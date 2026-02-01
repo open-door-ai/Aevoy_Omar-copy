@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  agent:
+    build:
+      context: ./packages/agent
+      dockerfile: Dockerfile
+    container_name: handlit-agent
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - AGENT_PORT=3001
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - AGENT_WEBHOOK_SECRET=${AGENT_WEBHOOK_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    volumes:
+      - agent-workspaces:/app/workspaces
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  agent-workspaces:
+    driver: local
