@@ -1,4 +1,4 @@
-name = "handlit-email-router"
+name = "aevoy-email-router"
 main = "src/index.ts"
 compatibility_date = "2024-09-25"
 
