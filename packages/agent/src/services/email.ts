@@ -167,7 +167,7 @@ export async function sendOverQuotaEmail(
 - Upgrade your plan for more messages
 - Or wait until your quota resets next month
 
-Visit your dashboard to upgrade: https://aevoy.ai/dashboard/settings
+Visit your dashboard to upgrade: https://aevoy.com/dashboard/settings
 
 See you soon!`;
 

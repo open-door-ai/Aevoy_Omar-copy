@@ -31,7 +31,7 @@ export async function GET() {
       id: profile.id,
       username: profile.username,
       email: profile.email,
-      aiEmail: `${profile.username}@aevoy.ai`,
+      aiEmail: `${profile.username}@aevoy.com`,
       displayName: profile.display_name,
       timezone: profile.timezone,
       subscription: {
@@ -94,7 +94,7 @@ export async function PATCH(request: NextRequest) {
       id: profile.id,
       username: profile.username,
       email: profile.email,
-      aiEmail: `${profile.username}@aevoy.ai`,
+      aiEmail: `${profile.username}@aevoy.com`,
       displayName: profile.display_name,
       timezone: profile.timezone,
       subscription: {

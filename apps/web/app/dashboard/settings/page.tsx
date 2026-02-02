@@ -292,7 +292,7 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-2">
             <Label>AI Email Address</Label>
-            <Input value={`${profile.username}@aevoy.ai`} disabled />
+            <Input value={`${profile.username}@aevoy.com`} disabled />
             <p className="text-xs text-muted-foreground">
               This is your AI&apos;s email address
             </p>
