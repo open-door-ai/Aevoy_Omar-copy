@@ -44,7 +44,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
 
     const isBeta = profile?.subscription_status === 'beta';
     if (!isBeta && profile && profile.messages_used >= profile.messages_limit) {
-      await sendOverQuotaEmail(from, `${username}@aevoy.ai`, subject);
+      await sendOverQuotaEmail(from, `${username}@aevoy.com`, subject);
       return {
         taskId: "",
         success: false,
@@ -92,7 +92,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       const confirmationMessage = formatConfirmationMessage(clarified);
       await sendConfirmationEmail(
         from,
-        `${username}@aevoy.ai`,
+        `${username}@aevoy.com`,
         taskId,
         clarified.structuredIntent.goal,
         confirmationMessage
@@ -106,7 +106,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       };
     } else {
       // Execute immediately
-      await sendTaskAccepted(from, `${username}@aevoy.ai`, clarified.structuredIntent.goal);
+      await sendTaskAccepted(from, `${username}@aevoy.com`, clarified.structuredIntent.goal);
       
       // Process the task in full (this handles the actual execution)
       return processTask({ ...task, taskId });
@@ -115,7 +115,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("processIncomingTask error:", errorMessage);
     
-    await sendErrorEmail(from, `${username}@aevoy.ai`, subject, errorMessage);
+    await sendErrorEmail(from, `${username}@aevoy.com`, subject, errorMessage);
     
     return {
       taskId: "",
@@ -177,7 +177,7 @@ export async function handleConfirmationReply(
       
       await sendResponse({
         to: from,
-        from: `${username}@aevoy.ai`,
+        from: `${username}@aevoy.com`,
         subject: `Confirm: ${task.input_text?.slice(0, 30)}...`,
         body: "Got it! Working on it now.",
       });
@@ -200,7 +200,7 @@ export async function handleConfirmationReply(
         .update({ status: "cancelled" })
         .eq("id", taskId);
       
-      await sendTaskCancelled(from, `${username}@aevoy.ai`, task.email_subject);
+      await sendTaskCancelled(from, `${username}@aevoy.com`, task.email_subject);
 
       return {
         taskId,
@@ -224,7 +224,7 @@ export async function handleConfirmationReply(
       
       await sendResponse({
         to: from,
-        from: `${username}@aevoy.ai`,
+        from: `${username}@aevoy.com`,
         subject: `Confirm: ${task.input_text?.slice(0, 30)}...`,
         body: "Got it! Updated and working on it now.",
       });
@@ -304,7 +304,7 @@ export async function handleVerificationCodeReply(
 
   await sendResponse({
     to: from,
-    from: `${username}@aevoy.ai`,
+    from: `${username}@aevoy.com`,
     subject: `🔐 Verification code received`,
     body: "Got it! Continuing with the task...",
   });
@@ -339,14 +339,14 @@ async function handleCardCommand(
         if (!card) {
           await sendResponse({
             to: from,
-            from: `${username}@aevoy.ai`,
+            from: `${username}@aevoy.com`,
             subject: "Agent Card Balance",
             body: "You don't have an agent card set up yet. Visit your settings to create one!",
           });
         } else {
           await sendResponse({
             to: from,
-            from: `${username}@aevoy.ai`,
+            from: `${username}@aevoy.com`,
             subject: "Agent Card Balance",
             body: `Your agent card balance is **$${(card.balance_cents / 100).toFixed(2)}**\n\nCard ending in ${card.last_four}\nStatus: ${card.is_frozen ? '🔒 Frozen' : '✅ Active'}`,
           });
@@ -358,7 +358,7 @@ async function handleCardCommand(
         const success = await freezeCard(userId);
         await sendResponse({
           to: from,
-          from: `${username}@aevoy.ai`,
+          from: `${username}@aevoy.com`,
           subject: "Agent Card Frozen",
           body: success 
             ? "🔒 Card frozen. No purchases allowed until you unfreeze."
@@ -371,7 +371,7 @@ async function handleCardCommand(
         const success = await unfreezeCard(userId);
         await sendResponse({
           to: from,
-          from: `${username}@aevoy.ai`,
+          from: `${username}@aevoy.com`,
           subject: "Agent Card Unfrozen",
           body: success 
             ? "✅ Card unfrozen. I can now make purchases for you."
@@ -384,7 +384,7 @@ async function handleCardCommand(
         if (!command.amount) {
           await sendResponse({
             to: from,
-            from: `${username}@aevoy.ai`,
+            from: `${username}@aevoy.com`,
             subject: "Agent Card",
             body: "Please specify an amount to add, like: 'Add $50 to my card'",
           });
@@ -392,7 +392,7 @@ async function handleCardCommand(
           const result = await fundAgentCard(userId, command.amount);
           await sendResponse({
             to: from,
-            from: `${username}@aevoy.ai`,
+            from: `${username}@aevoy.com`,
             subject: "Agent Card Funded",
             body: result.success 
               ? `Done! Added $${(command.amount / 100).toFixed(2)} to your card.\n\nNew balance: **$${(result.newBalance / 100).toFixed(2)}**`
@@ -411,7 +411,7 @@ async function handleCardCommand(
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    await sendErrorEmail(from, `${username}@aevoy.ai`, "Agent Card", errorMessage);
+    await sendErrorEmail(from, `${username}@aevoy.com`, "Agent Card", errorMessage);
     return {
       taskId: "",
       success: false,
@@ -438,7 +438,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Allow beta users unlimited access
     const isBeta = profile?.subscription_status === 'beta';
     if (!isBeta && profile && profile.messages_used >= profile.messages_limit) {
-      await sendOverQuotaEmail(from, `${username}@aevoy.ai`, subject);
+      await sendOverQuotaEmail(from, `${username}@aevoy.com`, subject);
       return {
         taskId: "",
         success: false,
@@ -522,7 +522,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // Send progress update for long tasks
     if (aiResponse.actions.length > 3) {
-      await sendProgressEmail(from, `${username}@aevoy.ai`, subject, 
+      await sendProgressEmail(from, `${username}@aevoy.com`, subject, 
         `Working on your request. Processing ${aiResponse.actions.length} actions...`);
     }
     
@@ -580,7 +580,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     await sendResponse({
       to: from,
-      from: `${username}@aevoy.ai`,
+      from: `${username}@aevoy.com`,
       subject,
       body: emailBody,
     });
@@ -630,7 +630,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // Send error email
-    await sendErrorEmail(from, `${username}@aevoy.ai`, subject, errorMessage);
+    await sendErrorEmail(from, `${username}@aevoy.com`, subject, errorMessage);
 
     return {
       taskId,
@@ -847,7 +847,7 @@ async function executeAction(
       const { to, subject, body } = action.params as { to: string; subject: string; body: string };
       const success = await sendResponse({
         to,
-        from: `${username}@aevoy.ai`,
+        from: `${username}@aevoy.com`,
         subject,
         body,
       });

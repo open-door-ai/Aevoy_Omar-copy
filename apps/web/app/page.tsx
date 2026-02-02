@@ -1247,7 +1247,7 @@ export default function AevoyLanding() {
           </MagneticButton>
           
           <p className="mt-10 text-sm text-stone-600">
-            Questions? hello@aevoy.ai — a human will respond.
+            Questions? hello@aevoy.com — a human will respond.
             <br />
             (We haven&apos;t automated ourselves yet.)
           </p>

@@ -39,7 +39,7 @@ function getTwilioConfig(): TwilioConfig | null {
   return {
     accountSid,
     authToken,
-    webhookUrl: webhookUrl || "https://api.aevoy.ai/webhook/sms"
+    webhookUrl: webhookUrl || "https://api.aevoy.com/webhook/sms"
   };
 }
 

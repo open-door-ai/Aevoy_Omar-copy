@@ -25,7 +25,7 @@ export default async function DashboardPage() {
     .limit(5);
 
   const username = profile?.username || user?.email?.split("@")[0] || "user";
-  const aiEmail = `${username}@aevoy.ai`;
+  const aiEmail = `${username}@aevoy.com`;
   const messagesUsed = profile?.messages_used || 0;
   const messagesLimit = profile?.messages_limit || 20;
 

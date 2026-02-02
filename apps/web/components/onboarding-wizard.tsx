@@ -82,7 +82,7 @@ export default function OnboardingWizard({ username, onComplete }: OnboardingWiz
           {step === 1 && (
             <>
               <p className="text-sm text-muted-foreground">
-                Your AI email address is: <strong>{username}@aevoy.ai</strong>
+                Your AI email address is: <strong>{username}@aevoy.com</strong>
               </p>
               <p className="text-sm text-muted-foreground">
                 How much should your AI check with you before acting?
