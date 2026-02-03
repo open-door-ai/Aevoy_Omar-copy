@@ -17,7 +17,7 @@ import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseClient } from "../utils/supabase.js";
 import type { Memory, MemoryType, WorkingMemory, EpisodicMemory } from "../types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,32 +27,46 @@ const ALGORITHM = "aes-256-gcm";
 
 // ---- Short-term memory (in-memory) ----
 
-const shortTermMemory = new Map<string, Record<string, unknown>>();
+// TTL for short-term memory entries (30 minutes)
+const SHORT_TERM_TTL_MS = 30 * 60 * 1000;
+
+interface ShortTermEntry {
+  data: Record<string, unknown>;
+  createdAt: number;
+}
+
+const shortTermMemory = new Map<string, ShortTermEntry>();
+
+// Periodic cleanup of expired short-term memory entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of shortTermMemory) {
+    if (now - entry.createdAt > SHORT_TERM_TTL_MS) {
+      shortTermMemory.delete(key);
+    }
+  }
+}, 60_000); // Check every minute
 
 export function setShortTermMemory(taskId: string, data: Record<string, unknown>): void {
-  shortTermMemory.set(taskId, { ...shortTermMemory.get(taskId), ...data });
+  const existing = shortTermMemory.get(taskId);
+  shortTermMemory.set(taskId, {
+    data: { ...(existing?.data), ...data },
+    createdAt: existing?.createdAt ?? Date.now(),
+  });
 }
 
 export function getShortTermMemory(taskId: string): Record<string, unknown> | undefined {
-  return shortTermMemory.get(taskId);
+  const entry = shortTermMemory.get(taskId);
+  if (!entry) return undefined;
+  if (Date.now() - entry.createdAt > SHORT_TERM_TTL_MS) {
+    shortTermMemory.delete(taskId);
+    return undefined;
+  }
+  return entry.data;
 }
 
 export function clearShortTermMemory(taskId: string): void {
   shortTermMemory.delete(taskId);
-}
-
-// ---- Supabase client ----
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
 }
 
 // ---- Encryption ----
@@ -427,17 +441,22 @@ export async function compressOldMemories(userId: string): Promise<number> {
   const keyFacts = extractKeyFacts(allText);
 
   if (keyFacts.length > 0) {
-    // Append to long-term memory
-    const longTerm = await loadLongTermMemory(userId);
-    const newFacts = keyFacts.map((f) => `- ${f}`).join("\n");
-    const updated = longTerm.replace(
-      /# Learned\n/,
-      `# Learned\n${newFacts}\n`
-    );
-    await saveMemory(userId, updated);
+    // Append to long-term memory — only delete old working memories if save succeeds
+    try {
+      const longTerm = await loadLongTermMemory(userId);
+      const newFacts = keyFacts.map((f) => `- ${f}`).join("\n");
+      const updated = longTerm.replace(
+        /# Learned\n/,
+        `# Learned\n${newFacts}\n`
+      );
+      await saveMemory(userId, updated);
+    } catch (saveErr) {
+      console.error(`[MEMORY] Failed to save compressed facts, skipping delete of old memories:`, saveErr);
+      return 0;
+    }
   }
 
-  // Delete compressed working memories
+  // Delete compressed working memories only after successful save above
   if (idsToDelete.length > 0) {
     await getSupabaseClient()
       .from("user_memory")

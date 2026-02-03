@@ -5,16 +5,17 @@
  * Includes confirmation flow for unclear tasks based on user settings.
  */
 
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
-import { generateResponse, cleanResponseForEmail, classifyTask } from "./ai.js";
+import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget } from "./ai.js";
 import { sendResponse, sendErrorEmail, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
+import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
 import { ActionValidator } from "../security/validator.js";
 import { ExecutionEngine } from "../execution/engine.js";
 import { getFailureMemory, recordFailure, learnSolution } from "../memory/failure-db.js";
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
 import { verifyTask, quickVerify } from "./task-verifier.js";
+import { getSupabaseClient } from "../utils/supabase.js";
 import type { TaskRequest, TaskResult, Action, ActionResult } from "../types/index.js";
 
 // ---- Test Mode / Payment Skip ----
@@ -24,18 +25,6 @@ function isTestMode(): boolean {
 
 function shouldSkipPayment(): boolean {
   return process.env.SKIP_PAYMENT_CHECKS === "true" || isTestMode();
-}
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
 }
 
 /**
@@ -458,6 +447,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       };
     }
 
+    // 1b. Check monthly budget ($15/month per user)
+    let forceCheapModel = false;
+    if (!shouldSkipPayment() && !isBeta) {
+      const budget = await checkUserBudget(userId);
+      if (budget.overBudget) {
+        // Budget exceeded — force free-tier model (Gemini Flash) or notify
+        console.log(`[BUDGET] User ${userId.slice(0, 8)} over monthly budget, forcing cheap model`);
+        forceCheapModel = true;
+      } else if (budget.remaining < 1) {
+        // Running low — prefer cheaper models
+        console.log(`[BUDGET] User ${userId.slice(0, 8)} budget low ($${budget.remaining.toFixed(2)} remaining)`);
+        forceCheapModel = true;
+      }
+    }
+
     // 2. Create or update task record
     if (taskId) {
       // Use existing task record (from confirmation flow)
@@ -511,8 +515,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 5. Load user's memory
     const memory = await loadMemory(userId);
 
-    // 6. Generate AI response
-    const aiResponse = await generateResponse(memory, subject, body, username);
+    // 6. Generate AI response (use cheapest model if over budget)
+    const aiTaskType = forceCheapModel ? "validate" as const : undefined;
+    const aiResponse = await generateResponse(memory, subject, body, username, aiTaskType, userId);
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
@@ -556,12 +561,30 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
       // Execute action with failure memory integration
       const result = await executeActionWithLearning(
-        action, 
-        userId, 
-        username, 
+        action,
+        userId,
+        username,
         executionEngine
       );
       actionResults.push(result);
+
+      // Record action in action_history for undo/audit trail
+      try {
+        const screenshotUrl = result.result && typeof result.result === "object" && "screenshot" in result.result
+          ? (result.result as Record<string, unknown>).screenshot as string | null
+          : null;
+        await getSupabaseClient().rpc("record_action", {
+          p_task_id: taskId,
+          p_user_id: userId,
+          p_action_type: action.type,
+          p_action_data: action.params || {},
+          p_undo_data: null,
+          p_screenshot_url: screenshotUrl,
+        });
+      } catch (recordErr) {
+        // Non-critical — don't fail the task over history recording
+        console.warn("[ACTION_HISTORY] Failed to record action:", recordErr);
+      }
     }
 
     // 8. Run 3-step verification on browser tasks
@@ -612,22 +635,63 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       await getSupabaseClient().rpc("increment_usage", { p_user_id: userId });
     }
 
-    // 11. Send response email
+    // 11. Send response via the same channel the task arrived on
     const cleanResponse = cleanResponseForEmail(aiResponse.content);
     const successCount = actionResults.filter(r => r.success).length;
     const totalActions = actionResults.length;
-    
+
     let emailBody = cleanResponse;
     if (totalActions > 0) {
-      emailBody += `\n\n---\n✅ Completed ${successCount}/${totalActions} actions.`;
+      emailBody += `\n\n---\nCompleted ${successCount}/${totalActions} actions.`;
     }
 
-    await sendResponse({
-      to: from,
-      from: `${username}@aevoy.com`,
-      subject,
-      body: emailBody,
-    });
+    const channel = task.inputChannel || "email";
+    if (channel === "sms") {
+      // SMS: short summary, truncated to 1600 chars
+      const smsBody = cleanResponse.length > 1500
+        ? cleanResponse.substring(0, 1500) + "... (full results emailed)"
+        : cleanResponse;
+      try {
+        const { data: profile } = await getSupabaseClient()
+          .from("profiles")
+          .select("twilio_number")
+          .eq("id", userId)
+          .single();
+        if (profile?.twilio_number) {
+          await sendSms({ userId, to: from, body: smsBody });
+        } else {
+          // No phone on file, fall back to email
+          await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+        }
+      } catch {
+        await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+      }
+      // Always send full results by email too if response is long
+      if (cleanResponse.length > 1500) {
+        await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+      }
+    } else if (channel === "voice") {
+      // Voice: send SMS summary + email full results
+      try {
+        const { data: profile } = await getSupabaseClient()
+          .from("profiles")
+          .select("twilio_number")
+          .eq("id", userId)
+          .single();
+        const smsSummary = cleanResponse.length > 300
+          ? cleanResponse.substring(0, 300) + "... (check email for full results)"
+          : cleanResponse;
+        if (profile?.twilio_number) {
+          await sendSms({ userId, to: from, body: `[Aevoy] ${smsSummary}` });
+        }
+      } catch {
+        // Non-critical
+      }
+      await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+    } else {
+      // Default: email
+      await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+    }
 
     // 12. Update task as completed with cost tracking + verification
     const elapsedMs = Date.now() - startTime;
@@ -895,6 +959,11 @@ async function executeAction(
 
     case "send_email": {
       const { to, subject, body } = action.params as { to: string; subject: string; body: string };
+      // Validate email address format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!to || !emailRegex.test(to)) {
+        return { action, success: false, error: "Invalid email address" };
+      }
       const success = await sendResponse({
         to,
         from: `${username}@aevoy.com`,

@@ -5,19 +5,7 @@
  * Never make the same mistake twice.
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabase(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-    );
-  }
-  return supabase;
-}
+import { getSupabaseClient } from '../utils/supabase.js';
 
 export interface FailureRecord {
   id: string;
@@ -45,31 +33,34 @@ export async function getFailureMemory(params: {
   selector?: string;
 }): Promise<FailureRecord | null> {
   const domain = extractDomain(params.site);
-  
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
   try {
-    // Try exact match first
-    const { data: exact } = await getSupabase()
+    // Try exact match first (exclude stale entries older than 30 days)
+    const { data: exact } = await getSupabaseClient()
       .from('failure_memory')
       .select('*')
       .eq('site_domain', domain)
       .eq('action_type', params.actionType)
       .eq('original_selector', params.selector || '')
       .gt('success_rate', 50)
+      .gte('last_seen_at', thirtyDaysAgo)
       .single();
-    
+
     if (exact) return mapRecord(exact);
-    
-    // Try similar match (same site + action type)
-    const { data: similar } = await getSupabase()
+
+    // Try similar match (same site + action type, not stale)
+    const { data: similar } = await getSupabaseClient()
       .from('failure_memory')
       .select('*')
       .eq('site_domain', domain)
       .eq('action_type', params.actionType)
       .gt('success_rate', 70)
+      .gte('last_seen_at', thirtyDaysAgo)
       .order('success_rate', { ascending: false })
       .limit(1)
       .single();
-    
+
     return similar ? mapRecord(similar) : null;
   } catch {
     return null;
@@ -93,7 +84,7 @@ export async function recordFailure(params: {
   const domain = extractDomain(params.site);
   
   try {
-    await getSupabase().from('failure_memory').upsert({
+    await getSupabaseClient().from('failure_memory').upsert({
       site_domain: domain,
       action_type: params.actionType,
       original_selector: params.selector || '',
@@ -116,7 +107,7 @@ export async function recordFailure(params: {
  */
 export async function recordSuccess(failureId: string): Promise<void> {
   try {
-    const { data } = await getSupabase()
+    const { data } = await getSupabaseClient()
       .from('failure_memory')
       .select('times_used, success_rate')
       .eq('id', failureId)
@@ -126,7 +117,7 @@ export async function recordSuccess(failureId: string): Promise<void> {
       const newTimesUsed = data.times_used + 1;
       const newSuccessRate = ((data.success_rate * data.times_used) + 100) / newTimesUsed;
       
-      await getSupabase().from('failure_memory').update({
+      await getSupabaseClient().from('failure_memory').update({
         times_used: newTimesUsed,
         success_rate: Math.min(100, newSuccessRate)
       }).eq('id', failureId);
@@ -141,7 +132,7 @@ export async function recordSuccess(failureId: string): Promise<void> {
  */
 export async function recordSolutionFailed(failureId: string): Promise<void> {
   try {
-    const { data } = await getSupabase()
+    const { data } = await getSupabaseClient()
       .from('failure_memory')
       .select('times_used, success_rate')
       .eq('id', failureId)
@@ -151,7 +142,7 @@ export async function recordSolutionFailed(failureId: string): Promise<void> {
       const newTimesUsed = data.times_used + 1;
       const newSuccessRate = (data.success_rate * data.times_used) / newTimesUsed;
       
-      await getSupabase().from('failure_memory').update({
+      await getSupabaseClient().from('failure_memory').update({
         times_used: newTimesUsed,
         success_rate: Math.max(0, newSuccessRate)
       }).eq('id', failureId);
@@ -178,7 +169,7 @@ export async function learnSolution(params: {
   const domain = extractDomain(params.site);
   
   try {
-    await getSupabase().from('failure_memory').upsert({
+    await getSupabaseClient().from('failure_memory').upsert({
       site_domain: domain,
       action_type: params.actionType,
       original_selector: params.originalSelector || '',

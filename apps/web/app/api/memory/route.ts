@@ -1,5 +1,20 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
+
+function encryptContent(text: string): string {
+  const key = process.env.ENCRYPTION_KEY;
+  if (!key) {
+    throw new Error("ENCRYPTION_KEY not configured");
+  }
+  const keyBuf = Buffer.from(key, "hex");
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-gcm", keyBuf, iv);
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag();
+  return iv.toString("hex") + ":" + authTag.toString("hex") + ":" + encrypted;
+}
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -80,12 +95,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Note: In production, content should be encrypted before storage.
-  // The agent server handles encryption. This API is for basic CRUD.
+  // Encrypt content before storage using AES-256-GCM
+  let encryptedData: string;
+  try {
+    encryptedData = encryptContent(content);
+  } catch {
+    return NextResponse.json(
+      { error: "Encryption not configured on server" },
+      { status: 500 }
+    );
+  }
+
   const { data, error } = await supabase.from("user_memory").insert({
     user_id: user.id,
     memory_type: type,
-    encrypted_data: content, // Should be encrypted by caller
+    encrypted_data: encryptedData,
     importance: body.importance || 0.5,
   }).select().single();
 

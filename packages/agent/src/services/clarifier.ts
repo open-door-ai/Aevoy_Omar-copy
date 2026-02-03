@@ -5,20 +5,8 @@
  * Determines if confirmation is needed based on user settings and confidence.
  */
 
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseClient } from "../utils/supabase.js";
 import type { Memory } from "../types/index.js";
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
-}
 
 // Types
 export type ConfirmationMode = 'always' | 'unclear' | 'risky' | 'never';

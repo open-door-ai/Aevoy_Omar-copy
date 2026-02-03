@@ -4,6 +4,8 @@ import { ScheduledTasks } from "@/components/scheduled-tasks";
 import { RecentActivity } from "@/components/recent-activity";
 import DashboardWithOnboarding from "@/components/dashboard-with-onboarding";
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardPage() {
   const supabase = await createClient();
 

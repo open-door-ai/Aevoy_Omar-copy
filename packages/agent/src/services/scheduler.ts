@@ -5,24 +5,13 @@
  * Checks every minute for tasks that need to be executed.
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { processTask } from './processor.js';
 import { getProactiveEngine } from './proactive.js';
 import { compressOldMemories } from './memory.js';
+import { getSupabaseClient } from '../utils/supabase.js';
 
-let supabase: SupabaseClient | null = null;
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
-
-function getSupabase(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-    );
-  }
-  return supabase;
-}
 
 /**
  * Start the scheduler - runs every minute
@@ -101,7 +90,7 @@ async function runProactiveChecks(): Promise<void> {
  * Compress old working memories for all users.
  */
 async function runMemoryCompression(): Promise<void> {
-  const { data: users } = await getSupabase()
+  const { data: users } = await getSupabaseClient()
     .from('profiles')
     .select('id')
     .limit(100);
@@ -124,7 +113,7 @@ async function runDueScheduledTasks(): Promise<void> {
   const now = new Date().toISOString();
   
   // Get all active tasks that are due
-  const { data: dueTasks, error } = await getSupabase()
+  const { data: dueTasks, error } = await getSupabaseClient()
     .from('scheduled_tasks')
     .select('*, profiles!user_id(*)')
     .eq('is_active', true)
@@ -162,7 +151,7 @@ async function runDueScheduledTasks(): Promise<void> {
       // Update last_run_at and calculate next_run_at
       const nextRun = calculateNextRun(scheduled.cron_expression, scheduled.timezone);
       
-      await getSupabase()
+      await getSupabaseClient()
         .from('scheduled_tasks')
         .update({
           last_run_at: now,
@@ -280,7 +269,7 @@ export async function createScheduledTask(params: {
 }): Promise<{ success: boolean; taskId?: string; error?: string }> {
   const nextRun = calculateNextRun(params.cronExpression, params.timezone);
   
-  const { data, error } = await getSupabase()
+  const { data, error } = await getSupabaseClient()
     .from('scheduled_tasks')
     .insert({
       user_id: params.userId,
@@ -304,7 +293,7 @@ export async function createScheduledTask(params: {
  * Cancel a scheduled task
  */
 export async function cancelScheduledTask(taskId: string, userId: string): Promise<boolean> {
-  const { error } = await getSupabase()
+  const { error } = await getSupabaseClient()
     .from('scheduled_tasks')
     .update({ is_active: false })
     .eq('id', taskId)

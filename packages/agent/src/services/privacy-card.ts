@@ -5,20 +5,8 @@
  * Each user can have a virtual card with limits that the agent uses for purchases.
  */
 
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { getUserSettings } from "./clarifier.js";
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
-}
+import { getSupabaseClient } from "../utils/supabase.js";
 
 const PRIVACY_API_BASE = "https://api.privacy.com/v1";
 

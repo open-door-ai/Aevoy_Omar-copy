@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+export const dynamic = "force-dynamic";
+
 export default async function ActivityPage() {
   const supabase = await createClient();
   

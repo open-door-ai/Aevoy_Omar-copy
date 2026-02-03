@@ -51,12 +51,17 @@ export default function SettingsPage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [cardAction, setCardAction] = useState<string | null>(null);
   const [fundAmount, setFundAmount] = useState("");
-  
+
+  // Phone provisioning state
+  const [phone, setPhone] = useState<string | null>(null);
+  const [phoneLoading, setPhoneLoading] = useState(false);
+  const [phoneAreaCode, setPhoneAreaCode] = useState("604");
+
   const router = useRouter();
-  const supabase = createClient();
 
   useEffect(() => {
     async function loadProfile() {
+      const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -97,10 +102,23 @@ export default function SettingsPage() {
       }
     }
 
+    async function loadPhone() {
+      try {
+        const response = await fetch("/api/phone");
+        if (response.ok) {
+          const data = await response.json();
+          setPhone(data.phone ?? null);
+        }
+      } catch (error) {
+        console.error("Failed to load phone:", error);
+      }
+    }
+
     loadProfile();
     loadSettings();
     loadAgentCard();
-  }, [supabase]);
+    loadPhone();
+  }, []);
 
   const handleSave = async () => {
     if (!profile) return;
@@ -108,7 +126,7 @@ export default function SettingsPage() {
     setSaving(true);
     setMessage(null);
 
-    const { error } = await supabase
+    const { error } = await createClient()
       .from("profiles")
       .update({
         display_name: displayName || null,
@@ -148,7 +166,7 @@ export default function SettingsPage() {
       }
 
       // Sign out and redirect
-      await supabase.auth.signOut();
+      await createClient().auth.signOut();
       router.push("/");
     } catch {
       setMessage({ type: "error", text: "Failed to delete account" });
@@ -179,6 +197,53 @@ export default function SettingsPage() {
     }
 
     setSavingSettings(false);
+  };
+
+  const handleProvisionPhone = async () => {
+    setPhoneLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/phone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ areaCode: phoneAreaCode }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to provision number");
+      }
+
+      const data = await response.json();
+      setPhone(data.phone);
+      setMessage({ type: "success", text: `Phone number provisioned: ${data.phone}` });
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to provision number" });
+    }
+
+    setPhoneLoading(false);
+  };
+
+  const handleReleasePhone = async () => {
+    setPhoneLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/phone", { method: "DELETE" });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to release number");
+      }
+
+      setPhone(null);
+      setMessage({ type: "success", text: "Phone number released" });
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to release number" });
+    }
+
+    setPhoneLoading(false);
   };
 
   const handleCardAction = async (action: string) => {
@@ -436,10 +501,57 @@ export default function SettingsPage() {
                   </label>
                 ))}
               </div>
-              {settings.virtual_phone && (
-                <p className="text-sm text-green-600">
-                  Your virtual number: {settings.virtual_phone}
-                </p>
+              {settings.verification_method === "virtual_number" && (
+                <div className="mt-3 p-3 border rounded-lg bg-muted/30 space-y-3">
+                  {phone ? (
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-green-600">
+                          Your virtual number: {phone}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Verification codes sent to this number will be received automatically
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleReleasePhone}
+                        disabled={phoneLoading}
+                      >
+                        {phoneLoading ? "Releasing..." : "Release Number"}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        Provision a virtual number for automatic code receiving
+                      </p>
+                      <div className="flex gap-2 items-end">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Area Code</Label>
+                          <Input
+                            value={phoneAreaCode}
+                            onChange={(e) => setPhoneAreaCode(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                            placeholder="604"
+                            className="w-24"
+                            maxLength={3}
+                          />
+                        </div>
+                        <Button
+                          onClick={handleProvisionPhone}
+                          disabled={phoneLoading || phoneAreaCode.length !== 3}
+                          size="sm"
+                        >
+                          {phoneLoading ? "Provisioning..." : "Provision Number"}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        $1/month - US numbers only
+                      </p>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </CardContent>

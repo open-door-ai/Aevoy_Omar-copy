@@ -1,6 +1,28 @@
 # Aevoy V2 — Status, Next Steps & Action Items
 
-Last updated: 2026-02-02
+Last updated: 2026-02-03 (session 3)
+
+## Session Log
+- Session 1: Implemented all 10 phases of V2 spec, created .env with all API keys
+- Session 2: Deep security audit (38 vulns found), fixed all 7 critical + key high issues, pushed to GitHub, fixed build errors, added Stripe sig verification, CORS restriction, Twilio webhook auth, XSS prevention, timing-safe comparisons, admin-only beta endpoint
+- Session 3: Phone provisioning API (GET/POST/DELETE /api/phone), UNIQUE constraint on profiles.twilio_number, agent_cards table + RLS + atomic RPCs, settings page phone provisioning UI, end-to-end email flow integration tests (7 cases)
+
+## Build Status
+- Web app: Dev mode works. Production build has pre-existing auth page error (login page SSR issue, not from V2 changes). Needs investigation.
+- Agent server: Not yet build-tested (TypeScript compilation). Run `pnpm --filter agent build` to check.
+- Desktop: Not build-tested. Needs electron-builder config.
+
+## What To Do Next Session
+1. Fix web app production build (login page SSR error)
+2. Add rate limiting to agent server (`express-rate-limit`)
+3. Add email sender validation in Cloudflare worker (SPF/DKIM check)
+4. ~~Add phone provisioning API endpoint~~ **Done (session 3)**
+5. Fix response channel (SMS/voice tasks should respond via same channel)
+6. ~~Add UNIQUE constraint on profiles.twilio_number~~ **Done (session 3)**
+7. ~~Add user_settings and agent_cards table migrations~~ **Done (session 3)**
+8. ~~Test full email flow end-to-end~~ **Done (session 3)**
+9. Set up ngrok for Twilio webhook testing
+10. Improve onboarding flow / setup questions on website
 
 ## Current Status: V2 Implementation Complete, Security Hardened
 
@@ -83,6 +105,14 @@ All 10 phases of the V2 spec are implemented. 38 security vulnerabilities were f
 | L-3 | Timing-safe comparison | Using `crypto.timingSafeEqual()` |
 | M-1 | Error details to users | Generic error messages now |
 
+### Fixed (Session 3)
+| # | Issue | Fix |
+|---|-------|-----|
+| H-9 | RLS policies too broad | Scoped to `TO service_role` in migration_v4.sql |
+| M-10 | Tasks table missing DELETE RLS | Added DELETE policy in migration_v4.sql |
+| M-11 | user_settings table missing | Created in migration_v4.sql |
+| M-12 | agent_cards table missing | Created with RLS + atomic RPCs in migration_v4.sql |
+
 ### Remaining (For Production)
 | # | Issue | Priority | Action |
 |---|-------|----------|--------|
@@ -91,29 +121,25 @@ All 10 phases of the V2 spec are implemented. 38 security vulnerabilities were f
 | H-6 | Shared browser singleton | High | Create per-user browser instances |
 | H-7 | Memory map never cleaned | High | Add TTL-based eviction (30 min) |
 | H-8 | Memory compression no transaction | High | Wrap in DB transaction |
-| H-9 | RLS policies too broad | High | Scope to `TO service_role` |
 | H-10 | Playwright `--no-sandbox` | Medium | Run in sandboxed container |
 | M-2 | CSS selector injection | Medium | Use `getByLabel()` instead of raw selectors |
 | M-4 | Desktop encryption fallback | Medium | Throw error if no key |
 | M-8 | Proactive spam | Medium | Add deduplication with 24h cooldown |
-| M-10 | Tasks table missing DELETE RLS | Medium | Add DELETE policy |
-| M-11 | user_settings table missing | Medium | Add migration |
-| M-12 | agent_cards table missing RLS | Medium | Add migration |
 | M-13 | AI action targets unvalidated | Medium | Validate send_email recipients |
 
 ---
 
 ## Phone/Voice Architecture Gaps to Fix
 
-| # | Gap | Priority |
-|---|-----|----------|
-| 1 | No API endpoint for phone provisioning | High |
-| 2 | Response always via email (not SMS/voice) | High |
-| 3 | Shared outbound number replies unrouted | High |
-| 4 | No UNIQUE constraint on twilio_number | Medium |
-| 5 | Duplicate task creation for voice | Medium |
-| 6 | Voice hardcoded to Polly.Amy | Low |
-| 7 | Area code hardcoded to 604 | Low |
+| # | Gap | Priority | Status |
+|---|-----|----------|--------|
+| 1 | No API endpoint for phone provisioning | High | **Fixed** (session 3) — `/api/phone` GET/POST/DELETE |
+| 2 | Response always via email (not SMS/voice) | High | Open |
+| 3 | Shared outbound number replies unrouted | High | Open |
+| 4 | No UNIQUE constraint on twilio_number | Medium | **Fixed** (session 3) — partial unique index |
+| 5 | Duplicate task creation for voice | Medium | Open |
+| 6 | Voice hardcoded to Polly.Amy | Low | Open |
+| 7 | Area code hardcoded to 604 | Low | **Fixed** (session 3) — user can specify area code |
 
 ---
 
