@@ -9,9 +9,13 @@ import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'crypto';
 import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
-const SERVER_SECRET = process.env.ENCRYPTION_KEY;
-if (!SERVER_SECRET) {
-  throw new Error("FATAL: ENCRYPTION_KEY environment variable is not set. Cannot start without encryption key.");
+
+function getServerSecret(): string {
+  const secret = process.env.ENCRYPTION_KEY;
+  if (!secret) {
+    throw new Error("FATAL: ENCRYPTION_KEY environment variable is not set.");
+  }
+  return secret;
 }
 
 /**
@@ -19,8 +23,9 @@ if (!SERVER_SECRET) {
  * This means we can only decrypt user data when they're authenticated
  */
 export async function deriveUserKey(userId: string, salt?: string): Promise<Buffer> {
-  const derivedSalt = salt || `${userId}:${SERVER_SECRET}`;
-  return await scryptAsync(SERVER_SECRET, derivedSalt, 32) as Buffer;
+  const secret = getServerSecret();
+  const derivedSalt = salt || `${userId}:${secret}`;
+  return await scryptAsync(secret, derivedSalt, 32) as Buffer;
 }
 
 /**
@@ -78,11 +83,11 @@ export async function decryptCredentials(
  * Simple encryption for memory files (without user key - uses server secret)
  */
 export async function encryptWithServerKey(data: string): Promise<string> {
-  const key = await scryptAsync(SERVER_SECRET, 'memory-salt', 32) as Buffer;
+  const key = await scryptAsync(getServerSecret(), 'memory-salt', 32) as Buffer;
   return encryptForUser(data, key);
 }
 
 export async function decryptWithServerKey(encryptedData: string): Promise<string> {
-  const key = await scryptAsync(SERVER_SECRET, 'memory-salt', 32) as Buffer;
+  const key = await scryptAsync(getServerSecret(), 'memory-salt', 32) as Buffer;
   return decryptForUser(encryptedData, key);
 }

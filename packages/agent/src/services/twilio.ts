@@ -10,20 +10,8 @@
  * - 2FA codes: Receive verification codes via SMS
  */
 
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseClient } from "../utils/supabase.js";
 import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData } from "../types/index.js";
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
-}
 
 // ---- Configuration ----
 

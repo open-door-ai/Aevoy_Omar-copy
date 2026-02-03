@@ -115,11 +115,22 @@ export class ExecutionEngine {
     
     for (const step of steps) {
       const result = await this.executeStep(step);
+
+      // Capture post-action screenshot for evidence (skip if step is already a screenshot)
+      if (this.page && step.action !== 'screenshot' && step.action !== 'wait') {
+        try {
+          const buffer = await this.page.screenshot({ type: 'png' });
+          result.screenshot = buffer.toString('base64');
+        } catch {
+          // Non-critical — page may not be ready for screenshot
+        }
+      }
+
       this.results.push(result);
-      
+
       if (!result.success) {
-        return { 
-          success: false, 
+        return {
+          success: false,
           error: `Step '${step.action}' failed: ${result.error}`,
           data: this.results
         };

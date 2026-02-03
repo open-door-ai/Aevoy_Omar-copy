@@ -19,11 +19,11 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const supabase = createClient();
   const [signingOut, setSigningOut] = useState(false);
 
   const handleSignOut = async () => {
     setSigningOut(true);
+    const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();

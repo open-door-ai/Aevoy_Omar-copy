@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "test": "vitest run",
     "test:flow": "tsx src/test.ts",
     "typecheck": "tsc --noEmit"
   },
@@ -15,9 +16,12 @@
     "@browserbasehq/sdk": "^2.0.0",
     "@browserbasehq/stagehand": "^2.0.0",
     "@supabase/supabase-js": "^2.93.3",
+    "bullmq": "^5.67.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
+    "express-rate-limit": "^8.2.1",
+    "ioredis": "^5.9.2",
     "openai": "^4.70.0",
     "playwright": "^1.58.1",
     "resend": "^4.0.0",
@@ -27,8 +31,10 @@
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/express-rate-limit": "^6.0.2",
     "@types/node": "^20.17.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^4.0.18"
   }
 }

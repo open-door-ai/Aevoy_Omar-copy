@@ -20,7 +20,7 @@ export type ModelProvider =
   | 'haiku'
   | 'ollama';
 
-export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'desktop' | 'proactive';
+export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'web' | 'desktop' | 'proactive';
 
 export type MemoryType = 'short_term' | 'working' | 'long_term' | 'episodic';
 

@@ -1,3 +1,5 @@
+import PostalMime from "postal-mime";
+
 interface Env {
   AGENT_URL: string;
   AGENT_WEBHOOK_SECRET: string;
@@ -51,7 +53,7 @@ async function getUser(
 
 async function parseEmail(
   raw: ReadableStream
-): Promise<{ subject: string; body: string; bodyHtml?: string }> {
+): Promise<{ subject: string; body: string; bodyHtml?: string; attachments?: { filename: string; mimeType: string; size: number }[] }> {
   const reader = raw.getReader();
   const chunks: Uint8Array[] = [];
 
@@ -61,33 +63,46 @@ async function parseEmail(
     chunks.push(value);
   }
 
-  const fullEmail = new TextDecoder().decode(
-    chunks.reduce((acc, chunk) => {
-      const tmp = new Uint8Array(acc.length + chunk.length);
-      tmp.set(acc, 0);
-      tmp.set(chunk, acc.length);
-      return tmp;
-    }, new Uint8Array())
-  );
+  const rawBytes = chunks.reduce((acc, chunk) => {
+    const tmp = new Uint8Array(acc.length + chunk.length);
+    tmp.set(acc, 0);
+    tmp.set(chunk, acc.length);
+    return tmp;
+  }, new Uint8Array());
 
-  // Simple email parsing - for production, use a proper email parser
-  const headerEnd = fullEmail.indexOf("\r\n\r\n");
-  const headers = fullEmail.substring(0, headerEnd);
-  const body = fullEmail.substring(headerEnd + 4);
+  try {
+    // Use postal-mime for proper MIME multipart parsing
+    const parser = new PostalMime();
+    const email = await parser.parse(rawBytes);
 
-  // Extract subject
-  const subjectMatch = headers.match(/^Subject: (.+)$/im);
-  const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
+    const subject = email.subject || "No subject";
+    const body = email.text || email.html?.replace(/<[^>]*>/g, "").trim() || "";
+    const bodyHtml = email.html || undefined;
+    const attachments = (email.attachments || []).map((att) => ({
+      filename: att.filename || "unnamed",
+      mimeType: att.mimeType || "application/octet-stream",
+      size: att.content instanceof ArrayBuffer ? att.content.byteLength : (att.content?.length || 0),
+    }));
 
-  // For simplicity, treat the rest as plain text body
-  // In production, handle MIME multipart properly
-  const plainBody = body.replace(/<[^>]*>/g, "").trim();
+    return { subject, body, bodyHtml, attachments: attachments.length > 0 ? attachments : undefined };
+  } catch (parseError) {
+    // Fallback to simple parsing if postal-mime fails
+    console.error("postal-mime parse failed, using fallback:", parseError);
+    const fullEmail = new TextDecoder().decode(rawBytes);
+    const headerEnd = fullEmail.indexOf("\r\n\r\n");
+    const headers = headerEnd > 0 ? fullEmail.substring(0, headerEnd) : "";
+    const bodyRaw = headerEnd > 0 ? fullEmail.substring(headerEnd + 4) : fullEmail;
 
-  return {
-    subject,
-    body: plainBody,
-    bodyHtml: body.includes("<") ? body : undefined,
-  };
+    const subjectMatch = headers.match(/^Subject: (.+)$/im);
+    const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
+    const plainBody = bodyRaw.replace(/<[^>]*>/g, "").trim();
+
+    return {
+      subject,
+      body: plainBody,
+      bodyHtml: bodyRaw.includes("<") ? bodyRaw : undefined,
+    };
+  }
 }
 
 /**
@@ -182,6 +197,14 @@ export default {
       if (!user) {
         console.log(`User not found: ${username}`);
         message.setReject("User not found");
+        return;
+      }
+
+      // Validate sender matches registered user email
+      const senderEmail = message.from.toLowerCase().trim();
+      if (user.email && senderEmail !== user.email.toLowerCase().trim()) {
+        console.log(`Sender mismatch: ${senderEmail} != ${user.email} for user ${username}`);
+        message.setReject("Sender email does not match registered user");
         return;
       }
 

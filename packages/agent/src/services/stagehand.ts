@@ -126,13 +126,14 @@ export class StagehandService {
   }
 
   private async initLocal(): Promise<Page> {
+    const args = ["--disable-dev-shm-usage"];
+    // Only use --no-sandbox in development; production should run in a proper sandbox
+    if (process.env.NODE_ENV !== "production") {
+      args.push("--no-sandbox", "--disable-setuid-sandbox");
+    }
     const browser = await chromium.launch({
       headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-      ],
+      args,
     });
 
     const context = await browser.newContext({
@@ -461,20 +462,8 @@ export class StagehandService {
   }
 }
 
-// ---- Singleton factory ----
+// ---- Per-task factory (no shared singleton to prevent session leaks) ----
 
-let defaultService: StagehandService | null = null;
-
-export function getStagehandService(config?: StagehandConfig): StagehandService {
-  if (!defaultService) {
-    defaultService = new StagehandService(config);
-  }
-  return defaultService;
-}
-
-export function resetStagehandService(): void {
-  if (defaultService) {
-    defaultService.close().catch(console.error);
-    defaultService = null;
-  }
+export function createStagehandService(config?: StagehandConfig): StagehandService {
+  return new StagehandService(config);
 }

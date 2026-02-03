@@ -15,7 +15,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { getSupabaseClient } from "../utils/supabase.js";
 import type { Memory, Action, AIResponse, TaskType, ModelProvider } from "../types/index.js";
 
 // Lazy initialization of clients
@@ -24,17 +24,6 @@ let deepseekClient: OpenAI | null = null;
 let geminiClient: OpenAI | null = null;
 let kimiClient: OpenAI | null = null;
 let ollamaClient: OpenAI | null = null;
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
-}
 
 function getAnthropicClient(): Anthropic {
   if (!anthropicClient) {
@@ -296,6 +285,40 @@ async function trackApiCall(
     });
   } catch {
     // Non-critical — don't fail the task over tracking
+  }
+}
+
+// ---- Budget enforcement ----
+
+const MONTHLY_BUDGET_USD = 15;
+
+/**
+ * Check remaining monthly budget for a user.
+ * Returns remaining budget in USD. If over budget, returns 0.
+ */
+export async function checkUserBudget(userId: string): Promise<{ remaining: number; overBudget: boolean }> {
+  try {
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const { data, error } = await getSupabaseClient()
+      .from("tasks")
+      .select("cost_usd")
+      .eq("user_id", userId)
+      .gte("created_at", startOfMonth.toISOString());
+
+    if (error || !data) {
+      return { remaining: MONTHLY_BUDGET_USD, overBudget: false };
+    }
+
+    const totalSpent = data.reduce((sum, row) => sum + (row.cost_usd || 0), 0);
+    const remaining = Math.max(0, MONTHLY_BUDGET_USD - totalSpent);
+
+    return { remaining, overBudget: totalSpent >= MONTHLY_BUDGET_USD };
+  } catch {
+    // If we can't check budget, don't block the task
+    return { remaining: MONTHLY_BUDGET_USD, overBudget: false };
   }
 }
 

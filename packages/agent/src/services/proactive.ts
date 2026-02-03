@@ -15,22 +15,10 @@
  * - Better deal found → Email (low)
  */
 
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { sendSms, callUser } from "./twilio.js";
 import { sendResponse } from "./email.js";
+import { getSupabaseClient } from "../utils/supabase.js";
 import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
-
-let supabase: SupabaseClient | null = null;
-
-function getSupabaseClient(): SupabaseClient {
-  if (!supabase) {
-    supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-    );
-  }
-  return supabase;
-}
 
 // ---- Proactive Engine ----
 
@@ -98,6 +86,8 @@ export class ProactiveEngine {
       this.checkRecurringTasks(userId),
       this.checkUnansweredTasks(userId),
       this.checkUpcomingScheduledTasks(userId, timezone),
+      this.checkUpcomingMeetings(userId),
+      this.checkRecurringBills(userId),
     ];
 
     const results = await Promise.allSettled(checks);
@@ -227,6 +217,123 @@ export class ProactiveEngine {
   }
 
   /**
+   * Check for upcoming meetings by scanning recent booking-type tasks with future dates.
+   */
+  private async checkUpcomingMeetings(userId: string): Promise<ProactiveFinding[]> {
+    const findings: ProactiveFinding[] = [];
+
+    const now = new Date();
+    const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    // Find completed booking/appointment tasks that reference future dates
+    const { data: tasks } = await getSupabaseClient()
+      .from("tasks")
+      .select("email_subject, input_text, completed_at")
+      .eq("user_id", userId)
+      .eq("status", "completed")
+      .in("type", ["booking", "general"])
+      .order("completed_at", { ascending: false })
+      .limit(50);
+
+    if (!tasks) return findings;
+
+    const meetingKeywords = ["meeting", "appointment", "call", "interview", "reservation", "booking"];
+
+    for (const task of tasks) {
+      const text = `${task.email_subject || ""} ${task.input_text || ""}`.toLowerCase();
+      const hasMeetingKeyword = meetingKeywords.some((kw) => text.includes(kw));
+      if (!hasMeetingKeyword) continue;
+
+      // Try to find a date reference in the task text
+      const dateMatch = text.match(/(\d{4}-\d{2}-\d{2})/);
+      if (!dateMatch) continue;
+
+      const meetingDate = new Date(dateMatch[1]);
+      if (meetingDate >= now && meetingDate <= twentyFourHoursFromNow) {
+        findings.push({
+          trigger: "upcoming_meeting",
+          action: `Reminder: You have an upcoming meeting/appointment tomorrow related to "${task.email_subject || "a booking"}".`,
+          channel: "sms",
+          priority: "medium",
+          userId,
+          data: { subject: task.email_subject, date: dateMatch[1] },
+        });
+      }
+    }
+
+    return findings;
+  }
+
+  /**
+   * Check for recurring bill patterns by detecting payment tasks at regular intervals.
+   */
+  private async checkRecurringBills(userId: string): Promise<ProactiveFinding[]> {
+    const findings: ProactiveFinding[] = [];
+
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: tasks } = await getSupabaseClient()
+      .from("tasks")
+      .select("email_subject, input_text, created_at")
+      .eq("user_id", userId)
+      .eq("status", "completed")
+      .gte("created_at", sixtyDaysAgo)
+      .order("created_at", { ascending: true });
+
+    if (!tasks || tasks.length < 2) return findings;
+
+    const billKeywords = ["pay", "bill", "invoice", "subscription", "renew", "payment"];
+
+    // Group bill-like tasks by normalized subject
+    const billGroups = new Map<string, Date[]>();
+    for (const task of tasks) {
+      const text = `${task.email_subject || ""} ${task.input_text || ""}`.toLowerCase();
+      const isBillLike = billKeywords.some((kw) => text.includes(kw));
+      if (!isBillLike) continue;
+
+      const key = normalizeSubject(task.email_subject || task.input_text || "");
+      if (!key) continue;
+
+      const dates = billGroups.get(key) || [];
+      dates.push(new Date(task.created_at));
+      billGroups.set(key, dates);
+    }
+
+    // Detect monthly patterns (2+ occurrences ~30 days apart)
+    const now = new Date();
+    for (const [subject, dates] of billGroups) {
+      if (dates.length < 2) continue;
+
+      // Check if dates are roughly 30 days apart
+      const intervals = [];
+      for (let i = 1; i < dates.length; i++) {
+        intervals.push((dates[i].getTime() - dates[i - 1].getTime()) / (24 * 60 * 60 * 1000));
+      }
+      const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+
+      if (avgInterval >= 25 && avgInterval <= 35) {
+        // Predict next due date
+        const lastDate = dates[dates.length - 1];
+        const predictedNext = new Date(lastDate.getTime() + avgInterval * 24 * 60 * 60 * 1000);
+        const daysUntilDue = (predictedNext.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
+
+        if (daysUntilDue > 0 && daysUntilDue <= 7) {
+          findings.push({
+            trigger: "recurring_bill",
+            action: `Heads up: "${subject}" appears to be a recurring monthly payment. It may be due in about ${Math.round(daysUntilDue)} days. Want me to handle it?`,
+            channel: "email",
+            priority: "medium",
+            userId,
+            data: { subject, predictedDate: predictedNext.toISOString(), avgInterval },
+          });
+        }
+      }
+    }
+
+    return findings;
+  }
+
+  /**
    * Route a finding to the appropriate channel based on priority.
    */
   private async routeFinding(
@@ -236,6 +343,22 @@ export class ProactiveEngine {
     const { priority, action, channel } = finding;
 
     try {
+      // 24h dedup: skip if same trigger was sent to this user recently
+      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentSame } = await getSupabaseClient()
+        .from("tasks")
+        .select("id")
+        .eq("user_id", user.userId)
+        .eq("type", "proactive")
+        .eq("email_subject", `[Proactive] ${finding.trigger}`)
+        .gte("created_at", twentyFourHoursAgo)
+        .limit(1);
+
+      if (recentSame && recentSame.length > 0) {
+        console.log(`[PROACTIVE] Skipping duplicate ${finding.trigger} for ${user.username} (sent within 24h)`);
+        return;
+      }
+
       switch (priority) {
         case "high": {
           // High priority: Call + SMS
