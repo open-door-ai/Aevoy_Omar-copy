@@ -12,6 +12,7 @@ import { executeClick } from './actions/click.js';
 import { executeFill } from './actions/fill.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
+import { StagehandService } from '../services/stagehand.js';
 
 export interface ExecutionStep {
   action: string;
@@ -36,14 +37,31 @@ export class ExecutionEngine {
   private validator: ActionValidator;
   private totalCost = 0;
   private results: StepResult[] = [];
-  
+  private stagehand: StagehandService | null = null;
+  private useStagehand: boolean;
+
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
+    // Use Stagehand if Browserbase keys are configured
+    this.useStagehand = !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
   }
-  
+
   async initialize(): Promise<void> {
-    this.browser = await chromium.launch({ 
+    if (this.useStagehand) {
+      try {
+        this.stagehand = new StagehandService();
+        this.page = await this.stagehand.init();
+        console.log("[ENGINE] Initialized with Stagehand (cloud)");
+        return;
+      } catch (error) {
+        console.warn("[ENGINE] Stagehand init failed, falling back to local Playwright:", error);
+        this.stagehand = null;
+      }
+    }
+
+    // Local Playwright fallback
+    this.browser = await chromium.launch({
       headless: true,
       args: [
         '--no-sandbox',
@@ -51,21 +69,31 @@ export class ExecutionEngine {
         '--disable-dev-shm-usage',
       ]
     });
-    
+
     this.context = await this.browser.newContext({
       viewport: { width: 1280, height: 800 },
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
-    
+
     this.page = await this.context.newPage();
+    console.log("[ENGINE] Initialized with local Playwright");
   }
-  
+
   async cleanup(): Promise<void> {
-    if (this.context) await this.context.close();
-    if (this.browser) await this.browser.close();
+    if (this.stagehand) {
+      await this.stagehand.close();
+      this.stagehand = null;
+    } else {
+      if (this.context) await this.context.close();
+      if (this.browser) await this.browser.close();
+    }
     this.page = null;
     this.context = null;
     this.browser = null;
+  }
+
+  getPage(): Page | null {
+    return this.page;
   }
   
   getTotalCost(): number { 

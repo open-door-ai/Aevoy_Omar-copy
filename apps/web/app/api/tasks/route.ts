@@ -14,11 +14,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Parse query parameters
+    // Parse query parameters with validation
     const searchParams = request.nextUrl.searchParams;
-    const limit = parseInt(searchParams.get("limit") || "20");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    const limit = Math.min(Math.max(1, parseInt(searchParams.get("limit") || "20") || 20), 100);
+    const offset = Math.max(0, parseInt(searchParams.get("offset") || "0") || 0);
     const status = searchParams.get("status");
+
+    // Validate status parameter
+    const validStatuses = ["pending", "processing", "completed", "failed", "cancelled", "needs_review", "awaiting_confirmation", "awaiting_user_input", "all"];
+    if (status && !validStatuses.includes(status)) {
+      return NextResponse.json(
+        { error: "bad_request", message: "Invalid status filter" },
+        { status: 400 }
+      );
+    }
 
     // Build query
     let query = supabase

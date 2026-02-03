@@ -221,20 +221,27 @@ export async function fundAgentCard(
     //   description: 'Fund Aevoy Agent Card'
     // });
     
-    // Update balance in database
-    const newBalance = card.balance_cents + amountCents;
-    
-    const { error } = await getSupabaseClient()
-      .from("agent_cards")
-      .update({ balance_cents: newBalance })
-      .eq("id", card.id);
-    
+    // Atomic balance update to prevent race conditions
+    const { data: updated, error } = await getSupabaseClient()
+      .rpc("increment_card_balance", {
+        p_card_id: card.id,
+        p_amount: amountCents,
+      });
+
     if (error) {
-      throw new Error(`Database error: ${error.message}`);
+      // Fallback to direct update if RPC not available
+      const newBalance = card.balance_cents + amountCents;
+      const { error: updateError } = await getSupabaseClient()
+        .from("agent_cards")
+        .update({ balance_cents: newBalance })
+        .eq("id", card.id);
+      if (updateError) throw new Error(`Database error: ${updateError.message}`);
+      console.log(`[PRIVACY] Funded card (fallback): +$${(amountCents / 100).toFixed(2)}`);
+      return { success: true, newBalance };
     }
-    
-    console.log(`[PRIVACY] Funded card for user ${userId}: +$${(amountCents / 100).toFixed(2)}`);
-    
+
+    const newBalance = updated?.balance_cents ?? (card.balance_cents + amountCents);
+    console.log(`[PRIVACY] Funded card: +$${(amountCents / 100).toFixed(2)}`);
     return { success: true, newBalance };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -272,19 +279,29 @@ export async function deductFromCard(
     };
   }
   
-  const newBalance = card.balance_cents - amountCents;
-  
-  const { error } = await getSupabaseClient()
-    .from("agent_cards")
-    .update({ balance_cents: newBalance })
-    .eq("id", card.id);
-  
+  // Atomic deduction to prevent race conditions (double-spend)
+  const { data: updated, error } = await getSupabaseClient()
+    .rpc("deduct_card_balance", {
+      p_card_id: card.id,
+      p_amount: amountCents,
+    });
+
   if (error) {
-    return { success: false, newBalance: card.balance_cents, error: error.message };
+    // Fallback to direct update with balance check
+    const newBalance = card.balance_cents - amountCents;
+    if (newBalance < 0) return { success: false, newBalance: card.balance_cents, error: "Insufficient balance (race)" };
+    const { error: updateError } = await getSupabaseClient()
+      .from("agent_cards")
+      .update({ balance_cents: newBalance })
+      .eq("id", card.id)
+      .gte("balance_cents", amountCents); // Extra safety: only update if balance still sufficient
+    if (updateError) return { success: false, newBalance: card.balance_cents, error: updateError.message };
+    console.log(`[PRIVACY] Deducted (fallback): -$${(amountCents / 100).toFixed(2)}`);
+    return { success: true, newBalance };
   }
-  
-  console.log(`[PRIVACY] Deducted from card for user ${userId}: -$${(amountCents / 100).toFixed(2)}`);
-  
+
+  const newBalance = updated?.balance_cents ?? (card.balance_cents - amountCents);
+  console.log(`[PRIVACY] Deducted: -$${(amountCents / 100).toFixed(2)}`);
   return { success: true, newBalance };
 }
 

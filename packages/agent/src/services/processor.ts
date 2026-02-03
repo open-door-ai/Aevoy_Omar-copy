@@ -14,7 +14,17 @@ import { ActionValidator } from "../security/validator.js";
 import { ExecutionEngine } from "../execution/engine.js";
 import { getFailureMemory, recordFailure, learnSolution } from "../memory/failure-db.js";
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
+import { verifyTask, quickVerify } from "./task-verifier.js";
 import type { TaskRequest, TaskResult, Action, ActionResult } from "../types/index.js";
+
+// ---- Test Mode / Payment Skip ----
+function isTestMode(): boolean {
+  return process.env.TEST_MODE === "true" || process.env.NODE_ENV === "development";
+}
+
+function shouldSkipPayment(): boolean {
+  return process.env.SKIP_PAYMENT_CHECKS === "true" || isTestMode();
+}
 
 let supabase: SupabaseClient | null = null;
 
@@ -43,7 +53,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       .single();
 
     const isBeta = profile?.subscription_status === 'beta';
-    if (!isBeta && profile && profile.messages_used >= profile.messages_limit) {
+    if (!shouldSkipPayment() && !isBeta && profile && profile.messages_used >= profile.messages_limit) {
       await sendOverQuotaEmail(from, `${username}@aevoy.com`, subject);
       return {
         taskId: "",
@@ -435,9 +445,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       .eq("id", userId)
       .single();
 
-    // Allow beta users unlimited access
+    // Allow beta users unlimited access; skip checks in test mode
     const isBeta = profile?.subscription_status === 'beta';
-    if (!isBeta && profile && profile.messages_used >= profile.messages_limit) {
+    if (!shouldSkipPayment() && !isBeta && profile && profile.messages_used >= profile.messages_limit) {
       await sendOverQuotaEmail(from, `${username}@aevoy.com`, subject);
       return {
         taskId: "",
@@ -492,7 +502,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       maxActions: 100
     });
 
-    console.log(`[SECURITY] Intent locked: ${taskType} for ${username}`);
+    console.log(`[SECURITY] Intent locked: ${taskType}`);
     console.log(`[SECURITY] Allowed actions: ${lockedIntent.allowedActions.join(', ')}`);
 
     // 4. Create action validator
@@ -517,7 +527,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Initialize execution engine for browser tasks
       executionEngine = new ExecutionEngine(lockedIntent);
       await executionEngine.initialize();
-      console.log(`[BROWSER] Execution engine initialized for ${username}`);
+      console.log(`[BROWSER] Execution engine initialized`);
     }
 
     // Send progress update for long tasks
@@ -554,21 +564,55 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       actionResults.push(result);
     }
 
+    // 8. Run 3-step verification on browser tasks
+    let verificationResult = null;
+    if (executionEngine && classification.taskType) {
+      try {
+        const page = executionEngine.getPage?.() || null;
+        verificationResult = await verifyTask(
+          classification.taskType,
+          page,
+          aiResponse.content,
+          `Task: ${subject} ${body}`
+        );
+        console.log(
+          `[VERIFY] ${verificationResult.passed ? "PASSED" : "FAILED"} (${verificationResult.confidence}% confidence, method: ${verificationResult.method})`
+        );
+
+        // If verification fails with retries remaining, retry once
+        if (!verificationResult.passed && verificationResult.confidence < 50) {
+          console.log("[VERIFY] Low confidence, but continuing (retry logic deferred)");
+        }
+      } catch (verifyError) {
+        console.error("[VERIFY] Verification error:", verifyError);
+      }
+    } else if (aiResponse.content) {
+      // Quick verify for non-browser tasks
+      try {
+        verificationResult = await quickVerify(
+          classification.taskType || "research",
+          aiResponse.content
+        );
+      } catch {
+        // Non-critical — continue
+      }
+    }
+
     // Cleanup browser if used
     if (executionEngine) {
       await executionEngine.cleanup();
       console.log(`[BROWSER] Execution engine cleaned up`);
     }
 
-    // 8. Log the interaction
+    // 9. Log the interaction
     await appendDailyLog(userId, `**Task:** ${subject}\n**Response:** ${aiResponse.content.substring(0, 200)}...`);
 
-    // 9. Increment usage (skip for beta users)
-    if (!isBeta) {
+    // 10. Increment usage (skip for beta users and test mode)
+    if (!shouldSkipPayment() && !isBeta) {
       await getSupabaseClient().rpc("increment_usage", { p_user_id: userId });
     }
 
-    // 10. Send response email
+    // 11. Send response email
     const cleanResponse = cleanResponseForEmail(aiResponse.content);
     const successCount = actionResults.filter(r => r.success).length;
     const totalActions = actionResults.length;
@@ -585,27 +629,33 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       body: emailBody,
     });
 
-    // 11. Update task as completed with cost tracking
+    // 12. Update task as completed with cost tracking + verification
     const elapsedMs = Date.now() - startTime;
     const aiCost = aiResponse.cost || 0;
     const browserCost = executionEngine?.getTotalCost() || 0;
     const totalCost = aiCost + browserCost;
-    
+
     await getSupabaseClient()
       .from("tasks")
       .update({
-        status: "completed",
+        status: verificationResult?.passed === false ? "needs_review" : "completed",
         completed_at: new Date().toISOString(),
         tokens_used: aiResponse.tokensUsed,
         cost_usd: totalCost,
         type: taskType,
-        execution_time_ms: elapsedMs
+        execution_time_ms: elapsedMs,
+        verification_status: verificationResult?.passed ? "verified" : (verificationResult ? "unverified" : null),
+        verification_data: verificationResult ? {
+          confidence: verificationResult.confidence,
+          method: verificationResult.method,
+          evidence: verificationResult.evidence,
+        } : null,
       })
       .eq("id", taskId);
     
     console.log(`[COST] Task cost: $${totalCost.toFixed(6)} (AI: $${aiCost.toFixed(6)}, Browser: $${browserCost.toFixed(6)})`);
 
-    console.log(`[TASK] Completed in ${elapsedMs}ms: ${subject.substring(0, 50)}`);
+    console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
 
     return {
       taskId,
@@ -629,8 +679,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         .eq("id", taskId);
     }
 
-    // Send error email
-    await sendErrorEmail(from, `${username}@aevoy.com`, subject, errorMessage);
+    // Send generic error email — never expose internal error details to users
+    await sendErrorEmail(from, `${username}@aevoy.com`, subject, "Something went wrong processing your task. Please try again or contact support.");
 
     return {
       taskId,
