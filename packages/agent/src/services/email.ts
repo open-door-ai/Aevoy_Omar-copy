@@ -67,20 +67,32 @@ export async function sendResponse(options: EmailOptions): Promise<boolean> {
   }
 }
 
+// HTML-escape to prevent XSS in email output
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export function formatResponseEmail(body: string): string {
-  // Convert markdown-ish text to HTML
+  // Convert markdown-ish text to HTML (with XSS protection)
   const paragraphs = body.split("\n\n");
-  
+
   const htmlParagraphs = paragraphs.map((p) => {
+    const safe = escapeHtml(p);
+
     // Convert headers
     if (p.startsWith("# ")) {
-      return `<h1 style="margin-top: 20px; font-size: 24px;">${p.slice(2)}</h1>`;
+      return `<h1 style="margin-top: 20px; font-size: 24px;">${escapeHtml(p.slice(2))}</h1>`;
     }
     if (p.startsWith("## ")) {
-      return `<h2 style="margin-top: 16px; font-size: 20px;">${p.slice(3)}</h2>`;
+      return `<h2 style="margin-top: 16px; font-size: 20px;">${escapeHtml(p.slice(3))}</h2>`;
     }
     if (p.startsWith("### ")) {
-      return `<h3 style="margin-top: 12px; font-size: 16px;">${p.slice(4)}</h3>`;
+      return `<h3 style="margin-top: 12px; font-size: 16px;">${escapeHtml(p.slice(4))}</h3>`;
     }
 
     // Convert bullet lists
@@ -88,13 +100,13 @@ export function formatResponseEmail(body: string): string {
       const lines = p.split("\n");
       const listItems = lines
         .filter((line) => line.startsWith("- "))
-        .map((line) => `<li>${line.slice(2)}</li>`)
+        .map((line) => `<li>${escapeHtml(line.slice(2))}</li>`)
         .join("");
       return `<ul style="margin: 10px 0; padding-left: 20px;">${listItems}</ul>`;
     }
 
     // Convert line breaks within paragraph
-    const withBreaks = p.replace(/\n/g, "<br>");
+    const withBreaks = safe.replace(/\n/g, "<br>");
     return `<p style="margin: 10px 0;">${withBreaks}</p>`;
   });
 

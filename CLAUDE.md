@@ -2,27 +2,29 @@
 
 ## What You Are Building
 
-**Aevoy** — An email-first AI assistant service.
+**Aevoy** — Your AI Employee That Never Fails.
 
-Users sign up, get an AI email address (e.g., `omar@aevoy.com`), and email tasks to their AI. The AI actually DOES things (browses web, fills forms, books reservations) and emails back results.
+Users interact via email, chat, phone calls, or text. The AI fully controls a computer and does any task a human can do. Two deployment modes: Cloud (Browserbase + Stagehand v3) and Local (Electron + nut.js).
+
+See `docs/SPEC-V2.md` for the full v2 specification.
 
 ## Core Architecture
 
 ```
-User emails omar@aevoy.com
+User (Email / SMS / Voice / Chat / Desktop App)
        ↓
-Cloudflare Email Worker catches it
+Cloudflare Email Worker / Twilio Voice+SMS / Desktop Client
        ↓
-Worker POSTs to Agent Server
+Agent Server (packages/agent):
+  1. Intent locking (security scope)
+  2. Loads user's memory (4 types)
+  3. AI model routing (DeepSeek → Kimi K2 → Gemini → Claude)
+  4. Executes actions (Browserbase+Stagehand / local Playwright / nut.js)
+  5. 3-step verification (self-check → evidence → smart review)
+  6. Updates memory
+  7. Sends response via Resend / Twilio
        ↓
-Agent Server:
-  1. Loads user's memory
-  2. Sends task to DeepSeek API
-  3. Executes actions (Playwright browser)
-  4. Updates memory
-  5. Sends response via Resend
-       ↓
-User receives email with results
+User receives email / SMS / voice call with results
 ```
 
 ## Tech Stack
@@ -35,10 +37,31 @@ User receives email with results
 | Auth | Supabase Auth |
 | Email In | Cloudflare Email Workers |
 | Email Out | Resend API |
-| AI | DeepSeek API (cheap), Claude API (complex tasks) |
-| Browser | Playwright |
+| AI (Primary) | DeepSeek V3.2 ($0.25/$0.38 per 1M tokens) |
+| AI (Agentic) | Kimi K2 ($0.60/$2.50 per 1M, 75% cache savings) |
+| AI (Free) | Gemini 2.0 Flash (free tier) |
+| AI (Complex) | Claude Sonnet 4 ($3/$15 per 1M) |
+| AI (Local) | Ollama (Llama3, Mistral) — free, offline |
+| Browser (Cloud) | Browserbase + Stagehand v3 |
+| Browser (Local) | Playwright |
+| Desktop | Electron + nut.js |
+| Voice/SMS | Twilio |
 | Web Host | Vercel |
-| Agent Host | Hetzner VPS (later) / Local (dev) |
+| Agent Host | Hetzner VPS (prod) / Local (dev) |
+
+## AI Model Routing
+
+| Task Type | Primary | Fallback Chain |
+|-----------|---------|----------------|
+| understand | DeepSeek V3.2 | Kimi K2 → Gemini Flash → Claude Haiku |
+| plan | DeepSeek V3.2 | Kimi K2 → Claude Haiku |
+| reason | Claude Sonnet | Kimi K2 → DeepSeek V3.2 |
+| vision | Claude Sonnet | Gemini Flash |
+| validate | Gemini Flash | DeepSeek V3.2 |
+| respond | DeepSeek V3.2 | Claude Haiku |
+| local | Ollama/Llama3 | Ollama/Mistral → DeepSeek V3.2 |
+
+Target: <$0.10 average cost per task. Monthly budget per user: $15.
 
 ## Project Structure
 
@@ -50,6 +73,8 @@ aevoy/
 ├── pnpm-workspace.yaml
 │
 ├── docs/                     # Documentation
+│   ├── SPEC-V2.md           # Full v2 specification
+│   ├── PROGRESS.md          # Implementation progress tracker
 │   ├── PRD.md               # Product requirements
 │   ├── ARCHITECTURE.md      # System design
 │   ├── DATABASE.md          # Database schema
@@ -57,39 +82,79 @@ aevoy/
 │   └── PRIVACY.md           # Privacy implementation
 │
 ├── apps/
-│   └── web/                 # Next.js app (Vercel)
-│       ├── app/
-│       │   ├── page.tsx           # Landing page
-│       │   ├── (auth)/
-│       │   │   ├── login/page.tsx
-│       │   │   └── signup/page.tsx
-│       │   ├── dashboard/
-│       │   │   ├── page.tsx       # Main dashboard
-│       │   │   ├── activity/page.tsx
-│       │   │   └── settings/page.tsx
-│       │   └── api/
-│       │       ├── tasks/route.ts
-│       │       └── webhooks/
-│       ├── components/
-│       ├── lib/
-│       │   ├── supabase/
-│       │   └── utils.ts
+│   ├── web/                 # Next.js app (Vercel)
+│   │   ├── app/
+│   │   │   ├── page.tsx           # Landing page
+│   │   │   ├── (auth)/
+│   │   │   │   ├── login/page.tsx
+│   │   │   │   └── signup/page.tsx
+│   │   │   ├── dashboard/
+│   │   │   │   ├── page.tsx       # Main dashboard
+│   │   │   │   ├── activity/page.tsx
+│   │   │   │   └── settings/page.tsx
+│   │   │   └── api/
+│   │   │       ├── tasks/route.ts
+│   │   │       ├── memory/route.ts
+│   │   │       ├── usage/route.ts
+│   │   │       └── webhooks/
+│   │   ├── components/
+│   │   ├── lib/
+│   │   │   ├── supabase/
+│   │   │   └── utils.ts
+│   │   ├── supabase/
+│   │   │   ├── migration.sql
+│   │   │   ├── migration_v2.sql
+│   │   │   └── migration_v3.sql
+│   │   └── package.json
+│   │
+│   └── desktop/             # Electron app (Local mode)
+│       ├── main/
+│       │   ├── index.ts           # Main Electron process
+│       │   ├── tray.ts            # System tray
+│       │   ├── screen-control.ts  # nut.js wrapper
+│       │   ├── local-browser.ts   # Local Playwright
+│       │   ├── safety.ts          # Panic button, undo, recording
+│       │   └── db.ts              # SQLite + encryption
+│       ├── renderer/
+│       │   ├── index.html
+│       │   └── app.tsx
 │       └── package.json
 │
 ├── packages/
 │   └── agent/               # Agent server
 │       ├── src/
 │       │   ├── index.ts           # Express entry
-│       │   ├── routes/
-│       │   │   └── task.ts        # POST /task
+│       │   ├── types/
+│       │   │   └── index.ts
 │       │   ├── services/
-│       │   │   ├── ai.ts          # DeepSeek/Claude calls
-│       │   │   ├── browser.ts     # Playwright
-│       │   │   ├── memory.ts      # Memory system
-│       │   │   └── email.ts       # Resend
-│       │   ├── workers/
-│       │   │   └── processor.ts   # Task queue processor
-│       │   └── types/
+│       │   │   ├── ai.ts          # AI model routing
+│       │   │   ├── browser.ts     # Playwright (local fallback)
+│       │   │   ├── stagehand.ts   # Browserbase + Stagehand v3
+│       │   │   ├── memory.ts      # 4-type memory system
+│       │   │   ├── email.ts       # Resend
+│       │   │   ├── twilio.ts      # Voice + SMS
+│       │   │   ├── processor.ts   # Task orchestration
+│       │   │   ├── task-verifier.ts # 3-step verification
+│       │   │   ├── proactive.ts   # Proactive engine
+│       │   │   ├── scheduler.ts   # Cron scheduler
+│       │   │   ├── clarifier.ts   # Task clarification
+│       │   │   ├── verification.ts # 2FA detection
+│       │   │   └── privacy-card.ts # Card management
+│       │   ├── execution/
+│       │   │   ├── engine.ts      # Execution orchestrator
+│       │   │   └── actions/
+│       │   │       ├── click.ts   # 15 click methods
+│       │   │       ├── fill.ts    # 12 fill methods
+│       │   │       ├── login.ts   # 10 login methods
+│       │   │       └── navigate.ts # 8 navigation methods
+│       │   ├── memory/
+│       │   │   └── failure-db.ts  # Global failure memory
+│       │   ├── security/
+│       │   │   ├── encryption.ts
+│       │   │   ├── intent-lock.ts
+│       │   │   └── validator.ts
+│       │   └── utils/
+│       │       └── error.ts
 │       ├── workspaces/            # User data (gitignored)
 │       └── package.json
 │
@@ -101,47 +166,14 @@ aevoy/
         └── package.json
 ```
 
-## Development Phases
+## Security Architecture
 
-### Phase 1: Foundation (Day 1)
-1. Initialize monorepo with pnpm
-2. Set up Next.js app with Supabase auth
-3. Create landing page
-4. Create login/signup pages
-5. Create basic dashboard
-
-### Phase 2: Database (Day 1-2)
-1. Create Supabase project
-2. Run database migrations (profiles, tasks tables)
-3. Set up Row Level Security
-4. Test auth flow
-
-### Phase 3: Agent Core (Day 2-3)
-1. Create Express server
-2. Implement memory system
-3. Integrate DeepSeek API
-4. Create task processor
-5. Test with mock emails
-
-### Phase 4: Email Integration (Day 3-4)
-1. Set up Cloudflare Email Worker
-2. Connect worker to agent
-3. Set up Resend for sending
-4. Test full email flow
-
-### Phase 5: Browser Automation (Day 4-5)
-1. Set up Playwright
-2. Implement basic browsing
-3. Add screenshot capability
-4. Add form filling
-5. Add CAPTCHA solving (Claude Vision)
-
-### Phase 6: Polish (Day 5-7)
-1. Activity feed in dashboard
-2. Usage tracking
-3. Error handling
-4. Testing
-5. Deploy to production
+1. **Intent Locking** — Task scope locked immutably before execution (allowedActions, allowedDomains, maxBudget)
+2. **User-derived Encryption** — AES-256-GCM for all user data at rest
+3. **Row-Level Security** — Supabase RLS on all user tables
+4. **Verification Layer** — 3-step verification on every task
+5. **Undo System** — All actions logged in action_history, reversible
+6. **Panic Button** — Cmd+Shift+X stops all actions (desktop)
 
 ## Key Commands
 
@@ -155,20 +187,32 @@ pnpm --filter web dev
 # Run agent server (development)
 pnpm --filter agent dev
 
-# Run both
+# Run desktop app (development)
+pnpm --filter desktop dev
+
+# Run all
 pnpm dev
 
 # Build for production
 pnpm build
 
+# Build desktop app
+pnpm --filter desktop build
+
 # Deploy web to Vercel
 cd apps/web && vercel
+
+# Run database migration
+pnpm db:migrate
 
 # Type check
 pnpm typecheck
 
 # Lint
 pnpm lint
+
+# Run end-to-end test flow
+pnpm --filter agent test:flow
 ```
 
 ## Environment Variables
@@ -181,19 +225,34 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=xxx
 SUPABASE_SERVICE_ROLE_KEY=xxx
 
-# AI
+# AI Services
 DEEPSEEK_API_KEY=xxx
-ANTHROPIC_API_KEY=xxx  # For vision/complex tasks
+ANTHROPIC_API_KEY=xxx
+GOOGLE_API_KEY=xxx
+KIMI_API_KEY=xxx
+
+# Browser Automation
+BROWSERBASE_API_KEY=xxx
+BROWSERBASE_PROJECT_ID=xxx
+
+# Voice/SMS
+TWILIO_ACCOUNT_SID=xxx
+TWILIO_AUTH_TOKEN=xxx
+TWILIO_PHONE_NUMBER=xxx
 
 # Email
 RESEND_API_KEY=xxx
 
-# Agent
-AGENT_WEBHOOK_SECRET=xxx  # Random string, shared with email worker
+# Agent Server
+AGENT_WEBHOOK_SECRET=xxx
 AGENT_PORT=3001
 
-# Encryption
-ENCRYPTION_KEY=xxx  # 32 byte hex string for AES-256
+# Security
+ENCRYPTION_KEY=xxx        # 32 byte hex string for AES-256
+JWT_SECRET=xxx            # 32 byte hex string
+
+# Local AI (optional)
+OLLAMA_HOST=http://localhost:11434
 ```
 
 ## Coding Standards
@@ -217,18 +276,12 @@ ENCRYPTION_KEY=xxx  # 32 byte hex string for AES-256
 ## File Reading Order
 
 When starting work, read these files first:
-1. `docs/PRD.md` — What we're building
+1. `docs/SPEC-V2.md` — Full v2 specification
 2. `docs/ARCHITECTURE.md` — How it works
 3. `docs/DATABASE.md` — Database schema
 4. `docs/PRIVACY.md` — Privacy requirements
-
-## When You're Stuck
-
-1. Check the docs/ folder
-2. Look at error messages carefully
-3. Ask for clarification — don't guess
-4. Check similar open-source projects for patterns
+5. `docs/PROGRESS.md` — Current implementation status
 
 ## Current Status
 
-Starting fresh. Begin with Phase 1.
+Implementing V2 specification. See `docs/PROGRESS.md` for detailed status.

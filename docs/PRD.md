@@ -2,9 +2,9 @@
 
 ## Product
 
-**Aevoy** — Your AI Employee
+**Aevoy** — Your AI Employee That Never Fails
 
-**Tagline:** "Email it. It does it."
+**Tagline:** "If a human can do it on a computer, Aevoy can do it."
 
 ## Problem
 
@@ -13,15 +13,19 @@ ChatGPT and Claude are just chatbots:
 - They only talk, don't actually DO things
 - They forget everything
 - Can't work autonomously
+- Give up when things fail
 
 ## Solution
 
 An AI that:
-- You email like a human assistant
-- Actually DOES tasks (books, researches, fills forms)
-- Remembers everything forever
+- You email, text, or call like a human assistant
+- Actually DOES tasks (books, researches, fills forms, makes calls)
+- Remembers everything forever (4 memory types)
 - Works 24/7 without you
-- Contacts YOU when needed
+- Contacts YOU when needed (proactive engine)
+- Never gives up — 15+ fallback methods for every action
+- Verifies its own work (3-step verification)
+- Can control your computer directly (desktop mode)
 
 ## Target Users
 
@@ -29,61 +33,55 @@ An AI that:
 2. **Small business owners** — Repetitive tasks pile up
 3. **Non-technical people** — Want AI without learning apps
 
-## Core Features (MVP)
+## Input Channels
 
-### 1. Sign Up & Get AI Email
+| Channel | How | Use Case |
+|---------|-----|----------|
+| Email | user@aevoy.com | Primary, detailed tasks |
+| SMS | Text to AI number | Quick tasks, on-the-go |
+| Voice Call | Call AI number | Hands-free, driving |
+| Desktop App | Type or hotkey | Local computer control |
+
+## Core Features
+
+### 1. Sign Up & Get AI Email + Phone
 - Sign up with email/password
-- Instantly get: `yourname@aevoy.com`
-- See dashboard with your AI's activity
+- Get: `yourname@aevoy.com` + dedicated phone number
+- See dashboard with AI's activity
 
-### 2. Email Your AI
-- Send email to your AI address
-- AI processes and responds
-- Attachments supported (PDFs, images)
+### 2. Multi-Channel Task Input
+- Email tasks to your AI address
+- Text tasks via SMS
+- Call AI for voice tasks
+- Use desktop app for local tasks
 
-### 3. AI Actually Does Things
+### 3. AI Actually Does Things (Never Fails)
 - **Research:** Searches web, compiles reports
-- **Writing:** Drafts emails, documents
-- **Forms:** Fills out forms on websites
-- **Booking:** Makes reservations
-- **Monitoring:** Watches for changes, alerts you
+- **Booking:** Makes reservations (15+ click fallbacks)
+- **Forms:** Fills out forms on websites (12+ fill methods)
+- **Email:** Drafts and sends emails
+- **Calls:** Makes phone calls on your behalf
+- **Shopping:** Finds deals, purchases (with virtual card)
+- **Calendar:** Manages events
+- **Downloads:** Gets files you need
 
-### 4. Memory
-- Remembers all conversations
-- Learns your preferences
-- Knows your context (location, business, etc.)
+### 4. Memory (4 Types)
+- **Short-term:** Current task context
+- **Working:** Recent 7 days of activity
+- **Long-term:** Permanent preferences and facts
+- **Episodic:** Specific event memories
 
 ### 5. Proactive Actions
-- Scheduled tasks ("Send me news every Monday")
-- Alerts ("Tell me if competitor updates site")
-- Reminders
+- Domain expiring alerts
+- Meeting preparation
+- Bill reminders
+- Flight auto check-in
+- Recurring task automation
 
-## User Stories
-
-### Research
-```
-Email: "Find top 5 project management tools for small teams"
-Response: Detailed comparison with pricing, pros/cons, recommendation
-```
-
-### Booking
-```
-Email: "Book dinner at Miku for 2, Saturday 7pm"
-Response: "Done! Confirmation #12345" + screenshot
-```
-
-### Form Filling
-```
-Email: [PDF attachment] "Fill this with my business info"
-Response: Completed PDF attached
-```
-
-### Scheduled Report
-```
-Email: "Every Monday 8am, send me a summary of tech news"
-Response: "Scheduled! First report coming Monday."
-(Then automatic emails every Monday)
-```
+### 6. Verification (3-Step)
+- Self-check with free AI
+- Evidence-based proof checking
+- Smart review for low-confidence results
 
 ## Pricing
 
@@ -94,9 +92,22 @@ Response: "Scheduled! First report coming Monday."
 | Pro | $19/mo | 500/mo |
 | Business | $49/mo | 2000/mo |
 
+Phone number: +$1/mo for dedicated Twilio number.
+
+## AI Model Costs
+
+| Model | Per Task (avg) | Use For |
+|-------|---------------|---------|
+| DeepSeek V3.2 | ~$0.003 | Most tasks |
+| Kimi K2 | ~$0.01 | Complex agentic |
+| Gemini Flash | Free | Validation |
+| Claude Sonnet | ~$0.05 | Vision, complex reasoning |
+
+Target: <$0.10 average cost per task.
+
 ## Success Metrics
 
-**Week 1:** 10 beta users, 80% task success rate
+**Week 1:** 10 beta users, 90% task success rate
 **Month 1:** 100 users, 5% conversion to paid
 **Month 3:** 1000 users, $5K MRR
 
@@ -104,16 +115,13 @@ Response: "Scheduled! First report coming Monday."
 
 | Feature | ChatGPT | Aevoy |
 |---------|---------|-------|
-| Email interface | ❌ | ✅ |
-| Does real tasks | ❌ | ✅ |
-| Messages you first | ❌ | ✅ |
-| Unlimited memory | ❌ | ✅ |
-| Works while you sleep | ❌ | ✅ |
-| Solves CAPTCHAs | ❌ | ✅ |
-
-## Timeline
-
-- Day 1-2: Auth, database, basic UI
-- Day 3-4: Agent core, email integration
-- Day 5-6: Browser automation
-- Day 7: Polish, deploy
+| Email interface | No | Yes |
+| Does real tasks | No | Yes |
+| Messages you first | No | Yes |
+| Unlimited memory | No | Yes |
+| Works while you sleep | No | Yes |
+| Solves CAPTCHAs | No | Yes |
+| Voice/SMS input | No | Yes |
+| Controls your computer | No | Yes |
+| Never gives up | No | Yes |
+| Verifies own work | No | Yes |

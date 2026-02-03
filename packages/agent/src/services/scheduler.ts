@@ -7,9 +7,12 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { processTask } from './processor.js';
+import { getProactiveEngine } from './proactive.js';
+import { compressOldMemories } from './memory.js';
 
 let supabase: SupabaseClient | null = null;
 let schedulerInterval: NodeJS.Timeout | null = null;
+let proactiveInterval: NodeJS.Timeout | null = null;
 
 function getSupabase(): SupabaseClient {
   if (!supabase) {
@@ -43,6 +46,18 @@ export function startScheduler(): void {
   }, 60 * 1000);
   
   console.log('[SCHEDULER] Started - checking for due tasks every minute');
+
+  // Start proactive engine (hourly)
+  runProactiveChecks().catch(console.error);
+  proactiveInterval = setInterval(async () => {
+    try {
+      await runProactiveChecks();
+    } catch (error) {
+      console.error('[SCHEDULER] Proactive check error:', error);
+    }
+  }, 60 * 60 * 1000); // Every hour
+
+  console.log('[SCHEDULER] Proactive engine started - checking hourly');
 }
 
 /**
@@ -52,7 +67,53 @@ export function stopScheduler(): void {
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;
-    console.log('[SCHEDULER] Stopped');
+  }
+  if (proactiveInterval) {
+    clearInterval(proactiveInterval);
+    proactiveInterval = null;
+  }
+  console.log('[SCHEDULER] Stopped');
+}
+
+/**
+ * Run proactive checks for all enabled users.
+ */
+async function runProactiveChecks(): Promise<void> {
+  try {
+    const engine = getProactiveEngine();
+    const count = await engine.runForAllUsers();
+    if (count > 0) {
+      console.log(`[SCHEDULER] Proactive: ${count} findings routed`);
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Proactive engine error:', error);
+  }
+
+  // Also run memory compression
+  try {
+    await runMemoryCompression();
+  } catch (error) {
+    console.error('[SCHEDULER] Memory compression error:', error);
+  }
+}
+
+/**
+ * Compress old working memories for all users.
+ */
+async function runMemoryCompression(): Promise<void> {
+  const { data: users } = await getSupabase()
+    .from('profiles')
+    .select('id')
+    .limit(100);
+
+  if (!users) return;
+
+  for (const user of users) {
+    try {
+      await compressOldMemories(user.id);
+    } catch {
+      // Non-critical
+    }
   }
 }
 

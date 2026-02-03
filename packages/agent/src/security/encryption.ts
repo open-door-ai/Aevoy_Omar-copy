@@ -9,7 +9,10 @@ import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'crypto';
 import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
-const SERVER_SECRET = process.env.ENCRYPTION_KEY || 'default-dev-secret-change-in-production';
+const SERVER_SECRET = process.env.ENCRYPTION_KEY;
+if (!SERVER_SECRET) {
+  throw new Error("FATAL: ENCRYPTION_KEY environment variable is not set. Cannot start without encryption key.");
+}
 
 /**
  * Derive a key from user credentials - NEVER stored

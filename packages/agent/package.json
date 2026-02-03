@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,13 +12,17 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
+    "@browserbasehq/sdk": "^2.0.0",
+    "@browserbasehq/stagehand": "^2.0.0",
     "@supabase/supabase-js": "^2.93.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "openai": "^4.70.0",
     "playwright": "^1.58.1",
-    "resend": "^4.0.0"
+    "resend": "^4.0.0",
+    "twilio": "^5.0.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

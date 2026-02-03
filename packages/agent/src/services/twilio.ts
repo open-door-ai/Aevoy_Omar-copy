@@ -1,12 +1,17 @@
 /**
- * Twilio Integration
- * 
- * Handles virtual phone numbers for auto-receiving verification codes.
- * Optional feature - users can choose to pay $1/month for a dedicated number.
+ * Twilio Service — Full Voice + SMS Integration
+ *
+ * Capabilities:
+ * - Outbound calls: AI calls user (updates, questions), AI calls others (appointments)
+ * - Inbound calls: User calls AI (voice tasks), AI receives calls (receptionist)
+ * - TwiML generation: Voice flow responses with speech synthesis (Polly.Amy)
+ * - Speech-to-text: Transcribe voice commands
+ * - SMS two-way: Send tasks via text, receive updates
+ * - 2FA codes: Receive verification codes via SMS
  */
 
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { getUserSettings } from "./clarifier.js";
+import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData } from "../types/index.js";
 
 let supabase: SupabaseClient | null = null;
 
@@ -20,197 +25,258 @@ function getSupabaseClient(): SupabaseClient {
   return supabase;
 }
 
+// ---- Configuration ----
+
 interface TwilioConfig {
   accountSid: string;
   authToken: string;
-  webhookUrl: string;
+  phoneNumber: string;
+  webhookBaseUrl: string;
 }
 
 function getTwilioConfig(): TwilioConfig | null {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const webhookUrl = process.env.TWILIO_PHONE_WEBHOOK_URL;
-  
+  const phoneNumber = process.env.TWILIO_PHONE_NUMBER;
+
   if (!accountSid || !authToken) {
-    console.warn("[TWILIO] Not configured - missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN");
     return null;
   }
-  
+
   return {
     accountSid,
     authToken,
-    webhookUrl: webhookUrl || "https://api.aevoy.com/webhook/sms"
+    phoneNumber: phoneNumber || "",
+    webhookBaseUrl: process.env.AGENT_WEBHOOK_BASE_URL || "https://agent.aevoy.com",
   };
 }
 
+export function isTwilioConfigured(): boolean {
+  return getTwilioConfig() !== null;
+}
+
+// ---- Twilio REST API helpers ----
+
+async function twilioRequest(
+  path: string,
+  method: "GET" | "POST" | "DELETE" = "POST",
+  body?: URLSearchParams
+): Promise<Response> {
+  const config = getTwilioConfig();
+  if (!config) throw new Error("Twilio not configured");
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}${path}`;
+  const auth = Buffer.from(`${config.accountSid}:${config.authToken}`).toString("base64");
+
+  const options: RequestInit = {
+    method,
+    headers: {
+      Authorization: `Basic ${auth}`,
+      ...(body ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+    },
+    ...(body ? { body: body.toString() } : {}),
+  };
+
+  return fetch(url, options);
+}
+
+// ---- Outbound Voice Calls ----
+
 /**
- * Provision a new phone number for a user
+ * AI calls the user (for updates, questions, alerts).
  */
-export async function provisionPhoneNumber(
+export async function callUser(request: VoiceCallRequest): Promise<{
+  success: boolean;
+  callSid?: string;
+  error?: string;
+}> {
+  const config = getTwilioConfig();
+  if (!config) return { success: false, error: "Twilio not configured" };
+
+  try {
+    const params = new URLSearchParams({
+      To: request.to,
+      From: config.phoneNumber,
+      Twiml: generateSpeechTwiml(request.message, request.voice),
+    });
+
+    const response = await twilioRequest("/Calls.json", "POST", params);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      return { success: false, error: `Twilio API error: ${response.status} ${errorData}` };
+    }
+
+    const data = await response.json() as { sid: string };
+
+    // Track usage
+    await trackVoiceUsage(request.userId, 1);
+
+    console.log(`[TWILIO] Call initiated to ${request.to}: ${data.sid}`);
+    return { success: true, callSid: data.sid };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    console.error("[TWILIO] Call error:", msg);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * AI calls another number (book appointments, make inquiries).
+ */
+export async function callExternal(
   userId: string,
-  areaCode: string = "604" // Default to Vancouver
-): Promise<{ success: boolean; phoneNumber?: string; error?: string }> {
-  const config = getTwilioConfig();
-  if (!config) {
-    return { success: false, error: "Twilio not configured" };
-  }
-  
-  try {
-    // Search for available numbers
-    const searchUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/AvailablePhoneNumbers/US/Local.json?AreaCode=${areaCode}&SmsEnabled=true`;
-    
-    const searchResponse = await fetch(searchUrl, {
-      headers: {
-        'Authorization': 'Basic ' + Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64')
-      }
-    });
-    
-    if (!searchResponse.ok) {
-      throw new Error(`Failed to search numbers: ${searchResponse.status}`);
-    }
-    
-    const searchData = await searchResponse.json() as { available_phone_numbers: Array<{ phone_number: string; friendly_name: string }> };
-    
-    if (!searchData.available_phone_numbers || searchData.available_phone_numbers.length === 0) {
-      return { success: false, error: "No available numbers in that area code" };
-    }
-    
-    const phoneNumber = searchData.available_phone_numbers[0].phone_number;
-    
-    // Purchase the number
-    const purchaseUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/IncomingPhoneNumbers.json`;
-    
-    const purchaseResponse = await fetch(purchaseUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Basic ' + Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64'),
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        PhoneNumber: phoneNumber,
-        SmsUrl: config.webhookUrl,
-        FriendlyName: `handlit-${userId.slice(0, 8)}`
-      })
-    });
-    
-    if (!purchaseResponse.ok) {
-      throw new Error(`Failed to purchase number: ${purchaseResponse.status}`);
-    }
-    
-    // Save to user settings
-    const { error: dbError } = await getSupabaseClient()
-      .from("user_settings")
-      .upsert({
-        user_id: userId,
-        virtual_phone: phoneNumber,
-        verification_method: 'virtual_number',
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id' });
-    
-    if (dbError) {
-      console.error("[TWILIO] Failed to save phone number to DB:", dbError);
-    }
-    
-    console.log(`[TWILIO] Provisioned ${phoneNumber} for user ${userId}`);
-    
-    return { success: true, phoneNumber };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    console.error("[TWILIO] Error provisioning number:", message);
-    return { success: false, error: message };
-  }
-}
-
-/**
- * Release a user's phone number
- */
-export async function releasePhoneNumber(userId: string): Promise<boolean> {
-  const config = getTwilioConfig();
-  if (!config) {
-    return false;
-  }
-  
-  try {
-    // Get user's phone number
-    const settings = await getUserSettings(userId);
-    if (!settings.virtualPhone) {
-      return true; // No number to release
-    }
-    
-    // Find the Twilio resource SID for this number
-    const listUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(settings.virtualPhone)}`;
-    
-    const listResponse = await fetch(listUrl, {
-      headers: {
-        'Authorization': 'Basic ' + Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64')
-      }
-    });
-    
-    if (!listResponse.ok) {
-      throw new Error(`Failed to find number: ${listResponse.status}`);
-    }
-    
-    const listData = await listResponse.json() as { incoming_phone_numbers: Array<{ sid: string }> };
-    
-    if (listData.incoming_phone_numbers && listData.incoming_phone_numbers.length > 0) {
-      const phoneSid = listData.incoming_phone_numbers[0].sid;
-      
-      // Delete the number
-      const deleteUrl = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/IncomingPhoneNumbers/${phoneSid}.json`;
-      
-      await fetch(deleteUrl, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': 'Basic ' + Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64')
-        }
-      });
-    }
-    
-    // Update user settings
-    await getSupabaseClient()
-      .from("user_settings")
-      .update({
-        virtual_phone: null,
-        verification_method: 'forward',
-        updated_at: new Date().toISOString()
-      })
-      .eq("user_id", userId);
-    
-    console.log(`[TWILIO] Released number for user ${userId}`);
-    
-    return true;
-  } catch (error) {
-    console.error("[TWILIO] Error releasing number:", error);
-    return false;
-  }
-}
-
-/**
- * Handle incoming SMS webhook from Twilio
- * This should be called from an Express route
- */
-export async function handleIncomingSms(
-  from: string,
   to: string,
-  body: string
-): Promise<{ processed: boolean; taskId?: string }> {
+  message: string,
+  gatherAfter: boolean = true
+): Promise<{ success: boolean; callSid?: string; error?: string }> {
+  const config = getTwilioConfig();
+  if (!config) return { success: false, error: "Twilio not configured" };
+
   try {
-    // Find user by their virtual phone number
-    const { data: settings } = await getSupabaseClient()
-      .from("user_settings")
-      .select("user_id")
-      .eq("virtual_phone", to)
+    // Build TwiML that speaks then optionally gathers response
+    let twiml = `<Response>
+  <Say voice="Polly.Amy">${escapeXml(message)}</Say>`;
+
+    if (gatherAfter) {
+      twiml += `
+  <Gather input="speech" timeout="10" speechTimeout="auto"
+          action="${config.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
+    <Say voice="Polly.Amy">I'm listening for your response.</Say>
+  </Gather>`;
+    }
+
+    twiml += `\n</Response>`;
+
+    const params = new URLSearchParams({
+      To: to,
+      From: config.phoneNumber,
+      Twiml: twiml,
+    });
+
+    const response = await twilioRequest("/Calls.json", "POST", params);
+
+    if (!response.ok) {
+      return { success: false, error: `Twilio error: ${response.status}` };
+    }
+
+    const data = await response.json() as { sid: string };
+    await trackVoiceUsage(userId, 1);
+
+    return { success: true, callSid: data.sid };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: msg };
+  }
+}
+
+// ---- Inbound Voice Handling ----
+
+/**
+ * Generate TwiML for incoming voice call.
+ * Greets user and starts speech gathering.
+ */
+export function generateIncomingCallTwiml(userId: string, userName: string): string {
+  const config = getTwilioConfig();
+  const processUrl = config
+    ? `${config.webhookBaseUrl}/webhook/voice/process/${userId}`
+    : "/webhook/voice/process/" + userId;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Hello ${escapeXml(userName)}! This is your Aevoy assistant. How can I help you today?</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto"
+          action="${processUrl}" method="POST">
+    <Say voice="Polly.Amy">Go ahead, I'm listening.</Say>
+  </Gather>
+  <Say voice="Polly.Amy">I didn't catch that. Please call back and try again.</Say>
+</Response>`;
+}
+
+/**
+ * Generate TwiML response after processing a voice command.
+ */
+export function generateResponseTwiml(message: string, voice?: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice || "Polly.Amy"}">${escapeXml(message)}</Say>
+</Response>`;
+}
+
+/**
+ * Generate TwiML for speech synthesis.
+ */
+function generateSpeechTwiml(text: string, voice?: string): string {
+  return `<Response>
+  <Say voice="${voice || "Polly.Amy"}">${escapeXml(text)}</Say>
+</Response>`;
+}
+
+// ---- SMS ----
+
+/**
+ * Send an SMS message.
+ */
+export async function sendSms(request: SmsRequest): Promise<{
+  success: boolean;
+  messageSid?: string;
+  error?: string;
+}> {
+  const config = getTwilioConfig();
+  if (!config) return { success: false, error: "Twilio not configured" };
+
+  try {
+    const params = new URLSearchParams({
+      To: request.to,
+      From: config.phoneNumber,
+      Body: request.body,
+    });
+
+    const response = await twilioRequest("/Messages.json", "POST", params);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      return { success: false, error: `SMS error: ${response.status} ${errorData}` };
+    }
+
+    const data = await response.json() as { sid: string };
+
+    // Track usage
+    await trackSmsUsage(request.userId, 1);
+
+    console.log(`[TWILIO] SMS sent to ${request.to}: ${data.sid}`);
+    return { success: true, messageSid: data.sid };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Handle incoming SMS — process as a task or verification code.
+ */
+export async function handleIncomingSms(data: IncomingSmsData): Promise<{
+  processed: boolean;
+  taskId?: string;
+  isVerificationCode?: boolean;
+}> {
+  try {
+    // Find user by their Twilio number
+    const { data: profile } = await getSupabaseClient()
+      .from("profiles")
+      .select("id, username, email")
+      .eq("twilio_number", data.to)
       .single();
-    
-    if (!settings) {
-      console.log(`[TWILIO] No user found for number ${to}`);
+
+    if (!profile) {
+      console.log(`[TWILIO] No user found for number ${data.to}`);
       return { processed: false };
     }
-    
-    const userId = settings.user_id;
-    
-    // Find a task awaiting verification input
-    const { data: task } = await getSupabaseClient()
+
+    const userId = profile.id;
+
+    // Check if there's a task waiting for verification code
+    const { data: pendingTask } = await getSupabaseClient()
       .from("tasks")
       .select("id")
       .eq("user_id", userId)
@@ -219,31 +285,44 @@ export async function handleIncomingSms(
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
-    
-    if (!task) {
-      console.log(`[TWILIO] No pending task for user ${userId}`);
-      return { processed: false };
+
+    if (pendingTask) {
+      // Extract verification code from SMS
+      const codeMatch = data.body.match(/\b(\d{4,8})\b/);
+      const code = codeMatch ? codeMatch[1] : data.body.trim();
+
+      await getSupabaseClient()
+        .from("tasks")
+        .update({
+          status: "processing",
+          stuck_reason: null,
+          structured_intent: { verification_code: code },
+        })
+        .eq("id", pendingTask.id);
+
+      console.log(`[TWILIO] Verification code received for task ${pendingTask.id}`);
+      return { processed: true, taskId: pendingTask.id, isVerificationCode: true };
     }
-    
-    // Extract verification code from SMS
-    const codeMatch = body.match(/\b(\d{4,8})\b/);
-    const code = codeMatch ? codeMatch[1] : body.trim();
-    
-    // Update task with the code
-    await getSupabaseClient()
+
+    // Otherwise, treat as a new task via SMS
+    const { data: taskRecord } = await getSupabaseClient()
       .from("tasks")
-      .update({
-        status: "processing",
-        stuck_reason: null,
-        structured_intent: {
-          verification_code: code
-        }
+      .insert({
+        user_id: userId,
+        status: "pending",
+        email_subject: "SMS Task",
+        input_text: data.body,
+        input_channel: "sms",
       })
-      .eq("id", task.id);
-    
-    console.log(`[TWILIO] Received code for task ${task.id}`);
-    
-    return { processed: true, taskId: task.id };
+      .select()
+      .single();
+
+    if (taskRecord) {
+      console.log(`[TWILIO] SMS task created: ${taskRecord.id}`);
+      return { processed: true, taskId: taskRecord.id };
+    }
+
+    return { processed: false };
   } catch (error) {
     console.error("[TWILIO] Error handling SMS:", error);
     return { processed: false };
@@ -251,16 +330,235 @@ export async function handleIncomingSms(
 }
 
 /**
- * Get user's virtual phone number if they have one
+ * Handle incoming voice call — returns TwiML.
  */
-export async function getUserPhoneNumber(userId: string): Promise<string | null> {
-  const settings = await getUserSettings(userId);
-  return settings.virtualPhone;
+export async function handleIncomingVoice(
+  data: IncomingVoiceData
+): Promise<string> {
+  try {
+    // Find user by their Twilio number
+    const { data: profile } = await getSupabaseClient()
+      .from("profiles")
+      .select("id, username")
+      .eq("twilio_number", data.to)
+      .single();
+
+    if (!profile) {
+      return generateResponseTwiml("Sorry, this number is not associated with an Aevoy account.");
+    }
+
+    return generateIncomingCallTwiml(profile.id, profile.username);
+  } catch (error) {
+    console.error("[TWILIO] Error handling voice:", error);
+    return generateResponseTwiml("Sorry, an error occurred. Please try again later.");
+  }
 }
 
 /**
- * Check if Twilio is configured
+ * Process transcribed voice command — returns TwiML response.
  */
-export function isTwilioConfigured(): boolean {
-  return getTwilioConfig() !== null;
+export async function processVoiceCommand(
+  userId: string,
+  speechResult: string
+): Promise<string> {
+  if (!speechResult || speechResult.trim().length === 0) {
+    return generateResponseTwiml("I didn't catch that. Could you repeat your request?");
+  }
+
+  try {
+    // Get user profile
+    const { data: profile } = await getSupabaseClient()
+      .from("profiles")
+      .select("id, username, email")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      return generateResponseTwiml("Sorry, I could not find your account.");
+    }
+
+    // Create task from voice command
+    const { data: taskRecord } = await getSupabaseClient()
+      .from("tasks")
+      .insert({
+        user_id: userId,
+        status: "pending",
+        email_subject: "Voice Task",
+        input_text: speechResult,
+        input_channel: "voice",
+      })
+      .select()
+      .single();
+
+    if (taskRecord) {
+      console.log(`[TWILIO] Voice task created: ${taskRecord.id}`);
+      return generateResponseTwiml(
+        `Got it! I'll work on that for you: "${speechResult.substring(0, 100)}". I'll send you the results by email or text.`
+      );
+    }
+
+    return generateResponseTwiml("Sorry, I had trouble creating your task. Please try again.");
+  } catch (error) {
+    console.error("[TWILIO] Voice processing error:", error);
+    return generateResponseTwiml("Sorry, something went wrong. Please try again later.");
+  }
+}
+
+// ---- Phone Number Provisioning ----
+
+/**
+ * Provision a new phone number for a user.
+ */
+export async function provisionPhoneNumber(
+  userId: string,
+  areaCode: string = "604"
+): Promise<{ success: boolean; phoneNumber?: string; error?: string }> {
+  const config = getTwilioConfig();
+  if (!config) return { success: false, error: "Twilio not configured" };
+
+  try {
+    // Search for available numbers
+    const searchResponse = await twilioRequest(
+      `/AvailablePhoneNumbers/US/Local.json?AreaCode=${areaCode}&SmsEnabled=true&VoiceEnabled=true`,
+      "GET"
+    );
+
+    if (!searchResponse.ok) {
+      return { success: false, error: `Search failed: ${searchResponse.status}` };
+    }
+
+    const searchData = await searchResponse.json() as {
+      available_phone_numbers: Array<{ phone_number: string }>;
+    };
+
+    if (!searchData.available_phone_numbers?.length) {
+      return { success: false, error: "No available numbers in that area code" };
+    }
+
+    const phoneNumber = searchData.available_phone_numbers[0].phone_number;
+
+    // Purchase the number
+    const params = new URLSearchParams({
+      PhoneNumber: phoneNumber,
+      SmsUrl: `${config.webhookBaseUrl}/webhook/sms/${userId}`,
+      VoiceUrl: `${config.webhookBaseUrl}/webhook/voice/${userId}`,
+      FriendlyName: `aevoy-${userId.slice(0, 8)}`,
+    });
+
+    const purchaseResponse = await twilioRequest("/IncomingPhoneNumbers.json", "POST", params);
+
+    if (!purchaseResponse.ok) {
+      return { success: false, error: `Purchase failed: ${purchaseResponse.status}` };
+    }
+
+    // Save to user profile
+    await getSupabaseClient()
+      .from("profiles")
+      .update({ twilio_number: phoneNumber })
+      .eq("id", userId);
+
+    console.log(`[TWILIO] Provisioned ${phoneNumber} for user ${userId}`);
+    return { success: true, phoneNumber };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Release a user's phone number.
+ */
+export async function releasePhoneNumber(userId: string): Promise<boolean> {
+  const config = getTwilioConfig();
+  if (!config) return false;
+
+  try {
+    const { data: profile } = await getSupabaseClient()
+      .from("profiles")
+      .select("twilio_number")
+      .eq("id", userId)
+      .single();
+
+    if (!profile?.twilio_number) return true;
+
+    // Find and delete the number
+    const listResponse = await twilioRequest(
+      `/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(profile.twilio_number)}`,
+      "GET"
+    );
+
+    if (listResponse.ok) {
+      const listData = await listResponse.json() as {
+        incoming_phone_numbers: Array<{ sid: string }>;
+      };
+
+      if (listData.incoming_phone_numbers?.length > 0) {
+        await twilioRequest(
+          `/IncomingPhoneNumbers/${listData.incoming_phone_numbers[0].sid}.json`,
+          "DELETE"
+        );
+      }
+    }
+
+    // Clear from profile
+    await getSupabaseClient()
+      .from("profiles")
+      .update({ twilio_number: null })
+      .eq("id", userId);
+
+    return true;
+  } catch (error) {
+    console.error("[TWILIO] Release error:", error);
+    return false;
+  }
+}
+
+/**
+ * Get user's phone number.
+ */
+export async function getUserPhoneNumber(userId: string): Promise<string | null> {
+  const { data } = await getSupabaseClient()
+    .from("profiles")
+    .select("twilio_number")
+    .eq("id", userId)
+    .single();
+
+  return data?.twilio_number || null;
+}
+
+// ---- Usage Tracking ----
+
+async function trackVoiceUsage(userId: string, minutes: number): Promise<void> {
+  try {
+    await getSupabaseClient().rpc("track_voice_sms_usage", {
+      p_user_id: userId,
+      p_sms_count: 0,
+      p_voice_minutes: minutes,
+    });
+  } catch {
+    // Non-critical
+  }
+}
+
+async function trackSmsUsage(userId: string, count: number): Promise<void> {
+  try {
+    await getSupabaseClient().rpc("track_voice_sms_usage", {
+      p_user_id: userId,
+      p_sms_count: count,
+      p_voice_minutes: 0,
+    });
+  } catch {
+    // Non-critical
+  }
+}
+
+// ---- Helpers ----
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }

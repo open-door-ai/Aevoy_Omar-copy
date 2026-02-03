@@ -9,9 +9,9 @@ const supabase = createClient(
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify webhook secret
+    // Verify webhook secret — ALWAYS require it
     const secret = request.headers.get("x-webhook-secret");
-    if (process.env.AGENT_WEBHOOK_SECRET && secret !== process.env.AGENT_WEBHOOK_SECRET) {
+    if (!secret || secret !== process.env.AGENT_WEBHOOK_SECRET) {
       return NextResponse.json(
         { error: "unauthorized", message: "Invalid webhook secret" },
         { status: 401 }
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { taskId, status, error_message, tokens_used, type } = body;
+    const { taskId, userId, status, error_message, tokens_used, type } = body;
 
     if (!taskId) {
       return NextResponse.json(
@@ -28,32 +28,50 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update task in database
+    // Validate status against allowed values
+    const validStatuses = ["pending", "processing", "completed", "failed", "cancelled", "needs_review", "awaiting_confirmation", "awaiting_user_input"];
+    if (status && !validStatuses.includes(status)) {
+      return NextResponse.json(
+        { error: "bad_request", message: "Invalid status value" },
+        { status: 400 }
+      );
+    }
+
+    // Update task in database with ownership check
     const updateData: Record<string, unknown> = {};
-    
+
     if (status) {
       updateData.status = status;
       if (status === "completed" || status === "failed") {
         updateData.completed_at = new Date().toISOString();
       }
     }
-    
+
     if (error_message !== undefined) {
-      updateData.error_message = error_message;
+      updateData.error_message = String(error_message).slice(0, 1000);
     }
-    
+
     if (tokens_used !== undefined) {
-      updateData.tokens_used = tokens_used;
+      updateData.tokens_used = Math.max(0, parseInt(String(tokens_used)) || 0);
     }
-    
+
     if (type !== undefined) {
-      updateData.type = type;
+      updateData.type = String(type).slice(0, 50);
+    }
+
+    // Build query with mandatory ownership verification
+    if (!userId) {
+      return NextResponse.json(
+        { error: "bad_request", message: "userId is required for ownership verification" },
+        { status: 400 }
+      );
     }
 
     const { error } = await supabase
       .from("tasks")
       .update(updateData)
-      .eq("id", taskId);
+      .eq("id", taskId)
+      .eq("user_id", userId);
 
     if (error) {
       return NextResponse.json(

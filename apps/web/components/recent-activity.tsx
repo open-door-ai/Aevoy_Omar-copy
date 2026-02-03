@@ -8,11 +8,13 @@ interface Task {
   email_subject: string | null;
   status: string;
   type: string | null;
+  input_channel: string | null;
   created_at: string;
   completed_at: string | null;
   tokens_used: number;
   cost_usd: number | null;
   error_message: string | null;
+  verification_status: string | null;
 }
 
 interface RecentActivityProps {
@@ -62,7 +64,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
     const date = new Date(dateStr);
     const now = new Date();
     const diff = now.getTime() - date.getTime();
-    
+
     if (diff < 60 * 1000) return "Just now";
     if (diff < 60 * 60 * 1000) {
       const mins = Math.floor(diff / (60 * 1000));
@@ -85,6 +87,10 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
         return "bg-blue-100 text-blue-800 animate-pulse";
       case "pending":
         return "bg-yellow-100 text-yellow-800";
+      case "needs_review":
+        return "bg-orange-100 text-orange-800";
+      case "awaiting_confirmation":
+        return "bg-purple-100 text-purple-800";
       default:
         return "bg-gray-100 text-gray-800";
     }
@@ -93,16 +99,46 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "completed":
-        return "✓";
+        return "OK";
       case "failed":
-        return "✕";
+        return "X";
       case "processing":
-        return "⟳";
+        return "...";
       case "pending":
-        return "○";
+        return "o";
+      case "needs_review":
+        return "!";
+      case "awaiting_confirmation":
+        return "?";
       default:
-        return "•";
+        return "-";
     }
+  };
+
+  const getChannelBadge = (channel: string | null) => {
+    switch (channel) {
+      case "sms":
+        return <span className="text-xs bg-cyan-100 text-cyan-700 px-1.5 py-0.5 rounded">SMS</span>;
+      case "voice":
+        return <span className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">Voice</span>;
+      case "chat":
+        return <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">Chat</span>;
+      case "proactive":
+        return <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Proactive</span>;
+      default:
+        return null; // email is default, no badge needed
+    }
+  };
+
+  const getVerificationBadge = (status: string | null) => {
+    if (!status) return null;
+    if (status === "verified") {
+      return <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Verified</span>;
+    }
+    if (status === "unverified") {
+      return <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Unverified</span>;
+    }
+    return null;
   };
 
   return (
@@ -137,15 +173,17 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                   <p className="font-medium truncate">
                     {task.email_subject || "Task"}
                   </p>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-sm text-muted-foreground">
                       {formatTime(task.created_at)}
                     </span>
+                    {getChannelBadge(task.input_channel)}
                     {task.type && (
                       <span className="text-xs bg-muted px-2 py-0.5 rounded">
                         {task.type}
                       </span>
                     )}
+                    {getVerificationBadge(task.verification_status)}
                     {task.tokens_used > 0 && (
                       <span className="text-xs text-muted-foreground">
                         {task.tokens_used.toLocaleString()} tokens
