@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import Stripe from "stripe";
+import { createHmac, timingSafeEqual } from "crypto";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-12-18.acacia" })
-  : null;
+// Verify Stripe webhook signature without importing Stripe SDK types
+function verifyStripeSignature(payload: string, sigHeader: string, secret: string): boolean {
+  const parts = sigHeader.split(",");
+  const timestamp = parts.find(p => p.startsWith("t="))?.slice(2);
+  const signature = parts.find(p => p.startsWith("v1="))?.slice(3);
+  if (!timestamp || !signature) return false;
+
+  const signedPayload = `${timestamp}.${payload}`;
+  const expected = createHmac("sha256", secret).update(signedPayload).digest("hex");
+  return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.text();
@@ -19,132 +29,75 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing signature" }, { status: 400 });
   }
 
-  // Verify webhook signature cryptographically
-  let event: Stripe.Event;
-  try {
-    if (stripe && process.env.STRIPE_WEBHOOK_SECRET) {
-      event = stripe.webhooks.constructEvent(
-        body,
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
-    } else if (process.env.SKIP_PAYMENT_CHECKS === "true") {
-      // Only allow unverified events in test mode
-      event = JSON.parse(body) as Stripe.Event;
-      console.warn("[STRIPE] Running in test mode — signature not verified");
-    } else {
-      return NextResponse.json(
-        { error: "Stripe not configured" },
-        { status: 500 }
-      );
+  // Verify signature if secret is configured
+  if (process.env.STRIPE_WEBHOOK_SECRET) {
+    if (!verifyStripeSignature(body, signature, process.env.STRIPE_WEBHOOK_SECRET)) {
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[STRIPE] Signature verification failed:", message);
-    return NextResponse.json(
-      { error: "Invalid signature" },
-      { status: 401 }
-    );
+  } else if (process.env.SKIP_PAYMENT_CHECKS !== "true") {
+    return NextResponse.json({ error: "Stripe not configured" }, { status: 500 });
   }
 
-  console.log(`[STRIPE] Verified event: ${event.type}`);
+  let event: { type: string; data: { object: Record<string, unknown> } };
+  try {
+    event = JSON.parse(body);
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
 
   try {
+    const obj = event.data.object;
+
     switch (event.type) {
       case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
-        const email = session.customer_email;
-        const customerId = session.customer as string;
-
+        const email = obj.customer_email as string;
+        const customerId = obj.customer as string;
         if (email) {
-          await supabase
-            .from("profiles")
-            .update({
-              stripe_customer_id: customerId,
-              subscription_status: "active",
-              subscription_tier: "pro",
-              messages_limit: 1000,
-              subscription_ends_at: new Date(
-                Date.now() + 30 * 24 * 60 * 60 * 1000
-              ).toISOString()
-            })
-            .eq("email", email);
+          await getSupabase().from("profiles").update({
+            stripe_customer_id: customerId,
+            subscription_status: "active",
+            subscription_tier: "pro",
+            messages_limit: 1000,
+            subscription_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+          }).eq("email", email);
         }
         break;
       }
-
       case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customerId = subscription.customer as string;
-        const status = subscription.status;
-
-        let subscriptionStatus = "active";
-        if (status === "past_due") subscriptionStatus = "past_due";
-        else if (status === "canceled") subscriptionStatus = "cancelled";
-        else if (status === "unpaid") subscriptionStatus = "unpaid";
-
-        const periodEnd = new Date(subscription.current_period_end * 1000);
-
-        await supabase
-          .from("profiles")
-          .update({
-            subscription_status: subscriptionStatus,
-            subscription_ends_at: periodEnd.toISOString()
-          })
-          .eq("stripe_customer_id", customerId);
+        const customerId = obj.customer as string;
+        const status = obj.status as string;
+        let subStatus = "active";
+        if (status === "past_due") subStatus = "past_due";
+        else if (status === "canceled") subStatus = "cancelled";
+        else if (status === "unpaid") subStatus = "unpaid";
+        const periodEnd = new Date((obj.current_period_end as number) * 1000);
+        await getSupabase().from("profiles").update({
+          subscription_status: subStatus,
+          subscription_ends_at: periodEnd.toISOString()
+        }).eq("stripe_customer_id", customerId);
         break;
       }
-
       case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customerId = subscription.customer as string;
-
-        await supabase
-          .from("profiles")
-          .update({
-            subscription_status: "cancelled",
-            subscription_tier: "free",
-            messages_limit: 20
-          })
-          .eq("stripe_customer_id", customerId);
+        const customerId = obj.customer as string;
+        await getSupabase().from("profiles").update({
+          subscription_status: "cancelled", subscription_tier: "free", messages_limit: 20
+        }).eq("stripe_customer_id", customerId);
         break;
       }
-
       case "invoice.payment_failed": {
-        const invoice = event.data.object as Stripe.Invoice;
-        const customerId = invoice.customer as string;
-
-        await supabase
-          .from("profiles")
-          .update({ subscription_status: "past_due" })
-          .eq("stripe_customer_id", customerId);
+        const customerId = obj.customer as string;
+        await getSupabase().from("profiles").update({ subscription_status: "past_due" }).eq("stripe_customer_id", customerId);
         break;
       }
-
       case "invoice.paid": {
-        const invoice = event.data.object as Stripe.Invoice;
-        const customerId = invoice.customer as string;
-
-        await supabase
-          .from("profiles")
-          .update({
-            subscription_status: "active",
-            messages_used: 0
-          })
-          .eq("stripe_customer_id", customerId);
+        const customerId = obj.customer as string;
+        await getSupabase().from("profiles").update({ subscription_status: "active", messages_used: 0 }).eq("stripe_customer_id", customerId);
         break;
       }
-
-      default:
-        break;
     }
-
     return NextResponse.json({ received: true });
   } catch (error) {
-    console.error("[STRIPE] Error processing webhook:", error);
-    return NextResponse.json(
-      { error: "Webhook processing failed" },
-      { status: 500 }
-    );
+    console.error("[STRIPE] Webhook error:", error);
+    return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }
