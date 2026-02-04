@@ -134,7 +134,7 @@ const FILL_METHODS: Array<{ name: string; fn: FillMethod }> = [
     fn: async (page, target) => {
       if (!target.selector) return false;
       await page.locator(target.selector).focus();
-      await page.keyboard.press('Meta+a');
+      await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
       await page.keyboard.type(target.value);
       return true;
     }
@@ -212,6 +212,70 @@ const FILL_METHODS: Array<{ name: string; fn: FillMethod }> = [
       await page.fill(sel, target.value);
       return true;
     }
+  },
+
+  // 16. React controlled component
+  {
+    name: 'react_controlled',
+    fn: async (page, target) => {
+      if (!target.selector) return false;
+      const success = await page.evaluate(({ sel, val }) => {
+        const el = document.querySelector(sel) as HTMLInputElement;
+        if (!el) return false;
+        // Use native setter to trigger React's onChange
+        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype, 'value'
+        )?.set;
+        if (nativeInputValueSetter) {
+          nativeInputValueSetter.call(el, val);
+        } else {
+          el.value = val;
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+      }, { sel: target.selector, val: target.value });
+      return success;
+    }
+  },
+
+  // 17. Shadow DOM fill
+  {
+    name: 'shadow_dom_fill',
+    fn: async (page, target) => {
+      const label = target.label || target.placeholder || target.name || '';
+      if (!label) return false;
+      const success = await page.evaluate(({ label, val }) => {
+        function findInShadowRoots(root: Document | ShadowRoot): HTMLInputElement | null {
+          const inputs = Array.from(root.querySelectorAll('input, textarea'));
+          for (const input of inputs) {
+            const el = input as HTMLInputElement;
+            if (
+              el.name?.toLowerCase().includes(label.toLowerCase()) ||
+              el.placeholder?.toLowerCase().includes(label.toLowerCase()) ||
+              el.getAttribute('aria-label')?.toLowerCase().includes(label.toLowerCase())
+            ) {
+              return el;
+            }
+          }
+          const allElements = Array.from(root.querySelectorAll('*'));
+          for (const el of allElements) {
+            if (el.shadowRoot) {
+              const found = findInShadowRoots(el.shadowRoot);
+              if (found) return found;
+            }
+          }
+          return null;
+        }
+        const input = findInShadowRoots(document);
+        if (!input) return false;
+        input.value = val;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }, { label, val: target.value });
+      return success;
+    }
   }
 ];
 
@@ -229,8 +293,19 @@ export async function executeFill(page: Page, target: FillTarget): Promise<FillR
               return { success: true, method: method.name, methodIndex: i + 1 };
             }
           } catch {
-            // Verification failed but fill might have worked
-            return { success: true, method: method.name, methodIndex: i + 1 };
+            // Verification via inputValue failed, try DOM value check
+            try {
+              const domValue = await page.evaluate((sel) => {
+                const el = document.querySelector(sel) as HTMLInputElement;
+                return el?.value || null;
+              }, target.selector);
+              if (domValue === target.value) {
+                return { success: true, method: method.name, methodIndex: i + 1 };
+              }
+            } catch {
+              // Both verification methods failed
+            }
+            return { success: false, method: method.name, error: 'Fill verification failed' };
           }
         } else {
           return { success: true, method: method.name, methodIndex: i + 1 };

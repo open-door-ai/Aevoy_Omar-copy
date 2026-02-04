@@ -7,7 +7,7 @@
 
 import { processTask } from './processor.js';
 import { getProactiveEngine } from './proactive.js';
-import { compressOldMemories } from './memory.js';
+import { compressOldMemories, decayMemories } from './memory.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
@@ -78,11 +78,18 @@ async function runProactiveChecks(): Promise<void> {
     console.error('[SCHEDULER] Proactive engine error:', error);
   }
 
-  // Also run memory compression
+  // Also run memory compression + decay
   try {
     await runMemoryCompression();
   } catch (error) {
     console.error('[SCHEDULER] Memory compression error:', error);
+  }
+
+  // Run data retention cleanup (daily, checked hourly)
+  try {
+    await runDataRetention();
+  } catch (error) {
+    console.error('[SCHEDULER] Data retention error:', error);
   }
 }
 
@@ -100,10 +107,51 @@ async function runMemoryCompression(): Promise<void> {
   for (const user of users) {
     try {
       await compressOldMemories(user.id);
+      await decayMemories(user.id);
     } catch {
       // Non-critical
     }
   }
+}
+
+// Track last retention run date to avoid running more than once per day
+let lastRetentionDate = "";
+
+/**
+ * Delete completed/failed tasks and action_history older than 90 days.
+ * Runs once per day (checked on each hourly invocation).
+ */
+async function runDataRetention(): Promise<void> {
+  const today = new Date().toISOString().split("T")[0];
+  if (lastRetentionDate === today) return;
+
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Delete old action_history entries
+  const { error: ahError } = await getSupabaseClient()
+    .from("action_history")
+    .delete()
+    .lt("created_at", ninetyDaysAgo);
+
+  if (ahError) {
+    console.error("[RETENTION] action_history cleanup error:", ahError);
+  }
+
+  // Delete old completed/failed/cancelled tasks
+  const { data: deleted, error: taskError } = await getSupabaseClient()
+    .from("tasks")
+    .delete()
+    .in("status", ["completed", "cancelled", "failed"])
+    .lt("completed_at", ninetyDaysAgo)
+    .select("id");
+
+  if (taskError) {
+    console.error("[RETENTION] tasks cleanup error:", taskError);
+  } else if (deleted && deleted.length > 0) {
+    console.log(`[RETENTION] Cleaned up ${deleted.length} old tasks`);
+  }
+
+  lastRetentionDate = today;
 }
 
 /**

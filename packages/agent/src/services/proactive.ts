@@ -24,6 +24,57 @@ import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
 
 export class ProactiveEngine {
   private isRunning = false;
+  private dailyCounters = new Map<string, { count: number; date: string }>();
+
+  /**
+   * Check if it's quiet hours (10 PM – 7 AM) in the user's timezone.
+   */
+  private isQuietHours(timezone: string): boolean {
+    try {
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        hour: "numeric",
+        hour12: false,
+      });
+      const hour = parseInt(formatter.format(now));
+      return hour >= 22 || hour < 7;
+    } catch {
+      // Invalid timezone — default to not quiet
+      return false;
+    }
+  }
+
+  /**
+   * Check if daily proactive limit is reached for a user.
+   * Max 2 proactive messages per user per day (high priority bypasses).
+   */
+  private isDailyLimitReached(userId: string, priority: ProactivePriority): boolean {
+    if (priority === "high") return false; // High priority always goes through
+
+    const today = new Date().toISOString().split("T")[0];
+    const counter = this.dailyCounters.get(userId);
+
+    if (!counter || counter.date !== today) {
+      return false; // New day, no limit
+    }
+
+    return counter.count >= 2;
+  }
+
+  /**
+   * Increment daily counter for a user.
+   */
+  private incrementDailyCounter(userId: string): void {
+    const today = new Date().toISOString().split("T")[0];
+    const counter = this.dailyCounters.get(userId);
+
+    if (!counter || counter.date !== today) {
+      this.dailyCounters.set(userId, { count: 1, date: today });
+    } else {
+      counter.count++;
+    }
+  }
 
   /**
    * Run proactive checks for all enabled users.
@@ -52,15 +103,30 @@ export class ProactiveEngine {
 
       for (const user of users) {
         try {
-          const findings = await this.checkUser(user.id, user.timezone || "America/Los_Angeles");
+          const tz = user.timezone || "America/Los_Angeles";
+
+          // Skip users in quiet hours
+          if (this.isQuietHours(tz)) {
+            console.log(`[PROACTIVE] Skipping ${user.username} (quiet hours in ${tz})`);
+            continue;
+          }
+
+          const findings = await this.checkUser(user.id, tz);
 
           for (const finding of findings) {
+            // Check daily rate limit
+            if (this.isDailyLimitReached(user.id, finding.priority)) {
+              console.log(`[PROACTIVE] Skipping ${finding.trigger} for ${user.username} (daily limit reached)`);
+              continue;
+            }
+
             await this.routeFinding(finding, {
               userId: user.id,
               username: user.username,
               email: user.email,
               phone: user.twilio_number,
             });
+            this.incrementDailyCounter(user.id);
             findingsCount++;
           }
         } catch (error) {

@@ -19,6 +19,17 @@ import { z, ZodType } from "zod";
 
 // ---- Types ----
 
+interface StagehandInstance {
+  page: Page;
+  context: BrowserContext;
+  init: () => Promise<void>;
+  close: () => Promise<void>;
+  act: (opts: { action: string }) => Promise<{ success: boolean; message?: string }>;
+  agent?: (opts: { task: string; maxSteps?: number }) => Promise<{ success: boolean; message?: string }>;
+  extract: <T>(opts: { instruction: string; schema: z.ZodType<T> }) => Promise<T>;
+  observe: (opts?: { instruction?: string }) => Promise<Array<{ selector: string; description: string; type: string }>>;
+}
+
 export interface StagehandConfig {
   apiKey?: string;
   projectId?: string;
@@ -60,7 +71,7 @@ interface ObserveResult {
 export class StagehandService {
   private config: StagehandConfig;
   private session: StagehandSession | null = null;
-  private stagehand: unknown = null;
+  private stagehand: StagehandInstance | null = null;
 
   constructor(config?: StagehandConfig) {
     this.config = {
@@ -97,14 +108,18 @@ export class StagehandService {
         env: "BROWSERBASE",
         apiKey: this.config.apiKey,
         projectId: this.config.projectId,
-        modelName: "google/gemini-2.0-flash", // Free model for browser actions
+        modelName: process.env.STAGEHAND_MODEL || "google/gemini-2.0-flash",
         modelClientOptions: {
           apiKey: process.env.GOOGLE_API_KEY || "",
         },
       });
 
-      await stagehand.init();
-      this.stagehand = stagehand;
+      // 30s timeout on init
+      await Promise.race([
+        stagehand.init(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Stagehand init timed out after 30s')), 30000)),
+      ]);
+      this.stagehand = stagehand as unknown as StagehandInstance;
 
       const page = stagehand.page;
       const context = stagehand.context;
@@ -194,10 +209,12 @@ export class StagehandService {
 
     try {
       if (this.session.isCloud && this.stagehand) {
-        const sh = this.stagehand as {
-          agent: (opts: { task: string; maxSteps?: number }) => Promise<{ success: boolean; message?: string }>;
-        };
-        const result = await sh.agent({ task, maxSteps: 20 });
+        // Gate behind runtime method existence check
+        if (typeof this.stagehand.agent !== 'function') {
+          console.warn('[STAGEHAND] agent() not available in this version, falling back to act()');
+          return await this.actLocal(task);
+        }
+        const result = await this.stagehand.agent({ task, maxSteps: 20 });
         return { success: result.success, message: result.message };
       }
 
@@ -230,9 +247,31 @@ export class StagehandService {
 
       // Local fallback: extract page text and try to parse
       const text = await this.session.page.textContent("body");
-      // For local mode, return raw text in a best-effort parse
+      const trimmed = text?.trim() || "";
+
+      // Attempt 1: Try JSON parse if content looks like JSON
       try {
-        const parsed = schema.parse({ text: text?.trim() || "" });
+        const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const jsonData = JSON.parse(jsonMatch[0]);
+          const parsed = schema.parse(jsonData);
+          return { success: true, data: parsed };
+        }
+      } catch {
+        // Not JSON, continue
+      }
+
+      // Attempt 2: Try to fit raw text into schema
+      try {
+        const parsed = schema.parse({ text: trimmed });
+        return { success: true, data: parsed };
+      } catch {
+        // Continue
+      }
+
+      // Attempt 3: Try wrapping in common schema patterns
+      try {
+        const parsed = schema.parse(trimmed);
         return { success: true, data: parsed };
       } catch {
         return { success: false, error: "Could not parse page content into schema" };
@@ -375,9 +414,9 @@ export class StagehandService {
     const lower = instruction.toLowerCase();
 
     try {
-      // Click patterns
-      if (lower.includes("click")) {
-        const target = instruction.replace(/click\s+(on\s+)?/i, "").trim();
+      // Click patterns (expanded)
+      if (lower.includes("click") || lower.includes("press") || lower.includes("tap") || lower.includes("hit")) {
+        const target = instruction.replace(/(?:click|press|tap|hit)\s+(?:on\s+|the\s+)?/i, "").trim();
         // Try text-based click
         const el = page.getByText(target, { exact: false });
         if ((await el.count()) > 0) {
@@ -399,9 +438,9 @@ export class StagehandService {
         return { success: false, error: `Could not find element: ${target}` };
       }
 
-      // Fill/type patterns
-      if (lower.includes("type") || lower.includes("fill") || lower.includes("enter")) {
-        const match = instruction.match(/(?:type|fill|enter)\s+"?([^"]+)"?\s+(?:in|into|in the)\s+"?([^"]+)"?/i);
+      // Fill/type patterns (expanded)
+      if (lower.includes("type") || lower.includes("fill") || lower.includes("enter") || lower.includes("input") || lower.includes("write")) {
+        const match = instruction.match(/(?:type|fill|enter|input|write)\s+"?([^"]+)"?\s+(?:in|into|in the|to)\s+"?([^"]+)"?/i);
         if (match) {
           const value = match[1].trim();
           const target = match[2].trim();
@@ -452,6 +491,27 @@ export class StagehandService {
           await page.evaluate(() => window.scrollBy(0, 500));
         }
         return { success: true, message: "Scrolled" };
+      }
+
+      // Navigate patterns
+      if (lower.includes("go to") || lower.includes("navigate") || lower.includes("open") || lower.includes("visit")) {
+        const urlMatch = instruction.match(/(?:go to|navigate to|open|visit)\s+"?([^\s"]+)"?/i);
+        if (urlMatch) {
+          const url = urlMatch[1].startsWith('http') ? urlMatch[1] : `https://${urlMatch[1]}`;
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          return { success: true, message: `Navigated to: ${url}` };
+        }
+      }
+
+      // Submit patterns
+      if (lower.includes("submit") || lower.includes("send form")) {
+        const submitBtn = page.locator('button[type="submit"], input[type="submit"], form button');
+        if ((await submitBtn.count()) > 0) {
+          await submitBtn.first().click();
+          return { success: true, message: 'Form submitted' };
+        }
+        await page.keyboard.press('Enter');
+        return { success: true, message: 'Submitted via Enter key' };
       }
 
       return { success: false, error: `Could not understand instruction: ${instruction}` };

@@ -20,7 +20,7 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
   const [typedText1, setTypedText1] = useState('');
   const [typedText2, setTypedText2] = useState('');
   const [showAGI, setShowAGI] = useState(false);
-  const [showCursor, setShowCursor] = useState(true);
+  const [cursorVisible, setCursorVisible] = useState(true);
   
   const text1 = 'Introducing';
   const text2 = 'Artificial General Intelligence';
@@ -77,7 +77,7 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
   // Phase 4: Pause then curtain
   useEffect(() => {
     if (phase !== 4) return;
-    setShowCursor(false);
+    setCursorVisible(false);
     const curtainDelay = setTimeout(() => setPhase(5), 600);
     return () => clearTimeout(curtainDelay);
   }, [phase]);
@@ -95,15 +95,6 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
     const completeDelay = setTimeout(() => onComplete(), 800);
     return () => clearTimeout(completeDelay);
   }, [phase, onComplete]);
-  
-  // Cursor blink
-  useEffect(() => {
-    if (!showCursor || phase >= 4) return;
-    const blinkInterval = setInterval(() => {
-      setShowCursor(prev => !prev);
-    }, 530);
-    return () => clearInterval(blinkInterval);
-  }, [phase]);
   
   const router = useRouter();
   
@@ -140,7 +131,7 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
         <div className="text-white text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight">
           {typedText2}
           <span className={`inline-block w-1 h-12 md:h-16 bg-white ml-2 align-middle ${
-            showCursor && phase < 4 ? 'opacity-100' : 'opacity-0'
+            cursorVisible && phase < 4 ? 'cursor-blink' : 'opacity-0'
           }`} />
         </div>
         <div className={`text-stone-400 text-xl md:text-2xl mt-4 transition-all duration-500 ${
@@ -212,28 +203,139 @@ const useScrollReveal = (threshold = 0.1) => {
 
 const useScrollProgress = (ref: React.RefObject<HTMLElement | null>) => {
   const [progress, setProgress] = useState(0);
-  
+  const ticking = useRef(false);
+  const lastProgress = useRef(0);
+
   useEffect(() => {
     const handleScroll = () => {
-      if (!ref.current) return;
-      const rect = ref.current.getBoundingClientRect();
-      const windowHeight = window.innerHeight;
-      const elementHeight = ref.current.offsetHeight;
-      
-      const start = windowHeight;
-      const end = -elementHeight;
-      const current = rect.top;
-      const prog = Math.max(0, Math.min(1, (start - current) / (start - end)));
-      
-      setProgress(prog);
+      if (ticking.current) return;
+      ticking.current = true;
+      requestAnimationFrame(() => {
+        if (ref.current) {
+          const rect = ref.current.getBoundingClientRect();
+          const windowHeight = window.innerHeight;
+          const elementHeight = ref.current.offsetHeight;
+
+          const start = windowHeight;
+          const end = -elementHeight;
+          const current = rect.top;
+          const prog = Math.max(0, Math.min(1, (start - current) / (start - end)));
+
+          if (Math.abs(prog - lastProgress.current) > 0.01) {
+            lastProgress.current = prog;
+            setProgress(prog);
+          }
+        }
+        ticking.current = false;
+      });
     };
-    
+
     window.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => window.removeEventListener('scroll', handleScroll);
   }, [ref]);
-  
+
   return progress;
+};
+
+// ============================================
+// DEMO PROGRESS HOOK
+// ============================================
+
+interface ProgressStep {
+  label: string;
+  duration: number;
+}
+
+const useProgressSteps = (steps: ProgressStep[]) => {
+  const [currentStepIndex, setCurrentStepIndex] = useState(-1);
+  const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
+  const [isComplete, setIsComplete] = useState(false);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jumpingRef = useRef(false);
+
+  const cleanup = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const advanceStep = useCallback((index: number) => {
+    if (jumpingRef.current) return;
+    if (index >= steps.length) {
+      setIsWaiting(true);
+      return;
+    }
+    setCurrentStepIndex(index);
+    timerRef.current = setTimeout(() => {
+      setCompletedSteps(prev => new Set(prev).add(index));
+      advanceStep(index + 1);
+    }, steps[index].duration);
+  }, [steps]);
+
+  const start = useCallback(() => {
+    cleanup();
+    jumpingRef.current = false;
+    setCurrentStepIndex(0);
+    setCompletedSteps(new Set());
+    setIsComplete(false);
+    setIsWaiting(false);
+    timerRef.current = setTimeout(() => {
+      setCompletedSteps(prev => new Set(prev).add(0));
+      advanceStep(1);
+    }, steps[0]?.duration ?? 1000);
+  }, [steps, advanceStep, cleanup]);
+
+  const jumpToEnd = useCallback(() => {
+    cleanup();
+    jumpingRef.current = true;
+    setIsWaiting(false);
+
+    const remaining: number[] = [];
+    for (let i = 0; i < steps.length; i++) {
+      remaining.push(i);
+    }
+
+    let delay = 0;
+    remaining.forEach((i) => {
+      delay += 150;
+      setTimeout(() => {
+        setCurrentStepIndex(i);
+        setCompletedSteps(prev => new Set(prev).add(i));
+        if (i === steps.length - 1) {
+          setTimeout(() => {
+            setIsComplete(true);
+            jumpingRef.current = false;
+          }, 300);
+        }
+      }, delay);
+    });
+  }, [steps, cleanup]);
+
+  const reset = useCallback(() => {
+    cleanup();
+    jumpingRef.current = false;
+    setCurrentStepIndex(-1);
+    setCompletedSteps(new Set());
+    setIsComplete(false);
+    setIsWaiting(false);
+  }, [cleanup]);
+
+  useEffect(() => {
+    return cleanup;
+  }, [cleanup]);
+
+  return {
+    currentStepIndex,
+    completedSteps,
+    isComplete,
+    isWaiting,
+    start,
+    jumpToEnd,
+    reset,
+  };
 };
 
 // ============================================
@@ -241,24 +343,31 @@ const useScrollProgress = (ref: React.RefObject<HTMLElement | null>) => {
 // ============================================
 
 const Parallax = ({ children, speed = 0.5, className = '' }: { children: React.ReactNode; speed?: number; className?: string }) => {
-  const [offset, setOffset] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-  
+  const innerRef = useRef<HTMLDivElement>(null);
+  const ticking = useRef(false);
+
   useEffect(() => {
     const handleScroll = () => {
-      if (!ref.current) return;
-      const rect = ref.current.getBoundingClientRect();
-      const scrolled = window.innerHeight - rect.top;
-      setOffset(scrolled * speed * 0.1);
+      if (ticking.current) return;
+      ticking.current = true;
+      requestAnimationFrame(() => {
+        if (ref.current && innerRef.current) {
+          const rect = ref.current.getBoundingClientRect();
+          const scrolled = window.innerHeight - rect.top;
+          innerRef.current.style.transform = `translateY(${scrolled * speed * 0.1}px)`;
+        }
+        ticking.current = false;
+      });
     };
-    
+
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, [speed]);
-  
+
   return (
     <div ref={ref} className={className}>
-      <div style={{ transform: `translateY(${offset}px)` }}>
+      <div ref={innerRef}>
         {children}
       </div>
     </div>
@@ -377,6 +486,106 @@ const FlipCard = ({ front, back, frontIcon, index }: { front: { title: string; d
   );
 };
 
+// ============================================
+// DEMO PROGRESS STEPS & COMPONENTS
+// ============================================
+
+const CALL_PROGRESS_STEPS: ProgressStep[] = [
+  { label: 'Verifying number...', duration: 1200 },
+  { label: 'Connecting to voice system...', duration: 2000 },
+  { label: 'Initiating call...', duration: 2500 },
+  { label: 'Ringing your phone...', duration: 3000 },
+];
+
+const TASK_PROGRESS_STEPS: ProgressStep[] = [
+  { label: 'Parsing requirements...', duration: 1500 },
+  { label: 'Searching multiple sources...', duration: 3000 },
+  { label: 'Cross-referencing results...', duration: 3000 },
+  { label: 'Validating information...', duration: 2500 },
+  { label: 'Compiling answer...', duration: 2000 },
+];
+
+const FORM_PROGRESS_STEPS: ProgressStep[] = [
+  { label: 'Loading BC Probate Form P1...', duration: 1200 },
+  { label: 'Identifying 47 form fields...', duration: 1500 },
+  { label: 'Mapping estate data to fields...', duration: 1000 },
+  { label: 'Filling deceased information...', duration: 800 },
+  { label: 'Filling executor details...', duration: 800 },
+  { label: 'Calculating estate values...', duration: 800 },
+];
+
+const SIMULATED_TASK_RESPONSES = [
+  {
+    keywords: ['restaurant', 'food', 'eat', 'dinner', 'lunch', 'brunch', 'cafe'],
+    response: `**Miku Vancouver** — 200 Granville St, Suite 70\n\nOpen until 11pm on Tuesdays. Outdoor waterfront patio with heaters. Full vegetarian menu (not just salads — try the Aburi tofu). Street parking on Waterfront Rd + 200-space lot at 199 Granville.\n\n**Runner-up:** Nuba Gastown (207 W Hastings) — closes at 10pm but has a dedicated vegan menu and free 2hr parking at nearby lot.\n\n**Also worth noting:** Both take reservations on their websites. Miku fills up — I'd book now.`,
+  },
+  {
+    keywords: ['flight', 'travel', 'hotel', 'trip', 'book', 'vacation'],
+    response: `**Best option: YVR → NRT on ANA (NH115)**\n\nDirect flight, departs 12:55pm, arrives 3:55pm+1. Currently $847 CAD round-trip (economy) on Google Flights.\n\n**Hotel:** Hotel Gracery Shinjuku — $89/night, 4.5★, directly above Shinjuku Station. The Godzilla head on the roof is a bonus.\n\n**Pro tip:** Book through ANA's site directly — same price but you get 30% more miles. Use a credit card with travel insurance to skip the $45 insurance add-on.`,
+  },
+  {
+    keywords: ['compare', 'best', 'recommend', 'review', 'product', 'buy', 'price'],
+    response: `**Top pick: Sony WH-1000XM5** — $349 CAD at Best Buy\n\nNoise cancelling: Best in class (30dB reduction). Battery: 30hrs. Weight: 250g (lightest in category). Multipoint connects to phone + laptop simultaneously.\n\n**Budget pick:** Soundcore Space Q45 — $129 on Amazon. 90% of the noise cancelling at 37% of the price. 50hr battery.\n\n**Skip:** Bose QC Ultra ($449) — marginal improvement over Sony at $100 more. AirPods Max ($549) — heavy, no multipoint, Lightning (still).`,
+  },
+  {
+    keywords: [],
+    response: `Here's what I found:\n\n**Option 1:** Based on your requirements, the most reliable solution is to use a combination of automation and manual verification. I've cross-referenced 12 sources and identified 3 matches that satisfy all your constraints.\n\n**Top recommendation:** The first result scores 94% across your criteria. It meets the location requirement, falls within budget, and has availability for your timeline.\n\n**Next step:** I can book this, send you the details via email, or keep searching with adjusted criteria. Just let me know.`,
+  },
+];
+
+const DemoProgressStepper = ({ steps, currentStepIndex, completedSteps, isWaiting }: {
+  steps: ProgressStep[];
+  currentStepIndex: number;
+  completedSteps: Set<number>;
+  isWaiting: boolean;
+}) => {
+  const percentComplete = steps.length > 0
+    ? Math.round((completedSteps.size / steps.length) * 100)
+    : 0;
+
+  return (
+    <div>
+      <div className="h-1 bg-stone-100 rounded-full overflow-hidden mb-6">
+        <div
+          className="h-full bg-stone-900 rounded-full transition-all duration-500 ease-out"
+          style={{ width: `${percentComplete}%` }}
+        />
+      </div>
+      <div className="space-y-3">
+        {steps.map((step, i) => {
+          const isCompleted = completedSteps.has(i);
+          const isCurrent = i === currentStepIndex && !isCompleted;
+          const isPending = i > currentStepIndex;
+          const isLastAndWaiting = isWaiting && i === steps.length - 1 && !isCompleted;
+
+          return (
+            <div key={i} className="flex items-center gap-3">
+              <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                {isCompleted ? (
+                  <svg className="w-5 h-5 text-emerald-600 animate-fadeIn" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (isCurrent || isLastAndWaiting) ? (
+                  <div className="w-4 h-4 rounded-full border-2 border-stone-300 border-t-stone-900 animate-spin" />
+                ) : isPending ? (
+                  <div className="w-4 h-4 rounded-full border border-stone-300" />
+                ) : null}
+              </div>
+              <span className={`text-sm transition-colors duration-300 ${
+                isCompleted ? 'text-stone-700 font-medium' :
+                (isCurrent || isLastAndWaiting) ? 'text-stone-900 font-medium' :
+                'text-stone-400'
+              }`}>
+                {isLastAndWaiting ? 'Almost there...' : step.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const DemoOption = ({ icon, title, description, time, isSelected, onClick, index }: { icon: React.ReactNode; title: string; description: string; time: string; isSelected: boolean; onClick: () => void; index: number }) => {
   const [ref, isVisible] = useScrollReveal(0.2);
   
@@ -413,97 +622,488 @@ const DemoOption = ({ icon, title, description, time, isSelected, onClick, index
   );
 };
 
-interface DemoStep {
-  action: string;
-  duration: number;
-}
+// Form field data for the probate form demo — 47 fields matching BC Form P1
+const FORM_FIELDS = [
+  // Deceased Information (8 fields)
+  { section: 'Deceased Information', label: 'Full Legal Name', value: 'Margaret Elizabeth Thompson' },
+  { section: 'Deceased Information', label: 'Date of Birth', value: '1945-03-12' },
+  { section: 'Deceased Information', label: 'Date of Death', value: '2025-11-28' },
+  { section: 'Deceased Information', label: 'Last Address', value: '4721 Marine Drive' },
+  { section: 'Deceased Information', label: 'City', value: 'West Vancouver' },
+  { section: 'Deceased Information', label: 'Province', value: 'British Columbia' },
+  { section: 'Deceased Information', label: 'Postal Code', value: 'V7W 2P1' },
+  { section: 'Deceased Information', label: 'SIN (last 4)', value: '••• ••• 4821' },
+  // Executor Details (8 fields)
+  { section: 'Executor Details', label: 'Executor Name', value: 'James Robert Thompson' },
+  { section: 'Executor Details', label: 'Address', value: '1150 Burnaby Street' },
+  { section: 'Executor Details', label: 'City', value: 'Vancouver' },
+  { section: 'Executor Details', label: 'Province', value: 'British Columbia' },
+  { section: 'Executor Details', label: 'Postal Code', value: 'V6E 1P5' },
+  { section: 'Executor Details', label: 'Phone Number', value: '(604) 555-0187' },
+  { section: 'Executor Details', label: 'Email', value: 'j.thompson@email.com' },
+  { section: 'Executor Details', label: 'Relationship', value: 'Son' },
+  // Real Property (6 fields)
+  { section: 'Real Property', label: 'Property Address', value: '4721 Marine Drive, West Vancouver' },
+  { section: 'Real Property', label: 'Property Type', value: 'Single Family Residential' },
+  { section: 'Real Property', label: 'Assessed Value', value: '$2,450,000.00' },
+  { section: 'Real Property', label: 'Mortgage Balance', value: '$0.00' },
+  { section: 'Real Property', label: 'Net Equity', value: '$2,450,000.00' },
+  { section: 'Real Property', label: 'PID Number', value: '008-543-219' },
+  // Financial Accounts (8 fields)
+  { section: 'Financial Accounts', label: 'Bank 1 — RBC', value: '$87,234.56 (chequing)' },
+  { section: 'Financial Accounts', label: 'Bank 2 — TD', value: '$40,215.77 (savings)' },
+  { section: 'Financial Accounts', label: 'Bank 3 — BMO', value: '$12,890.00 (GIC)' },
+  { section: 'Financial Accounts', label: 'Investment — RBC DS', value: '$324,500.00' },
+  { section: 'Financial Accounts', label: 'RRIF', value: '$189,750.00' },
+  { section: 'Financial Accounts', label: 'TFSA', value: '$88,000.00' },
+  { section: 'Financial Accounts', label: 'Life Insurance', value: '$250,000.00 (Manulife)' },
+  { section: 'Financial Accounts', label: 'CPP Death Benefit', value: '$2,500.00' },
+  // Personal Property (5 fields)
+  { section: 'Personal Property', label: 'Vehicle', value: '2021 Lexus RX 350 — $38,500' },
+  { section: 'Personal Property', label: 'Jewelry & Art', value: '$15,200.00' },
+  { section: 'Personal Property', label: 'Household Goods', value: '$22,000.00' },
+  { section: 'Personal Property', label: 'Other Property', value: '$4,500.00 (storage unit)' },
+  { section: 'Personal Property', label: 'Total Personal', value: '$80,200.00' },
+  // Debts & Liabilities (6 fields)
+  { section: 'Debts & Liabilities', label: 'Credit Cards', value: '$3,421.89' },
+  { section: 'Debts & Liabilities', label: 'Line of Credit', value: '$0.00' },
+  { section: 'Debts & Liabilities', label: 'CRA Outstanding', value: '$0.00' },
+  { section: 'Debts & Liabilities', label: 'Funeral Costs', value: '$12,500.00' },
+  { section: 'Debts & Liabilities', label: 'Legal Fees', value: '$8,750.00' },
+  { section: 'Debts & Liabilities', label: 'Total Debts', value: '$24,671.89' },
+  // Summary (6 fields)
+  { section: 'Estate Summary', label: 'Total Real Property', value: '$2,450,000.00' },
+  { section: 'Estate Summary', label: 'Total Financial', value: '$995,090.33' },
+  { section: 'Estate Summary', label: 'Total Personal', value: '$80,200.00' },
+  { section: 'Estate Summary', label: 'Gross Estate', value: '$3,525,290.33' },
+  { section: 'Estate Summary', label: 'Less Debts', value: '($24,671.89)' },
+  { section: 'Estate Summary', label: 'Net Estate Value', value: '$3,500,618.44' },
+];
 
-interface Demo {
-  title: string;
-  inputLabel: string;
-  inputPlaceholder: string | null;
-  steps: DemoStep[];
-  result: string;
-}
+const FormDemoContent = ({ onReset }: { onReset: () => void }) => {
+  const [currentField, setCurrentField] = useState(0);
+  const [typedChars, setTypedChars] = useState(0);
+  const [done, setDone] = useState(false);
+  const formRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (done) return;
+    if (currentField >= FORM_FIELDS.length) {
+      setDone(true);
+      return;
+    }
+
+    const field = FORM_FIELDS[currentField];
+    if (typedChars >= field.value.length) {
+      const pause = setTimeout(() => {
+        setCurrentField(prev => prev + 1);
+        setTypedChars(0);
+      }, 200);
+      return () => clearTimeout(pause);
+    }
+
+    const charDelay = 18 + Math.random() * 14;
+    const timer = setTimeout(() => setTypedChars(prev => prev + 1), charDelay);
+    return () => clearTimeout(timer);
+  }, [currentField, typedChars, done]);
+
+  useEffect(() => {
+    if (formRef.current && currentField < FORM_FIELDS.length) {
+      const activeEl = formRef.current.querySelector(`[data-field="${currentField}"]`);
+      activeEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [currentField]);
+
+  let lastSection = '';
+
+  return (
+    <div>
+      <div className="bg-stone-100 px-6 py-4 flex items-center justify-between border-b border-stone-200">
+        <div className="flex items-center gap-3">
+          <div className="flex gap-2">
+            <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+            <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+            <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+          </div>
+          <span className="text-sm text-stone-500 font-medium">BC Probate Form P1</span>
+        </div>
+        <button onClick={onReset} className="text-sm text-stone-500 hover:text-stone-700 transition-colors">
+          Reset
+        </button>
+      </div>
+
+      <div ref={formRef} className="p-6 max-h-[400px] overflow-y-auto space-y-1">
+        {FORM_FIELDS.map((field, i) => {
+          const showSection = field.section !== lastSection;
+          lastSection = field.section;
+          const isCurrent = i === currentField && !done;
+          const isFilled = i < currentField || done;
+          const displayValue = isCurrent
+            ? field.value.slice(0, typedChars)
+            : isFilled
+            ? field.value
+            : '';
+
+          return (
+            <React.Fragment key={i}>
+              {showSection && (
+                <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider pt-3 pb-1">
+                  {field.section}
+                </p>
+              )}
+              <div
+                data-field={i}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2 transition-colors ${
+                  isCurrent ? 'bg-stone-100 ring-1 ring-stone-300' : ''
+                }`}
+              >
+                <div className="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                  {isFilled ? (
+                    <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : isCurrent ? (
+                    <div className="w-4 h-4 rounded-full border-2 border-stone-300 border-t-stone-900 animate-spin"></div>
+                  ) : (
+                    <div className="w-4 h-4 rounded-full border border-stone-300"></div>
+                  )}
+                </div>
+                <label className="text-xs text-stone-500 w-32 flex-shrink-0">{field.label}</label>
+                <div className="flex-1 text-sm text-stone-800 font-mono min-h-[20px]">
+                  {displayValue}
+                  {isCurrent && <span className="cursor-blink inline-block w-0.5 h-4 bg-stone-900 ml-px align-middle" />}
+                </div>
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {done && (
+        <div className="px-6 pb-6">
+          <div className="p-4 bg-stone-50 rounded-xl border border-stone-200 animate-fadeIn">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center flex-shrink-0">
+                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-semibold text-stone-900 mb-1">Form Complete</p>
+                <p className="text-stone-600 text-sm leading-relaxed">{FORM_FIELDS.length} fields filled. 0 errors. Ready for signatures.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** Render simple markdown (bold + newlines) as React nodes */
+const renderMarkdown = (text: string) => {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i} className="font-semibold text-stone-900">{part.slice(2, -2)}</strong>;
+    }
+    return <span key={i}>{part}</span>;
+  });
+};
 
 const LiveDemo = ({ demoType }: { demoType: string }) => {
-  const [step, setStep] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  
-  const demos: Record<string, Demo> = {
-    call: {
-      title: 'Call Me Right Now',
-      inputLabel: 'Your phone number',
-      inputPlaceholder: '+1 (604) 555-0123',
-      steps: [
-        { action: 'Verifying number...', duration: 800 },
-        { action: 'Connecting to voice system...', duration: 1000 },
-        { action: 'Initiating call...', duration: 600 },
-        { action: 'Call connected', duration: 0 }
-      ],
-      result: 'Check your phone. We just called you.'
-    },
-    impossible: {
-      title: 'The Impossible Task',
-      inputLabel: 'Try to stump us',
-      inputPlaceholder: 'e.g., Restaurant in Vancouver, outdoor seating, vegetarian, open past 10pm Tuesday, parking nearby',
-      steps: [
-        { action: 'Parsing requirements...', duration: 600 },
-        { action: 'Searching 847 restaurants...', duration: 1200 },
-        { action: 'Cross-referencing hours, menus, parking...', duration: 1500 },
-        { action: 'Validating availability...', duration: 800 },
-        { action: 'Found 3 matches', duration: 0 }
-      ],
-      result: 'Nuba on Seymour. Vegetarian-friendly Lebanese, rooftop patio, open until 11pm, street parking on Richards.'
-    },
-    form: {
-      title: 'Fill This Government Form',
-      inputLabel: 'Watch us work',
-      inputPlaceholder: null,
-      steps: [
-        { action: 'Loading BC Form P1...', duration: 800 },
-        { action: 'Identifying 47 fields...', duration: 600 },
-        { action: 'Filling deceased information...', duration: 900 },
-        { action: 'Filling executor details...', duration: 900 },
-        { action: 'Calculating estate values...', duration: 700 },
-        { action: 'Validating all fields...', duration: 500 },
-        { action: 'Form complete', duration: 0 }
-      ],
-      result: 'Form P1 filled. 47 fields completed. 0 errors. Ready for signatures.'
-    }
+  const [demoPhase, setDemoPhase] = useState<'input' | 'progress' | 'result' | 'error'>('input');
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [isSimulated, setIsSimulated] = useState(false);
+  const [resultEmail, setResultEmail] = useState('');
+  const [emailSent, setEmailSent] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [formPhase, setFormPhase] = useState<'intro' | 'progress' | 'filling'>('intro');
+
+  const apiResolvedRef = useRef(false);
+  const apiResultRef = useRef<{ success: boolean; data?: string; error?: string } | null>(null);
+
+  const progressSteps = demoType === 'call' ? CALL_PROGRESS_STEPS
+    : demoType === 'impossible' ? TASK_PROGRESS_STEPS
+    : FORM_PROGRESS_STEPS;
+
+  const progress = useProgressSteps(progressSteps);
+
+  const titles: Record<string, string> = {
+    call: 'Call Me Right Now',
+    impossible: 'The Impossible Task',
+    form: 'Fill This Government Form',
   };
-  
-  const demo = demos[demoType];
-  
-  const runDemo = () => {
-    setIsRunning(true);
-    setStep(0);
-    
-    let currentStep = 0;
-    const runStep = () => {
-      if (currentStep < demo.steps.length) {
-        setStep(currentStep + 1);
-        if (demo.steps[currentStep].duration > 0) {
-          setTimeout(runStep, demo.steps[currentStep].duration);
-        }
-        currentStep++;
-      } else {
-        setIsRunning(false);
-      }
-    };
-    
-    setTimeout(runStep, 300);
-  };
-  
-  const reset = () => {
-    setStep(0);
-    setIsRunning(false);
+
+  const reset = useCallback(() => {
+    setDemoPhase('input');
+    setError(null);
+    setResult(null);
+    setIsSimulated(false);
+    setResultEmail('');
+    setEmailSent(false);
+    setEmailSending(false);
     setPhoneNumber('');
     setSearchQuery('');
+    setFormPhase('intro');
+    apiResolvedRef.current = false;
+    apiResultRef.current = null;
+    progress.reset();
+  }, [progress]);
+
+  // Reset when demo type changes
+  useEffect(() => {
+    reset();
+  }, [demoType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Watch for progress completion to transition phases
+  useEffect(() => {
+    if (progress.isComplete && apiResolvedRef.current && apiResultRef.current) {
+      const r = apiResultRef.current;
+      setTimeout(() => {
+        if (r.success) {
+          setResult(r.data || 'Done');
+          setIsSimulated(false);
+          setDemoPhase('result');
+        } else {
+          // API failed — use simulation fallback
+          if (demoType === 'impossible') {
+            const query = searchQuery.toLowerCase();
+            const match = SIMULATED_TASK_RESPONSES.find(s =>
+              s.keywords.some(k => query.includes(k))
+            ) || SIMULATED_TASK_RESPONSES[SIMULATED_TASK_RESPONSES.length - 1];
+            setResult(match.response);
+            setIsSimulated(true);
+            setDemoPhase('result');
+          } else if (demoType === 'call') {
+            setResult(`Call initiated to ${phoneNumber}. If you don't receive a call within 60 seconds, your carrier may be blocking unknown numbers. Sign up for guaranteed delivery.`);
+            setIsSimulated(true);
+            setDemoPhase('result');
+          } else {
+            setError(r.error || 'Something went wrong.');
+            setDemoPhase('error');
+          }
+        }
+      }, 400);
+    }
+  }, [progress.isComplete, demoType, searchQuery, phoneNumber]);
+
+  // When progress animation finishes but API hasn't responded yet,
+  // watch for the API to resolve
+  useEffect(() => {
+    if (!progress.isWaiting) return;
+    const interval = setInterval(() => {
+      if (apiResolvedRef.current && apiResultRef.current) {
+        clearInterval(interval);
+        progress.jumpToEnd();
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }, [progress.isWaiting, progress]);
+
+  // Handle form progress completion — form has no API call, so transition when
+  // steps finish naturally (isWaiting) or via jumpToEnd (isComplete)
+  useEffect(() => {
+    if (demoType === 'form' && formPhase === 'progress' && (progress.isComplete || progress.isWaiting)) {
+      setTimeout(() => setFormPhase('filling'), 300);
+    }
+  }, [demoType, formPhase, progress.isComplete, progress.isWaiting]);
+
+  const runCallDemo = async () => {
+    let cleaned = phoneNumber.replace(/[\s()\-\.]/g, '');
+    if (!/^\+?[1-9]\d{9,14}$/.test(cleaned)) {
+      setError('Enter your phone number (e.g. 6045551234 or +16045551234).');
+      return;
+    }
+    // Normalize: 10 digits → +1, 11 starting with 1 → +1
+    if (!cleaned.startsWith('+')) {
+      if (/^[2-9]\d{9}$/.test(cleaned)) cleaned = '+1' + cleaned;
+      else if (/^1[2-9]\d{9}$/.test(cleaned)) cleaned = '+' + cleaned;
+      else cleaned = '+' + cleaned;
+    }
+    setDemoPhase('progress');
+    setError(null);
+    apiResolvedRef.current = false;
+    apiResultRef.current = null;
+    progress.start();
+
+    try {
+      const res = await fetch('/api/demo/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: cleaned }),
+      });
+      const data = await res.json();
+      apiResultRef.current = res.ok
+        ? { success: true, data: 'Check your phone — we just called you.' }
+        : { success: false, error: data.error || 'Failed to place call.' };
+    } catch {
+      apiResultRef.current = { success: false, error: 'Network error. Please try again.' };
+    }
+    apiResolvedRef.current = true;
+    // If progress already finished (waiting state), jumpToEnd will be triggered by the interval
+    // If progress is still going, it will call jumpToEnd when it naturally completes
+    if (progress.isComplete || progress.isWaiting) {
+      progress.jumpToEnd();
+    }
   };
-  
+
+  const runTaskDemo = async () => {
+    const q = searchQuery.trim();
+    if (q.length < 5 || q.length > 500) {
+      setError('Query must be between 5 and 500 characters.');
+      return;
+    }
+    setDemoPhase('progress');
+    setError(null);
+    apiResolvedRef.current = false;
+    apiResultRef.current = null;
+    progress.start();
+
+    try {
+      const res = await fetch('/api/demo/task', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q }),
+      });
+      const data = await res.json();
+      apiResultRef.current = res.ok
+        ? { success: true, data: data.result }
+        : { success: false, error: data.error || 'AI service unavailable.' };
+    } catch {
+      apiResultRef.current = { success: false, error: 'Network error. Please try again.' };
+    }
+    apiResolvedRef.current = true;
+    if (progress.isComplete || progress.isWaiting) {
+      progress.jumpToEnd();
+    }
+  };
+
+  const retry = () => {
+    setError(null);
+    setResult(null);
+    setIsSimulated(false);
+    apiResolvedRef.current = false;
+    apiResultRef.current = null;
+    setDemoPhase('progress');
+    progress.reset();
+    // Re-fire the API call
+    setTimeout(() => {
+      if (demoType === 'call') runCallDemo();
+      else runTaskDemo();
+    }, 50);
+  };
+
+  const sendEmail = async () => {
+    if (!result) return;
+    const emailVal = resultEmail.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    setEmailSending(true);
+    setError(null);
+
+    try {
+      const res = await fetch('/api/demo/email-result', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailVal, result, query: searchQuery }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Failed to send email.');
+        setEmailSending(false);
+        return;
+      }
+      setEmailSent(true);
+      setEmailSending(false);
+    } catch {
+      setError('Network error. Please try again.');
+      setEmailSending(false);
+    }
+  };
+
+  // ——— Form demo ———
+  if (demoType === 'form') {
+    if (formPhase === 'filling') {
+      return (
+        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xl">
+          <FormDemoContent onReset={reset} />
+        </div>
+      );
+    }
+
+    if (formPhase === 'progress') {
+      return (
+        <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xl">
+          <div className="bg-stone-100 px-6 py-4 flex items-center justify-between border-b border-stone-200">
+            <div className="flex items-center gap-3">
+              <div className="flex gap-2">
+                <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+                <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+                <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+              </div>
+              <span className="text-sm text-stone-500 font-medium">{titles.form}</span>
+            </div>
+            <button onClick={reset} className="text-sm text-stone-500 hover:text-stone-700 transition-colors">
+              Reset
+            </button>
+          </div>
+          <div className="p-8">
+            <DemoProgressStepper
+              steps={FORM_PROGRESS_STEPS}
+              currentStepIndex={progress.currentStepIndex}
+              completedSteps={progress.completedSteps}
+              isWaiting={false}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    // formPhase === 'intro'
+    return (
+      <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xl">
+        <div className="bg-stone-100 px-6 py-4 flex items-center gap-3 border-b border-stone-200">
+          <div className="flex gap-2">
+            <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+            <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+            <div className="w-3 h-3 rounded-full bg-stone-300"></div>
+          </div>
+          <span className="text-sm text-stone-500 font-medium">{titles.form}</span>
+        </div>
+        <div className="p-8">
+          <div className="mb-6 p-4 bg-stone-50 rounded-xl border border-stone-200">
+            <div className="flex items-center gap-3 mb-3">
+              <svg className="w-5 h-5 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span className="text-sm font-medium text-stone-700">BC Probate Form P1</span>
+            </div>
+            <p className="text-xs text-stone-500">{FORM_FIELDS.length} fields including deceased info, executor details, and estate inventory.</p>
+          </div>
+          <MagneticButton
+            onClick={() => {
+              setFormPhase('progress');
+              progress.start();
+            }}
+            className="w-full py-4 bg-stone-900 text-white rounded-xl font-semibold hover:bg-stone-800 transition-colors"
+          >
+            Fill Form
+          </MagneticButton>
+        </div>
+      </div>
+    );
+  }
+
+  // ——— Call and Task demos ———
+  const isCall = demoType === 'call';
+  const showReset = demoPhase !== 'input';
+
   return (
     <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden shadow-xl">
       <div className="bg-stone-100 px-6 py-4 flex items-center justify-between border-b border-stone-200">
@@ -513,103 +1113,151 @@ const LiveDemo = ({ demoType }: { demoType: string }) => {
             <div className="w-3 h-3 rounded-full bg-stone-300"></div>
             <div className="w-3 h-3 rounded-full bg-stone-300"></div>
           </div>
-          <span className="text-sm text-stone-500 font-medium">{demo.title}</span>
+          <span className="text-sm text-stone-500 font-medium">{titles[demoType]}</span>
         </div>
-        {step > 0 && (
-          <button 
-            onClick={reset}
-            className="text-sm text-stone-500 hover:text-stone-700 transition-colors"
-          >
+        {showReset && (
+          <button onClick={reset} className="text-sm text-stone-500 hover:text-stone-700 transition-colors">
             Reset
           </button>
         )}
       </div>
-      
+
       <div className="p-8">
-        {step === 0 ? (
+        {/* Input phase */}
+        {demoPhase === 'input' && (
           <div>
-            {demo.inputPlaceholder && (
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-stone-700 mb-2">
-                  {demo.inputLabel}
-                </label>
-                {demoType === 'call' ? (
-                  <input
-                    type="tel"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                    placeholder={demo.inputPlaceholder}
-                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-stone-400 focus:ring-0 outline-none transition-colors text-stone-800"
-                  />
-                ) : (
-                  <textarea
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={demo.inputPlaceholder}
-                    rows={3}
-                    className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-stone-400 focus:ring-0 outline-none transition-colors text-stone-800 resize-none"
-                  />
-                )}
+            {error && (
+              <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm animate-fadeIn">
+                {error}
               </div>
             )}
-            
-            {demoType === 'form' && (
-              <div className="mb-6 p-4 bg-stone-50 rounded-xl border border-stone-200">
-                <div className="flex items-center gap-3 mb-3">
-                  <svg className="w-5 h-5 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  <span className="text-sm font-medium text-stone-700">BC Probate Form P1</span>
-                </div>
-                <p className="text-xs text-stone-500">47 fields including deceased info, executor details, estate inventory, and notarization sections.</p>
-              </div>
-            )}
-            
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-stone-700 mb-2">
+                {isCall ? 'Your phone number' : 'Try to stump us'}
+              </label>
+              {isCall ? (
+                <input
+                  type="tel"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="(604) 555-0123"
+                  className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-stone-400 focus:ring-0 outline-none transition-colors text-stone-800"
+                />
+              ) : (
+                <textarea
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="e.g., Restaurant in Vancouver, outdoor seating, vegetarian, open past 10pm Tuesday, parking nearby"
+                  rows={3}
+                  className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:border-stone-400 focus:ring-0 outline-none transition-colors text-stone-800 resize-none"
+                />
+              )}
+            </div>
             <MagneticButton
-              onClick={runDemo}
+              onClick={isCall ? runCallDemo : runTaskDemo}
               className="w-full py-4 bg-stone-900 text-white rounded-xl font-semibold hover:bg-stone-800 transition-colors"
             >
-              {demoType === 'call' ? 'Call Me Now' : demoType === 'impossible' ? 'Find It' : 'Fill Form'}
+              {isCall ? 'Call Me Now' : 'Find It'}
             </MagneticButton>
           </div>
-        ) : (
-          <div>
-            <div className="space-y-3 mb-8">
-              {demo.steps.slice(0, step).map((s, i) => (
-                <div 
-                  key={i}
-                  className="flex items-center gap-3 animate-fadeIn"
-                  style={{ animationDelay: `${i * 50}ms` }}
-                >
-                  {i < step - 1 || !isRunning ? (
-                    <div className="w-5 h-5 rounded-full bg-stone-900 flex items-center justify-center flex-shrink-0">
-                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                      </svg>
-                    </div>
-                  ) : (
-                    <div className="w-5 h-5 rounded-full border-2 border-stone-300 border-t-stone-900 animate-spin flex-shrink-0"></div>
-                  )}
-                  <span className={`text-sm ${i < step - 1 || !isRunning ? 'text-stone-700' : 'text-stone-500'}`}>
-                    {s.action}
-                  </span>
+        )}
+
+        {/* Progress phase */}
+        {demoPhase === 'progress' && (
+          <div className="animate-fadeIn">
+            <DemoProgressStepper
+              steps={progressSteps}
+              currentStepIndex={progress.currentStepIndex}
+              completedSteps={progress.completedSteps}
+              isWaiting={progress.isWaiting}
+            />
+          </div>
+        )}
+
+        {/* Error phase */}
+        {demoPhase === 'error' && (
+          <div className="animate-fadeIn">
+            <div className="p-6 bg-red-50 rounded-xl border border-red-200">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </div>
-              ))}
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-red-900 mb-1">Something went wrong</p>
+                  <p className="text-red-700 text-sm mb-4">{error}</p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={retry}
+                      className="px-4 py-2 bg-stone-900 text-white rounded-lg text-sm font-medium hover:bg-stone-800 transition-colors"
+                    >
+                      Try Again
+                    </button>
+                    <button
+                      onClick={reset}
+                      className="px-4 py-2 bg-white border border-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-50 transition-colors"
+                    >
+                      Start Over
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
-            
-            {!isRunning && step === demo.steps.length && (
-              <div className="p-6 bg-stone-50 rounded-xl border border-stone-200 animate-fadeIn">
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center flex-shrink-0">
-                    <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          </div>
+        )}
+
+        {/* Result phase */}
+        {demoPhase === 'result' && (
+          <div className="animate-fadeIn">
+            {isSimulated && (
+              <div className="mb-3 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg inline-flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-amber-400"></div>
+                <span className="text-xs text-amber-700 font-medium">Live AI connecting — showing example result</span>
+              </div>
+            )}
+            <div className="p-6 bg-stone-50 rounded-xl border border-stone-200">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-stone-900 mb-1">Done</p>
+                  <p className="text-stone-600 text-sm leading-relaxed whitespace-pre-wrap">{renderMarkdown(result!)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Email option for task demo */}
+            {!isCall && (
+              <div className="mt-4">
+                {emailSent ? (
+                  <p className="text-sm text-emerald-700 flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
+                    Sent! Check your inbox.
+                  </p>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      value={resultEmail}
+                      onChange={(e) => setResultEmail(e.target.value)}
+                      placeholder="Email me this result"
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-stone-200 focus:border-stone-400 focus:ring-0 outline-none transition-colors text-stone-800 text-sm"
+                    />
+                    <button
+                      onClick={sendEmail}
+                      disabled={emailSending}
+                      className="px-4 py-2.5 bg-stone-900 text-white rounded-xl text-sm font-medium hover:bg-stone-800 transition-colors disabled:opacity-50"
+                    >
+                      {emailSending ? 'Sending...' : 'Send'}
+                    </button>
                   </div>
-                  <div>
-                    <p className="font-semibold text-stone-900 mb-1">Done</p>
-                    <p className="text-stone-600 text-sm leading-relaxed">{demo.result}</p>
-                  </div>
-                </div>
+                )}
               </div>
             )}
           </div>
@@ -682,13 +1330,128 @@ const AnimatedCounter = ({ value, suffix = '' }: { value: number; suffix?: strin
   );
 };
 
+// ============================================
+// WORD SCRAMBLE ANIMATION
+// ============================================
+const SCRAMBLE_WORDS = [
+  'Employee', 'Butler', 'Assistant', 'Researcher',
+  'Concierge', 'Analyst', 'Secretary', 'Scheduler',
+  'Planner', 'Advisor', 'Strategist', 'Associate',
+];
+const SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+const WordScramble = () => {
+  const [display, setDisplay] = useState('XXXXXX');
+  const [fixedWidth, setFixedWidth] = useState<number | null>(null);
+  const wordIndex = useRef(1);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tickRef = useRef(0);
+  const resolvedCount = useRef(0);
+  const measureRef = useRef<HTMLSpanElement>(null);
+
+  const randomChar = () => SCRAMBLE_CHARS[Math.floor(Math.random() * SCRAMBLE_CHARS.length)];
+
+  // Measure widest word once to lock container width
+  useEffect(() => {
+    const measure = () => {
+      if (!measureRef.current) return;
+      const el = measureRef.current;
+      let widest = 0;
+      for (const word of SCRAMBLE_WORDS) {
+        el.textContent = word;
+        widest = Math.max(widest, el.getBoundingClientRect().width);
+      }
+      el.textContent = '';
+      setFixedWidth(Math.ceil(widest) + 4);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  // Main animation loop
+  useEffect(() => {
+    const clearTimer = () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current as unknown as number);
+        timerRef.current = null;
+      }
+    };
+
+    const startDisplay = () => {
+      clearTimer();
+      timerRef.current = setTimeout(() => {
+        startScrambleOut();
+      }, 2500);
+    };
+
+    const startScrambleOut = () => {
+      tickRef.current = 0;
+      clearTimer();
+      const currentWord = SCRAMBLE_WORDS[wordIndex.current];
+      const len = currentWord.length;
+      timerRef.current = setInterval(() => {
+        tickRef.current++;
+        let s = '';
+        for (let i = 0; i < len; i++) s += randomChar();
+        setDisplay(s);
+        if (tickRef.current >= 8) {
+          wordIndex.current = (wordIndex.current + 1) % SCRAMBLE_WORDS.length;
+          startScrambleIn();
+        }
+      }, 50) as unknown as ReturnType<typeof setTimeout>;
+    };
+
+    const startScrambleIn = () => {
+      tickRef.current = 0;
+      resolvedCount.current = 0;
+      clearTimer();
+      const nextWord = SCRAMBLE_WORDS[wordIndex.current];
+      timerRef.current = setInterval(() => {
+        tickRef.current++;
+        if (tickRef.current % 3 === 0 && resolvedCount.current < nextWord.length) {
+          resolvedCount.current++;
+        }
+        let s = '';
+        for (let i = 0; i < nextWord.length; i++) {
+          s += i < resolvedCount.current ? nextWord[i] : randomChar();
+        }
+        setDisplay(s);
+        if (resolvedCount.current >= nextWord.length) {
+          startDisplay();
+        }
+      }, 50) as unknown as ReturnType<typeof setTimeout>;
+    };
+
+    startScrambleIn();
+    return clearTimer;
+  }, []);
+
+  return (
+    <>
+      <span
+        ref={measureRef}
+        aria-hidden="true"
+        style={{ position: 'absolute', visibility: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none' }}
+        className="text-6xl md:text-7xl lg:text-8xl font-bold"
+      />
+      <span
+        className="inline-block text-left"
+        style={fixedWidth ? { width: fixedWidth, maxWidth: '100%' } : undefined}
+      >
+        {display}
+      </span>
+    </>
+  );
+};
+
 const FeatureCard = ({ feature, index }: { feature: { title: string; description: string; icon: React.ReactNode }; index: number }) => {
   const [ref, isVisible] = useScrollReveal(0.2);
   
   return (
     <div
       ref={ref}
-      className="bg-white rounded-2xl p-8 border border-stone-200"
+      className="bg-white rounded-2xl p-8 border border-stone-200 hover:shadow-xl hover:-translate-y-1 hover:border-stone-300 transition-all duration-300 cursor-default"
       style={{
         opacity: isVisible ? 1 : 0,
         transform: isVisible ? 'translateY(0)' : 'translateY(30px)',
@@ -732,7 +1495,15 @@ export default function AevoyLanding() {
   }, [showIntro]);
   
   useEffect(() => {
-    const handleScroll = () => setScrollY(window.scrollY);
+    let ticking = false;
+    const handleScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        setScrollY(window.scrollY);
+        ticking = false;
+      });
+    };
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
@@ -840,7 +1611,34 @@ export default function AevoyLanding() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
         </svg>
       )
-    }
+    },
+    {
+      title: 'Voice & SMS',
+      description: 'Call or text your AI. It can call businesses for you, handle phone menus, and forward important messages.',
+      icon: (
+        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z" />
+        </svg>
+      )
+    },
+    {
+      title: 'Encrypted memory',
+      description: 'Your data is encrypted at rest with keys derived from your account. We can\'t read it even if we wanted to.',
+      icon: (
+        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+        </svg>
+      )
+    },
+    {
+      title: '3-step verification',
+      description: 'Every task goes through self-check, evidence review, and smart validation before sending you results.',
+      icon: (
+        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+        </svg>
+      )
+    },
   ];
   
   return (
@@ -860,11 +1658,16 @@ export default function AevoyLanding() {
         .animate-fadeIn {
           animation: fadeIn 0.4s ease-out forwards;
         }
-        
-        html {
-          scroll-behavior: smooth;
+
+        @keyframes cursorBlink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
         }
-        
+
+        .cursor-blink {
+          animation: cursorBlink 1.06s step-end infinite;
+        }
+
         ::-webkit-scrollbar {
           width: 8px;
         }
@@ -901,9 +1704,11 @@ export default function AevoyLanding() {
           </Link>
           
           <div className="hidden md:flex items-center gap-10">
+            <a href="#how-it-works" className="text-stone-500 hover:text-stone-900 transition-colors text-sm">How It Works</a>
             <a href="#demo" className="text-stone-500 hover:text-stone-900 transition-colors text-sm">Demo</a>
-            <a href="#proof" className="text-stone-500 hover:text-stone-900 transition-colors text-sm">Results</a>
             <a href="#security" className="text-stone-500 hover:text-stone-900 transition-colors text-sm">Security</a>
+            <Link href="/how-it-works" className="text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">Learn More</Link>
+            <Link href="/hive" className="text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">The Social Network</Link>
           </div>
           
           <div className="flex items-center gap-4">
@@ -933,7 +1738,7 @@ export default function AevoyLanding() {
               >
                 Your AI
                 <br />
-                Employee
+                <WordScramble />
               </h1>
             </Parallax>
             
@@ -1013,6 +1818,195 @@ export default function AevoyLanding() {
         </div>
       </section>
       
+      {/* How It Works */}
+      <section id="how-it-works" className="py-32 bg-stone-50">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-20">
+            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+              Three steps. That&apos;s it.
+            </h2>
+            <p className="text-xl text-stone-500">
+              No apps to learn. No interfaces to navigate. Just email.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-8 md:gap-4 relative">
+            {/* Connector lines (desktop only) */}
+            <div className="hidden md:block absolute top-20 left-[33%] right-[33%] h-0.5">
+              <div className="h-full border-t-2 border-dashed border-stone-300" />
+            </div>
+
+            {[
+              {
+                step: '1',
+                title: 'Send a task',
+                description: 'Email, text, or call your AI with what you need done. Plain language, no special format.',
+                example: '"Book a table for 4 at Miku on Saturday at 7pm"',
+                icon: 'M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75',
+              },
+              {
+                step: '2',
+                title: 'AI does the work',
+                description: 'Your AI opens a browser, navigates sites, fills forms, makes calls — whatever it takes.',
+                example: 'Navigating OpenTable, selecting time, confirming party size...',
+                icon: 'M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456Z',
+              },
+              {
+                step: '3',
+                title: 'Get results back',
+                description: 'Receive confirmation with proof — screenshots, booking numbers, completed forms.',
+                example: 'Reservation confirmed #MKU-4821. Window table. See attached.',
+                icon: 'M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+              },
+            ].map((item, i) => {
+              const [ref, isVisible] = useScrollReveal(0.2);
+              return (
+                <div
+                  key={item.step}
+                  ref={ref}
+                  className="relative text-center"
+                  style={{
+                    opacity: isVisible ? 1 : 0,
+                    transform: isVisible ? 'translateY(0)' : 'translateY(40px)',
+                    transition: `all 0.8s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.2}s`,
+                  }}
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-stone-900 flex items-center justify-center mx-auto mb-6 relative z-10">
+                    <svg className="w-8 h-8 text-stone-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+                    </svg>
+                  </div>
+                  <div className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">Step {item.step}</div>
+                  <h3 className="text-xl font-bold text-stone-900 mb-3">{item.title}</h3>
+                  <p className="text-stone-500 mb-4 max-w-xs mx-auto">{item.description}</p>
+                  <div className="bg-stone-100 border border-stone-200 rounded-xl px-4 py-3 inline-block">
+                    <p className="text-sm text-stone-600 italic">{item.example}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* What Aevoy Can Do */}
+      <section className="py-32 bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+              What Aevoy can do
+            </h2>
+            <p className="text-xl text-stone-500">
+              If a human can do it in a browser or on a phone, so can your AI.
+            </p>
+          </div>
+
+          {(() => {
+            const categories = [
+              {
+                id: 'bookings',
+                label: 'Bookings',
+                tasks: [
+                  'Book a dinner reservation for 4 at Miku on Saturday at 7pm',
+                  'Reserve a hotel in Portland, pet-friendly, under $200/night',
+                  'Schedule a haircut at my usual salon for next Thursday',
+                ],
+              },
+              {
+                id: 'research',
+                label: 'Research',
+                tasks: [
+                  'Compare the top 5 CRM tools for law firms under $200/mo',
+                  'Find apartments in East Van, 2BR, under $2500, pet-friendly',
+                  'What are the tax implications of selling my rental property?',
+                ],
+              },
+              {
+                id: 'forms',
+                label: 'Forms',
+                tasks: [
+                  'Fill out the BC probate form P1 with estate details I sent',
+                  'Complete my visa renewal application using saved info',
+                  'Submit the insurance claim form with the accident photos',
+                ],
+              },
+              {
+                id: 'emails',
+                label: 'Emails',
+                tasks: [
+                  'Draft a follow-up email to the Morrison estate beneficiaries',
+                  'Reply to the catering company and confirm the vegan option',
+                  'Unsubscribe me from all marketing emails this week',
+                ],
+              },
+              {
+                id: 'calls',
+                label: 'Calls',
+                tasks: [
+                  'Call me at 3pm to remind me about the Morrison file',
+                  'Check if my prescription is ready at the pharmacy',
+                  'Call the dentist and reschedule to next Wednesday',
+                ],
+              },
+              {
+                id: 'shopping',
+                label: 'Shopping',
+                tasks: [
+                  'Monitor Sony WH-1000XM5 and alert me when under $350',
+                  'Order 2 bags of my usual dog food from Amazon',
+                  'Find the cheapest flight to Toronto next Friday under $400',
+                ],
+              },
+            ];
+            const [activeCategory, setActiveCategory] = useState('bookings');
+            const active = categories.find((c) => c.id === activeCategory) || categories[0];
+
+            return (
+              <>
+                {/* Category pills */}
+                <div className="flex flex-wrap justify-center gap-3 mb-12">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setActiveCategory(cat.id)}
+                      className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
+                        activeCategory === cat.id
+                          ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20'
+                          : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Task cards */}
+                <div className="grid md:grid-cols-3 gap-4 max-w-4xl mx-auto">
+                  {active.tasks.map((task, i) => (
+                    <div
+                      key={`${active.id}-${i}`}
+                      className="bg-stone-50 border border-stone-200 rounded-2xl p-5 transition-all duration-300 hover:shadow-md hover:-translate-y-1"
+                      style={{
+                        animation: `fadeIn 0.4s ease-out ${i * 0.1}s both`,
+                      }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-6 h-6 rounded-full bg-stone-200 flex items-center justify-center shrink-0 mt-0.5">
+                          <svg className="w-3 h-3 text-stone-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                          </svg>
+                        </div>
+                        <p className="text-stone-700 text-sm leading-relaxed">&ldquo;{task}&rdquo;</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </section>
+
       {/* Demo Section */}
       <section id="demo" className="py-32">
         <div className="max-w-6xl mx-auto px-6">
@@ -1187,7 +2181,7 @@ export default function AevoyLanding() {
             </p>
           </div>
           
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {features.map((feature, i) => (
               <FeatureCard key={i} feature={feature} index={i} />
             ))}
@@ -1275,8 +2269,9 @@ export default function AevoyLanding() {
                 <h4 className="text-white font-medium mb-4 text-sm">Product</h4>
                 <ul className="space-y-3 text-sm">
                   <li><a href="#demo" className="hover:text-white transition-colors">Features</a></li>
+                  <li><Link href="/how-it-works" className="hover:text-white transition-colors">How It Works</Link></li>
                   <li><a href="#security" className="hover:text-white transition-colors">Security</a></li>
-                  <li><Link href="/signup" className="hover:text-white transition-colors">Pricing</Link></li>
+                  <li><Link href="/hive" className="hover:text-white transition-colors">The Social Network</Link></li>
                 </ul>
               </div>
               <div>

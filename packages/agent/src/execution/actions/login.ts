@@ -1,18 +1,8 @@
 /**
- * Login Actions — 10 Fallback Methods
+ * Login Actions — 10+ Fallback Methods
  *
  * Never gives up on login. If one method fails, tries the next.
- * Methods:
- * 1. Standard form login (username + password fields)
- * 2. Two-step login (email page → password page)
- * 3. Google OAuth flow
- * 4. Magic link detection (check email)
- * 5. Mobile site login (m.site.com)
- * 6. API-based login (direct POST)
- * 7. Cookie injection (from saved session)
- * 8. Enter key submission
- * 9. Tab navigation login (Tab between fields + Enter)
- * 10. Claude Vision-guided login (screenshot analysis)
+ * Includes OAuth, magic link, API+CSRF, and vision-guided methods.
  */
 
 import type { Page } from "playwright";
@@ -22,7 +12,8 @@ export interface LoginParams {
   url: string;
   username: string;
   password: string;
-  savedCookies?: string; // JSON stringified cookies
+  savedCookies?: string;
+  oauthCookies?: string; // Stored Google/OAuth cookies
 }
 
 export interface LoginResult {
@@ -30,11 +21,11 @@ export interface LoginResult {
   method?: string;
   error?: string;
   redirectUrl?: string;
+  magicLinkSent?: boolean;
 }
 
 /**
  * Attempt login with fallback chain.
- * Tries each method in order until one succeeds.
  */
 export async function executeLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   const methods: Array<{
@@ -49,6 +40,7 @@ export async function executeLogin(page: Page, params: LoginParams): Promise<Log
     { name: "api_login", fn: () => apiBasedLogin(page, params) },
     { name: "cookie_injection", fn: () => cookieInjectionLogin(page, params) },
     { name: "google_oauth", fn: () => googleOAuthLogin(page, params) },
+    { name: "generic_oauth", fn: () => genericOAuthLogin(page, params) },
     { name: "magic_link", fn: () => magicLinkLogin(page, params) },
     { name: "vision_guided", fn: () => visionGuidedLogin(page, params) },
   ];
@@ -61,6 +53,9 @@ export async function executeLogin(page: Page, params: LoginParams): Promise<Log
         console.log(`[LOGIN] Success with method: ${method.name}`);
         return { ...result, method: method.name };
       }
+      if (result.magicLinkSent) {
+        return { ...result, method: method.name };
+      }
       console.log(`[LOGIN] Method ${method.name} failed: ${result.error}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
@@ -68,7 +63,7 @@ export async function executeLogin(page: Page, params: LoginParams): Promise<Log
     }
   }
 
-  return { success: false, error: "All 10 login methods failed" };
+  return { success: false, error: "All login methods failed" };
 }
 
 // ---- Method 1: Standard Form Login ----
@@ -77,7 +72,6 @@ async function standardFormLogin(page: Page, params: LoginParams): Promise<Login
   await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 15000 });
   await page.waitForTimeout(1000);
 
-  // Common username/email field selectors
   const usernameSelectors = [
     'input[type="email"]',
     'input[name="email"]',
@@ -126,7 +120,6 @@ async function standardFormLogin(page: Page, params: LoginParams): Promise<Login
     return { success: false, error: "Could not find password field" };
   }
 
-  // Find and click submit button
   const submitSelectors = [
     'button[type="submit"]',
     'input[type="submit"]',
@@ -139,9 +132,10 @@ async function standardFormLogin(page: Page, params: LoginParams): Promise<Login
   for (const sel of submitSelectors) {
     const el = page.locator(sel);
     if ((await el.count()) > 0) {
+      const urlBefore = page.url();
       await el.first().click();
       await page.waitForLoadState("networkidle").catch(() => {});
-      return await checkLoginSuccess(page);
+      return await checkLoginSuccess(page, urlBefore);
     }
   }
 
@@ -154,7 +148,6 @@ async function twoStepLogin(page: Page, params: LoginParams): Promise<LoginResul
   await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 15000 });
   await page.waitForTimeout(1000);
 
-  // Step 1: Enter email/username
   const emailField = page.locator('input[type="email"], input[name="email"], input[name="username"]');
   if ((await emailField.count()) === 0) {
     return { success: false, error: "No email field for two-step" };
@@ -162,7 +155,6 @@ async function twoStepLogin(page: Page, params: LoginParams): Promise<LoginResul
 
   await emailField.first().fill(params.username);
 
-  // Click next/continue
   const nextSelectors = [
     'button:has-text("Next")',
     'button:has-text("Continue")',
@@ -184,10 +176,8 @@ async function twoStepLogin(page: Page, params: LoginParams): Promise<LoginResul
     return { success: false, error: "Could not find Next button" };
   }
 
-  // Wait for password page
   await page.waitForTimeout(2000);
 
-  // Step 2: Enter password
   const passwordField = page.locator('input[type="password"]');
   if ((await passwordField.count()) === 0) {
     return { success: false, error: "Password field not found after step 1" };
@@ -195,12 +185,12 @@ async function twoStepLogin(page: Page, params: LoginParams): Promise<LoginResul
 
   await passwordField.first().fill(params.password);
 
-  // Submit
+  const urlBefore = page.url();
   const submitBtn = page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")');
   if ((await submitBtn.count()) > 0) {
     await submitBtn.first().click();
     await page.waitForLoadState("networkidle").catch(() => {});
-    return await checkLoginSuccess(page);
+    return await checkLoginSuccess(page, urlBefore);
   }
 
   return { success: false, error: "Could not submit password in step 2" };
@@ -208,49 +198,205 @@ async function twoStepLogin(page: Page, params: LoginParams): Promise<LoginResul
 
 // ---- Method 3: Google OAuth ----
 
-async function googleOAuthLogin(page: Page, _params: LoginParams): Promise<LoginResult> {
-  // Look for Google sign-in button on the page
+async function googleOAuthLogin(page: Page, params: LoginParams): Promise<LoginResult> {
+  // If we have stored OAuth cookies, inject them first
+  if (params.oauthCookies) {
+    try {
+      const cookies = JSON.parse(params.oauthCookies);
+      await page.context().addCookies(cookies);
+    } catch {
+      // Invalid cookies, continue without
+    }
+  }
+
   const googleSelectors = [
     'a[href*="accounts.google.com"]',
     'button:has-text("Sign in with Google")',
     'button:has-text("Continue with Google")',
     '[class*="google"] button',
     'div[id="g_id_signin"]',
+    '[data-provider="google"]',
   ];
 
+  let googleBtn = null;
   for (const sel of googleSelectors) {
     const el = page.locator(sel);
     if ((await el.count()) > 0) {
-      // OAuth requires user interaction — we can detect but not fully automate
-      return { success: false, error: "Google OAuth detected but requires user interaction" };
+      googleBtn = el.first();
+      break;
     }
   }
 
-  return { success: false, error: "No Google OAuth option found" };
+  if (!googleBtn) {
+    return { success: false, error: "No Google OAuth option found" };
+  }
+
+  const urlBefore = page.url();
+  await googleBtn.click();
+  await page.waitForLoadState("networkidle").catch(() => {});
+  await page.waitForTimeout(2000);
+
+  // Check if we're on Google's login page
+  const currentUrl = page.url();
+  if (currentUrl.includes("accounts.google.com")) {
+    // Fill Google email
+    const emailInput = page.locator('input[type="email"], input[name="identifier"]');
+    if ((await emailInput.count()) > 0) {
+      await emailInput.first().fill(params.username);
+      const nextBtn = page.locator('#identifierNext, button:has-text("Next")');
+      if ((await nextBtn.count()) > 0) {
+        await nextBtn.first().click();
+        await page.waitForTimeout(2000);
+      }
+    }
+
+    // Fill Google password
+    const passInput = page.locator('input[type="password"], input[name="Passwd"]');
+    if ((await passInput.count()) > 0) {
+      await passInput.first().fill(params.password);
+      const passNext = page.locator('#passwordNext, button:has-text("Next")');
+      if ((await passNext.count()) > 0) {
+        await passNext.first().click();
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(3000);
+      }
+    }
+
+    // Handle consent screen if present
+    const allowBtn = page.locator('button:has-text("Allow"), button:has-text("Continue"), button[id="submit_approve_access"]');
+    if ((await allowBtn.count()) > 0) {
+      await allowBtn.first().click();
+      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.waitForTimeout(2000);
+    }
+
+    return await checkLoginSuccess(page, urlBefore);
+  }
+
+  // If cookies worked, we might have been redirected directly
+  return await checkLoginSuccess(page, urlBefore);
 }
 
-// ---- Method 4: Magic Link ----
+// ---- Method 4: Generic OAuth (Apple, GitHub, Microsoft, Facebook) ----
+
+async function genericOAuthLogin(page: Page, params: LoginParams): Promise<LoginResult> {
+  const oauthProviders = [
+    {
+      name: 'GitHub',
+      selectors: ['a[href*="github.com/login/oauth"]', 'button:has-text("Sign in with GitHub")', 'button:has-text("Continue with GitHub")'],
+      emailSel: 'input[name="login"]',
+      passSel: 'input[name="password"]',
+      submitSel: 'input[type="submit"]',
+    },
+    {
+      name: 'Microsoft',
+      selectors: ['a[href*="login.microsoftonline.com"]', 'button:has-text("Sign in with Microsoft")', 'button:has-text("Continue with Microsoft")'],
+      emailSel: 'input[type="email"], input[name="loginfmt"]',
+      passSel: 'input[type="password"], input[name="passwd"]',
+      submitSel: 'input[type="submit"], button:has-text("Sign in")',
+    },
+    {
+      name: 'Facebook',
+      selectors: ['a[href*="facebook.com/dialog"]', 'button:has-text("Continue with Facebook")', '[data-provider="facebook"]'],
+      emailSel: 'input[name="email"]',
+      passSel: 'input[name="pass"]',
+      submitSel: 'button[name="login"]',
+    },
+    {
+      name: 'Apple',
+      selectors: ['a[href*="appleid.apple.com"]', 'button:has-text("Sign in with Apple")', 'button:has-text("Continue with Apple")'],
+      emailSel: 'input[type="text"]#account_name_text_field',
+      passSel: 'input[type="password"]',
+      submitSel: 'button#sign-in',
+    },
+  ];
+
+  for (const provider of oauthProviders) {
+    let oauthBtn = null;
+    for (const sel of provider.selectors) {
+      const el = page.locator(sel);
+      if ((await el.count()) > 0) {
+        oauthBtn = el.first();
+        break;
+      }
+    }
+
+    if (!oauthBtn) continue;
+
+    console.log(`[LOGIN] Found ${provider.name} OAuth, attempting...`);
+    const urlBefore = page.url();
+    await oauthBtn.click();
+    await page.waitForLoadState("networkidle").catch(() => {});
+    await page.waitForTimeout(2000);
+
+    // Fill credentials on provider's page
+    const emailInput = page.locator(provider.emailSel);
+    if ((await emailInput.count()) > 0) {
+      await emailInput.first().fill(params.username);
+
+      // Submit email (some providers have separate steps)
+      const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), input[type="submit"]');
+      if ((await nextBtn.count()) > 0) {
+        await nextBtn.first().click();
+        await page.waitForTimeout(2000);
+      }
+    }
+
+    const passInput = page.locator(provider.passSel);
+    if ((await passInput.count()) > 0) {
+      await passInput.first().fill(params.password);
+
+      const submitBtn = page.locator(provider.submitSel);
+      if ((await submitBtn.count()) > 0) {
+        await submitBtn.first().click();
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(3000);
+      }
+    }
+
+    // Handle consent/authorize screen
+    const authorizeBtn = page.locator('button:has-text("Authorize"), button:has-text("Allow"), button:has-text("Continue"), button:has-text("Accept")');
+    if ((await authorizeBtn.count()) > 0) {
+      await authorizeBtn.first().click();
+      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.waitForTimeout(2000);
+    }
+
+    const result = await checkLoginSuccess(page, urlBefore);
+    if (result.success) return result;
+  }
+
+  return { success: false, error: "No supported OAuth provider found" };
+}
+
+// ---- Method 5: Magic Link ----
 
 async function magicLinkLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   const magicSelectors = [
     'button:has-text("Email me a link")',
     'button:has-text("Magic link")',
     'button:has-text("Send login link")',
+    'button:has-text("Passwordless")',
+    'button:has-text("Sign in with email")',
     'a:has-text("Email me a link")',
+    'a:has-text("Magic link")',
   ];
 
   for (const sel of magicSelectors) {
     const el = page.locator(sel);
     if ((await el.count()) > 0) {
-      // Fill email first
       const emailField = page.locator('input[type="email"], input[name="email"]');
       if ((await emailField.count()) > 0) {
         await emailField.first().fill(params.username);
       }
       await el.first().click();
+      await page.waitForTimeout(2000);
+
+      // Magic link sent — the email router will forward it to /task/magic-link
       return {
         success: false,
-        error: "Magic link sent — check email for login link",
+        magicLinkSent: true,
+        error: "Magic link sent — waiting for email to be forwarded by Cloudflare worker",
       };
     }
   }
@@ -258,7 +404,7 @@ async function magicLinkLogin(page: Page, params: LoginParams): Promise<LoginRes
   return { success: false, error: "No magic link option found" };
 }
 
-// ---- Method 5: Mobile Site Login ----
+// ---- Method 6: Mobile Site Login ----
 
 async function mobileSiteLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   const url = new URL(params.url);
@@ -272,36 +418,69 @@ async function mobileSiteLogin(page: Page, params: LoginParams): Promise<LoginRe
   }
 }
 
-// ---- Method 6: API-Based Login ----
+// ---- Method 7: API-Based Login with CSRF ----
 
 async function apiBasedLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   const url = new URL(params.url);
+
+  // First, GET the login page to extract CSRF token
+  await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+
+  const csrfToken = await page.evaluate(() => {
+    // Check meta tags
+    const metaCsrf = document.querySelector(
+      'meta[name="csrf-token"], meta[name="_csrf"], meta[name="csrf"], meta[name="X-CSRF-Token"]'
+    );
+    if (metaCsrf) return metaCsrf.getAttribute('content');
+
+    // Check hidden form fields
+    const hiddenCsrf = document.querySelector(
+      'input[name="_csrf"], input[name="csrf_token"], input[name="_token"], input[name="authenticity_token"]'
+    );
+    if (hiddenCsrf) return (hiddenCsrf as HTMLInputElement).value;
+
+    return null;
+  }).catch(() => null);
+
   const loginEndpoints = [
     `${url.origin}/api/login`,
     `${url.origin}/api/auth/login`,
     `${url.origin}/api/v1/login`,
+    `${url.origin}/api/v1/auth/login`,
     `${url.origin}/auth/login`,
+    `${url.origin}/login`,
+    `${url.origin}/api/session`,
+    `${url.origin}/api/v1/session`,
   ];
 
   for (const endpoint of loginEndpoints) {
     try {
       const response = await page.evaluate(
-        async ({ ep, user, pass }) => {
+        async ({ ep, user, pass, csrf }) => {
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (csrf) {
+            headers["X-CSRF-Token"] = csrf;
+            headers["X-XSRF-TOKEN"] = csrf;
+          }
+
+          const body: Record<string, string> = { email: user, password: pass };
+          if (csrf) body._csrf = csrf;
+
           const res = await fetch(ep, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: user, password: pass }),
+            headers,
+            body: JSON.stringify(body),
             credentials: "include",
           });
           return { ok: res.ok, status: res.status };
         },
-        { ep: endpoint, user: params.username, pass: params.password }
+        { ep: endpoint, user: params.username, pass: params.password, csrf: csrfToken }
       );
 
       if (response.ok) {
-        // Reload page to apply session
+        const urlBefore = page.url();
         await page.reload();
-        return await checkLoginSuccess(page);
+        return await checkLoginSuccess(page, urlBefore);
       }
     } catch {
       // Endpoint doesn't exist, try next
@@ -311,7 +490,7 @@ async function apiBasedLogin(page: Page, params: LoginParams): Promise<LoginResu
   return { success: false, error: "No API login endpoints found" };
 }
 
-// ---- Method 7: Cookie Injection ----
+// ---- Method 8: Cookie Injection ----
 
 async function cookieInjectionLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   if (!params.savedCookies) {
@@ -321,47 +500,45 @@ async function cookieInjectionLogin(page: Page, params: LoginParams): Promise<Lo
   try {
     const cookies = JSON.parse(params.savedCookies);
     await page.context().addCookies(cookies);
+    const urlBefore = page.url();
     await page.reload();
-    return await checkLoginSuccess(page);
+    return await checkLoginSuccess(page, urlBefore);
   } catch {
     return { success: false, error: "Cookie injection failed" };
   }
 }
 
-// ---- Method 8: Enter Key Submission ----
+// ---- Method 9: Enter Key Submission ----
 
 async function enterKeyLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 15000 });
   await page.waitForTimeout(1000);
 
-  // Fill username
   const emailField = page.locator('input[type="email"], input[name="email"], input[name="username"]');
   if ((await emailField.count()) === 0) {
     return { success: false, error: "No email field found" };
   }
   await emailField.first().fill(params.username);
 
-  // Fill password
   const passwordField = page.locator('input[type="password"]');
   if ((await passwordField.count()) === 0) {
     return { success: false, error: "No password field found" };
   }
   await passwordField.first().fill(params.password);
 
-  // Press Enter instead of clicking submit
+  const urlBefore = page.url();
   await passwordField.first().press("Enter");
   await page.waitForLoadState("networkidle").catch(() => {});
 
-  return await checkLoginSuccess(page);
+  return await checkLoginSuccess(page, urlBefore);
 }
 
-// ---- Method 9: Tab Navigation Login ----
+// ---- Method 10: Tab Navigation Login ----
 
 async function tabNavigationLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   await page.goto(params.url, { waitUntil: "domcontentloaded", timeout: 15000 });
   await page.waitForTimeout(1000);
 
-  // Find first visible input and start tabbing
   const firstInput = page.locator("input:visible").first();
   if ((await firstInput.count()) === 0) {
     return { success: false, error: "No visible inputs" };
@@ -372,13 +549,15 @@ async function tabNavigationLogin(page: Page, params: LoginParams): Promise<Logi
   await page.keyboard.press("Tab");
   await page.waitForTimeout(300);
   await page.keyboard.type(params.password);
+
+  const urlBefore = page.url();
   await page.keyboard.press("Enter");
 
   await page.waitForLoadState("networkidle").catch(() => {});
-  return await checkLoginSuccess(page);
+  return await checkLoginSuccess(page, urlBefore);
 }
 
-// ---- Method 10: Vision-Guided Login ----
+// ---- Method 11: Vision-Guided Login ----
 
 async function visionGuidedLogin(page: Page, params: LoginParams): Promise<LoginResult> {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -406,65 +585,99 @@ async function visionGuidedLogin(page: Page, params: LoginParams): Promise<Login
     if (selectors.passwordSelector) {
       await page.locator(selectors.passwordSelector).first().fill(params.password);
     }
+
+    const urlBefore = page.url();
     if (selectors.submitSelector) {
       await page.locator(selectors.submitSelector).first().click();
     }
 
     await page.waitForLoadState("networkidle").catch(() => {});
-    return await checkLoginSuccess(page);
+    return await checkLoginSuccess(page, urlBefore);
   } catch {
     return { success: false, error: "Vision could not identify login fields" };
   }
 }
 
-// ---- Success Check ----
+// ---- Success Check (improved with scoped matching + URL change detection) ----
 
-async function checkLoginSuccess(page: Page): Promise<LoginResult> {
+async function checkLoginSuccess(page: Page, urlBefore?: string): Promise<LoginResult> {
   await page.waitForTimeout(2000);
 
   const url = page.url();
-  const text = (await page.textContent("body"))?.toLowerCase() || "";
+  const urlLower = url.toLowerCase();
 
-  // Check for error indicators
+  // Strong negative: still on login/signin page
+  if (urlLower.includes("/login") || urlLower.includes("/signin") || urlLower.includes("/sign-in")) {
+    // Only fail if URL didn't change at all
+    if (!urlBefore || url === urlBefore) {
+      // Check for error indicators
+      const text = (await page.textContent("body"))?.toLowerCase() || "";
+      const errorIndicators = [
+        "invalid password", "incorrect password", "wrong password",
+        "login failed", "authentication failed", "invalid credentials",
+        "try again", "account not found",
+      ];
+      for (const indicator of errorIndicators) {
+        if (text.includes(indicator)) {
+          return { success: false, error: `Login error: "${indicator}" detected` };
+        }
+      }
+      return { success: false, error: "Still on login page" };
+    }
+  }
+
+  // Scope success matching to title, h1/h2, and main content (not footer)
+  const scopedText = await page.evaluate(() => {
+    const parts: string[] = [];
+    parts.push(document.title);
+    document.querySelectorAll('h1, h2').forEach(el => {
+      parts.push(el.textContent || '');
+    });
+    const main = document.querySelector('main, [role="main"], .main-content, #main');
+    if (main) {
+      parts.push((main.textContent || '').substring(0, 500));
+    }
+    return parts.join(' ').toLowerCase();
+  }).catch(() => '');
+
+  // Check for error indicators in scoped text
   const errorIndicators = [
-    "invalid password",
-    "incorrect password",
-    "wrong password",
-    "login failed",
-    "authentication failed",
-    "invalid credentials",
-    "try again",
-    "account not found",
+    "invalid password", "incorrect password", "wrong password",
+    "login failed", "authentication failed", "invalid credentials",
+    "try again", "account not found",
   ];
 
   for (const indicator of errorIndicators) {
-    if (text.includes(indicator)) {
+    if (scopedText.includes(indicator)) {
       return { success: false, error: `Login error: "${indicator}" detected` };
     }
   }
 
-  // Check for success indicators
+  // Check for success indicators in scoped text
   const successIndicators = [
-    "dashboard",
-    "welcome",
-    "account",
-    "profile",
-    "home",
-    "inbox",
-    "feed",
-    "settings",
+    "dashboard", "welcome", "account", "profile",
+    "home", "inbox", "feed", "settings", "my ",
   ];
 
-  const urlLower = url.toLowerCase();
   for (const indicator of successIndicators) {
-    if (urlLower.includes(indicator) || text.includes(`welcome`)) {
+    if (scopedText.includes(indicator)) {
       return { success: true, redirectUrl: url };
     }
   }
 
-  // If we navigated away from the login page, likely success
-  if (!urlLower.includes("login") && !urlLower.includes("signin") && !urlLower.includes("auth")) {
-    return { success: true, redirectUrl: url };
+  // URL change detection: if we navigated away from login, likely success
+  if (urlBefore && url !== urlBefore) {
+    if (!urlLower.includes("login") && !urlLower.includes("signin") && !urlLower.includes("auth")) {
+      return { success: true, redirectUrl: url };
+    }
+  }
+
+  // Check URL for success patterns
+  const successUrlPatterns = ["dashboard", "home", "account", "profile", "inbox", "feed", "welcome"];
+  for (const pattern of successUrlPatterns) {
+    if (urlLower.includes(pattern)) {
+      return { success: true, redirectUrl: url };
+    }
   }
 
   return { success: false, error: "Could not confirm login success" };

@@ -11,6 +11,8 @@ function validateEnv(): void {
   const required: { key: string; label: string }[] = [
     { key: "ENCRYPTION_KEY", label: "Encryption key (32 byte hex string)" },
     { key: "AGENT_WEBHOOK_SECRET", label: "Agent webhook secret" },
+    { key: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL" },
+    { key: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase service role key" },
   ];
 
   const missing = required.filter(({ key }) => !process.env[key]);
@@ -42,6 +44,19 @@ function validateEnv(): void {
     console.error("[STARTUP] ENCRYPTION_KEY must be a 64-character hex string (32 bytes).");
     process.exit(1);
   }
+
+  // Warn for optional but important env vars
+  const optional = [
+    "RESEND_API_KEY",
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "BROWSERBASE_API_KEY",
+    "BROWSERBASE_PROJECT_ID",
+  ];
+  const missingOptional = optional.filter((key) => !process.env[key]);
+  if (missingOptional.length > 0) {
+    console.warn("[STARTUP] Optional env vars not set (features will be limited):", missingOptional.join(", "));
+  }
 }
 
 validateEnv();
@@ -52,6 +67,7 @@ import rateLimit from "express-rate-limit";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
 import { startScheduler } from "./services/scheduler.js";
 import { handleIncomingSms, handleIncomingVoice, processVoiceCommand } from "./services/twilio.js";
+import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest } from "./types/index.js";
 
@@ -74,19 +90,29 @@ const globalLimiter = rateLimit({
 const taskLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
-  keyGenerator: (req) => req.body?.userId || req.ip || "unknown",
+  keyGenerator: (req) => {
+    const forwarded = req.headers["x-forwarded-for"];
+    const clientIp = typeof forwarded === "string" ? forwarded.split(",")[0]?.trim() : req.ip;
+    return req.body?.userId || clientIp || "unknown";
+  },
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "rate_limited", message: "Too many tasks, please wait" },
+  validate: false,
 });
 
 const twilioLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
-  keyGenerator: (req) => req.body?.From || req.ip || "unknown",
+  keyGenerator: (req) => {
+    const forwarded = req.headers["x-forwarded-for"];
+    const clientIp = typeof forwarded === "string" ? forwarded.split(",")[0]?.trim() : req.ip;
+    return req.body?.From || clientIp || "unknown";
+  },
   standardHeaders: true,
   legacyHeaders: false,
   message: "Rate limited",
+  validate: false,
 });
 
 // ---- Middleware ----
@@ -327,6 +353,34 @@ app.post("/task/verification", taskLimiter, async (req, res) => {
     .finally(() => { activeTasks--; });
 });
 
+// ---- Email Connection Test ----
+
+app.post("/email/test", taskLimiter, async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required" });
+  }
+
+  try {
+    const { testImapConnection, detectProvider } = await import("./services/inbox.js");
+    const provider = detectProvider(email);
+    if (!provider) {
+      return res.json({ success: false, error: "Unsupported email provider" });
+    }
+
+    const result = await testImapConnection(email, password, provider.imap_host, provider.imap_port);
+    return res.json(result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Test failed";
+    return res.json({ success: false, error: msg });
+  }
+});
+
 // ---- Twilio Voice Webhooks ----
 
 app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
@@ -363,13 +417,18 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
     res.send(twiml);
 
     if (speechResult.trim()) {
-      const { data: profile } = await getSupabaseClient()
-        .from("profiles").select("username, email").eq("id", userId).single();
+      // Use identity resolver for consistent user lookup
+      const resolved = await resolveUser(userId);
+      const profile = resolved || await (async () => {
+        const { data } = await getSupabaseClient()
+          .from("profiles").select("id, username, email").eq("id", userId).single();
+        return data ? { userId: data.id, username: data.username, email: data.email, phone: null } : null;
+      })();
 
       if (profile) {
         activeTasks++;
         processIncomingTask({
-          userId,
+          userId: profile.userId,
           username: profile.username,
           from: profile.email,
           subject: "Voice Task",
@@ -386,6 +445,64 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Amy">Sorry, I had trouble processing that. Please try again.</Say>
+</Response>`);
+  }
+});
+
+// ---- Twilio Message-Taking Webhook (Receptionist) ----
+
+app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const speechResult = req.body.SpeechResult || "";
+  const callerNumber = req.query.caller as string || req.body.From || "unknown";
+
+  console.log(`[TWILIO] Message received for user ${userId?.slice(0, 8)} from ${callerNumber}`);
+
+  try {
+    // Respond to the caller
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Thank you! I've recorded your message and will make sure it's delivered right away. Goodbye!</Say>
+</Response>`);
+
+    // Send message to user via email and SMS
+    if (speechResult.trim()) {
+      const { data: profile } = await getSupabaseClient()
+        .from("profiles").select("username, email, twilio_number").eq("id", userId).single();
+
+      if (profile) {
+        const { sendResponse: sendEmail } = await import("./services/email.js");
+        const { sendSms } = await import("./services/twilio.js");
+
+        const messageBody = `You received a call from ${callerNumber}.\n\nTheir message: "${speechResult}"\n\nReply to this email or text to follow up.`;
+
+        // Email the user
+        await sendEmail({
+          to: profile.email,
+          from: `${profile.username}@aevoy.com`,
+          subject: `Call from ${callerNumber}`,
+          body: messageBody,
+        });
+
+        // SMS the user if they have a phone
+        if (profile.twilio_number) {
+          await sendSms({
+            userId,
+            to: profile.email, // This would need to be their personal phone
+            body: `[Aevoy] Missed call from ${callerNumber}: "${speechResult.substring(0, 140)}"`,
+          });
+        }
+
+        console.log(`[TWILIO] Message delivered to ${profile.username} from ${callerNumber}`);
+      }
+    }
+  } catch (error) {
+    console.error("[TWILIO] Message recording error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Sorry, there was an error. Please try calling back later.</Say>
 </Response>`);
   }
 });
@@ -417,16 +534,21 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
       }
 
       if (!result.isVerificationCode && result.taskId) {
-        const { data: profile } = await getSupabaseClient()
-          .from("profiles")
-          .select("id, username, email")
-          .eq("twilio_number", to)
-          .single();
+        // Use identity resolver for consistent phone-based lookup
+        const resolved = await resolveUser(to);
+        const profile = resolved || await (async () => {
+          const { data } = await getSupabaseClient()
+            .from("profiles")
+            .select("id, username, email")
+            .eq("twilio_number", to)
+            .single();
+          return data ? { userId: data.id, username: data.username, email: data.email, phone: null } : null;
+        })();
 
         if (profile) {
           activeTasks++;
           processIncomingTask({
-            userId: profile.id,
+            userId: profile.userId,
             username: profile.username,
             from: profile.email,
             subject: "SMS Task",
@@ -459,6 +581,28 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "internal_error", message: "An unexpected error occurred" });
+});
+
+// ---- Process Crash Handlers ----
+
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception:", err);
+  // Give time for logs to flush, then exit
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled rejection:", reason);
+});
+
+process.on("SIGTERM", () => {
+  console.log("[SHUTDOWN] SIGTERM received, shutting down gracefully...");
+  process.exit(0);
+});
+
+process.on("SIGINT", () => {
+  console.log("[SHUTDOWN] SIGINT received, shutting down...");
+  process.exit(0);
 });
 
 // ---- Start Server ----

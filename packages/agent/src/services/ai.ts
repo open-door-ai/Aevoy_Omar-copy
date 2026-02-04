@@ -13,10 +13,51 @@
  * - Ollama (local): Free (privacy mode, offline)
  */
 
+import crypto from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { getSupabaseClient } from "../utils/supabase.js";
+import { getCompiledPrompt } from "./personality.js";
 import type { Memory, Action, AIResponse, TaskType, ModelProvider } from "../types/index.js";
+import { withTimeout } from "../utils/timeout.js";
+import { CircuitBreaker } from "../execution/retry.js";
+
+// ---- Response Cache (LRU, 100 entries, 5-min TTL) ----
+
+interface CacheEntry {
+  response: AIResponse;
+  timestamp: number;
+}
+
+const responseCache = new Map<string, CacheEntry>();
+const CACHE_MAX_SIZE = 100;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(taskType: string, prompt: string): string {
+  const input = `${taskType}:${prompt.substring(0, 200)}`;
+  return crypto.createHash("sha256").update(input).digest("hex");
+}
+
+function getCachedResponse(key: string): AIResponse | null {
+  const entry = responseCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    responseCache.delete(key);
+    return null;
+  }
+  return entry.response;
+}
+
+function setCachedResponse(key: string, response: AIResponse): void {
+  // Evict oldest if at capacity
+  if (responseCache.size >= CACHE_MAX_SIZE) {
+    const oldest = responseCache.keys().next().value;
+    if (oldest !== undefined) {
+      responseCache.delete(oldest);
+    }
+  }
+  responseCache.set(key, { response, timestamp: Date.now() });
+}
 
 // Lazy initialization of clients
 let anthropicClient: Anthropic | null = null;
@@ -135,6 +176,28 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
 };
 
+// ---- Per-model timeouts (ms) ----
+const MODEL_TIMEOUTS: Record<ModelProvider, number> = {
+  deepseek: 30000,
+  kimi: 30000,
+  gemini: 15000,
+  sonnet: 45000,
+  haiku: 20000,
+  ollama: 60000,
+};
+
+// ---- Circuit breakers per provider ----
+const providerCircuitBreakers: Map<ModelProvider, CircuitBreaker> = new Map();
+
+function getCircuitBreaker(provider: ModelProvider): CircuitBreaker {
+  let cb = providerCircuitBreakers.get(provider);
+  if (!cb) {
+    cb = new CircuitBreaker({ threshold: 5, windowMs: 600000, cooldownMs: 60000 });
+    providerCircuitBreakers.set(provider, cb);
+  }
+  return cb;
+}
+
 // ---- Provider availability checks ----
 
 function isProviderAvailable(provider: ModelProvider): boolean {
@@ -144,7 +207,7 @@ function isProviderAvailable(provider: ModelProvider): boolean {
     case 'gemini': return !!process.env.GOOGLE_API_KEY;
     case 'sonnet':
     case 'haiku': return !!process.env.ANTHROPIC_API_KEY;
-    case 'ollama': return !!process.env.OLLAMA_HOST || true; // Always try localhost
+    case 'ollama': return !!process.env.OLLAMA_HOST;
     default: return false;
   }
 }
@@ -313,9 +376,20 @@ export async function checkUserBudget(userId: string): Promise<{ remaining: numb
     }
 
     const totalSpent = data.reduce((sum, row) => sum + (row.cost_usd || 0), 0);
-    const remaining = Math.max(0, MONTHLY_BUDGET_USD - totalSpent);
 
-    return { remaining, overBudget: totalSpent >= MONTHLY_BUDGET_USD };
+    // Also include estimated cost for in-progress tasks
+    const { data: inProgress } = await getSupabaseClient()
+      .from("tasks")
+      .select("cost_usd")
+      .eq("user_id", userId)
+      .eq("status", "processing")
+      .gte("created_at", startOfMonth.toISOString());
+
+    const inProgressCost = (inProgress || []).reduce((sum, row) => sum + (row.cost_usd || 0), 0);
+    const totalWithInProgress = totalSpent + inProgressCost;
+    const remaining = Math.max(0, MONTHLY_BUDGET_USD - totalWithInProgress);
+
+    return { remaining, overBudget: totalWithInProgress >= MONTHLY_BUDGET_USD };
   } catch {
     // If we can't check budget, don't block the task
     return { remaining: MONTHLY_BUDGET_USD, overBudget: false };
@@ -385,8 +459,23 @@ export async function generateResponse(
     return generateMockResponse(username, taskSubject, taskBody);
   }
 
-  const systemPromptWithUser = `${SYSTEM_PROMPT}\n\nYou are ${username}'s personal AI assistant. Address them by name when appropriate.`;
+  // Use personality system for system prompt (falls back to SYSTEM_PROMPT if files missing)
+  const systemPromptWithUser = await getCompiledPrompt(
+    userId || "anonymous",
+    username,
+    memory
+  );
   const userPrompt = buildUserPrompt(memory, taskSubject, taskBody);
+
+  // Check response cache (skip for vision/complex types)
+  if (taskType !== "vision" && taskType !== "complex") {
+    const cacheKey = getCacheKey(taskType, userPrompt);
+    const cached = getCachedResponse(cacheKey);
+    if (cached) {
+      console.log(`[AI] Cache hit for ${taskType}`);
+      return cached;
+    }
+  }
 
   // Get the fallback chain for this task type
   const chain = ROUTING_TABLE[taskType] || ROUTING_TABLE.understand;
@@ -396,26 +485,80 @@ export async function generateResponse(
       continue;
     }
 
+    // Check circuit breaker
+    const cb = getCircuitBreaker(config.provider);
+    if (!cb.canExecute()) {
+      console.log(`[AI] ${config.provider} circuit breaker open, skipping`);
+      continue;
+    }
+
     try {
-      const result = await callProvider(config, systemPromptWithUser, userPrompt);
+      const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
+      const result = await withTimeout(
+        callProvider(config, systemPromptWithUser, userPrompt),
+        timeout,
+        `${config.provider}/${config.model}`
+      );
       const cost = calculateCost(config, result.inputTokens, result.outputTokens);
       const totalTokens = result.inputTokens + result.outputTokens;
 
       console.log(`[AI] ${config.provider}/${config.model} success | Tokens: ${totalTokens} | Cost: $${cost.toFixed(6)}`);
+      cb.recordSuccess();
 
       // Track cost
       await trackApiCall(userId, config.model, result.inputTokens, result.outputTokens, cost);
 
-      return {
+      const aiResponse: AIResponse = {
         content: result.content,
         actions: parseActions(result.content),
         tokensUsed: totalTokens,
         cost,
         model: config.model,
       };
+
+      // Cache the response (skip vision/complex)
+      if (taskType !== "vision" && taskType !== "complex") {
+        const cacheKey = getCacheKey(taskType, userPrompt);
+        setCachedResponse(cacheKey, aiResponse);
+      }
+
+      return aiResponse;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.log(`[AI] ${config.provider}/${config.model} failed: ${errorMessage}`);
+
+      // Handle 429 rate limit: check Retry-After header
+      if (errorMessage.includes('429') || errorMessage.includes('rate limit')) {
+        const retryMatch = errorMessage.match(/retry.after[:\s]*(\d+)/i);
+        const retryAfterSec = retryMatch ? parseInt(retryMatch[1]) : 0;
+        if (retryAfterSec > 0 && retryAfterSec <= 10) {
+          console.log(`[AI] Rate limited, waiting ${retryAfterSec}s and retrying same model...`);
+          await new Promise(resolve => setTimeout(resolve, retryAfterSec * 1000));
+          try {
+            const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
+            const retryResult = await withTimeout(
+              callProvider(config, systemPromptWithUser, userPrompt),
+              timeout,
+              `${config.provider}/${config.model} retry`
+            );
+            const cost = calculateCost(config, retryResult.inputTokens, retryResult.outputTokens);
+            const totalTokens = retryResult.inputTokens + retryResult.outputTokens;
+            cb.recordSuccess();
+            await trackApiCall(userId, config.model, retryResult.inputTokens, retryResult.outputTokens, cost);
+            return {
+              content: retryResult.content,
+              actions: parseActions(retryResult.content),
+              tokensUsed: totalTokens,
+              cost,
+              model: config.model,
+            };
+          } catch {
+            // Retry also failed, fall through
+          }
+        }
+      }
+
+      cb.recordFailure();
     }
   }
 
@@ -484,6 +627,35 @@ export async function generateVisionResponse(
       return { content, cost: 0 };
     } catch (error) {
       console.error("[AI] Vision (Gemini) failed:", error);
+    }
+  }
+
+  // Fallback to Claude Haiku (cheaper vision)
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const response = await getAnthropicClient().messages.create({
+        model: "claude-3-5-haiku-latest",
+        max_tokens: 1024,
+        system: systemPrompt || "Analyze this image and respond concisely.",
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: imageBase64 }
+            },
+            { type: "text", text: prompt }
+          ]
+        }]
+      });
+
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      const cost = (response.usage.input_tokens * 0.25 + response.usage.output_tokens * 1.25) / 1_000_000;
+
+      console.log(`[AI] Vision (Haiku) | Cost: $${cost.toFixed(6)}`);
+      return { content, cost };
+    } catch (error) {
+      console.error("[AI] Vision (Haiku) failed:", error);
     }
   }
 
@@ -676,7 +848,24 @@ export function cleanResponseForEmail(response: string): string {
 }
 
 /**
- * Classify a task using AI (or heuristics as fallback)
+ * Valid task classifications returned by classifyTask.
+ */
+const VALID_TASK_TYPES = [
+  "research", "booking", "form", "shopping", "email",
+  "reminder", "writing", "voice", "general",
+] as const;
+
+type ClassifiedTaskType = typeof VALID_TASK_TYPES[number];
+
+/**
+ * Map of task types that require browser access.
+ */
+const BROWSER_TASK_TYPES: ReadonlySet<string> = new Set([
+  "research", "booking", "form", "shopping",
+]);
+
+/**
+ * Classify a task using keyword heuristics first, then AI fallback for ambiguous cases.
  */
 export async function classifyTask(userMessage: string): Promise<{
   taskType: string;
@@ -686,10 +875,11 @@ export async function classifyTask(userMessage: string): Promise<{
 }> {
   const text = userMessage.toLowerCase();
 
-  let taskType = "general";
+  let taskType: ClassifiedTaskType = "general";
   let needsBrowser = false;
   const domains: string[] = [];
 
+  // Fast path: keyword matching
   if (text.includes("research") || text.includes("find") || text.includes("search") || text.includes("look up")) {
     taskType = "research";
     needsBrowser = true;
@@ -710,6 +900,33 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "writing";
   } else if (text.includes("call") || text.includes("phone") || text.includes("dial")) {
     taskType = "voice";
+  }
+
+  // AI fallback: when keyword matching produces low-confidence "general" result
+  if (taskType === "general") {
+    try {
+      const classificationPrompt = `Classify this user task into exactly one category. Respond with ONLY the category name, nothing else.
+
+Categories: research, booking, form, shopping, email, reminder, writing, voice, general
+
+Task: "${userMessage.substring(0, 500)}"`;
+
+      const { result } = await quickValidate(
+        classificationPrompt,
+        "You are a task classifier. Respond with exactly one word: the task category."
+      );
+
+      const aiType = result.toLowerCase().trim().replace(/[^a-z]/g, "");
+      const validTypes: readonly string[] = VALID_TASK_TYPES;
+      if (validTypes.includes(aiType)) {
+        taskType = aiType as ClassifiedTaskType;
+        needsBrowser = BROWSER_TASK_TYPES.has(taskType);
+        console.log(`[AI] classifyTask AI fallback: "${taskType}"`);
+      }
+    } catch {
+      // AI classification failed — keep keyword-based "general" result
+      console.log("[AI] classifyTask AI fallback failed, using keyword result");
+    }
   }
 
   // Extract URLs/domains

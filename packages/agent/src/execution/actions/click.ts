@@ -75,41 +75,57 @@ const CLICK_METHODS: Array<{ name: string; fn: ClickMethod }> = [
     }
   },
   
-  // 6. Force click (bypasses overlays)
+  // 6. Force click (bypasses overlays, checks disabled state)
   {
     name: 'force_click',
     fn: async (page, target) => {
       if (!target.selector) return false;
+      // Check if element is disabled before force clicking
+      const isDisabled = await page.evaluate((sel) => {
+        const el = document.querySelector(sel) as HTMLElement;
+        if (!el) return true;
+        return el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
+      }, target.selector);
+      if (isDisabled) return false;
       await page.click(target.selector, { force: true, timeout: 5000 });
       return true;
     }
   },
   
-  // 7. JavaScript click
+  // 7. JavaScript click (with error handling)
   {
     name: 'js_click',
     fn: async (page, target) => {
       if (!target.selector) return false;
       const clicked = await page.evaluate((sel) => {
-        const el = document.querySelector(sel) as HTMLElement;
-        if (el) { 
-          el.click(); 
-          return true; 
+        try {
+          const el = document.querySelector(sel) as HTMLElement;
+          if (el) {
+            el.click();
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
         }
-        return false;
       }, target.selector);
       return clicked;
     }
   },
   
-  // 8. Coordinates click (center of element)
+  // 8. Coordinates click (center of element, scroll-adjusted)
   {
     name: 'coordinates_click',
     fn: async (page, target) => {
       if (!target.selector) return false;
       const box = await page.locator(target.selector).boundingBox();
       if (!box) return false;
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      // boundingBox() returns viewport-relative coords, no scroll adjustment needed
+      // but ensure element is in viewport first
+      await page.locator(target.selector).scrollIntoViewIfNeeded().catch(() => {});
+      const updatedBox = await page.locator(target.selector).boundingBox();
+      if (!updatedBox) return false;
+      await page.mouse.click(updatedBox.x + updatedBox.width / 2, updatedBox.y + updatedBox.height / 2);
       return true;
     }
   },
@@ -187,7 +203,7 @@ const CLICK_METHODS: Array<{ name: string; fn: ClickMethod }> = [
     name: 'dispatch_event',
     fn: async (page, target) => {
       if (!target.selector) return false;
-      await page.evaluate((sel) => {
+      const clicked = await page.evaluate((sel) => {
         const el = document.querySelector(sel) as HTMLElement;
         if (el) {
           el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -195,7 +211,7 @@ const CLICK_METHODS: Array<{ name: string; fn: ClickMethod }> = [
         }
         return false;
       }, target.selector);
-      return true;
+      return clicked;
     }
   }
 ];

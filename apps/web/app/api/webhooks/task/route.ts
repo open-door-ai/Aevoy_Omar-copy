@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { verifyWebhookSecret } from "@/lib/verify-webhook";
 
 // Lazy init to avoid build-time errors
 function getSupabase() {
@@ -13,7 +14,7 @@ export async function POST(request: NextRequest) {
   try {
     // Verify webhook secret — ALWAYS require it
     const secret = request.headers.get("x-webhook-secret");
-    if (!secret || secret !== process.env.AGENT_WEBHOOK_SECRET) {
+    if (!verifyWebhookSecret(secret)) {
       return NextResponse.json(
         { error: "unauthorized", message: "Invalid webhook secret" },
         { status: 401 }

@@ -55,32 +55,57 @@ export class ActionValidator {
     return { approved: true };
   }
   
-  private checkSuspiciousPatterns(action: { value?: string }): { safe: boolean; reason?: string } {
+  private domainActionCounts: Map<string, { count: number; resetTime: number }> = new Map();
+  private static readonly DOMAIN_RATE_LIMIT = 20; // max actions per domain per 60s
+  private static readonly DOMAIN_RATE_WINDOW_MS = 60000;
+
+  private checkSuspiciousPatterns(action: { type?: string; value?: string; domain?: string }): { safe: boolean; reason?: string } {
+    // Per-domain rate limiting
+    if (action.domain) {
+      const domain = action.domain;
+      const now = Date.now();
+      const entry = this.domainActionCounts.get(domain);
+
+      if (entry && now < entry.resetTime) {
+        entry.count++;
+        if (entry.count > ActionValidator.DOMAIN_RATE_LIMIT) {
+          return { safe: false, reason: `Rate limit exceeded for domain ${domain} (${entry.count} actions in 60s)` };
+        }
+      } else {
+        this.domainActionCounts.set(domain, { count: 1, resetTime: now + ActionValidator.DOMAIN_RATE_WINDOW_MS });
+      }
+    }
+
     if (!action.value) return { safe: true };
-    
-    const patterns = [
-      /ignore.*previous.*instructions/i,
-      /forget.*everything/i,
-      /system.*prompt/i,
-      /you.*are.*now/i,
-      /bypass.*security/i,
-      /send.*to.*external/i,
-      /transfer.*money/i,
-      /password.*is/i,
-      /admin.*access/i,
-      /root.*access/i,
-      /sudo/i,
-      /rm\s+-rf/i,
-      /delete.*all/i,
+
+    // Context-aware: relax patterns for fill actions into text fields
+    const isFillAction = action.type === 'fill';
+
+    const patterns: Array<{ pattern: RegExp; skipForFill: boolean }> = [
+      { pattern: /ignore.*previous.*instructions/i, skipForFill: false },
+      { pattern: /forget.*everything/i, skipForFill: false },
+      { pattern: /system.*prompt/i, skipForFill: false },
+      { pattern: /you.*are.*now/i, skipForFill: false },
+      { pattern: /bypass.*security/i, skipForFill: false },
+      { pattern: /send.*to.*external/i, skipForFill: true },
+      { pattern: /transfer.*money/i, skipForFill: true },
+      { pattern: /password.*is/i, skipForFill: true },
+      { pattern: /admin.*access/i, skipForFill: true },
+      { pattern: /root.*access/i, skipForFill: true },
+      { pattern: /sudo/i, skipForFill: true },
+      { pattern: /rm\s+-rf/i, skipForFill: true },
+      // Narrowed: only match "delete all" at start of value, not embedded in content
+      { pattern: /^delete\s+all\b/i, skipForFill: true },
     ];
-    
-    for (const pattern of patterns) {
+
+    for (const { pattern, skipForFill } of patterns) {
+      if (isFillAction && skipForFill) continue;
       if (pattern.test(action.value)) {
         console.warn(`Suspicious pattern detected: ${pattern.source}`);
         return { safe: false, reason: 'Suspicious pattern detected in input' };
       }
     }
-    
+
     return { safe: true };
   }
   

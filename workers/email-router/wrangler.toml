@@ -3,16 +3,18 @@ main = "src/index.ts"
 compatibility_date = "2024-09-25"
 
 # Email routing configuration
-# After deploying, go to Cloudflare dashboard:
-# 1. Email > Email Routing
-# 2. Enable Email Routing for your domain
-# 3. Add catch-all rule pointing to this worker
+# After deploying:
+# 1. Set secrets (see below)
+# 2. Go to Cloudflare dashboard > Email > Email Routing
+# 3. Enable Email Routing for aevoy.com
+# 4. Add catch-all rule pointing to this worker
+#
+# Set secrets with:
+#   npx wrangler secret put AGENT_URL              # e.g. https://agent.aevoy.com
+#   npx wrangler secret put AGENT_WEBHOOK_SECRET   # same value as in agent server .env
+#   npx wrangler secret put SUPABASE_URL           # https://xxx.supabase.co
+#   npx wrangler secret put SUPABASE_SERVICE_KEY   # sb_secret_xxx
 
 [vars]
-# These will be overridden by secrets in production
+# Overridden by secrets in production
 AGENT_URL = "http://localhost:3001"
-
-# Add these as secrets using: wrangler secret put SECRET_NAME
-# - AGENT_WEBHOOK_SECRET
-# - SUPABASE_URL
-# - SUPABASE_SERVICE_KEY

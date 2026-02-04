@@ -34,6 +34,7 @@ declare module "express-rate-limit" {
     standardHeaders?: boolean;
     legacyHeaders?: boolean;
     message?: string | Record<string, string>;
+    validate?: boolean | Record<string, boolean>;
   }
 
   function rateLimit(options?: RateLimitOptions): RequestHandler;

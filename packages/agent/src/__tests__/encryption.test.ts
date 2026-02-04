@@ -9,39 +9,39 @@ describe("memory encryption (encrypt/decrypt)", () => {
   it("round-trips correctly", async () => {
     const { encrypt, decrypt } = await import("../services/memory.js");
     const plaintext = "Hello, this is a secret message!";
-    const encrypted = encrypt(plaintext);
+    const encrypted = await encrypt(plaintext);
     expect(encrypted).not.toBe(plaintext);
     expect(encrypted).toContain(":");
-    const decrypted = decrypt(encrypted);
+    const decrypted = await decrypt(encrypted);
     expect(decrypted).toBe(plaintext);
   });
 
   it("produces different ciphertext for same plaintext (random IV)", async () => {
     const { encrypt } = await import("../services/memory.js");
     const plaintext = "same message";
-    const enc1 = encrypt(plaintext);
-    const enc2 = encrypt(plaintext);
+    const enc1 = await encrypt(plaintext);
+    const enc2 = await encrypt(plaintext);
     expect(enc1).not.toBe(enc2);
   });
 
   it("handles empty string", async () => {
     const { encrypt, decrypt } = await import("../services/memory.js");
-    const encrypted = encrypt("");
-    const decrypted = decrypt(encrypted);
+    const encrypted = await encrypt("");
+    const decrypted = await decrypt(encrypted);
     expect(decrypted).toBe("");
   });
 
   it("handles unicode text", async () => {
     const { encrypt, decrypt } = await import("../services/memory.js");
     const plaintext = "Hello 🌍 Bonjour 日本語 مرحبا";
-    const encrypted = encrypt(plaintext);
-    const decrypted = decrypt(encrypted);
+    const encrypted = await encrypt(plaintext);
+    const decrypted = await decrypt(encrypted);
     expect(decrypted).toBe(plaintext);
   });
 
   it("fails to decrypt with wrong data", async () => {
     const { decrypt } = await import("../services/memory.js");
-    expect(() => decrypt("bad:data:here")).toThrow();
+    await expect(decrypt("bad:data:here")).rejects.toThrow();
   });
 });
 

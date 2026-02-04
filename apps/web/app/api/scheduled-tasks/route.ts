@@ -20,7 +20,7 @@ export async function GET() {
 
     if (error) {
       console.error("Error fetching scheduled tasks:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
     }
 
     return NextResponse.json({ tasks: tasks || [] });
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
 
     if (error) {
       console.error("Error creating scheduled task:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
     }
 
     return NextResponse.json({ task }, { status: 201 });
@@ -121,7 +121,7 @@ export async function DELETE(request: Request) {
 
     if (error) {
       console.error("Error deleting scheduled task:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
     }
 
     return NextResponse.json({ success: true });

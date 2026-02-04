@@ -5,28 +5,26 @@ services:
     build:
       context: ./packages/agent
       dockerfile: Dockerfile
-    container_name: handlit-agent
+    container_name: aevoy-agent
     restart: unless-stopped
     ports:
       - "3001:3001"
+    env_file:
+      - apps/web/.env.local
     environment:
       - NODE_ENV=production
       - AGENT_PORT=3001
-      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - RESEND_API_KEY=${RESEND_API_KEY}
-      - AGENT_WEBHOOK_SECRET=${AGENT_WEBHOOK_SECRET}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - AGENT_URL=http://localhost:3001
+      - ALLOWED_ORIGINS=https://aevoy.com,https://www.aevoy.com,http://localhost:3000
+      - TEST_MODE=false
     volumes:
       - agent-workspaces:/app/workspaces
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
 volumes:
   agent-workspaces:
