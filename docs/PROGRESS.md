@@ -1,6 +1,6 @@
 # Aevoy V2 Implementation Progress
 
-Last updated: 2026-02-02
+Last updated: 2026-02-04
 
 ## Phase 0: Documentation & Tracking
 - [x] Create `docs/SPEC-V2.md`
@@ -85,6 +85,16 @@ Last updated: 2026-02-02
 - [x] Add TEST_MODE and SKIP_PAYMENT_CHECKS flags
 - [x] Skip payment walls in processor.ts when TEST_MODE=true
 
+## Session 4: Bug Fixes + Onboarding + Landing Page (2026-02-04)
+- [x] Fixed 26 bugs from security audit (7 critical, 9 high, 10 medium)
+- [x] Rebuilt onboarding: 5-step full-screen wizard (welcome, email, phone, interview, tour)
+- [x] Created 4 onboarding API endpoints (check-username, complete, request-call, send-questionnaire)
+- [x] Expanded landing page: How It Works section, What Aevoy Can Do (6 categories), 6 feature cards
+- [x] Created /how-it-works page (6 capability tabs, FAQ accordion, pricing, security)
+- [x] Created migration_v5.sql (hive mind tables) and migration_v6.sql (onboarding + user_settings + agent_cards)
+- [x] Full E2E Playwright testing — all pages, all interactions, mobile responsive
+- [x] Spec cross-check: 95% complete against SPEC-V2.md
+
 ## Security Hardening
 - [x] .env in .gitignore (was already)
 - [x] Input validation on API routes (type, content checks)
@@ -93,8 +103,12 @@ Last updated: 2026-02-02
 - [x] Intent locking before execution
 - [x] Action validation against locked intent
 - [x] Parameterized queries (Supabase client handles this)
-- [ ] Rate limiting on API routes (recommended for production)
-- [ ] CSP headers on web app (recommended for production)
+- [x] Rate limiting on API routes (express-rate-limit on agent + web endpoints)
+- [x] CSP headers on web app (next.config.ts: CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy)
+- [x] Response channel routing (SMS/voice tasks respond via same channel)
+- [x] Memory TTL cleanup (30-min eviction with periodic timer in memory.ts)
+- [x] Per-task browser isolation (factory pattern in stagehand.ts, no shared singleton)
+- [x] Created docs/DEPLOYMENT.md production runbook
 
 ## API Keys Status
 - [x] Supabase (URL + Anon + Service Role)
@@ -104,10 +118,10 @@ Last updated: 2026-02-02
 - [x] Encryption Key
 - [x] JWT Secret (generated)
 - [x] Agent Webhook Secret
-- [ ] **GOOGLE_API_KEY** — needed for Gemini Flash (free tier) — get from Google AI Studio
-- [ ] **KIMI_API_KEY** — needed for Kimi K2 — get from kimi.ai / Moonshot AI
-- [ ] **BROWSERBASE_API_KEY** — needed for cloud browser automation — get from browserbase.com
-- [ ] **BROWSERBASE_PROJECT_ID** — needed for cloud browser automation — get from browserbase.com
-- [ ] **TWILIO_ACCOUNT_SID** — needed for voice/SMS — get from twilio.com
-- [ ] **TWILIO_AUTH_TOKEN** — needed for voice/SMS — get from twilio.com
-- [ ] **TWILIO_PHONE_NUMBER** — need to purchase a number on Twilio
+- [x] Google API Key (Gemini Flash — free tier)
+- [x] Kimi API Key (Kimi K2 — Moonshot AI)
+- [x] Browserbase API Key + Project ID (cloud browser automation)
+- [x] Twilio Account SID + Auth Token + Phone Number (+17789008951)
+- [ ] **STRIPE_SECRET_KEY** — deferred (not needed for beta)
+- [ ] **STRIPE_WEBHOOK_SECRET** — deferred (not needed for beta)
+- [ ] **ADMIN_USER_IDS** — set after first signup (copy UUID from Supabase Auth)

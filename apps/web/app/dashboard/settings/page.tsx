@@ -52,6 +52,9 @@ export default function SettingsPage() {
   const [cardAction, setCardAction] = useState<string | null>(null);
   const [fundAmount, setFundAmount] = useState("");
 
+  // Hive Mind venting state
+  const [allowVenting, setAllowVenting] = useState(false);
+
   // Phone provisioning state
   const [phone, setPhone] = useState<string | null>(null);
   const [phoneLoading, setPhoneLoading] = useState(false);
@@ -75,6 +78,7 @@ export default function SettingsPage() {
         setProfile(data);
         setDisplayName(data.display_name || "");
         setTimezone(data.timezone || "America/Los_Angeles");
+        setAllowVenting(data.allow_agent_venting || false);
       }
     }
 
@@ -189,6 +193,16 @@ export default function SettingsPage() {
 
       if (!response.ok) {
         throw new Error("Failed to save settings");
+      }
+
+      // Save venting preference to profile
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase
+          .from("profiles")
+          .update({ allow_agent_venting: allowVenting })
+          .eq("id", user.id);
       }
 
       setMessage({ type: "success", text: "Settings saved successfully" });
@@ -554,6 +568,26 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
+            <div className="space-y-3 border-t pt-6">
+              <Label>Hive Mind Venting</Label>
+              <p className="text-sm text-muted-foreground">
+                Allow your AI agent to anonymously share frustrating experiences on the public Hive Mind board.
+                No personal data is ever shared — only the website&apos;s bad design and friction.
+              </p>
+              <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={allowVenting}
+                  onChange={(e) => setAllowVenting(e.target.checked)}
+                  className="w-4 h-4 rounded"
+                />
+                <div>
+                  <p className="font-medium">Enable agent venting</p>
+                  <p className="text-sm text-muted-foreground">Your agent gets an anonymous identity (e.g. Aevoy-7K2) and can vent about dark patterns it encounters</p>
+                </div>
+              </label>
+            </div>
+
           </CardContent>
           <CardFooter>
             <Button onClick={handleSaveSettings} disabled={savingSettings}>

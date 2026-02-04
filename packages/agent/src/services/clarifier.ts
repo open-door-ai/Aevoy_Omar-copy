@@ -165,7 +165,19 @@ Only include entities that are relevant. Remove empty or null values.`;
       unclearParts: parsed.unclear_parts || []
     };
 
-    const confidence = parsed.confidence || 50;
+    let confidence = parsed.confidence || 50;
+
+    // Per-task-type confidence caps for missing required fields
+    if (structuredIntent.taskType === 'booking' && !structuredIntent.entities.date) {
+      confidence = Math.min(confidence, 60);
+    }
+    if (structuredIntent.taskType === 'email' && !structuredIntent.entities.recipient) {
+      confidence = Math.min(confidence, 50);
+    }
+    if (structuredIntent.taskType === 'shopping' && !structuredIntent.entities.amount) {
+      confidence = Math.min(confidence, 65);
+    }
+
     const needsConfirmation = shouldConfirm(structuredIntent, confidence, settings);
 
     console.log(`[CLARIFY] Task: ${structuredIntent.taskType}, Confidence: ${confidence}, NeedsConfirm: ${needsConfirmation}`);
@@ -271,17 +283,22 @@ function formatKey(key: string): string {
 /**
  * Parse user's confirmation reply
  */
-export function parseConfirmationReply(text: string): 'yes' | 'no' | 'changes' {
+export function parseConfirmationReply(text: string): 'yes' | 'no' | 'changes' | 'unclear' {
   const normalized = text.toLowerCase().trim();
-  
-  if (normalized === 'yes' || normalized === 'y' || normalized === 'confirm' || normalized === 'ok') {
+
+  if (normalized === 'yes' || normalized === 'y' || normalized === 'confirm' || normalized === 'ok' || normalized === 'go ahead' || normalized === 'do it') {
     return 'yes';
   }
-  
-  if (normalized === 'no' || normalized === 'n' || normalized === 'cancel' || normalized === 'stop') {
+
+  if (normalized === 'no' || normalized === 'n' || normalized === 'cancel' || normalized === 'stop' || normalized === 'nevermind') {
     return 'no';
   }
-  
+
+  // Handle uncertain replies
+  if (normalized.includes("not sure") || normalized.includes("maybe") || normalized.includes("i guess") || normalized.includes("uncertain")) {
+    return 'unclear';
+  }
+
   return 'changes';
 }
 
@@ -306,12 +323,25 @@ export function parseCardCommand(text: string): { type: string; amount?: number 
     return { type: 'unfreeze' };
   }
   
-  // Check for funding
+  // Check for funding (numeric)
   const fundMatch = normalized.match(/add\s+\$?(\d+(?:\.\d{2})?)\s+to\s+(?:my\s+)?card/i);
   if (fundMatch) {
     const amount = parseFloat(fundMatch[1]) * 100; // Convert to cents
     return { type: 'fund', amount };
   }
-  
+
+  // Check for funding (word-form amounts)
+  const wordAmounts: Record<string, number> = {
+    'ten': 10, 'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50,
+    'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90, 'hundred': 100,
+    'five': 5, 'fifteen': 15, 'twenty-five': 25, 'two hundred': 200,
+    'five hundred': 500, 'thousand': 1000,
+  };
+  for (const [word, dollars] of Object.entries(wordAmounts)) {
+    if (normalized.includes(`add ${word}`) && normalized.includes('card')) {
+      return { type: 'fund', amount: dollars * 100 };
+    }
+  }
+
   return null;
 }

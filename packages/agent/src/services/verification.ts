@@ -197,40 +197,79 @@ export async function enterVerificationCode(
   try {
     // Clean the code (remove spaces, dashes)
     const cleanCode = code.replace(/[\s-]/g, '');
-    
+    let filled = false;
+
     // Try to find and fill the input
     if (detection.inputSelector) {
-      // Check if it's multiple single-digit inputs
       const inputs = await page.$$(detection.inputSelector);
-      
+
       if (inputs.length > 1 && inputs.length === cleanCode.length) {
-        // Fill each digit separately
         for (let i = 0; i < inputs.length; i++) {
           await inputs[i].fill(cleanCode[i]);
         }
-        return true;
+        filled = true;
       } else if (inputs.length > 0) {
-        // Single input field
         await inputs[0].fill(cleanCode);
-        return true;
+        filled = true;
       }
     }
-    
+
     // Fallback: try common selectors
-    for (const selector of CODE_INPUT_SELECTORS) {
+    if (!filled) {
+      for (const selector of CODE_INPUT_SELECTORS) {
+        try {
+          const input = await page.$(selector);
+          if (input) {
+            await input.fill(cleanCode);
+            filled = true;
+            break;
+          }
+        } catch {
+          // Continue to next selector
+        }
+      }
+    }
+
+    if (!filled) {
+      console.error("[VERIFICATION] Could not find code input field");
+      return false;
+    }
+
+    // After filling code, click submit/verify button
+    const submitSelectors = [
+      'button[type="submit"]',
+      'button:has-text("Verify")',
+      'button:has-text("Submit")',
+      'button:has-text("Confirm")',
+      'button:has-text("Continue")',
+      'input[type="submit"]',
+    ];
+
+    for (const sel of submitSelectors) {
       try {
-        const input = await page.$(selector);
-        if (input) {
-          await input.fill(cleanCode);
-          return true;
+        const btn = await page.$(sel);
+        if (btn) {
+          await btn.click();
+          break;
         }
       } catch {
         // Continue to next selector
       }
     }
-    
-    console.error("[VERIFICATION] Could not find code input field");
-    return false;
+
+    // Wait for page to leave verification screen
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Verify 2FA indicators are gone
+    const stillOnVerification = await detectVerificationNeeded(page);
+    if (stillOnVerification.detected) {
+      console.warn("[VERIFICATION] Still on verification page after entering code");
+      return false;
+    }
+
+    console.log("[VERIFICATION] Code entered and verification screen cleared");
+    return true;
   } catch (error) {
     console.error("[VERIFICATION] Error entering code:", error);
     return false;

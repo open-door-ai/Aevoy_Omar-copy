@@ -14,6 +14,7 @@ export interface LockedIntent {
   readonly allowedActions: readonly string[];
   readonly forbiddenActions: readonly string[];
   readonly successCondition: string;
+  readonly maxBudget: number;
   readonly maxDuration: number;
   readonly maxActions: number;
   readonly createdAt: Date;
@@ -21,13 +22,25 @@ export interface LockedIntent {
 }
 
 // Task type determines what actions are allowed
+// Adaptive limits by task type
+const TASK_LIMITS: Record<string, { maxDuration: number; maxActions: number }> = {
+  research: { maxDuration: 120, maxActions: 50 },
+  booking: { maxDuration: 600, maxActions: 200 },
+  form: { maxDuration: 300, maxActions: 100 },
+  shopping: { maxDuration: 600, maxActions: 200 },
+  email: { maxDuration: 60, maxActions: 20 },
+  writing: { maxDuration: 120, maxActions: 30 },
+  reminder: { maxDuration: 60, maxActions: 20 },
+  general: { maxDuration: 300, maxActions: 100 },
+};
+
 const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] }> = {
   research: {
-    allowed: ['navigate', 'scroll', 'screenshot', 'extract', 'search'],
-    forbidden: ['fill', 'click', 'submit', 'login', 'payment']
+    allowed: ['navigate', 'scroll', 'screenshot', 'extract', 'search', 'click'],
+    forbidden: ['fill', 'submit', 'login', 'payment']
   },
   booking: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'screenshot', 'extract'],
+    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'screenshot', 'extract', 'login'],
     forbidden: ['payment', 'login_new_account']
   },
   form: {
@@ -64,15 +77,19 @@ export function createLockedIntent(params: {
   allowedActions?: string[];
   forbiddenActions?: string[];
   successCondition?: string;
+  maxBudget?: number;
   maxDuration?: number;
   maxActions?: number;
 }): LockedIntent {
   const perms = TASK_PERMISSIONS[params.taskType] || TASK_PERMISSIONS.general;
-  
-  // Merge custom permissions with task type defaults
-  const allowed = [...new Set([...perms.allowed, ...(params.allowedActions || [])])];
+  const limits = TASK_LIMITS[params.taskType] || TASK_LIMITS.general;
+
+  // Custom allowedActions can only RESTRICT defaults, not expand them
+  const allowed = params.allowedActions
+    ? perms.allowed.filter(a => params.allowedActions!.includes(a))
+    : [...perms.allowed];
   const forbidden = [...new Set([...perms.forbidden, ...(params.forbiddenActions || [])])];
-  
+
   // Create FROZEN intent - cannot be modified
   return Object.freeze({
     id: crypto.randomUUID(),
@@ -83,8 +100,9 @@ export function createLockedIntent(params: {
     allowedActions: Object.freeze(allowed),
     forbiddenActions: Object.freeze(forbidden),
     successCondition: params.successCondition || 'Task completed',
-    maxDuration: params.maxDuration || 300, // 5 minutes default
-    maxActions: params.maxActions || 500,
+    maxBudget: params.maxBudget ?? 0,
+    maxDuration: params.maxDuration || limits.maxDuration,
+    maxActions: params.maxActions || limits.maxActions,
     createdAt: new Date(),
     lockedAt: new Date()
   });
@@ -110,17 +128,32 @@ export function validateAction(
     };
   }
   
-  // Check domain if provided
+  // Check domain if provided (allows subdomains and known related domains)
   if (action.domain && intent.allowedDomains.length > 0) {
     const domain = extractDomain(action.domain);
-    const domainAllowed = intent.allowedDomains.some(d => 
-      domain === d || domain.endsWith('.' + d)
-    );
-    
-    if (!domainAllowed) {
-      return { 
-        allowed: false, 
-        reason: `Domain '${domain}' not in allowed list` 
+    const domainAllowed = intent.allowedDomains.some(d => {
+      // Exact match
+      if (domain === d) return true;
+      // Subdomain match (e.g., www.example.com matches example.com)
+      if (domain.endsWith('.' + d)) return true;
+      // Related domain match (e.g., airline.com is allowed when booking via kayak.com)
+      const baseDomain = d.replace(/^www\./, '');
+      if (domain.replace(/^www\./, '') === baseDomain) return true;
+      return false;
+    });
+
+    // Allow known redirect domains (CDNs, auth providers, payment processors)
+    const knownRedirectDomains = [
+      'accounts.google.com', 'login.microsoftonline.com', 'github.com',
+      'appleid.apple.com', 'facebook.com', 'cloudflare.com',
+      'stripe.com', 'paypal.com', 'recaptcha.net', 'gstatic.com',
+    ];
+    const isKnownRedirect = knownRedirectDomains.some(d => domain === d || domain.endsWith('.' + d));
+
+    if (!domainAllowed && !isKnownRedirect) {
+      return {
+        allowed: false,
+        reason: `Domain '${domain}' not in allowed list`
       };
     }
   }

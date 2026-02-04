@@ -15,8 +15,43 @@ import { ExecutionEngine } from "../execution/engine.js";
 import { getFailureMemory, recordFailure, learnSolution } from "../memory/failure-db.js";
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
 import { verifyTask, quickVerify } from "./task-verifier.js";
+import { detectWorkflow, createWorkflow } from "./workflow.js";
 import { getSupabaseClient } from "../utils/supabase.js";
-import type { TaskRequest, TaskResult, Action, ActionResult } from "../types/index.js";
+import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel } from "../types/index.js";
+
+/**
+ * Send a message back to the user via the same channel they used.
+ * SMS/voice channels get SMS replies; email/web/other get email replies.
+ * Falls back to email if SMS delivery fails or no phone number on file.
+ */
+async function sendViaChannel(
+  channel: InputChannel | undefined,
+  userId: string,
+  to: string,
+  aevoyFrom: string,
+  subject: string,
+  body: string
+): Promise<void> {
+  if (channel === "sms" || channel === "voice") {
+    try {
+      const { data: profile } = await getSupabaseClient()
+        .from("profiles")
+        .select("twilio_number")
+        .eq("id", userId)
+        .single();
+      if (profile?.twilio_number) {
+        const smsBody = body.length > 1500
+          ? body.substring(0, 1500) + "... (full results emailed)"
+          : body;
+        await sendSms({ userId, to, body: smsBody });
+        return;
+      }
+    } catch {
+      // Fall through to email
+    }
+  }
+  await sendResponse({ to, from: aevoyFrom, subject, body });
+}
 
 // ---- Test Mode / Payment Skip ----
 function isTestMode(): boolean {
@@ -57,6 +92,19 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const cardCommand = parseCardCommand(body);
     if (cardCommand) {
       return handleCardCommand(cardCommand, userId, from, username);
+    }
+
+    // Detect if this is a multi-step workflow (complex project)
+    const workflowCheck = await detectWorkflow(subject, body);
+    if (workflowCheck.isWorkflow) {
+      console.log(`[WORKFLOW] Detected multi-step project: ${workflowCheck.reason}`);
+      const workflowId = await createWorkflow(userId, username, from, subject, body);
+      return {
+        taskId: workflowId,
+        success: true,
+        response: "Workflow created and processing",
+        actions: [],
+      };
     }
 
     // Load user's memory for clarification
@@ -455,9 +503,40 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Budget exceeded — force free-tier model (Gemini Flash) or notify
         console.log(`[BUDGET] User ${userId.slice(0, 8)} over monthly budget, forcing cheap model`);
         forceCheapModel = true;
-      } else if (budget.remaining < 1) {
-        // Running low — prefer cheaper models
+      } else if (budget.remaining < 3 && !budget.overBudget) {
+        // Running low — send alert (once per day)
         console.log(`[BUDGET] User ${userId.slice(0, 8)} budget low ($${budget.remaining.toFixed(2)} remaining)`);
+        forceCheapModel = budget.remaining < 1;
+        try {
+          const today = new Date().toISOString().split("T")[0];
+          const { data: existingAlert } = await getSupabaseClient()
+            .from("tasks")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("type", "budget_alert")
+            .gte("created_at", `${today}T00:00:00Z`)
+            .limit(1);
+
+          if (!existingAlert || existingAlert.length === 0) {
+            await sendResponse({
+              to: from,
+              from: `${username}@aevoy.com`,
+              subject: "[Aevoy] Budget Running Low",
+              body: `You have $${budget.remaining.toFixed(2)} remaining in your monthly budget. Tasks will continue using cost-optimized models to stretch your budget.`,
+            });
+            await getSupabaseClient().from("tasks").insert({
+              user_id: userId,
+              status: "completed",
+              type: "budget_alert",
+              email_subject: "Budget alert sent",
+              completed_at: new Date().toISOString(),
+            });
+            console.log(`[BUDGET] Alert sent to ${username}`);
+          }
+        } catch {
+          // Non-critical
+        }
+      } else if (budget.remaining < 1) {
         forceCheapModel = true;
       }
     }
@@ -515,9 +594,36 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 5. Load user's memory
     const memory = await loadMemory(userId);
 
+    // 5b. Query Hive learnings for known approaches
+    let learningsHint = "";
+    try {
+      const domain = classification.domains[0] || "";
+      const { data: learnings } = await getSupabaseClient()
+        .from("learnings")
+        .select("steps, gotchas, difficulty")
+        .or(`service.ilike.%${domain}%,task_type.eq.${classification.taskType}`)
+        .limit(3);
+
+      if (learnings && learnings.length > 0) {
+        const hints = learnings.map(l => {
+          const parts: string[] = [];
+          if (l.steps) parts.push(`Steps: ${l.steps}`);
+          if (l.gotchas) parts.push(`Watch for: ${l.gotchas}`);
+          return parts.join(". ");
+        }).filter(Boolean);
+        if (hints.length > 0) {
+          learningsHint = `\n\nKnown approaches:\n${hints.join("\n")}`;
+          console.log(`[LEARNINGS] Found ${hints.length} relevant hints for ${domain || classification.taskType}`);
+        }
+      }
+    } catch {
+      // Non-critical — learnings table may not exist yet
+    }
+
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
-    const aiResponse = await generateResponse(memory, subject, body, username, aiTaskType, userId);
+    const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
+    const aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId);
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
@@ -541,7 +647,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         `Working on your request. Processing ${aiResponse.actions.length} actions...`);
     }
     
-    for (const action of aiResponse.actions) {
+    for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
+      const action = aiResponse.actions[actionIndex];
       // Validate action against locked intent
       const validation = await validator.validate({
         type: action.type,
@@ -560,13 +667,42 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
 
       // Execute action with failure memory integration
-      const result = await executeActionWithLearning(
+      let result = await executeActionWithLearning(
         action,
         userId,
         username,
         executionEngine
       );
+
+      // Action-level retry: on failure, retry once after 3s delay
+      if (!result.success && result.error && !result.error.startsWith('Security:')) {
+        console.log(`[RETRY] Action '${action.type}' failed, retrying in 3s...`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const retryResult = await executeActionWithLearning(
+          action,
+          userId,
+          username,
+          executionEngine
+        );
+        if (retryResult.success) {
+          console.log(`[RETRY] Action '${action.type}' succeeded on retry`);
+          result = retryResult;
+        }
+      }
+
       actionResults.push(result);
+
+      // Checkpoint: save progress after each successful action
+      if (result.success && taskId) {
+        try {
+          await getSupabaseClient()
+            .from("tasks")
+            .update({ checkpoint_data: { lastActionIndex: actionIndex, completedActions: actionIndex + 1 } })
+            .eq("id", taskId);
+        } catch {
+          // Non-critical
+        }
+      }
 
       // Record action in action_history for undo/audit trail
       try {
@@ -584,6 +720,42 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       } catch (recordErr) {
         // Non-critical — don't fail the task over history recording
         console.warn("[ACTION_HISTORY] Failed to record action:", recordErr);
+      }
+    }
+
+    // 7b. Beyond-browser cascade if browser success rate is low
+    let cascadeLevel = 1;
+    if (classification.needsBrowser && actionResults.length > 0) {
+      const successCount = actionResults.filter(r => r.success).length;
+      const successRate = successCount / actionResults.length;
+
+      if (successRate < 0.7) {
+        console.log(`[CASCADE] Browser success rate ${(successRate * 100).toFixed(0)}%, trying fallbacks`);
+        try {
+          // Level 2: API fallback
+          const { tryApiApproach } = await import("./tasks/api-fallback.js");
+          const apiResult = await tryApiApproach(classification.taskType, classification.goal, classification.domains);
+          if (apiResult.success && apiResult.result) {
+            cascadeLevel = apiResult.level;
+            aiResponse.content += `\n\n${apiResult.result}`;
+          } else {
+            // Level 3-4: Email fallback
+            const { tryEmailApproach } = await import("./tasks/email-fallback.js");
+            const emailResult = await tryEmailApproach(userId, username, classification.goal, classification.domains[0] || "the service");
+            if (emailResult.success && emailResult.result) {
+              cascadeLevel = emailResult.level;
+              aiResponse.content += `\n\n${emailResult.result}`;
+            } else {
+              // Level 6: Manual instructions
+              const { generateManualInstructions } = await import("./tasks/manual-fallback.js");
+              const manualResult = await generateManualInstructions(classification.goal, classification.domains[0] || "the service");
+              cascadeLevel = manualResult.level;
+              aiResponse.content += `\n\n${manualResult.result}`;
+            }
+          }
+        } catch (cascadeErr) {
+          console.error("[CASCADE] Fallback error:", cascadeErr);
+        }
       }
     }
 
@@ -643,6 +815,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let emailBody = cleanResponse;
     if (totalActions > 0) {
       emailBody += `\n\n---\nCompleted ${successCount}/${totalActions} actions.`;
+    }
+
+    // Add disclaimer if verification failed or had low confidence
+    if (verificationResult && !verificationResult.passed && verificationResult.confidence < 50) {
+      emailBody += `\n\n⚠️ Note: I wasn't fully able to verify this task completed successfully (confidence: ${verificationResult.confidence}%). Please double-check the results.`;
     }
 
     const channel = task.inputChannel || "email";
@@ -708,6 +885,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         cost_usd: totalCost,
         type: taskType,
         execution_time_ms: elapsedMs,
+        cascade_level: cascadeLevel,
         verification_status: verificationResult?.passed ? "verified" : (verificationResult ? "unverified" : null),
         verification_data: verificationResult ? {
           confidence: verificationResult.confidence,
@@ -768,7 +946,7 @@ async function executeActionWithLearning(
   username: string,
   executionEngine: ExecutionEngine | null
 ): Promise<ActionResult> {
-  console.log(`[ACTION] Executing: ${action.type}`, action.params);
+  console.log(`[ACTION] Executing: ${action.type}`);
 
   // Check failure memory for learned solutions
   const url = action.params?.url as string || '';

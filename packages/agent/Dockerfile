@@ -1,7 +1,7 @@
-# Handlit Agent Server Dockerfile
+# Aevoy Agent Server
 FROM node:20-slim
 
-# Install dependencies for Playwright
+# Install dependencies for Playwright + healthcheck
 RUN apt-get update && apt-get install -y \
     libnss3 \
     libnspr4 \
@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y \
     libcairo2 \
     libasound2 \
     libatspi2.0-0 \
+    wget \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pnpm
@@ -27,11 +29,11 @@ RUN npm install -g pnpm
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package.json pnpm-lock.yaml ./
+# Copy package files (lockfile is at monorepo root, not in this package)
+COPY package.json ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --no-frozen-lockfile
 
 # Install Playwright browsers
 RUN npx playwright install chromium
@@ -53,8 +55,8 @@ ENV NODE_ENV=production
 ENV AGENT_PORT=3001
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3001/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
 # Run the server
 CMD ["node", "dist/index.js"]

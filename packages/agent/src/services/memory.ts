@@ -18,6 +18,7 @@ import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getSupabaseClient } from "../utils/supabase.js";
+import { encryptWithServerKey, decryptWithServerKey } from "../security/encryption.js";
 import type { Memory, MemoryType, WorkingMemory, EpisodicMemory } from "../types/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,35 +71,25 @@ export function clearShortTermMemory(taskId: string): void {
 }
 
 // ---- Encryption ----
+// Uses encryptWithServerKey / decryptWithServerKey from encryption.ts
+// which derive keys via scrypt (instead of raw hex key).
 
-function getEncryptionKey(): Buffer {
+/**
+ * Legacy decrypt for backward compatibility with old format.
+ * Old format used raw hex ENCRYPTION_KEY directly (no scrypt derivation).
+ * Format: ivHex:authTagHex:encryptedHex
+ */
+function legacyDecrypt(encryptedData: string): string {
   const key = process.env.ENCRYPTION_KEY;
   if (!key) {
     throw new Error("ENCRYPTION_KEY not set");
   }
-  return Buffer.from(key, "hex");
-}
-
-export function encrypt(text: string): string {
-  const key = getEncryptionKey();
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
-
-  const authTag = cipher.getAuthTag();
-
-  return iv.toString("hex") + ":" + authTag.toString("hex") + ":" + encrypted;
-}
-
-export function decrypt(encryptedData: string): string {
-  const key = getEncryptionKey();
+  const keyBuf = Buffer.from(key, "hex");
   const [ivHex, authTagHex, encrypted] = encryptedData.split(":");
 
   const iv = Buffer.from(ivHex, "hex");
   const authTag = Buffer.from(authTagHex, "hex");
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  const decipher = crypto.createDecipheriv(ALGORITHM, keyBuf, iv);
 
   decipher.setAuthTag(authTag);
 
@@ -106,6 +97,28 @@ export function decrypt(encryptedData: string): string {
   decrypted += decipher.final("utf8");
 
   return decrypted;
+}
+
+/**
+ * Encrypt using the unified encryption.ts system (scrypt-derived key).
+ */
+export async function encrypt(text: string): Promise<string> {
+  return encryptWithServerKey(text);
+}
+
+/**
+ * Decrypt with backward compatibility.
+ * Tries new format (encryptWithServerKey) first, then falls back to legacy raw-hex format.
+ */
+export async function decrypt(encryptedData: string): Promise<string> {
+  // Try new scrypt-based decryption first
+  try {
+    return await decryptWithServerKey(encryptedData);
+  } catch {
+    // Fall back to legacy raw-hex decryption for old data
+  }
+  // Legacy format: ivHex:authTagHex:encryptedHex (3 parts, all hex)
+  return legacyDecrypt(encryptedData);
 }
 
 // ---- Workspace management ----
@@ -146,7 +159,7 @@ export async function ensureWorkspace(userId: string): Promise<string> {
 # Learned
 - Nothing learned yet
 `;
-    await fs.writeFile(memoryFilePath, encrypt(initialMemory));
+    await fs.writeFile(memoryFilePath, await encrypt(initialMemory));
   }
 
   return workspacePath;
@@ -159,7 +172,7 @@ async function loadLongTermMemory(userId: string): Promise<string> {
   try {
     const memoryFilePath = path.join(workspacePath, "MEMORY.md.enc");
     const encryptedContent = await fs.readFile(memoryFilePath, "utf8");
-    return decrypt(encryptedContent);
+    return await decrypt(encryptedContent);
   } catch {
     return "No memory available.";
   }
@@ -168,7 +181,7 @@ async function loadLongTermMemory(userId: string): Promise<string> {
 export async function saveMemory(userId: string, content: string): Promise<void> {
   const workspacePath = await ensureWorkspace(userId);
   const memoryFilePath = path.join(workspacePath, "MEMORY.md.enc");
-  await fs.writeFile(memoryFilePath, encrypt(content));
+  await fs.writeFile(memoryFilePath, await encrypt(content));
 }
 
 // ---- Working memory (Supabase, last 7 days) ----
@@ -195,27 +208,33 @@ async function loadWorkingMemories(
     return [];
   }
 
-  const memories: WorkingMemory[] = [];
+  const memories: Array<WorkingMemory & { _score: number }> = [];
   for (const row of data) {
     try {
-      const content = decrypt(row.encrypted_data);
-      // If keywords provided, filter by relevance
+      const content = await decrypt(row.encrypted_data);
+      // Score by keyword relevance
+      let score = 0.5; // default
       if (keywords && keywords.length > 0) {
         const lower = content.toLowerCase();
-        const relevant = keywords.some((kw) => lower.includes(kw.toLowerCase()));
-        if (!relevant) continue;
+        const matchCount = keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
+        score = matchCount / keywords.length; // 0.0 to 1.0
+        if (score === 0) continue; // No relevant keywords at all
       }
       memories.push({
         id: row.id,
         content,
         createdAt: row.created_at,
+        _score: score,
       });
     } catch {
       // Skip corrupted entries
     }
   }
 
-  return memories;
+  // Sort by relevance score (highest first)
+  memories.sort((a, b) => b._score - a._score);
+
+  return memories.map(({ _score, ...m }) => m);
 }
 
 // ---- Episodic memory (Supabase, compressed over time) ----
@@ -239,27 +258,35 @@ async function loadEpisodicMemories(
     return [];
   }
 
-  const memories: EpisodicMemory[] = [];
+  const memories: Array<EpisodicMemory & { _score: number }> = [];
   for (const row of data) {
     try {
-      const content = decrypt(row.encrypted_data);
+      const content = await decrypt(row.encrypted_data);
+      const importance = row.importance || 0.5;
+      let keywordOverlap = 0;
       if (keywords && keywords.length > 0) {
         const lower = content.toLowerCase();
-        const relevant = keywords.some((kw) => lower.includes(kw.toLowerCase()));
-        if (!relevant) continue;
+        const matchCount = keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
+        keywordOverlap = matchCount / keywords.length;
       }
+      // Weighted score: importance 60%, keyword relevance 40%
+      const score = (importance * 0.6) + (keywordOverlap * 0.4);
       memories.push({
         id: row.id,
         content,
-        importance: row.importance || 0.5,
+        importance,
         createdAt: row.created_at,
+        _score: score,
       });
     } catch {
       // Skip corrupted
     }
   }
 
-  return memories;
+  // Sort by combined score (highest first)
+  memories.sort((a, b) => b._score - a._score);
+
+  return memories.slice(0, limit).map(({ _score, ...m }) => m);
 }
 
 // ---- Cost-optimized context loading ----
@@ -314,7 +341,7 @@ export async function saveWorkingMemory(userId: string, content: string): Promis
   await getSupabaseClient().from("user_memory").insert({
     user_id: userId,
     memory_type: "working",
-    encrypted_data: encrypt(content),
+    encrypted_data: await encrypt(content),
     importance: 0.5,
   });
 }
@@ -327,7 +354,7 @@ export async function saveEpisodicMemory(
   await getSupabaseClient().from("user_memory").insert({
     user_id: userId,
     memory_type: "episodic",
-    encrypted_data: encrypt(content),
+    encrypted_data: await encrypt(content),
     importance: Math.min(Math.max(importance, 0), 1),
   });
 }
@@ -346,11 +373,11 @@ export async function appendDailyLog(userId: string, entry: string): Promise<voi
 
   try {
     const existingContent = await fs.readFile(logFilePath, "utf8");
-    const decrypted = decrypt(existingContent);
-    await fs.writeFile(logFilePath, encrypt(decrypted + logEntry));
+    const decrypted = await decrypt(existingContent);
+    await fs.writeFile(logFilePath, await encrypt(decrypted + logEntry));
   } catch {
     const header = `# Daily Log - ${today}\n`;
-    await fs.writeFile(logFilePath, encrypt(header + logEntry));
+    await fs.writeFile(logFilePath, await encrypt(header + logEntry));
   }
 }
 
@@ -368,7 +395,7 @@ export async function loadRecentLogs(userId: string, days: number): Promise<stri
 
     try {
       const encryptedContent = await fs.readFile(logFilePath, "utf8");
-      logs.push(decrypt(encryptedContent));
+      logs.push(await decrypt(encryptedContent));
     } catch {
       // File doesn't exist
     }
@@ -422,7 +449,7 @@ export async function compressOldMemories(userId: string): Promise<number> {
 
   for (const row of oldMemories) {
     try {
-      const content = decrypt(row.encrypted_data);
+      const content = await decrypt(row.encrypted_data);
       contents.push(content);
       idsToDelete.push(row.id);
     } catch {
@@ -516,4 +543,42 @@ function truncateToTokenBudget(text: string, maxTokens: number): string {
  */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+// ---- Memory Decay ----
+
+/**
+ * Reduce importance of old memories by 0.1.
+ * Targets memories older than 30 days with importance > 0.1.
+ * Called periodically by the scheduler.
+ */
+export async function decayMemories(userId: string): Promise<number> {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: oldMemories, error } = await getSupabaseClient()
+    .from("user_memory")
+    .select("id, importance")
+    .eq("user_id", userId)
+    .gt("importance", 0.1)
+    .lt("created_at", thirtyDaysAgo)
+    .limit(100);
+
+  if (error || !oldMemories || oldMemories.length === 0) {
+    return 0;
+  }
+
+  let decayed = 0;
+  for (const mem of oldMemories) {
+    const newImportance = Math.max(0.1, (mem.importance || 0.5) - 0.1);
+    const { error: updateErr } = await getSupabaseClient()
+      .from("user_memory")
+      .update({ importance: newImportance })
+      .eq("id", mem.id);
+    if (!updateErr) decayed++;
+  }
+
+  if (decayed > 0) {
+    console.log(`[MEMORY] Decayed ${decayed} memories for user ${userId.slice(0, 8)}`);
+  }
+  return decayed;
 }

@@ -81,13 +81,36 @@ export async function decryptCredentials(
 
 /**
  * Simple encryption for memory files (without user key - uses server secret)
+ * New format: salt:iv:authTag:encryptedData (all base64, random salt per operation)
  */
 export async function encryptWithServerKey(data: string): Promise<string> {
-  const key = await scryptAsync(getServerSecret(), 'memory-salt', 32) as Buffer;
-  return encryptForUser(data, key);
+  const salt = randomBytes(16);
+  const key = await scryptAsync(getServerSecret(), salt, 32) as Buffer;
+  const iv = randomBytes(16);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(data, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${salt.toString('base64')}:${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
 }
 
 export async function decryptWithServerKey(encryptedData: string): Promise<string> {
-  const key = await scryptAsync(getServerSecret(), 'memory-salt', 32) as Buffer;
-  return decryptForUser(encryptedData, key);
+  const parts = encryptedData.split(':');
+
+  // Backward compat: old format has 3 parts (iv:authTag:data) with static salt
+  if (parts.length === 3) {
+    const key = await scryptAsync(getServerSecret(), 'memory-salt', 32) as Buffer;
+    return decryptForUser(encryptedData, key);
+  }
+
+  // New format: 4 parts (salt:iv:authTag:data)
+  const [saltB64, ivB64, authTagB64, dataB64] = parts;
+  const salt = Buffer.from(saltB64, 'base64');
+  const key = await scryptAsync(getServerSecret(), salt, 32) as Buffer;
+  const iv = Buffer.from(ivB64, 'base64');
+  const authTag = Buffer.from(authTagB64, 'base64');
+  const encrypted = Buffer.from(dataB64, 'base64');
+
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }

@@ -145,6 +145,97 @@ const VERIFICATION_CRITERIA: Record<string, VerificationCriteria> = {
     evidencePatterns: [],
     requiresScreenshot: false,
   },
+  shopping: {
+    successIndicators: [
+      "added to cart",
+      "add to bag",
+      "in your cart",
+      "cart updated",
+      "added to basket",
+      "checkout",
+      "view cart",
+    ],
+    errorIndicators: [
+      "out of stock",
+      "unavailable",
+      "sold out",
+      "error",
+      "could not add",
+    ],
+    evidencePatterns: [
+      /added?\s+to\s+(your\s+)?cart/i,
+      /cart\s*\(\d+\)/i,
+      /bag\s*\(\d+\)/i,
+    ],
+    requiresScreenshot: true,
+  },
+  payment: {
+    successIndicators: [
+      "payment successful",
+      "payment confirmed",
+      "transaction complete",
+      "receipt",
+      "paid",
+      "charge confirmed",
+    ],
+    errorIndicators: [
+      "payment failed",
+      "declined",
+      "insufficient funds",
+      "card declined",
+      "transaction failed",
+      "payment error",
+    ],
+    evidencePatterns: [
+      /transaction\s*(?:#|id|number)?\s*[:.]?\s*([A-Z0-9-]{4,})/i,
+      /receipt\s*(?:#|number)?\s*[:.]?\s*([A-Z0-9-]{4,})/i,
+      /amount\s*(?:charged|paid)?\s*[:.]?\s*\$?([\d,.]+)/i,
+    ],
+    requiresScreenshot: true,
+  },
+  account_creation: {
+    successIndicators: [
+      "account created",
+      "welcome",
+      "registration complete",
+      "verify your email",
+      "sign up successful",
+      "congratulations",
+    ],
+    errorIndicators: [
+      "already exists",
+      "email taken",
+      "username taken",
+      "registration failed",
+      "try again",
+    ],
+    evidencePatterns: [
+      /account\s+(?:created|registered)\s+successfully/i,
+      /welcome,?\s+(\w+)/i,
+    ],
+    requiresScreenshot: true,
+  },
+  '2fa_completion': {
+    successIndicators: [
+      "verified",
+      "authentication successful",
+      "identity confirmed",
+      "logged in",
+      "dashboard",
+      "welcome back",
+    ],
+    errorIndicators: [
+      "invalid code",
+      "expired",
+      "incorrect code",
+      "try again",
+      "too many attempts",
+    ],
+    evidencePatterns: [
+      /(?:verified|authenticated)\s+successfully/i,
+    ],
+    requiresScreenshot: true,
+  },
 };
 
 // ---- Main Verification Function ----
@@ -174,7 +265,20 @@ export async function verifyTask(
   }
 
   // Combine step 1 and step 2 confidence
-  const combinedConfidence = Math.max(step1.confidence, step2.confidence);
+  let combinedConfidence = Math.max(step1.confidence, step2.confidence);
+
+  // Verification retry: if confidence < 50, wait and re-check
+  if (combinedConfidence < 50 && page) {
+    console.log("[VERIFY] Low confidence, retrying verification after 2s...");
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const retryStep1 = await selfCheck(page, responseText, criteria);
+    const retryStep2 = await evidenceCheck(page, responseText, criteria);
+    const retryConfidence = Math.max(retryStep1.confidence, retryStep2.confidence);
+    if (retryConfidence > combinedConfidence) {
+      combinedConfidence = retryConfidence;
+      console.log(`[VERIFY] Retry improved confidence to ${retryConfidence}%`);
+    }
+  }
 
   // Step 3: Smart Review (Claude Sonnet) — only if confidence < 90%
   if (combinedConfidence < 90 && page && criteria.requiresScreenshot) {
@@ -334,7 +438,7 @@ async function smartReview(
   if (!process.env.ANTHROPIC_API_KEY) {
     return {
       passed: false,
-      confidence: 50,
+      confidence: 25,
       method: "smart_review",
       evidence: "Smart review unavailable (no Anthropic API key)",
     };

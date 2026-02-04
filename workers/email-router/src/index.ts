@@ -25,7 +25,7 @@ interface Profile {
   messages_limit: number;
 }
 
-type EmailType = 'confirmation_reply' | 'verification_reply' | 'new_task';
+type EmailType = 'confirmation_reply' | 'verification_reply' | 'magic_link' | 'new_task';
 
 async function getUser(
   username: string,
@@ -147,6 +147,25 @@ function detectEmailType(subject: string, body: string): { type: EmailType; task
     };
   }
 
+  // Check for magic link emails (login/verification links from other services)
+  const magicLinkPatterns = [
+    /(?:sign.?in|log.?in|verify|confirm|magic).?link/i,
+    /click\s+(?:here|this\s+link)\s+to\s+(?:sign|log)\s*in/i,
+    /one-time\s+(?:link|login)/i,
+  ];
+
+  const isMagicLink = magicLinkPatterns.some(p => p.test(subject) || p.test(body));
+  if (isMagicLink) {
+    // Extract any URL that looks like a login/verification link
+    const urlMatch = body.match(/https?:\/\/[^\s<>"]+(?:token|verify|login|auth|magic|confirm)[^\s<>"]*/i);
+    if (urlMatch) {
+      return {
+        type: 'magic_link' as EmailType,
+        taskId: null
+      };
+    }
+  }
+
   return {
     type: 'new_task',
     taskId: null
@@ -177,16 +196,39 @@ function extractReplyText(body: string): string {
   return replyLines.join('\n').trim();
 }
 
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok || response.status < 500) {
+        return response;
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+    if (attempt < maxRetries - 1) {
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt)));
+    }
+  }
+  throw lastError || new Error("fetchWithRetry failed");
+}
+
 export default {
   async email(message: EmailMessage, env: Env): Promise<void> {
     try {
-      console.log(`Email received from ${message.from} to ${message.to}`);
+      console.log(`[EMAIL] Received, size: ${message.rawSize}`);
 
       // Extract username from to address
       const toAddress = message.to.toLowerCase();
       const username = toAddress.split("@")[0];
 
-      if (!username) {
+      if (!username || !/^[a-zA-Z0-9_-]+$/.test(username)) {
         message.setReject("Invalid recipient address");
         return;
       }
@@ -203,7 +245,7 @@ export default {
       // Validate sender matches registered user email
       const senderEmail = message.from.toLowerCase().trim();
       if (user.email && senderEmail !== user.email.toLowerCase().trim()) {
-        console.log(`Sender mismatch: ${senderEmail} != ${user.email} for user ${username}`);
+        console.log(`[EMAIL] Sender mismatch for user ${username}`);
         message.setReject("Sender email does not match registered user");
         return;
       }
@@ -215,7 +257,7 @@ export default {
       }
 
       // Parse email content
-      const { subject, body, bodyHtml } = await parseEmail(message.raw);
+      const { subject, body, bodyHtml, attachments } = await parseEmail(message.raw);
 
       // Detect email type (confirmation reply, verification reply, or new task)
       const { type: emailType, taskId } = detectEmailType(subject, body);
@@ -236,10 +278,11 @@ export default {
               subject,
               body,
               bodyHtml,
+              attachments,
             };
             break;
           }
-          
+
           endpoint = '/task/confirm';
           const replyText = extractReplyText(body);
           payload = {
@@ -263,10 +306,11 @@ export default {
               subject,
               body,
               bodyHtml,
+              attachments,
             };
             break;
           }
-          
+
           endpoint = '/task/verification';
           // Extract the verification code from the reply
           const replyText = extractReplyText(body);
@@ -281,6 +325,23 @@ export default {
           break;
         }
 
+        case 'magic_link': {
+          // Extract the magic link URL and forward to agent via /task/incoming
+          const urlMatch = body.match(/https?:\/\/[^\s<>"]+(?:token|verify|login|auth|magic|confirm)[^\s<>"]*/i);
+          endpoint = '/task/incoming';
+          payload = {
+            userId: user.id,
+            username: user.username,
+            from: message.from,
+            type: 'magic_link',
+            magicLinkUrl: urlMatch ? urlMatch[0] : null,
+            subject,
+            body,
+            attachments,
+          };
+          break;
+        }
+
         case 'new_task':
         default:
           endpoint = '/task/incoming';
@@ -291,26 +352,30 @@ export default {
             subject,
             body,
             bodyHtml,
+            attachments,
           };
           break;
       }
 
-      // Forward to agent server
-      const response = await fetch(`${env.AGENT_URL}${endpoint}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
-        },
-        body: JSON.stringify(payload),
-      });
+      // Forward to agent server with retry
+      try {
+        const response = await fetchWithRetry(`${env.AGENT_URL}${endpoint}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
+          },
+          body: JSON.stringify(payload),
+        });
 
-      if (!response.ok) {
-        console.error(`Failed to forward to agent (${endpoint}):`, response.status);
-        // Don't reject - email was received, just processing failed
+        if (!response.ok) {
+          console.error(`Agent returned ${response.status} for ${endpoint}`);
+        }
+      } catch (retryError) {
+        console.error(`All retries failed for ${endpoint}:`, retryError);
       }
 
-      console.log(`${emailType} forwarded for user ${username} to ${endpoint}`);
+      console.log(`[EMAIL] ${emailType} forwarded for user ${username}`);
     } catch (error) {
       console.error("Email processing error:", error);
       // Don't reject for processing errors - we received the email

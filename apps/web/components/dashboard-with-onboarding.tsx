@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import OnboardingWizard from "./onboarding-wizard";
+import OnboardingFlow from "./onboarding/onboarding-flow";
 
 interface DashboardWithOnboardingProps {
   username: string;
@@ -18,13 +18,11 @@ export default function DashboardWithOnboarding({ username, children }: Dashboar
         const response = await fetch("/api/settings");
         if (response.ok) {
           const settings = await response.json();
-          // If no settings exist or they're default values, show onboarding
-          // We check if user_id exists - if settings were never created, it won't exist
+          // Show onboarding if settings were never created (no user_id means defaults returned)
           if (!settings.user_id || settings.user_id === undefined) {
             setShowOnboarding(true);
           }
         } else if (response.status === 404) {
-          // No settings found, show onboarding
           setShowOnboarding(true);
         }
       } catch (error) {
@@ -48,9 +46,9 @@ export default function DashboardWithOnboarding({ username, children }: Dashboar
   return (
     <>
       {showOnboarding && (
-        <OnboardingWizard 
-          username={username} 
-          onComplete={handleOnboardingComplete} 
+        <OnboardingFlow
+          username={username}
+          onComplete={handleOnboardingComplete}
         />
       )}
       {children}

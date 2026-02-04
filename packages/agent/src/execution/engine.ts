@@ -1,6 +1,6 @@
 /**
  * Execution Engine
- * 
+ *
  * Orchestrates browser automation with fallback chains and learning.
  * Never makes the same mistake twice - learns from every failure.
  */
@@ -13,6 +13,17 @@ import { executeFill } from './actions/fill.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { StagehandService } from '../services/stagehand.js';
+import { withTimeout, delay } from '../utils/timeout.js';
+import { applyStealthPatches, getRealisticUserAgent } from './stealth.js';
+import { dismissPopups } from './popup-handler.js';
+import { waitForSPAReady } from './dynamic-content.js';
+import { checkAndHandleAntiBot } from './antibot.js';
+import { handleCaptchaIfPresent } from './captcha.js';
+
+// Timeouts
+const TASK_TIMEOUT_MS = 180000;  // 3 minutes per task
+const STEP_TIMEOUT_MS = 30000;   // 30 seconds per step
+const POST_ACTION_WAIT_MS = 800; // Wait after click/fill/submit/select
 
 export interface ExecutionStep {
   action: string;
@@ -43,7 +54,6 @@ export class ExecutionEngine {
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
-    // Use Stagehand if Browserbase keys are configured
     this.useStagehand = !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
   }
 
@@ -60,23 +70,29 @@ export class ExecutionEngine {
       }
     }
 
-    // Local Playwright fallback
+    // Local Playwright fallback with stealth
     this.browser = await chromium.launch({
       headless: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
       ]
     });
 
     this.context = await this.browser.newContext({
       viewport: { width: 1280, height: 800 },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      userAgent: getRealisticUserAgent(),
+      locale: 'en-US',
+      timezoneId: 'America/New_York',
     });
 
+    // Apply stealth patches to avoid bot detection
+    await applyStealthPatches(this.context);
+
     this.page = await this.context.newPage();
-    console.log("[ENGINE] Initialized with local Playwright");
+    console.log("[ENGINE] Initialized with local Playwright (stealth)");
   }
 
   async cleanup(): Promise<void> {
@@ -84,8 +100,8 @@ export class ExecutionEngine {
       await this.stagehand.close();
       this.stagehand = null;
     } else {
-      if (this.context) await this.context.close();
-      if (this.browser) await this.browser.close();
+      if (this.context) await this.context.close().catch(() => {});
+      if (this.browser) await this.browser.close().catch(() => {});
     }
     this.page = null;
     this.context = null;
@@ -95,40 +111,126 @@ export class ExecutionEngine {
   getPage(): Page | null {
     return this.page;
   }
-  
-  getTotalCost(): number { 
-    return this.totalCost; 
+
+  getTotalCost(): number {
+    return this.totalCost;
   }
-  
+
   getResults(): StepResult[] {
     return this.results;
   }
-  
+
   getCurrentUrl(): string {
     return this.page?.url() || '';
   }
-  
+
+  /**
+   * Check if the page is still alive; re-initialize if crashed.
+   */
+  private async ensurePageAlive(): Promise<boolean> {
+    if (!this.page) return false;
+    try {
+      if (this.page.isClosed()) {
+        console.warn('[ENGINE] Page closed unexpectedly, re-initializing...');
+        await this.cleanup();
+        await this.initialize();
+        return !!this.page;
+      }
+      return true;
+    } catch {
+      console.warn('[ENGINE] Page health check failed, re-initializing...');
+      await this.cleanup();
+      await this.initialize();
+      return !!this.page;
+    }
+  }
+
   async executeSteps(steps: ExecutionStep[]): Promise<{ success: boolean; data?: unknown; error?: string }> {
     if (!this.page) {
       throw new Error('Engine not initialized. Call initialize() first.');
     }
-    
-    for (const step of steps) {
-      const result = await this.executeStep(step);
 
-      // Capture post-action screenshot for evidence (skip if step is already a screenshot)
-      if (this.page && step.action !== 'screenshot' && step.action !== 'wait') {
+    // Wrap entire execution in a task-level timeout
+    try {
+      return await withTimeout(
+        this._executeStepsInner(steps),
+        TASK_TIMEOUT_MS,
+        'Task execution'
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      if (message.includes('timed out')) {
+        console.error(`[ENGINE] Task timed out after ${TASK_TIMEOUT_MS}ms`);
+        await this.cleanup();
+      }
+      return { success: false, error: message, data: this.results };
+    }
+  }
+
+  private async _executeStepsInner(steps: ExecutionStep[]): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    for (const step of steps) {
+      // Ensure page is still alive before each step
+      const alive = await this.ensurePageAlive();
+      if (!alive) {
+        return { success: false, error: 'Page not available', data: this.results };
+      }
+
+      // Wrap each step in a step-level timeout
+      let result: StepResult;
+      try {
+        result = await withTimeout(
+          this.executeStep(step),
+          STEP_TIMEOUT_MS,
+          `Step: ${step.action}`
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result = { success: false, action: step.action, error: message };
+      }
+
+      // Post-action wait for click, fill, submit, select
+      if (['click', 'fill', 'submit', 'select'].includes(step.action) && this.page && !this.page.isClosed()) {
+        await this.page.waitForLoadState('networkidle').catch(() => {});
+        await delay(POST_ACTION_WAIT_MS);
+      }
+
+      // Capture post-action screenshot for evidence
+      if (this.page && !this.page.isClosed() && step.action !== 'screenshot' && step.action !== 'wait') {
         try {
           const buffer = await this.page.screenshot({ type: 'png' });
           result.screenshot = buffer.toString('base64');
         } catch {
-          // Non-critical — page may not be ready for screenshot
+          // Non-critical
         }
       }
 
       this.results.push(result);
 
       if (!result.success) {
+        // Step-level retry: retry once after 2s for transient failures
+        if (step.action !== 'verify' && step.action !== 'wait') {
+          console.log(`[ENGINE] Step '${step.action}' failed, retrying once...`);
+          await delay(2000);
+
+          const alive = await this.ensurePageAlive();
+          if (alive) {
+            try {
+              const retryResult = await withTimeout(
+                this.executeStep(step),
+                STEP_TIMEOUT_MS,
+                `Step retry: ${step.action}`
+              );
+              if (retryResult.success) {
+                // Replace the failed result
+                this.results[this.results.length - 1] = retryResult;
+                continue;
+              }
+            } catch {
+              // Retry also failed, use original error
+            }
+          }
+        }
+
         return {
           success: false,
           error: `Step '${step.action}' failed: ${result.error}`,
@@ -136,72 +238,74 @@ export class ExecutionEngine {
         };
       }
     }
-    
-    // Return last step's data or aggregate
+
     const lastResult = this.results[this.results.length - 1];
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: lastResult?.data || 'Task completed successfully'
     };
   }
-  
+
   async executeStep(step: ExecutionStep): Promise<StepResult> {
     if (!this.page) {
       return { success: false, action: step.action, error: 'Page not initialized' };
     }
-    
+
+    // Dismiss popups before each step
+    await dismissPopups(this.page).catch(() => {});
+
     // Validate action against intent
     const validation = await this.validator.validate({
       type: step.action,
       domain: this.page.url(),
       ...step.params as { target?: string; value?: string }
     });
-    
+
     if (!validation.approved) {
-      return { 
-        success: false, 
-        action: step.action, 
-        error: `Action blocked: ${validation.reason}` 
+      return {
+        success: false,
+        action: step.action,
+        error: `Action blocked: ${validation.reason}`
       };
     }
-    
+
     try {
       switch (step.action) {
         case 'navigate':
           return await this.handleNavigate(step.params);
-          
+
         case 'click':
           return await this.handleClick(step.params);
-          
+
         case 'fill':
           return await this.handleFill(step.params);
-          
+
         case 'select':
           return await this.handleSelect(step.params);
-          
+
         case 'submit':
           return await this.handleSubmit(step.params);
-          
+
         case 'extract':
           return await this.handleExtract(step.params);
-          
+
         case 'screenshot':
           return await this.handleScreenshot();
-          
+
         case 'scroll':
           return await this.handleScroll(step.params);
-          
+
         case 'wait':
           return await this.handleWait(step.params);
-          
+
         case 'verify':
           return await this.handleVerify(step.params);
-          
+
         default:
-          return { 
-            success: false, 
-            action: step.action, 
-            error: `Unknown action: ${step.action}` 
+          return {
+            success: false,
+            action: step.action,
+            error: `Unknown action: ${step.action}`
           };
       }
     } catch (error) {
@@ -209,48 +313,54 @@ export class ExecutionEngine {
       return { success: false, action: step.action, error: message };
     }
   }
-  
+
   private async handleNavigate(params: Record<string, unknown>): Promise<StepResult> {
     const url = params.url as string;
     if (!url) {
       return { success: false, action: 'navigate', error: 'URL is required' };
     }
-    
-    await this.page!.goto(url, { 
+
+    await this.page!.goto(url, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000 
+      timeout: 30000
     });
-    
+
+    // Use SPA-ready wait instead of just domcontentloaded
+    await waitForSPAReady(this.page!);
+
+    // Check for anti-bot challenges after navigation
+    await checkAndHandleAntiBot(this.page!);
+
+    // Check for CAPTCHAs
+    await handleCaptchaIfPresent(this.page!);
+
     return { success: true, action: 'navigate', data: { url } };
   }
-  
+
   private async handleClick(params: Record<string, unknown>): Promise<StepResult> {
     const url = this.page!.url();
     const selector = params.selector as string | undefined;
-    
-    // Check failure memory for learned solutions
+
     const pastFailure = await getFailureMemory({
       site: url,
       actionType: 'click',
       selector
     });
-    
-    // Apply learned fix if available
+
     let effectiveParams = { ...params };
     if (pastFailure?.solution?.selector) {
       console.log(`[LEARNING] Using learned selector for click: ${pastFailure.solution.selector}`);
       effectiveParams.selector = pastFailure.solution.selector;
     }
-    
+
     const result = await executeClick(this.page!, {
       selector: effectiveParams.selector as string | undefined,
       text: effectiveParams.text as string | undefined,
       description: effectiveParams.description as string | undefined,
       role: effectiveParams.role as string | undefined
     });
-    
-    // Learn from successful workarounds
-    if (result.success && result.method && result.method !== 'method_1') {
+
+    if (result.success && result.method && result.method !== 'css_selector') {
       await learnSolution({
         site: url,
         actionType: 'click',
@@ -260,8 +370,7 @@ export class ExecutionEngine {
       });
       console.log(`[LEARNING] Learned click method ${result.method} for ${url}`);
     }
-    
-    // Record failures for learning
+
     if (!result.success && result.error) {
       await recordFailure({
         site: url,
@@ -270,7 +379,7 @@ export class ExecutionEngine {
         error: result.error
       });
     }
-    
+
     return {
       success: result.success,
       action: 'click',
@@ -278,26 +387,24 @@ export class ExecutionEngine {
       error: result.error
     };
   }
-  
+
   private async handleFill(params: Record<string, unknown>): Promise<StepResult> {
     const url = this.page!.url();
     const selector = params.selector as string | undefined;
     const label = params.label as string | undefined;
-    
-    // Check failure memory for learned solutions
+
     const pastFailure = await getFailureMemory({
       site: url,
       actionType: 'fill',
       selector: selector || label
     });
-    
-    // Apply learned fix if available
+
     let effectiveParams = { ...params };
     if (pastFailure?.solution?.selector) {
       console.log(`[LEARNING] Using learned selector for fill: ${pastFailure.solution.selector}`);
       effectiveParams.selector = pastFailure.solution.selector;
     }
-    
+
     const result = await executeFill(this.page!, {
       selector: effectiveParams.selector as string | undefined,
       label: effectiveParams.label as string | undefined,
@@ -305,9 +412,8 @@ export class ExecutionEngine {
       name: effectiveParams.name as string | undefined,
       value: effectiveParams.value as string || ''
     });
-    
-    // Learn from successful workarounds
-    if (result.success && result.method && result.method !== 'method_1') {
+
+    if (result.success && result.method && result.method !== 'css_selector') {
       await learnSolution({
         site: url,
         actionType: 'fill',
@@ -317,8 +423,7 @@ export class ExecutionEngine {
       });
       console.log(`[LEARNING] Learned fill method ${result.method} for ${url}`);
     }
-    
-    // Record failures for learning
+
     if (!result.success && result.error) {
       await recordFailure({
         site: url,
@@ -327,7 +432,7 @@ export class ExecutionEngine {
         error: result.error
       });
     }
-    
+
     return {
       success: result.success,
       action: 'fill',
@@ -335,130 +440,141 @@ export class ExecutionEngine {
       error: result.error
     };
   }
-  
+
   private async handleSelect(params: Record<string, unknown>): Promise<StepResult> {
     const selector = params.selector as string;
     const value = params.value as string;
-    
+
     await this.page!.selectOption(selector, value);
     return { success: true, action: 'select' };
   }
-  
+
   private async handleSubmit(params: Record<string, unknown>): Promise<StepResult> {
     const selector = params.selector as string || 'button[type="submit"], input[type="submit"], form button';
     const expectedOutcome = params.expected as string;
-    
+
     await this.page!.click(selector);
     await this.page!.waitForLoadState('networkidle').catch(() => {});
-    
-    // Verification: Take screenshot and verify outcome if expected outcome is specified
+
+    // Check for CAPTCHAs after submit
+    await handleCaptchaIfPresent(this.page!);
+
     if (expectedOutcome) {
       const verifyResult = await this.verifyActionSuccess('submit', expectedOutcome);
       if (!verifyResult.success) {
-        return { 
-          success: false, 
-          action: 'submit', 
+        return {
+          success: false,
+          action: 'submit',
           error: `Verification failed: ${verifyResult.reason}`,
           screenshot: verifyResult.screenshot
         };
       }
     }
-    
+
     return { success: true, action: 'submit' };
   }
-  
+
   /**
-   * Verify action success using screenshot + AI analysis
+   * Verify action success using screenshot + AI analysis.
+   * No longer defaults to success — requires evidence.
    */
   private async verifyActionSuccess(
-    actionType: string, 
+    actionType: string,
     expectedOutcome: string
   ): Promise<{ success: boolean; reason?: string; screenshot?: string }> {
     try {
-      // Take screenshot
       const screenshotBuffer = await this.page!.screenshot({ type: 'png' });
       const screenshotBase64 = screenshotBuffer.toString('base64');
-      
-      // First, try quick text-based verification
+
       const pageText = await this.page!.textContent('body');
       const textLower = (pageText || '').toLowerCase();
-      const expectedLower = expectedOutcome.toLowerCase();
-      
-      // Quick heuristic checks
+
       const successIndicators = ['success', 'thank you', 'confirmed', 'submitted', 'complete'];
       const errorIndicators = ['error', 'failed', 'invalid', 'required', 'please try again'];
-      
+
       const hasSuccessIndicator = successIndicators.some(s => textLower.includes(s));
       const hasErrorIndicator = errorIndicators.some(e => textLower.includes(e));
-      
+
       if (hasSuccessIndicator && !hasErrorIndicator) {
         console.log(`[VERIFY] Quick check passed for ${actionType}`);
         return { success: true, screenshot: screenshotBase64 };
       }
-      
+
       if (hasErrorIndicator) {
         console.log(`[VERIFY] Error indicator found for ${actionType}`);
-        return { 
-          success: false, 
+        return {
+          success: false,
           reason: 'Error message detected on page',
-          screenshot: screenshotBase64 
+          screenshot: screenshotBase64
         };
       }
-      
-      // If we have Claude API, use vision for detailed verification
+
+      // Use vision for detailed verification
       if (process.env.ANTHROPIC_API_KEY) {
-        const visionResult = await generateVisionResponse(
-          `Does this screenshot show that the ${actionType} action was successful? Expected outcome: "${expectedOutcome}". Respond with only "YES" or "NO" followed by a brief reason.`,
-          screenshotBase64,
-          'You are verifying if a web action succeeded. Be concise.'
-        );
-        
-        this.totalCost += visionResult.cost;
-        
-        const isSuccess = visionResult.content.toUpperCase().startsWith('YES');
-        console.log(`[VERIFY] Vision verification: ${isSuccess ? 'passed' : 'failed'}`);
-        
-        return { 
-          success: isSuccess, 
-          reason: visionResult.content,
-          screenshot: screenshotBase64 
-        };
+        try {
+          const visionResult = await generateVisionResponse(
+            `Does this screenshot show that the ${actionType} action was successful? Expected outcome: "${expectedOutcome}". Respond with only "YES" or "NO" followed by a brief reason.`,
+            screenshotBase64,
+            'You are verifying if a web action succeeded. Be concise.'
+          );
+
+          this.totalCost += visionResult.cost;
+
+          const isSuccess = visionResult.content.toUpperCase().startsWith('YES');
+          console.log(`[VERIFY] Vision verification: ${isSuccess ? 'passed' : 'failed'}`);
+
+          return {
+            success: isSuccess,
+            reason: visionResult.content,
+            screenshot: screenshotBase64
+          };
+        } catch (error) {
+          // Detect 429 rate limit errors explicitly
+          const errorMsg = error instanceof Error ? error.message : '';
+          if (errorMsg.includes('429') || errorMsg.includes('rate limit')) {
+            console.warn('[VERIFY] Vision API rate limited (429)');
+            return { success: false, reason: 'Vision API rate limited', screenshot: screenshotBase64 };
+          }
+          console.error('[VERIFY] Vision error:', error);
+          // Don't assume success on vision failure
+          return { success: false, reason: 'Vision verification failed', screenshot: screenshotBase64 };
+        }
       }
-      
-      // Default: assume success if no clear error indicators
-      return { success: true, screenshot: screenshotBase64 };
+
+      // No vision available and no clear indicators — NOT assumed success
+      return { success: false, reason: 'No verification evidence', screenshot: screenshotBase64 };
     } catch (error) {
       console.error('[VERIFY] Verification error:', error);
-      // Don't fail the action if verification itself fails
-      return { success: true };
+      // Don't assume success if verification itself fails
+      return { success: false, reason: 'Verification process failed' };
     }
   }
-  
+
   private async handleExtract(params: Record<string, unknown>): Promise<StepResult> {
     const selector = params.selector as string || 'body';
     const text = await this.page!.textContent(selector);
-    
-    return { 
-      success: true, 
-      action: 'extract', 
-      data: text?.trim().substring(0, 5000) 
+
+    return {
+      success: true,
+      action: 'extract',
+      data: text?.trim().substring(0, 5000)
     };
   }
-  
+
   private async handleScreenshot(): Promise<StepResult> {
     const buffer = await this.page!.screenshot({ type: 'png' });
-    
-    return { 
-      success: true, 
-      action: 'screenshot', 
-      screenshot: buffer.toString('base64') 
+
+    return {
+      success: true,
+      action: 'screenshot',
+      screenshot: buffer.toString('base64')
     };
   }
-  
+
   private async handleScroll(params: Record<string, unknown>): Promise<StepResult> {
     const direction = params.direction as string || 'down';
     const amount = params.amount as number || 500;
-    
+
     if (direction === 'down') {
       await this.page!.evaluate((amt) => window.scrollBy(0, amt), amount);
     } else if (direction === 'up') {
@@ -468,48 +584,48 @@ export class ExecutionEngine {
     } else if (direction === 'bottom') {
       await this.page!.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     }
-    
+
     return { success: true, action: 'scroll' };
   }
-  
+
   private async handleWait(params: Record<string, unknown>): Promise<StepResult> {
     const ms = params.ms as number || 1000;
     const selector = params.selector as string;
-    
+
     if (selector) {
       await this.page!.waitForSelector(selector, { timeout: ms });
     } else {
       await this.page!.waitForTimeout(ms);
     }
-    
+
     return { success: true, action: 'wait' };
   }
-  
+
   private async handleVerify(params: Record<string, unknown>): Promise<StepResult> {
     const condition = params.condition as string;
     const selector = params.selector as string;
-    
+
     if (selector) {
       const visible = await this.page!.isVisible(selector);
-      return { 
-        success: visible, 
-        action: 'verify', 
+      return {
+        success: visible,
+        action: 'verify',
         data: { visible },
         error: visible ? undefined : `Element not visible: ${selector}`
       };
     }
-    
+
     if (condition) {
       const text = await this.page!.textContent('body');
       const found = text?.toLowerCase().includes(condition.toLowerCase());
-      return { 
-        success: !!found, 
-        action: 'verify', 
+      return {
+        success: !!found,
+        action: 'verify',
         data: { found },
         error: found ? undefined : `Condition not met: ${condition}`
       };
     }
-    
+
     return { success: false, action: 'verify', error: 'No condition or selector provided' };
   }
 }

@@ -51,7 +51,8 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("Memory fetch error:", error);
+    return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
   }
 
   // Note: encrypted_data is returned as-is. Client-side decryption would be needed
@@ -114,7 +115,8 @@ export async function POST(request: NextRequest) {
   }).select().single();
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("Memory save error:", error);
+    return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
   }
 
   return NextResponse.json({

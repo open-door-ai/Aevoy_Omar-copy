@@ -20,8 +20,11 @@ export async function GET() {
     .single();
 
   if (error && error.code !== "PGRST116") {
-    // PGRST116 = no rows found
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("Settings fetch error:", error);
+    return NextResponse.json(
+      { error: "internal_error", message: "An unexpected error occurred" },
+      { status: 500 }
+    );
   }
 
   // Return defaults if no settings exist
@@ -92,7 +95,11 @@ export async function PUT(request: Request) {
       .single();
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      console.error("Settings update error:", error);
+      return NextResponse.json(
+        { error: "internal_error", message: "An unexpected error occurred" },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json(data);

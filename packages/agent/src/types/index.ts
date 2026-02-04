@@ -20,7 +20,7 @@ export type ModelProvider =
   | 'haiku'
   | 'ollama';
 
-export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'web' | 'desktop' | 'proactive';
+export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'web' | 'desktop' | 'proactive' | 'workflow';
 
 export type MemoryType = 'short_term' | 'working' | 'long_term' | 'episodic';
 
@@ -212,4 +212,43 @@ export interface IncomingSmsData {
   from: string;
   to: string;
   body: string;
+}
+
+// ---- Cascade (Beyond-Browser Fallback) ----
+
+/** Cascade levels: 1=Browser, 2=API, 3=Email service, 4=Draft, 5=Phone script, 6=Manual */
+export type CascadeLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface CascadeResult {
+  level: CascadeLevel;
+  success: boolean;
+  result?: string;
+  error?: string;
+}
+
+// ---- Personality ----
+
+export interface CompiledPersonality {
+  hasSoul: boolean;
+  hasIdentity: boolean;
+  hasUserTemplate: boolean;
+  usingFallback: boolean;
+}
+
+// ---- Identity ----
+
+export interface ResolvedUser {
+  userId: string;
+  username: string;
+  email: string;
+  phone: string | null;
+}
+
+// ---- Task Knowledge ----
+
+export interface TaskKnowledge {
+  steps: string;
+  gotchas: string;
+  difficulty: number;
+  successRate: number;
 }

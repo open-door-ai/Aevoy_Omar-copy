@@ -20,7 +20,7 @@ export async function GET() {
     .single();
 
   if (error && error.code !== "PGRST116") {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
   }
 
   return NextResponse.json(card || null);
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
           .single();
 
         if (error) {
-          return NextResponse.json({ error: error.message }, { status: 500 });
+          return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
         }
 
         // Update user settings
@@ -139,7 +139,7 @@ export async function POST(request: Request) {
           .eq("user_id", user.id);
 
         if (error) {
-          return NextResponse.json({ error: error.message }, { status: 500 });
+          return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
         }
 
         return NextResponse.json({ success: true });
@@ -152,7 +152,7 @@ export async function POST(request: Request) {
           .eq("user_id", user.id);
 
         if (error) {
-          return NextResponse.json({ error: error.message }, { status: 500 });
+          return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
         }
 
         return NextResponse.json({ success: true });
@@ -165,7 +165,7 @@ export async function POST(request: Request) {
           .eq("user_id", user.id);
 
         if (error) {
-          return NextResponse.json({ error: error.message }, { status: 500 });
+          return NextResponse.json({ error: "internal_error", message: "An unexpected error occurred" }, { status: 500 });
         }
 
         // Update user settings

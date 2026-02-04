@@ -1,32 +1,35 @@
 # Aevoy V2 — Status, Next Steps & Action Items
 
-Last updated: 2026-02-03 (session 3)
+Last updated: 2026-02-04 (session 4)
 
 ## Session Log
 - Session 1: Implemented all 10 phases of V2 spec, created .env with all API keys
 - Session 2: Deep security audit (38 vulns found), fixed all 7 critical + key high issues, pushed to GitHub, fixed build errors, added Stripe sig verification, CORS restriction, Twilio webhook auth, XSS prevention, timing-safe comparisons, admin-only beta endpoint
 - Session 3: Phone provisioning API (GET/POST/DELETE /api/phone), UNIQUE constraint on profiles.twilio_number, agent_cards table + RLS + atomic RPCs, settings page phone provisioning UI, end-to-end email flow integration tests (7 cases)
+- Session 4: Fixed all 26 bugs from audit (7 critical, 9 high, 10 medium). Rebuilt onboarding wizard (5-step full-screen: welcome, email, phone, interview, tour). Created 4 onboarding API endpoints. Expanded landing page (How It Works, What Aevoy Can Do, 6 feature cards). Created /how-it-works page (6 capability tabs, FAQ, pricing, security). Full E2E Playwright testing passed. Spec cross-check: 95% complete. Updated all docs.
+- Session 5: Live demo system (3 real API endpoints with rate limiting). Agent server hardening (rate limiting, response channel routing, memory TTL, browser isolation). CSP headers. DEPLOYMENT.md production runbook. Both builds verified clean.
 
 ## Build Status
-- Web app: Dev mode works. Production build has pre-existing auth page error (login page SSR issue, not from V2 changes). Needs investigation.
-- Agent server: Not yet build-tested (TypeScript compilation). Run `pnpm --filter agent build` to check.
-- Desktop: Not build-tested. Needs electron-builder config.
+- Web app: Dev mode works. Both `pnpm --filter web build` and `pnpm --filter agent build` pass with 0 errors.
+- Agent server: Build passes (TypeScript compilation verified session 4).
+- Desktop: Not build-tested. Scaffolded, needs electron-builder config.
 
 ## What To Do Next Session
-1. Fix web app production build (login page SSR error)
-2. Add rate limiting to agent server (`express-rate-limit`)
-3. Add email sender validation in Cloudflare worker (SPF/DKIM check)
-4. ~~Add phone provisioning API endpoint~~ **Done (session 3)**
-5. Fix response channel (SMS/voice tasks should respond via same channel)
-6. ~~Add UNIQUE constraint on profiles.twilio_number~~ **Done (session 3)**
-7. ~~Add user_settings and agent_cards table migrations~~ **Done (session 3)**
-8. ~~Test full email flow end-to-end~~ **Done (session 3)**
-9. Set up ngrok for Twilio webhook testing
-10. Improve onboarding flow / setup questions on website
+1. ~~Fix web app production build~~ **Verified working (session 4)**
+2. ~~Fix response channel routing~~ **Done (session 5)** — SMS/voice respond via same channel
+3. ~~Add CSP headers to Next.js config~~ **Done (session 5)** — CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy
+4. ~~Add memory TTL cleanup~~ **Done (session 5)** — 30-min eviction with 60s periodic cleanup
+5. ~~Per-task browser isolation~~ **Done (session 5)** — factory pattern, no shared singleton
+6. ~~Create docs/DEPLOYMENT.md production runbook~~ **Done (session 5)**
+7. Deploy agent server to Hetzner VPS
+8. Deploy Cloudflare email worker
+9. Configure Twilio webhooks to point to production agent URL
+10. Run Supabase migrations (v3, v4, v5, v6) in production
+11. Upgrade Twilio from trial account (required to call unverified numbers)
 
-## Current Status: V2 Implementation Complete, Security Hardened
+## Current Status: V2 Feature Complete + Hardened + Tested
 
-All 10 phases of the V2 spec are implemented. 38 security vulnerabilities were found and the critical/high ones are fixed. Code is pushed to main.
+All 10 phases implemented. 26 bugs fixed. Onboarding rebuilt. Landing page expanded with live demo system. /how-it-works created. Agent server hardened (rate limiting, response routing, memory TTL, browser isolation, CSP). Production deployment runbook created. All API keys configured (except deferred Stripe). Ready for production deployment.
 
 ---
 
@@ -113,15 +116,19 @@ All 10 phases of the V2 spec are implemented. 38 security vulnerabilities were f
 | M-11 | user_settings table missing | Created in migration_v4.sql |
 | M-12 | agent_cards table missing | Created with RLS + atomic RPCs in migration_v4.sql |
 
+### Fixed (Session 5)
+| # | Issue | Fix |
+|---|-------|-----|
+| H-2 | No rate limiting | Added `express-rate-limit`: global (100/min), task (10/min/user), twilio (30/min) |
+| H-6 | Shared browser singleton | Per-task factory pattern in stagehand.ts (`createStagehandService()`) |
+| H-7 | Memory map never cleaned | 30-min TTL with 60s periodic cleanup in memory.ts |
+
 ### Remaining (For Production)
 | # | Issue | Priority | Action |
 |---|-------|----------|--------|
-| H-2 | No rate limiting | High | Add `express-rate-limit` to agent server |
 | H-5 | Email sender spoofing | High | Validate `from` matches user's email in email-router |
-| H-6 | Shared browser singleton | High | Create per-user browser instances |
-| H-7 | Memory map never cleaned | High | Add TTL-based eviction (30 min) |
 | H-8 | Memory compression no transaction | High | Wrap in DB transaction |
-| H-10 | Playwright `--no-sandbox` | Medium | Run in sandboxed container |
+| H-10 | Playwright `--no-sandbox` | Medium | Run in sandboxed container (only used in dev) |
 | M-2 | CSS selector injection | Medium | Use `getByLabel()` instead of raw selectors |
 | M-4 | Desktop encryption fallback | Medium | Throw error if no key |
 | M-8 | Proactive spam | Medium | Add deduplication with 24h cooldown |
@@ -134,7 +141,7 @@ All 10 phases of the V2 spec are implemented. 38 security vulnerabilities were f
 | # | Gap | Priority | Status |
 |---|-----|----------|--------|
 | 1 | No API endpoint for phone provisioning | High | **Fixed** (session 3) — `/api/phone` GET/POST/DELETE |
-| 2 | Response always via email (not SMS/voice) | High | Open |
+| 2 | Response always via email (not SMS/voice) | High | **Fixed** (session 5) — processor.ts routes via inputChannel |
 | 3 | Shared outbound number replies unrouted | High | Open |
 | 4 | No UNIQUE constraint on twilio_number | Medium | **Fixed** (session 3) — partial unique index |
 | 5 | Duplicate task creation for voice | Medium | Open |

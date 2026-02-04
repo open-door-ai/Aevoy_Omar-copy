@@ -100,7 +100,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // Track usage
     await trackVoiceUsage(request.userId, 1);
 
-    console.log(`[TWILIO] Call initiated to ${request.to}: ${data.sid}`);
+    console.log(`[TWILIO] Call initiated: ${data.sid}`);
     return { success: true, callSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
@@ -232,7 +232,7 @@ export async function sendSms(request: SmsRequest): Promise<{
     // Track usage
     await trackSmsUsage(request.userId, 1);
 
-    console.log(`[TWILIO] SMS sent to ${request.to}: ${data.sid}`);
+    console.log(`[TWILIO] SMS sent: ${data.sid}`);
     return { success: true, messageSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
@@ -266,7 +266,7 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
     // Check if there's a task waiting for verification code
     const { data: pendingTask } = await getSupabaseClient()
       .from("tasks")
-      .select("id")
+      .select("id, structured_intent")
       .eq("user_id", userId)
       .eq("status", "awaiting_user_input")
       .eq("stuck_reason", "verification_code")
@@ -284,7 +284,10 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
         .update({
           status: "processing",
           stuck_reason: null,
-          structured_intent: { verification_code: code },
+          structured_intent: {
+            ...(pendingTask.structured_intent as Record<string, unknown> || {}),
+            verification_code: code,
+          },
         })
         .eq("id", pendingTask.id);
 
@@ -319,6 +322,8 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
 
 /**
  * Handle incoming voice call — returns TwiML.
+ * Detects whether the caller is the user (direct call) or someone else
+ * (forwarded call / third party) and responds accordingly.
  */
 export async function handleIncomingVoice(
   data: IncomingVoiceData
@@ -327,7 +332,7 @@ export async function handleIncomingVoice(
     // Find user by their Twilio number
     const { data: profile } = await getSupabaseClient()
       .from("profiles")
-      .select("id, username")
+      .select("id, username, phone, email")
       .eq("twilio_number", data.to)
       .single();
 
@@ -335,11 +340,45 @@ export async function handleIncomingVoice(
       return generateResponseTwiml("Sorry, this number is not associated with an Aevoy account.");
     }
 
-    return generateIncomingCallTwiml(profile.id, profile.username);
+    // Check if the caller IS the user (direct call to their AI)
+    const callerIsUser =
+      profile.phone && data.from &&
+      (data.from === profile.phone || data.from.replace(/\D/g, "").endsWith(profile.phone.replace(/\D/g, "").slice(-10)));
+
+    if (callerIsUser) {
+      // User calling their own AI — normal assistant mode
+      return generateIncomingCallTwiml(profile.id, profile.username);
+    }
+
+    // Someone else is calling the user's Aevoy number (forwarded call)
+    // Act as a receptionist / assistant
+    console.log(`[TWILIO] Forwarded call for ${profile.username} from ${data.from}`);
+    return generateReceptionistTwiml(profile.id, profile.username, data.from);
   } catch (error) {
     console.error("[TWILIO] Error handling voice:", error);
     return generateResponseTwiml("Sorry, an error occurred. Please try again later.");
   }
+}
+
+/**
+ * Generate TwiML for receptionist mode (answering forwarded calls).
+ * Greets caller, takes a message, and sends it to the user.
+ */
+function generateReceptionistTwiml(userId: string, userName: string, callerNumber: string): string {
+  const config = getTwilioConfig();
+  const processUrl = config
+    ? `${config.webhookBaseUrl}/webhook/voice/message/${userId}?caller=${encodeURIComponent(callerNumber)}`
+    : `/webhook/voice/message/${userId}?caller=${encodeURIComponent(callerNumber)}`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Hello! You've reached ${escapeXml(userName)}'s assistant. ${escapeXml(userName)} is not available right now, but I can take a message and make sure they get it right away.</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto"
+          action="${processUrl}" method="POST">
+    <Say voice="Polly.Amy">Please leave your message after this prompt. What would you like me to tell ${escapeXml(userName)}?</Say>
+  </Gather>
+  <Say voice="Polly.Amy">I didn't hear a message. I'll let ${escapeXml(userName)} know you called. Goodbye!</Say>
+</Response>`;
 }
 
 /**
@@ -445,7 +484,7 @@ export async function provisionPhoneNumber(
       .update({ twilio_number: phoneNumber })
       .eq("id", userId);
 
-    console.log(`[TWILIO] Provisioned ${phoneNumber} for user ${userId}`);
+    console.log(`[TWILIO] Provisioned number for user ${userId.slice(0, 8)}...`);
     return { success: true, phoneNumber };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
