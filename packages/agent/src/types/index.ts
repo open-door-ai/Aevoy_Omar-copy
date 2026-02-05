@@ -16,9 +16,49 @@ export type ModelProvider =
   | 'deepseek'
   | 'kimi'
   | 'gemini'
+  | 'groq'
   | 'sonnet'
   | 'haiku'
   | 'ollama';
+
+// ---- Execution Plan ----
+
+export interface ExecutionPlan {
+  taskId: string;
+  method: 'api' | 'browser_cached' | 'browser_new' | 'direct';
+  steps: PlanStep[];
+  requiredAuth: { provider: string; status: 'ready' | 'missing' }[];
+  estimatedCost: number;
+}
+
+export interface PlanStep {
+  type: 'api_call' | 'browser_action' | 'cached_step' | 'send_message';
+  description: string;
+  params: Record<string, unknown>;
+}
+
+// ---- Skill ----
+
+export interface Skill {
+  id: string;
+  name: string;
+  provider: string;
+  action: string;
+  description: string | null;
+  required_scopes: string[];
+  api_endpoint: string | null;
+  method: string;
+  input_schema: Record<string, unknown> | null;
+  enabled: boolean;
+}
+
+// ---- Recovery Result ----
+
+export interface RecoveryResult {
+  recovered: boolean;
+  method?: string;
+  error?: string;
+}
 
 export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'web' | 'desktop' | 'proactive' | 'workflow';
 

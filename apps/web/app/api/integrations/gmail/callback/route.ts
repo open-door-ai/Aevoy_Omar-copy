@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { encrypt } from "@/lib/encryption";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
@@ -97,21 +98,46 @@ export async function GET(request: Request) {
       gmailAddress = profile.emailAddress || "";
     }
 
-    // Store tokens encrypted in user_credentials
-    // The agent server will decrypt these using the user's encryption key
-    const tokenData = JSON.stringify({
+    // Encrypt tokens before storage (FIX: was plaintext before)
+    const accessTokenEncrypted = await encrypt(tokens.access_token);
+    const refreshTokenEncrypted = tokens.refresh_token
+      ? await encrypt(tokens.refresh_token)
+      : null;
+
+    const scopes = [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.modify",
+    ];
+
+    // Dual-write: new oauth_connections table (primary)
+    await supabase.from("oauth_connections").upsert(
+      {
+        user_id: user.id,
+        provider: "google",
+        access_token_encrypted: accessTokenEncrypted,
+        refresh_token_encrypted: refreshTokenEncrypted,
+        expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+        scopes,
+        account_email: gmailAddress,
+        status: "active",
+      },
+      { onConflict: "user_id,provider,account_email" }
+    );
+
+    // Backward compat: also write to user_credentials (encrypted)
+    const tokenData = await encrypt(JSON.stringify({
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       expires_at: Date.now() + tokens.expires_in * 1000,
       gmail_address: gmailAddress,
-    });
+    }));
 
-    // Upsert credential (replace if exists)
     await supabase.from("user_credentials").upsert(
       {
         user_id: user.id,
         site_domain: "gmail.googleapis.com",
-        encrypted_data: tokenData, // Agent server handles encryption at rest
+        encrypted_data: tokenData,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "user_id,site_domain" }

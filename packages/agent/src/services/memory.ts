@@ -234,6 +234,17 @@ async function loadWorkingMemories(
   // Sort by relevance score (highest first)
   memories.sort((a, b) => b._score - a._score);
 
+  // Update last_accessed_at for loaded memories
+  const loadedIds = memories.map(m => m.id);
+  if (loadedIds.length > 0) {
+    Promise.resolve(
+      getSupabaseClient()
+        .from("user_memory")
+        .update({ last_accessed_at: new Date().toISOString() })
+        .in("id", loadedIds)
+    ).catch(() => { /* non-critical */ });
+  }
+
   return memories.map(({ _score, ...m }) => m);
 }
 
@@ -286,7 +297,20 @@ async function loadEpisodicMemories(
   // Sort by combined score (highest first)
   memories.sort((a, b) => b._score - a._score);
 
-  return memories.slice(0, limit).map(({ _score, ...m }) => m);
+  const result = memories.slice(0, limit);
+
+  // Update last_accessed_at for loaded memories
+  const loadedIds = result.map(m => m.id);
+  if (loadedIds.length > 0) {
+    Promise.resolve(
+      getSupabaseClient()
+        .from("user_memory")
+        .update({ last_accessed_at: new Date().toISOString() })
+        .in("id", loadedIds)
+    ).catch(() => { /* non-critical */ });
+  }
+
+  return result.map(({ _score, ...m }) => m);
 }
 
 // ---- Cost-optimized context loading ----

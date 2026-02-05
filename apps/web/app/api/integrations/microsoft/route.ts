@@ -1,24 +1,23 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+const MICROSOFT_CLIENT_ID = process.env.MICROSOFT_CLIENT_ID;
+const MICROSOFT_CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_APP_URL
-  ? `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/gmail/callback`
-  : "http://localhost:3000/api/integrations/gmail/callback";
+  ? `${process.env.NEXT_PUBLIC_APP_URL}/api/integrations/microsoft/callback`
+  : "http://localhost:3000/api/integrations/microsoft/callback";
 
 const SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.modify",
-  "https://www.googleapis.com/auth/calendar",
-  "https://www.googleapis.com/auth/calendar.events",
-  "https://www.googleapis.com/auth/drive.readonly",
-  "https://www.googleapis.com/auth/drive.file",
+  "Mail.Read",
+  "Mail.Send",
+  "Calendars.ReadWrite",
+  "Files.ReadWrite",
+  "User.Read",
+  "offline_access",
 ].join(" ");
 
 /**
- * GET /api/integrations/gmail — Get Gmail integration status
+ * GET /api/integrations/microsoft — Get Microsoft integration status
  */
 export async function GET() {
   try {
@@ -32,17 +31,18 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Check if user has Gmail connected
-    const { data: cred } = await supabase
-      .from("user_credentials")
-      .select("id, site_domain, created_at, updated_at")
+    const { data: conn } = await supabase
+      .from("oauth_connections")
+      .select("id, created_at, account_email")
       .eq("user_id", user.id)
-      .eq("site_domain", "gmail.googleapis.com")
+      .eq("provider", "microsoft")
+      .eq("status", "active")
       .single();
 
     return NextResponse.json({
-      connected: !!cred,
-      connectedAt: cred?.created_at || null,
+      connected: !!conn,
+      connectedAt: conn?.created_at || null,
+      email: conn?.account_email || null,
     });
   } catch {
     return NextResponse.json(
@@ -53,8 +53,7 @@ export async function GET() {
 }
 
 /**
- * POST /api/integrations/gmail — Start OAuth flow
- * Returns the Google OAuth authorization URL.
+ * POST /api/integrations/microsoft — Start Microsoft OAuth flow
  */
 export async function POST() {
   try {
@@ -68,25 +67,23 @@ export async function POST() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    if (!MICROSOFT_CLIENT_ID || !MICROSOFT_CLIENT_SECRET) {
       return NextResponse.json(
-        { error: "Gmail integration not configured" },
+        { error: "Microsoft integration not configured" },
         { status: 503 }
       );
     }
 
-    // Generate state param with user ID for security
     const state = Buffer.from(
       JSON.stringify({ userId: user.id, ts: Date.now() })
     ).toString("base64url");
 
-    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    authUrl.searchParams.set("client_id", GOOGLE_CLIENT_ID);
+    const authUrl = new URL("https://login.microsoftonline.com/common/oauth2/v2.0/authorize");
+    authUrl.searchParams.set("client_id", MICROSOFT_CLIENT_ID);
     authUrl.searchParams.set("redirect_uri", REDIRECT_URI);
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("scope", SCOPES);
-    authUrl.searchParams.set("access_type", "offline");
-    authUrl.searchParams.set("prompt", "consent");
+    authUrl.searchParams.set("response_mode", "query");
     authUrl.searchParams.set("state", state);
 
     return NextResponse.json({ authUrl: authUrl.toString() });
@@ -99,7 +96,7 @@ export async function POST() {
 }
 
 /**
- * DELETE /api/integrations/gmail — Disconnect Gmail
+ * DELETE /api/integrations/microsoft — Disconnect Microsoft
  */
 export async function DELETE() {
   try {
@@ -114,10 +111,10 @@ export async function DELETE() {
     }
 
     await supabase
-      .from("user_credentials")
-      .delete()
+      .from("oauth_connections")
+      .update({ status: "revoked" })
       .eq("user_id", user.id)
-      .eq("site_domain", "gmail.googleapis.com");
+      .eq("provider", "microsoft");
 
     return NextResponse.json({ success: true });
   } catch {

@@ -154,10 +154,34 @@ export async function requestVerificationCode(
   agentEmail: string,
   context: string,
   detection: VerificationDetectionResult
-): Promise<void> {
-  // Build context message
+): Promise<string | void> {
+  // Try auto-extraction before asking user
+
+  // 1. Try Gmail API (if user has Google OAuth)
+  try {
+    const { extractCodeFromGmail, getLatestCode } = await import("./tfa.js");
+    const siteDomain = context.match(/(?:on|for|at)\s+(\S+\.\w+)/i)?.[1] || "";
+    const emailCode = await extractCodeFromGmail(userId, siteDomain);
+    if (emailCode) {
+      const { storeTfaCode } = await import("./tfa.js");
+      await storeTfaCode(userId, taskId, emailCode, "email", siteDomain);
+      console.log(`[VERIFICATION] Auto-extracted code from Gmail for task ${taskId}`);
+      return emailCode;
+    }
+
+    // 2. Try existing tfa_codes table (maybe SMS already arrived)
+    const smsCode = await getLatestCode(taskId);
+    if (smsCode) {
+      console.log(`[VERIFICATION] Found existing TFA code for task ${taskId}`);
+      return smsCode;
+    }
+  } catch {
+    // Non-critical — fall through to asking user
+  }
+
+  // 3. Fall back to asking user (existing behavior)
   let contextMessage = context;
-  
+
   if (detection.type === 'phone' && detection.phoneHint) {
     contextMessage += ` A code was sent to your phone ${detection.phoneHint}.`;
   } else if (detection.type === 'email' && detection.emailHint) {
@@ -165,7 +189,7 @@ export async function requestVerificationCode(
   } else if (detection.type === 'authenticator') {
     contextMessage += ` Please provide the code from your authenticator app.`;
   }
-  
+
   // Update task status to awaiting input
   await getSupabaseClient()
     .from("tasks")
@@ -174,7 +198,7 @@ export async function requestVerificationCode(
       stuck_reason: "verification_code"
     })
     .eq("id", taskId);
-  
+
   // Send email requesting code
   await sendVerificationCodeRequest(
     userEmail,
@@ -182,7 +206,7 @@ export async function requestVerificationCode(
     taskId,
     contextMessage
   );
-  
+
   console.log(`[VERIFICATION] Code requested for task ${taskId}`);
 }
 

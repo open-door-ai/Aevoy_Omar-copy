@@ -148,6 +148,9 @@ importers:
       playwright:
         specifier: ^1.58.1
         version: 1.58.1
+      postal-mime:
+        specifier: ^2.7.3
+        version: 2.7.3
       resend:
         specifier: ^4.0.0
         version: 4.8.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
