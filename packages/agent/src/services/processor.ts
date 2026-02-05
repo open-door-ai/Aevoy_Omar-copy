@@ -504,33 +504,33 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         console.log(`[BUDGET] User ${userId.slice(0, 8)} over monthly budget, forcing cheap model`);
         forceCheapModel = true;
       } else if (budget.remaining < 3 && !budget.overBudget) {
-        // Running low — send alert (once per day)
+        // Running low — send alert (once per day, tracked on usage table)
         console.log(`[BUDGET] User ${userId.slice(0, 8)} budget low ($${budget.remaining.toFixed(2)} remaining)`);
         forceCheapModel = budget.remaining < 1;
         try {
           const today = new Date().toISOString().split("T")[0];
-          const { data: existingAlert } = await getSupabaseClient()
-            .from("tasks")
-            .select("id")
+          const currentMonth = today.slice(0, 7); // YYYY-MM
+          const { data: usageRow } = await getSupabaseClient()
+            .from("usage")
+            .select("budget_alert_date")
             .eq("user_id", userId)
-            .eq("type", "budget_alert")
-            .gte("created_at", `${today}T00:00:00Z`)
-            .limit(1);
+            .eq("month", currentMonth)
+            .single();
 
-          if (!existingAlert || existingAlert.length === 0) {
+          const alreadySentToday = usageRow?.budget_alert_date === today;
+
+          if (!alreadySentToday) {
             await sendResponse({
               to: from,
               from: `${username}@aevoy.com`,
               subject: "[Aevoy] Budget Running Low",
               body: `You have $${budget.remaining.toFixed(2)} remaining in your monthly budget. Tasks will continue using cost-optimized models to stretch your budget.`,
             });
-            await getSupabaseClient().from("tasks").insert({
-              user_id: userId,
-              status: "completed",
-              type: "budget_alert",
-              email_subject: "Budget alert sent",
-              completed_at: new Date().toISOString(),
-            });
+            await getSupabaseClient()
+              .from("usage")
+              .update({ budget_alert_date: today })
+              .eq("user_id", userId)
+              .eq("month", currentMonth);
             console.log(`[BUDGET] Alert sent to ${username}`);
           }
         } catch {
@@ -601,14 +601,19 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const { data: learnings } = await getSupabaseClient()
         .from("learnings")
         .select("steps, gotchas, difficulty")
-        .or(`service.ilike.%${domain}%,task_type.eq.${classification.taskType}`)
+        .or(`service.ilike.*${domain}*,task_type.eq.${classification.taskType}`)
         .limit(3);
 
       if (learnings && learnings.length > 0) {
         const hints = learnings.map(l => {
           const parts: string[] = [];
-          if (l.steps) parts.push(`Steps: ${l.steps}`);
-          if (l.gotchas) parts.push(`Watch for: ${l.gotchas}`);
+          // steps and gotchas are JSONB arrays
+          if (l.steps && Array.isArray(l.steps) && l.steps.length > 0) {
+            parts.push(`Steps: ${l.steps.join(", ")}`);
+          }
+          if (l.gotchas && Array.isArray(l.gotchas) && l.gotchas.length > 0) {
+            parts.push(`Watch for: ${l.gotchas.join(", ")}`);
+          }
           return parts.join(". ");
         }).filter(Boolean);
         if (hints.length > 0) {
@@ -620,17 +625,83 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Non-critical — learnings table may not exist yet
     }
 
+    // 5c. Create execution plan
+    let planId: string | null = null;
+    let plan: import("../types/index.js").ExecutionPlan | null = null;
+    try {
+      const { createPlan } = await import("./planner.js");
+      plan = await createPlan(userId, taskId, classification, memory, learningsHint);
+
+      // Store plan in DB
+      const { data: planRecord } = await getSupabaseClient().from("execution_plans").insert({
+        task_id: taskId,
+        user_id: userId,
+        plan_steps: plan.steps,
+        execution_method: plan.method,
+        approved: true,
+        status: "executing",
+        estimated_cost: plan.estimatedCost,
+        started_at: new Date().toISOString(),
+      }).select("id").single();
+      planId = planRecord?.id || null;
+
+      // If auth is missing, text connect link and pause
+      const missingAuth = plan.requiredAuth.filter(a => a.status === "missing");
+      if (missingAuth.length > 0) {
+        console.log(`[PLANNER] Missing auth for: ${missingAuth.map(a => a.provider).join(", ")}`);
+        // Could generate connect links here in future — for now just log
+      }
+
+      // Route API path (skip browser entirely)
+      if (plan.method === "api") {
+        const { executeViaApi } = await import("../execution/api-executor.js");
+        const apiResults = await executeViaApi(userId, plan);
+        const allSuccess = apiResults.every(r => r.success);
+
+        // Update plan status
+        if (planId) {
+          await getSupabaseClient().from("execution_plans").update({
+            status: allSuccess ? "completed" : "failed",
+            completed_at: new Date().toISOString(),
+          }).eq("id", planId);
+        }
+
+        // Build response from API results
+        const resultText = apiResults.map(r =>
+          r.success ? `Done: ${JSON.stringify(r.result)}` : `Failed: ${r.error}`
+        ).join("\n");
+
+        // Update task record
+        await getSupabaseClient().from("tasks").update({
+          status: allSuccess ? "completed" : "failed",
+          completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime,
+          cost_usd: plan.estimatedCost,
+        }).eq("id", taskId);
+
+        const responseText = allSuccess
+          ? `Done! ${resultText}`
+          : `I completed some steps but ran into issues:\n${resultText}`;
+
+        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+        return { taskId, success: allSuccess, response: responseText, actions: [] };
+      }
+    } catch (planError) {
+      console.warn("[PLANNER] Planning failed, using direct path:", planError);
+      plan = null;
+    }
+
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
-    const aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId);
+    const aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId);
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
     let executionEngine: ExecutionEngine | null = null;
-    
+
     // Check if we need browser for any action
-    const needsBrowser = aiResponse.actions.some(a => 
+    const needsBrowser = aiResponse.actions.some(a =>
       ['browse', 'search', 'screenshot', 'fill_form'].includes(a.type)
     );
 
@@ -648,6 +719,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
     
     for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
+      // Per-task budget check: stop if accumulated cost exceeds $2
+      const taskCostSoFar = actionResults.reduce((sum, r) => sum + ((r.result && typeof r.result === "object" && "cost" in r.result ? (r.result as Record<string, unknown>).cost as number : 0) || 0), 0) + (aiResponse.cost || 0);
+      if (taskCostSoFar > 2.0) {
+        console.warn(`[BUDGET] Task cost exceeded $2 (${taskCostSoFar.toFixed(4)}), stopping execution`);
+        break;
+      }
+
       const action = aiResponse.actions[actionIndex];
       // Validate action against locked intent
       const validation = await validator.validate({
@@ -699,6 +777,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             .from("tasks")
             .update({ checkpoint_data: { lastActionIndex: actionIndex, completedActions: actionIndex + 1 } })
             .eq("id", taskId);
+        } catch {
+          // Non-critical
+        }
+      }
+
+      // Send progress update every 3 successful actions
+      if (actionIndex > 0 && actionIndex % 3 === 0 && result.success) {
+        try {
+          const { sendProgressUpdate } = await import("./progress.js");
+          await sendProgressUpdate(userId, taskId, task.inputChannel || "email",
+            `Completed ${actionIndex + 1}/${aiResponse.actions.length} actions...`);
         } catch {
           // Non-critical
         }
@@ -897,6 +986,47 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     
     console.log(`[COST] Task cost: $${totalCost.toFixed(6)} (AI: $${aiCost.toFixed(6)}, Browser: $${browserCost.toFixed(6)})`);
 
+    // Update execution plan status
+    if (planId) {
+      try {
+        await getSupabaseClient().from("execution_plans").update({
+          status: verificationResult?.passed === false ? "failed" : "completed",
+          completed_at: new Date().toISOString(),
+        }).eq("id", planId);
+      } catch {
+        // Non-critical
+      }
+    }
+
+    // Record successful browser steps to learnings (Hive Mind auto-learning)
+    if (executionEngine && classification.needsBrowser && actionResults.filter(r => r.success).length > 0) {
+      try {
+        const { computePageHash } = await import("../execution/page-hash.js");
+        const page = executionEngine.getPage();
+        if (page) {
+          const pageHash = await computePageHash(page);
+          const domain = classification.domains[0] || "unknown";
+          await getSupabaseClient().from("learnings").upsert({
+            service: domain,
+            task_type: classification.taskType,
+            title: `Auto-learned: ${classification.taskType} on ${domain}`,
+            recorded_steps: actionResults.filter(r => r.success).map(r => ({
+              type: r.action.type,
+              params: r.action.params,
+            })),
+            page_hash: pageHash,
+            layout_verified_at: new Date().toISOString(),
+            success_rate: 100,
+            total_attempts: 1,
+            total_successes: 1,
+            last_verified: new Date().toISOString(),
+          }, { onConflict: "service,task_type" }).select();
+        }
+      } catch {
+        // Non-critical — learning is bonus
+      }
+    }
+
     console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
 
     return {
@@ -985,7 +1115,7 @@ async function executeActionWithLearning(
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    
+
     // Record failure for learning
     await recordFailure({
       site: url,
@@ -993,6 +1123,24 @@ async function executeActionWithLearning(
       selector: action.params?.selector as string,
       error: errorMessage
     });
+
+    // Try specific failure handler for recovery
+    try {
+      const { dispatchFailureHandler } = await import("../execution/failure-handlers.js");
+      const domain = url ? new URL(url).hostname : undefined;
+      const recovery = await dispatchFailureHandler(
+        error instanceof Error ? error : new Error(errorMessage),
+        userId,
+        action.params?.taskId as string || "",
+        domain,
+        action.type
+      );
+      if (recovery.recovered) {
+        console.log(`[RECOVERY] Recovered via ${recovery.method}`);
+      }
+    } catch {
+      // Non-critical — failure handlers are best-effort
+    }
 
     return {
       action,

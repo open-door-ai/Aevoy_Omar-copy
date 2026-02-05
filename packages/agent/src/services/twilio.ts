@@ -291,8 +291,28 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
         })
         .eq("id", pendingTask.id);
 
+      // Also store in tfa_codes table for the new TFA system
+      try {
+        const { storeTfaCode } = await import("./tfa.js");
+        const siteDomain = (pendingTask.structured_intent as Record<string, unknown>)?.site_domain as string | undefined;
+        await storeTfaCode(userId, pendingTask.id, code, "sms", siteDomain);
+      } catch {
+        // Non-critical
+      }
+
       console.log(`[TWILIO] Verification code received for task ${pendingTask.id}`);
       return { processed: true, taskId: pendingTask.id, isVerificationCode: true };
+    }
+
+    // Check if the body looks like a 2FA code even without a pending task
+    const standaloneCode = data.body.trim().match(/^\d{4,8}$/);
+    if (standaloneCode) {
+      try {
+        const { storeTfaCode } = await import("./tfa.js");
+        await storeTfaCode(userId, null, standaloneCode[0], "sms");
+      } catch {
+        // Non-critical
+      }
     }
 
     // Otherwise, treat as a new task via SMS
@@ -483,6 +503,24 @@ export async function provisionPhoneNumber(
       .from("profiles")
       .update({ twilio_number: phoneNumber })
       .eq("id", userId);
+
+    // Also sync to user_twilio_numbers table
+    try {
+      const purchaseData = await purchaseResponse.json() as { sid?: string };
+      await getSupabaseClient().from("user_twilio_numbers").upsert(
+        {
+          user_id: userId,
+          phone_number: phoneNumber,
+          twilio_sid: purchaseData.sid || null,
+          purpose: "primary",
+          is_active: true,
+          area_code: areaCode,
+        },
+        { onConflict: "user_id,purpose" }
+      );
+    } catch {
+      // Non-critical
+    }
 
     console.log(`[TWILIO] Provisioned number for user ${userId.slice(0, 8)}...`);
     return { success: true, phoneNumber };

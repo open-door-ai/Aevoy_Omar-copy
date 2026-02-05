@@ -30,6 +30,7 @@ function validateEnv(): void {
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
     "KIMI_API_KEY",
+    "GROQ_API_KEY",
   ];
   const hasAiKey = aiKeys.some((key) => !!process.env[key]);
   if (!hasAiKey && process.env.AI_MOCK_MODE !== "true") {
@@ -66,6 +67,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
 import { startScheduler } from "./services/scheduler.js";
+import { startInboxPoller } from "./services/inbox-poller.js";
 import { handleIncomingSms, handleIncomingVoice, processVoiceCommand } from "./services/twilio.js";
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
@@ -607,9 +609,18 @@ process.on("SIGINT", () => {
 
 // ---- Start Server ----
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Agent server v2.0 running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 
   startScheduler();
+  startInboxPoller();
+
+  // Seed default skills (idempotent)
+  try {
+    const { seedDefaultSkills } = await import("./services/skill-registry.js");
+    await seedDefaultSkills();
+  } catch {
+    // Non-critical — skills will be seeded on next restart
+  }
 });

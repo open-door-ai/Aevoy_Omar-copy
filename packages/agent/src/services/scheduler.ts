@@ -91,6 +91,49 @@ async function runProactiveChecks(): Promise<void> {
   } catch (error) {
     console.error('[SCHEDULER] Data retention error:', error);
   }
+
+  // Cleanup expired TFA codes
+  try {
+    await getSupabaseClient().rpc('cleanup_expired_tfa_codes');
+  } catch {
+    // Non-critical
+  }
+
+  // Refresh expiring OAuth tokens
+  try {
+    const { checkAndRefreshExpiring } = await import("./oauth-manager.js");
+    await checkAndRefreshExpiring();
+  } catch {
+    // Non-critical
+  }
+
+  // Process overnight task queue
+  try {
+    const { processOvernightQueue, sendMorningSummaries } = await import("./overnight.js");
+    await processOvernightQueue();
+    await sendMorningSummaries();
+  } catch {
+    // Non-critical
+  }
+
+  // Check stale learnings (>14 days since layout verified)
+  try {
+    await checkStaleLearnings();
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
+ * Mark learnings with stale layout verification (>14 days old).
+ */
+async function checkStaleLearnings(): Promise<void> {
+  const staleDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  await getSupabaseClient()
+    .from("learnings")
+    .update({ page_hash: null })
+    .not("page_hash", "is", null)
+    .lt("layout_verified_at", staleDate);
 }
 
 /**

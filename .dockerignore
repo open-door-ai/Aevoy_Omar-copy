@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+apps/web
+apps/desktop
+workers
+.git
+.github
+.playwright-mcp
+*.png
+*.md
+!packages/agent/**

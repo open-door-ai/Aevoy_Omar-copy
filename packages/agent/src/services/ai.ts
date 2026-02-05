@@ -64,6 +64,7 @@ let anthropicClient: Anthropic | null = null;
 let deepseekClient: OpenAI | null = null;
 let geminiClient: OpenAI | null = null;
 let kimiClient: OpenAI | null = null;
+let groqClient: OpenAI | null = null;
 let ollamaClient: OpenAI | null = null;
 
 function getAnthropicClient(): Anthropic {
@@ -105,6 +106,16 @@ function getKimiClient(): OpenAI {
   return kimiClient;
 }
 
+function getGroqClient(): OpenAI {
+  if (!groqClient) {
+    groqClient = new OpenAI({
+      apiKey: process.env.GROQ_API_KEY || "",
+      baseURL: "https://api.groq.com/openai/v1",
+    });
+  }
+  return groqClient;
+}
+
 function getOllamaClient(): OpenAI | null {
   if (!ollamaClient) {
     const host = process.env.OLLAMA_HOST || "http://localhost:11434";
@@ -128,12 +139,14 @@ interface ModelConfig {
 // Task type → ordered list of models to try
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
+    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
   ],
   plan: [
+    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
@@ -148,10 +161,12 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   validate: [
+    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
   ],
   respond: [
+    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
   ],
@@ -161,6 +176,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
   ],
   classify: [
+    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
@@ -181,6 +197,7 @@ const MODEL_TIMEOUTS: Record<ModelProvider, number> = {
   deepseek: 30000,
   kimi: 30000,
   gemini: 15000,
+  groq: 15000,
   sonnet: 45000,
   haiku: 20000,
   ollama: 60000,
@@ -205,6 +222,7 @@ function isProviderAvailable(provider: ModelProvider): boolean {
     case 'deepseek': return !!process.env.DEEPSEEK_API_KEY;
     case 'kimi': return !!process.env.KIMI_API_KEY;
     case 'gemini': return !!process.env.GOOGLE_API_KEY;
+    case 'groq': return !!process.env.GROQ_API_KEY;
     case 'sonnet':
     case 'haiku': return !!process.env.ANTHROPIC_API_KEY;
     case 'ollama': return !!process.env.OLLAMA_HOST;
@@ -289,6 +307,23 @@ async function callProvider(
       };
     }
 
+    case 'groq': {
+      const response = await getGroqClient().chat.completions.create({
+        model: config.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+      });
+      return {
+        content: response.choices[0]?.message?.content || "",
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
+      };
+    }
+
     case 'sonnet':
     case 'haiku': {
       const response = await getAnthropicClient().messages.create({
@@ -321,7 +356,10 @@ async function trackApiCall(
   model: string,
   inputTokens: number,
   outputTokens: number,
-  costUsd: number
+  costUsd: number,
+  provider?: string,
+  taskId?: string,
+  purpose?: string
 ): Promise<void> {
   if (!userId) return;
   try {
@@ -345,6 +383,19 @@ async function trackApiCall(
       p_user_id: userId,
       p_task_type: "ai_call",
       p_ai_cost_cents: costCents,
+    });
+
+    // Per-call cost logging for granular tracking
+    await getSupabaseClient().from("ai_cost_log").insert({
+      user_id: userId,
+      task_id: taskId || null,
+      provider: provider || "unknown",
+      model,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cost_usd: costUsd,
+      purpose: purpose || null,
+      cached: false,
     });
   } catch {
     // Non-critical — don't fail the task over tracking
@@ -453,7 +504,8 @@ export async function generateResponse(
   taskBody: string,
   username: string,
   taskType: TaskType = "understand",
-  userId?: string
+  userId?: string,
+  taskId?: string
 ): Promise<AIResponse> {
   if (process.env.AI_MOCK_MODE === "true") {
     return generateMockResponse(username, taskSubject, taskBody);
@@ -506,7 +558,7 @@ export async function generateResponse(
       cb.recordSuccess();
 
       // Track cost
-      await trackApiCall(userId, config.model, result.inputTokens, result.outputTokens, cost);
+      await trackApiCall(userId, config.model, result.inputTokens, result.outputTokens, cost, config.provider, taskId, taskType);
 
       const aiResponse: AIResponse = {
         content: result.content,
@@ -544,7 +596,7 @@ export async function generateResponse(
             const cost = calculateCost(config, retryResult.inputTokens, retryResult.outputTokens);
             const totalTokens = retryResult.inputTokens + retryResult.outputTokens;
             cb.recordSuccess();
-            await trackApiCall(userId, config.model, retryResult.inputTokens, retryResult.outputTokens, cost);
+            await trackApiCall(userId, config.model, retryResult.inputTokens, retryResult.outputTokens, cost, config.provider, taskId, taskType);
             return {
               content: retryResult.content,
               actions: parseActions(retryResult.content),
