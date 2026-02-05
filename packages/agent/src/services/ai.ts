@@ -139,14 +139,14 @@ interface ModelConfig {
 // Task type → ordered list of models to try
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
-    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
   ],
   plan: [
-    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
@@ -161,12 +161,12 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   validate: [
-    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
   ],
   respond: [
-    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
   ],
@@ -176,7 +176,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
   ],
   classify: [
-    { provider: 'groq', model: 'llama-3.1-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
