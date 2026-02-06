@@ -2375,32 +2375,6 @@ export default function AevoyLanding() {
         </div>
       </section>
 
-      {/* Proof Wall */}
-      <section id="proof" className="py-32 bg-white">
-        <div className="max-w-4xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              What we did this week
-            </h2>
-            <p className="text-xl text-stone-500">
-              Real tasks. Real results. Updated live.
-            </p>
-          </div>
-          
-          <div>
-            {proofItems.map((item, i) => (
-              <ProofItem key={i} {...item} index={i} />
-            ))}
-          </div>
-          
-          <div className="text-center mt-12">
-            <Link href="/dashboard/activity" className="text-stone-500 hover:text-stone-700 text-sm font-medium transition-colors">
-              View all completed tasks
-            </Link>
-          </div>
-        </div>
-      </section>
-      
       {/* Features */}
       <section className="py-32 bg-stone-50">
         <div className="max-w-6xl mx-auto px-6">
@@ -2536,6 +2510,32 @@ export default function AevoyLanding() {
         </div>
       </section>
 
+      {/* Proof Wall */}
+      <section id="proof" className="py-32 bg-white">
+        <div className="max-w-4xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+              What we did this week
+            </h2>
+            <p className="text-xl text-stone-500">
+              Real tasks. Real results. Updated live from actual users.
+            </p>
+          </div>
+
+          <div>
+            {proofItems.map((item, i) => (
+              <ProofItem key={i} {...item} index={i} />
+            ))}
+          </div>
+
+          <div className="text-center mt-12">
+            <Link href="/dashboard/activity" className="text-stone-500 hover:text-stone-700 text-sm font-medium transition-colors">
+              View all completed tasks
+            </Link>
+          </div>
+        </div>
+      </section>
+
       {/* CTA */}
       <section className="py-32 bg-stone-900 text-white">
         <div className="max-w-4xl mx-auto px-6 text-center">
@@ -2557,7 +2557,7 @@ export default function AevoyLanding() {
           <p className="mt-10 text-sm text-stone-600">
             Questions? hello@aevoy.com — a human will respond.
             <br />
-            (We haven&apos;t automated ourselves yet.)
+            (We haven&apos;t automated ourselves yet. Also, see exact pricing above—no hidden costs.)
           </p>
         </div>
       </section>
