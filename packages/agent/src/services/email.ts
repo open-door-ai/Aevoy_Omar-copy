@@ -86,13 +86,13 @@ export function formatResponseEmail(body: string): string {
 
     // Convert headers
     if (p.startsWith("# ")) {
-      return `<h1 style="margin-top: 20px; font-size: 24px;">${escapeHtml(p.slice(2))}</h1>`;
+      return `<h1 style="margin: 24px 0 12px 0; font-size: 24px; font-weight: 700; color: #1c1917; line-height: 1.3;">${escapeHtml(p.slice(2))}</h1>`;
     }
     if (p.startsWith("## ")) {
-      return `<h2 style="margin-top: 16px; font-size: 20px;">${escapeHtml(p.slice(3))}</h2>`;
+      return `<h2 style="margin: 20px 0 10px 0; font-size: 20px; font-weight: 600; color: #1c1917; line-height: 1.3;">${escapeHtml(p.slice(3))}</h2>`;
     }
     if (p.startsWith("### ")) {
-      return `<h3 style="margin-top: 12px; font-size: 16px;">${escapeHtml(p.slice(4))}</h3>`;
+      return `<h3 style="margin: 16px 0 8px 0; font-size: 17px; font-weight: 600; color: #292524; line-height: 1.4;">${escapeHtml(p.slice(4))}</h3>`;
     }
 
     // Convert bullet lists
@@ -100,47 +100,66 @@ export function formatResponseEmail(body: string): string {
       const lines = p.split("\n");
       const listItems = lines
         .filter((line) => line.startsWith("- "))
-        .map((line) => `<li>${escapeHtml(line.slice(2))}</li>`)
+        .map((line) => `<li style="margin: 6px 0; line-height: 1.65;">${escapeHtml(line.slice(2))}</li>`)
         .join("");
-      return `<ul style="margin: 10px 0; padding-left: 20px;">${listItems}</ul>`;
+      return `<ul style="margin: 12px 0; padding-left: 24px; color: #57534e;">${listItems}</ul>`;
     }
 
     // Convert line breaks within paragraph
     const withBreaks = safe.replace(/\n/g, "<br>");
-    return `<p style="margin: 10px 0;">${withBreaks}</p>`;
+    return `<p style="margin: 12px 0; line-height: 1.65; color: #57534e;">${withBreaks}</p>`;
   });
 
+  // Premium Linear/Stripe-inspired table-based layout (email-safe)
   return `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
-      <style>
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          line-height: 1.6;
-          color: #333;
-          max-width: 600px;
-          margin: 0 auto;
-          padding: 20px;
-        }
-        a {
-          color: #0066cc;
-        }
-        code {
-          background: #f4f4f4;
-          padding: 2px 6px;
-          border-radius: 3px;
-          font-family: monospace;
-        }
-      </style>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     </head>
-    <body>
-      ${htmlParagraphs.join("\n")}
-      <hr style="margin-top: 30px; border: none; border-top: 1px solid #eee;">
-      <p style="font-size: 12px; color: #666;">
-        This email was sent by your AI assistant at Aevoy.
-      </p>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; background-color: #f5f5f4;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f5f5f4;">
+        <tr>
+          <td align="center" style="padding: 40px 16px;">
+            <!-- Logo -->
+            <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; width: 100%;">
+              <tr>
+                <td align="center" style="padding-bottom: 32px;">
+                  <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1c1917; letter-spacing: -0.02em;">Aevoy</h1>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Content Card -->
+            <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; width: 100%; background-color: #ffffff; border-radius: 16px; border: 1px solid #e7e5e4; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);">
+              <tr>
+                <td style="padding: 40px;">
+                  <!-- Body Content -->
+                  ${htmlParagraphs.join("\n")}
+                </td>
+              </tr>
+            </table>
+
+            <!-- Footer -->
+            <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; width: 100%;">
+              <tr>
+                <td align="center" style="padding-top: 32px;">
+                  <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 1.5; color: #a8a29e;">
+                    Sent by your AI assistant at Aevoy
+                  </p>
+                  <p style="margin: 0; font-size: 12px; line-height: 1.5;">
+                    <a href="https://aevoy.com/dashboard" style="color: #78716c; text-decoration: underline; margin: 0 8px;">Dashboard</a>
+                    <span style="color: #d6d3d1;">•</span>
+                    <a href="https://aevoy.com/dashboard/settings" style="color: #78716c; text-decoration: underline; margin: 0 8px;">Settings</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
   `;

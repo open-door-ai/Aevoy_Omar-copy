@@ -30,3 +30,11 @@ npm-debug.log*
 
 # Vercel
 .vercel
+
+# Test artifacts
+*.png
+.playwright-mcp/
+
+# Build artifacts
+packages/agent/tsconfig.tsbuildinfo
+packages/agent/dist/

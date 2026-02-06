@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AnimatePresence, motion, springs } from "@/components/ui/motion";
 
 interface ScheduledTask {
   id: string;
@@ -104,7 +105,7 @@ export function ScheduledTasks() {
     const date = new Date(dateStr);
     const now = new Date();
     const diff = date.getTime() - now.getTime();
-    
+
     if (diff < 0) return "Overdue";
     if (diff < 60 * 60 * 1000) {
       const mins = Math.round(diff / (60 * 1000));
@@ -141,43 +142,52 @@ export function ScheduledTasks() {
         </Button>
       </CardHeader>
       <CardContent>
-        {showForm && (
-          <form onSubmit={handleCreate} className="mb-6 p-4 bg-muted rounded-lg space-y-4">
-            {error && (
-              <div className="p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md">
-                {error}
+        <AnimatePresence>
+          {showForm && (
+            <motion.form
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={springs.default}
+              onSubmit={handleCreate}
+              className="mb-6 p-4 bg-muted rounded-lg space-y-4 overflow-hidden"
+            >
+              {error && (
+                <div className="p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md">
+                  {error}
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="task">Task Description</Label>
+                <Input
+                  id="task"
+                  placeholder="e.g., Check my email for urgent messages and summarize them"
+                  value={newTask}
+                  onChange={(e) => setNewTask(e.target.value)}
+                  required
+                />
               </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="task">Task Description</Label>
-              <Input
-                id="task"
-                placeholder="e.g., Check my email for urgent messages and summarize them"
-                value={newTask}
-                onChange={(e) => setNewTask(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="frequency">Frequency</Label>
-              <select
-                id="frequency"
-                value={frequency}
-                onChange={(e) => setFrequency(e.target.value)}
-                className="w-full px-3 py-2 border rounded-md bg-white"
-              >
-                <option value="hourly">Every hour</option>
-                <option value="daily">Daily at 9 AM</option>
-                <option value="weekdays">Weekdays at 9 AM</option>
-                <option value="weekly">Weekly on Monday</option>
-                <option value="monthly">Monthly on the 1st</option>
-              </select>
-            </div>
-            <Button type="submit" disabled={submitting || !newTask.trim()}>
-              {submitting ? "Creating..." : "Create Scheduled Task"}
-            </Button>
-          </form>
-        )}
+              <div className="space-y-2">
+                <Label htmlFor="frequency">Frequency</Label>
+                <select
+                  id="frequency"
+                  value={frequency}
+                  onChange={(e) => setFrequency(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-md bg-white"
+                >
+                  <option value="hourly">Every hour</option>
+                  <option value="daily">Daily at 9 AM</option>
+                  <option value="weekdays">Weekdays at 9 AM</option>
+                  <option value="weekly">Weekly on Monday</option>
+                  <option value="monthly">Monthly on the 1st</option>
+                </select>
+              </div>
+              <Button type="submit" disabled={submitting || !newTask.trim()}>
+                {submitting ? "Creating..." : "Create Scheduled Task"}
+              </Button>
+            </motion.form>
+          )}
+        </AnimatePresence>
 
         {loading ? (
           <div className="text-center py-8 text-muted-foreground">

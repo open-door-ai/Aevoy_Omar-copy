@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { FadeIn, AnimatePresence, motion, springs } from "@/components/ui/motion";
 
 interface StepTourProps {
   aiEmail: string;
@@ -29,6 +30,7 @@ const TOUR_STEPS = [
 export default function StepTour({ aiEmail, onComplete }: StepTourProps) {
   const [tourStep, setTourStep] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [direction, setDirection] = useState(1);
 
   const isLastStep = tourStep >= TOUR_STEPS.length - 1;
   const current = TOUR_STEPS[tourStep];
@@ -39,57 +41,77 @@ export default function StepTour({ aiEmail, onComplete }: StepTourProps) {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const goTo = (next: number) => {
+    setDirection(next > tourStep ? 1 : -1);
+    setTourStep(next);
+  };
+
   return (
     <div className="flex flex-col items-center max-w-lg mx-auto px-6">
-      <h2 className="text-3xl font-bold text-stone-900 mb-2">Your Dashboard</h2>
-      <p className="text-stone-500 mb-8 text-center">
-        Here&apos;s a quick tour of what you&apos;ll find
-      </p>
+      <FadeIn>
+        <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">Your Dashboard</h2>
+        <p className="text-stone-500 mb-8 text-center">
+          Here&apos;s a quick tour of what you&apos;ll find
+        </p>
+      </FadeIn>
 
       {/* Progress dots */}
       <div className="flex gap-2 mb-8">
         {TOUR_STEPS.map((_, i) => (
-          <div
+          <motion.div
             key={i}
-            className={`w-2 h-2 rounded-full transition-colors ${
-              i === tourStep ? "bg-stone-800" : i < tourStep ? "bg-stone-400" : "bg-stone-200"
-            }`}
+            animate={{
+              scale: i === tourStep ? 1.3 : 1,
+              backgroundColor: i === tourStep ? "#1c1917" : i < tourStep ? "#a8a29e" : "#e7e5e4",
+            }}
+            transition={springs.micro}
+            className="w-2 h-2 rounded-full"
           />
         ))}
       </div>
 
       {/* Spotlight card */}
-      <div className="w-full bg-white border-2 border-stone-800 rounded-2xl p-8 text-center space-y-4 mb-8 relative overflow-hidden">
-        {/* Background glow */}
-        <div className="absolute inset-0 bg-gradient-to-br from-stone-100/50 to-transparent pointer-events-none" />
+      <AnimatePresence mode="wait" custom={direction}>
+        <motion.div
+          key={tourStep}
+          custom={direction}
+          initial={{ x: direction > 0 ? 40 : -40, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: direction > 0 ? -40 : 40, opacity: 0 }}
+          transition={springs.default}
+          className="w-full bg-white border-2 border-stone-800 rounded-2xl p-8 text-center space-y-4 mb-8 relative overflow-hidden"
+        >
+          {/* Background glow */}
+          <div className="absolute inset-0 bg-gradient-to-br from-stone-100/50 to-transparent pointer-events-none" />
 
-        <div className="relative">
-          <div className="w-16 h-16 bg-stone-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <svg
-              className="w-8 h-8 text-stone-700"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d={current.icon} />
-            </svg>
+          <div className="relative">
+            <div className="w-16 h-16 bg-stone-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <svg
+                className="w-8 h-8 text-stone-700"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d={current.icon} />
+              </svg>
+            </div>
+
+            <h3 className="text-xl font-bold text-stone-900">{current.title}</h3>
+            <p className="text-stone-500 mt-2">{current.description}</p>
           </div>
-
-          <h3 className="text-xl font-bold text-stone-900">{current.title}</h3>
-          <p className="text-stone-500 mt-2">{current.description}</p>
-        </div>
-      </div>
+        </motion.div>
+      </AnimatePresence>
 
       {/* Step navigation */}
       <div className="flex gap-4 w-full mb-6">
         {tourStep > 0 && (
-          <Button variant="outline" onClick={() => setTourStep((s) => s - 1)} className="flex-1">
+          <Button variant="outline" onClick={() => goTo(tourStep - 1)} className="flex-1">
             Previous
           </Button>
         )}
         {!isLastStep ? (
-          <Button onClick={() => setTourStep((s) => s + 1)} className="flex-1">
+          <Button onClick={() => goTo(tourStep + 1)} className="flex-1">
             Next
           </Button>
         ) : (
@@ -98,29 +120,36 @@ export default function StepTour({ aiEmail, onComplete }: StepTourProps) {
       </div>
 
       {/* Final CTA */}
-      {isLastStep && (
-        <div className="w-full space-y-4">
-          <div className="bg-gradient-to-br from-stone-800 to-stone-900 rounded-2xl p-6 text-center text-white">
-            <h3 className="text-lg font-bold mb-2">Ready to send your first task?</h3>
-            <p className="text-stone-300 text-sm mb-4">
-              Send an email to your AI and watch it work
-            </p>
-            <div className="bg-white/10 backdrop-blur rounded-xl p-3 font-mono text-lg mb-3">
-              {aiEmail}
+      <AnimatePresence>
+        {isLastStep && (
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={springs.bouncy}
+            className="w-full space-y-4"
+          >
+            <div className="bg-gradient-to-br from-stone-800 to-stone-900 rounded-2xl p-6 text-center text-white">
+              <h3 className="text-lg font-bold mb-2">Ready to send your first task?</h3>
+              <p className="text-stone-300 text-sm mb-4">
+                Send an email to your AI and watch it work
+              </p>
+              <div className="bg-white/10 backdrop-blur rounded-xl p-3 font-mono text-lg mb-3">
+                {aiEmail}
+              </div>
+              <button
+                onClick={handleCopy}
+                className="text-stone-300 hover:text-white text-sm transition-colors underline underline-offset-4"
+              >
+                {copied ? "Copied!" : "Copy email address"}
+              </button>
             </div>
-            <button
-              onClick={handleCopy}
-              className="text-stone-300 hover:text-white text-sm transition-colors underline underline-offset-4"
-            >
-              {copied ? "Copied!" : "Copy email address"}
-            </button>
-          </div>
 
-          <Button onClick={onComplete} className="w-full" size="lg">
-            Go to Dashboard
-          </Button>
-        </div>
-      )}
+            <Button onClick={onComplete} className="w-full" size="lg">
+              Go to Dashboard
+            </Button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Skip tour link */}
       {!isLastStep && (

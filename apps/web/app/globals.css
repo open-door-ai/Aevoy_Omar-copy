@@ -79,6 +79,21 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Brand accent */
+  --brand: oklch(0.55 0.15 270);
+  --brand-light: oklch(0.72 0.12 270);
+  --brand-subtle: oklch(0.92 0.04 270);
+
+  /* Aurora colors */
+  --aurora-1: oklch(0.7 0.15 270);
+  --aurora-2: oklch(0.65 0.18 300);
+  --aurora-3: oklch(0.6 0.12 240);
+
+  /* Glass properties */
+  --glass-bg: oklch(1 0 0 / 60%);
+  --glass-border: oklch(1 0 0 / 20%);
+  --glass-blur: 20px;
 }
 
 .dark {
@@ -113,6 +128,21 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* Brand accent (dark) */
+  --brand: oklch(0.7 0.15 270);
+  --brand-light: oklch(0.8 0.1 270);
+  --brand-subtle: oklch(0.3 0.06 270);
+
+  /* Aurora colors (dark) */
+  --aurora-1: oklch(0.4 0.15 270);
+  --aurora-2: oklch(0.35 0.18 300);
+  --aurora-3: oklch(0.3 0.12 240);
+
+  /* Glass properties (dark) */
+  --glass-bg: oklch(0.2 0 0 / 60%);
+  --glass-border: oklch(1 0 0 / 10%);
+  --glass-blur: 20px;
 }
 
 @layer base {
@@ -122,4 +152,49 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Aurora animation */
+@keyframes aurora-shift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30px, -50px) scale(1.1); }
+  50% { transform: translate(-20px, 20px) scale(0.95); }
+  75% { transform: translate(50px, 30px) scale(1.05); }
+}
+
+/* Shimmer effect for loading states */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Error shake */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 50%, 90% { transform: translateX(-4px); }
+  30%, 70% { transform: translateX(4px); }
+}
+
+/* Idle float */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.animate-aurora {
+  animation: aurora-shift 15s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent 25%, oklch(1 0 0 / 20%) 50%, transparent 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
 }
