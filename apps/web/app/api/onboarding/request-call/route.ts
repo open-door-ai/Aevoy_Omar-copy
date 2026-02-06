@@ -35,6 +35,8 @@ export async function POST(request: Request) {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
+    const apiKeySid = process.env.TWILIO_API_KEY_SID;
+    const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
 
     if (!accountSid || !authToken || !twilioNumber) {
       // Mark as requested but service unavailable
@@ -61,7 +63,10 @@ export async function POST(request: Request) {
       StatusCallbackMethod: "POST",
     });
 
-    const auth = "Basic " + Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+    // Prefer API Key auth (more secure, independently revocable)
+    const authUser = apiKeySid && apiKeySecret ? apiKeySid : accountSid;
+    const authPass = apiKeySid && apiKeySecret ? apiKeySecret : authToken;
+    const auth = "Basic " + Buffer.from(`${authUser}:${authPass}`).toString("base64");
 
     const callRes = await fetch(
       `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`,

@@ -32,7 +32,13 @@ function getTwilioCredentials() {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
   if (!accountSid || !authToken || !from) return null;
-  return { accountSid, authToken, from };
+  return {
+    accountSid,
+    authToken,
+    from,
+    apiKeySid: process.env.TWILIO_API_KEY_SID || undefined,
+    apiKeySecret: process.env.TWILIO_API_KEY_SECRET || undefined,
+  };
 }
 
 /**
@@ -84,7 +90,11 @@ export async function POST(request: Request) {
       {
         method: 'POST',
         headers: {
-          Authorization: 'Basic ' + Buffer.from(`${creds.accountSid}:${creds.authToken}`).toString('base64'),
+          Authorization: 'Basic ' + Buffer.from(
+            creds.apiKeySid && creds.apiKeySecret
+              ? `${creds.apiKeySid}:${creds.apiKeySecret}`
+              : `${creds.accountSid}:${creds.authToken}`
+          ).toString('base64'),
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: callBody.toString(),
