@@ -175,7 +175,7 @@ export function ScheduledTasks() {
                   id="frequency"
                   value={frequency}
                   onChange={(e) => setFrequency(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-md bg-white"
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground"
                 >
                   <option value="hourly">Every hour</option>
                   <option value="daily">Daily at 9 AM</option>

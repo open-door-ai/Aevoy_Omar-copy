@@ -82,10 +82,10 @@ export class CircuitBreaker {
     cooldownMs?: number;
     requiredSuccesses?: number;
   }) {
-    this.threshold = options?.threshold ?? 5;
+    this.threshold = options?.threshold ?? 10; // Was: 5 (increased tolerance)
     this.windowMs = options?.windowMs ?? 600000; // 10 minutes
-    this.cooldownMs = options?.cooldownMs ?? 60000; // 1 minute
-    this.requiredSuccesses = options?.requiredSuccesses ?? 2;
+    this.cooldownMs = options?.cooldownMs ?? 120000; // Was: 60000 (2 minutes for recovery)
+    this.requiredSuccesses = options?.requiredSuccesses ?? 3; // Was: 2 (more proof needed)
   }
 
   /**

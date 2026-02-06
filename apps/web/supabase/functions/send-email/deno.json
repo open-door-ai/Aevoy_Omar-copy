@@ -1,0 +1,9 @@
+{
+  "imports": {
+    "https://esm.sh/": "https://esm.sh/"
+  },
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
+  }
+}

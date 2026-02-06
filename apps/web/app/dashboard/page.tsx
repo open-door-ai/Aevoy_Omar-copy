@@ -86,10 +86,10 @@ export default async function DashboardPage() {
         <StaggerItem>
           <GlassCard className="p-6">
             <div className="space-y-1 mb-4">
-              <h3 className="text-sm font-medium text-stone-500">Your AI Email</h3>
-              <p className="text-xs text-stone-400">Send tasks via email</p>
+              <h3 className="text-sm font-medium text-muted-foreground">Your AI Email</h3>
+              <p className="text-xs text-muted-foreground/70">Send tasks via email</p>
             </div>
-            <div className="text-2xl font-mono bg-stone-50 dark:bg-stone-900/30 p-4 rounded-xl inline-block border border-stone-200 dark:border-stone-700">
+            <div className="text-2xl font-mono bg-muted p-4 rounded-xl inline-block border border-border">
               {aiEmail}
             </div>
           </GlassCard>
@@ -99,10 +99,10 @@ export default async function DashboardPage() {
           <StaggerItem>
             <GlassCard className="p-6">
               <div className="space-y-1 mb-4">
-                <h3 className="text-sm font-medium text-stone-500">Your AI Phone</h3>
-                <p className="text-xs text-stone-400">Call or text tasks</p>
+                <h3 className="text-sm font-medium text-muted-foreground">Your AI Phone</h3>
+                <p className="text-xs text-muted-foreground/70">Call or text tasks</p>
               </div>
-              <div className="text-2xl font-mono bg-stone-50 dark:bg-stone-900/30 p-4 rounded-xl inline-block border border-stone-200 dark:border-stone-700">
+              <div className="text-2xl font-mono bg-muted p-4 rounded-xl inline-block border border-border">
                 {twilioNumber}
               </div>
               <p className="text-sm text-muted-foreground mt-2">
@@ -137,7 +137,7 @@ export default async function DashboardPage() {
         </StaggerItem>
 
         <StaggerItem>
-          <Card className={isBetaUser ? "border-purple-300 bg-gradient-to-br from-purple-50 to-pink-50" : ""}>
+          <Card className={isBetaUser ? "border-purple-300 dark:border-purple-700 bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-950/30 dark:to-pink-950/30" : ""}>
             <CardHeader className="pb-2">
               <CardDescription>Plan</CardDescription>
               <CardTitle className="text-3xl capitalize">

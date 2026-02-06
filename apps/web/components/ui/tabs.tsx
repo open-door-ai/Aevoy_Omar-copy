@@ -78,7 +78,7 @@ export function TabsList({ children, className }: TabsListProps) {
       <div
         ref={listRef}
         className={cn(
-          "inline-flex items-center gap-1 p-1 bg-stone-100 dark:bg-stone-800 rounded-xl",
+          "inline-flex items-center gap-1 p-1 bg-muted rounded-xl",
           className
         )}
       >
@@ -91,12 +91,12 @@ export function TabsList({ children, className }: TabsListProps) {
     return (
       <div
         ref={listRef}
-        className={cn("relative flex items-center gap-6 border-b border-stone-200 dark:border-stone-700", className)}
+        className={cn("relative flex items-center gap-6 border-b border-border", className)}
       >
         {children}
         {/* Animated underline indicator */}
         <motion.div
-          className="absolute bottom-0 h-0.5 bg-stone-900 dark:bg-white"
+          className="absolute bottom-0 h-0.5 bg-foreground"
           initial={false}
           animate={indicatorProps}
           transition={springs.snappy}
@@ -110,14 +110,14 @@ export function TabsList({ children, className }: TabsListProps) {
     <div
       ref={listRef}
       className={cn(
-        "inline-flex items-center gap-2 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg relative",
+        "inline-flex items-center gap-2 p-1 bg-muted rounded-lg relative",
         className
       )}
     >
       {children}
       {/* Animated background indicator */}
       <motion.div
-        className="absolute bg-white dark:bg-stone-700 rounded-md shadow-sm"
+        className="absolute bg-card rounded-md shadow-sm"
         style={{ height: "calc(100% - 8px)", top: 4 }}
         initial={false}
         animate={indicatorProps}
@@ -165,8 +165,8 @@ export function TabsTrigger({ children, value, className, disabled }: TabsTrigge
           "relative px-4 py-2 text-sm font-medium rounded-lg transition-colors",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           isActive
-            ? "bg-white dark:bg-stone-700 text-stone-900 dark:text-white shadow-sm"
-            : "text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white",
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
           disabled && "opacity-50 cursor-not-allowed",
           className
         )}
@@ -189,8 +189,8 @@ export function TabsTrigger({ children, value, className, disabled }: TabsTrigge
           "relative px-1 py-3 text-sm font-medium transition-colors",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           isActive
-            ? "text-stone-900 dark:text-white"
-            : "text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white",
+            ? "text-foreground"
+            : "text-muted-foreground hover:text-foreground",
           disabled && "opacity-50 cursor-not-allowed",
           className
         )}
@@ -213,8 +213,8 @@ export function TabsTrigger({ children, value, className, disabled }: TabsTrigge
         "relative z-10 px-4 py-2 text-sm font-medium rounded-md transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         isActive
-          ? "text-stone-900 dark:text-white"
-          : "text-stone-600 dark:text-stone-400 hover:text-stone-900 dark:hover:text-white",
+          ? "text-foreground"
+          : "text-muted-foreground hover:text-foreground",
         disabled && "opacity-50 cursor-not-allowed",
         className
       )}

@@ -66,9 +66,9 @@ export default function AuthLayout({
         </div>
 
         {/* Mobile header */}
-        <header className="lg:hidden border-b bg-white/80 backdrop-blur-sm relative z-10">
+        <header className="lg:hidden border-b border-border bg-background/80 backdrop-blur-sm relative z-10">
           <div className="px-6 py-4">
-            <Link href="/" className="text-2xl font-bold text-stone-900">
+            <Link href="/" className="text-2xl font-bold text-foreground">
               Aevoy
             </Link>
           </div>

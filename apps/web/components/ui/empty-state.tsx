@@ -34,20 +34,20 @@ export function EmptyState({
       {/* Icon with float animation */}
       {Icon && (
         <div className="flex justify-center mb-4">
-          <div className="p-4 bg-stone-100 dark:bg-stone-800 rounded-2xl animate-float">
-            <Icon className="w-10 h-10 text-stone-400 dark:text-stone-500" />
+          <div className="p-4 bg-muted rounded-2xl animate-float">
+            <Icon className="w-10 h-10 text-muted-foreground" />
           </div>
         </div>
       )}
 
       {/* Title */}
-      <h3 className="text-lg font-semibold text-stone-900 dark:text-white mb-2">
+      <h3 className="text-lg font-semibold text-foreground mb-2">
         {title}
       </h3>
 
       {/* Description */}
       {description && (
-        <p className="text-sm text-stone-500 dark:text-stone-400 max-w-md mx-auto mb-6">
+        <p className="text-sm text-muted-foreground max-w-md mx-auto mb-6">
           {description}
         </p>
       )}

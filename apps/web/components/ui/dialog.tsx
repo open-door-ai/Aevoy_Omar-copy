@@ -89,8 +89,8 @@ export function DialogContent({
         <ModalOverlay onClose={() => setOpen(false)}>
           <div
             className={cn(
-              "w-full bg-white dark:bg-stone-900 rounded-2xl shadow-xl",
-              "border border-stone-200 dark:border-stone-700",
+              "w-full bg-card rounded-2xl shadow-xl",
+              "border border-border",
               sizeClasses[size],
               className
             )}
@@ -100,9 +100,9 @@ export function DialogContent({
                 onClick={() => setOpen(false)}
                 className={cn(
                   "absolute top-4 right-4 z-20",
-                  "text-stone-400 hover:text-stone-600 dark:hover:text-stone-300",
+                  "text-muted-foreground hover:text-foreground",
                   "transition-colors duration-200",
-                  "rounded-lg p-1 hover:bg-stone-100 dark:hover:bg-stone-800"
+                  "rounded-lg p-1 hover:bg-accent"
                 )}
                 aria-label="Close dialog"
               >
@@ -146,7 +146,7 @@ export function DialogTitle({ children, className }: DialogTitleProps) {
   return (
     <h2
       className={cn(
-        "text-xl font-semibold text-stone-900 dark:text-white",
+        "text-xl font-semibold text-foreground",
         className
       )}
     >
@@ -165,7 +165,7 @@ export function DialogDescription({ children, className }: DialogDescriptionProp
   return (
     <p
       className={cn(
-        "mt-2 text-sm text-stone-500 dark:text-stone-400",
+        "mt-2 text-sm text-muted-foreground",
         className
       )}
     >

@@ -69,7 +69,7 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
   };
 
   return (
-    <div className="fixed inset-0 bg-white z-50 overflow-auto">
+    <div className="fixed inset-0 bg-white z-50 overflow-auto force-light">
       {/* Progress bar */}
       <div className="fixed top-0 left-0 right-0 z-10">
         <div className="h-1 bg-stone-100">

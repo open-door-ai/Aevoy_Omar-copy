@@ -27,6 +27,7 @@ interface UserSettings {
   agent_card_limit_transaction: number;
   agent_card_limit_monthly: number;
   virtual_phone: string | null;
+  proactive_daily_limit?: number;
 }
 
 interface AgentCard {
@@ -54,6 +55,9 @@ export default function SettingsPage() {
 
   // Hive Mind venting state
   const [allowVenting, setAllowVenting] = useState(false);
+
+  // Proactive notifications limit
+  const [proactiveLimit, setProactiveLimit] = useState(10);
 
   // Phone provisioning state
   const [phone, setPhone] = useState<string | null>(null);
@@ -88,6 +92,7 @@ export default function SettingsPage() {
         if (response.ok) {
           const data = await response.json();
           setSettings(data);
+          setProactiveLimit(data.proactive_daily_limit ?? 10);
         }
       } catch (error) {
         console.error("Failed to load settings:", error);
@@ -188,7 +193,10 @@ export default function SettingsPage() {
       const response = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        body: JSON.stringify({
+          ...settings,
+          proactive_daily_limit: proactiveLimit,
+        }),
       });
 
       if (!response.ok) {
@@ -345,8 +353,8 @@ export default function SettingsPage() {
         <div
           className={`p-4 rounded-md ${
             message.type === "success"
-              ? "bg-green-50 text-green-800 border border-green-200"
-              : "bg-red-50 text-red-800 border border-red-200"
+              ? "bg-green-50 dark:bg-green-950/30 text-green-800 dark:text-green-300 border border-green-200 dark:border-green-800"
+              : "bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800"
           }`}
         >
           {message.text}
@@ -568,6 +576,47 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
+
+            {/* Proactive Notifications Slider */}
+            <div className="space-y-3 border-t pt-6">
+              <Label>Proactive Notifications</Label>
+              <p className="text-sm text-muted-foreground">
+                Control how many proactive notifications your AI can send per day (reminders, alerts, opportunities).
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <Label className="text-sm">Daily Limit: <span className="font-semibold text-primary">{proactiveLimit}</span> messages</Label>
+                    <span className="text-xs text-muted-foreground">
+                      {proactiveLimit === 0 ? "Disabled" : proactiveLimit <= 5 ? "Minimal" : proactiveLimit <= 10 ? "Moderate" : "Maximum"}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="20"
+                    value={proactiveLimit}
+                    onChange={(e) => setProactiveLimit(parseInt(e.target.value))}
+                    className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                    style={{
+                      background: `linear-gradient(to right, var(--brand) 0%, var(--brand) ${(proactiveLimit / 20) * 100}%, var(--muted) ${(proactiveLimit / 20) * 100}%, var(--muted) 100%)`
+                    }}
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                    <span>Off (0)</span>
+                    <span>Moderate (10)</span>
+                    <span>Max (20)</span>
+                  </div>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {proactiveLimit === 0 && "⚠️ Proactive mode disabled - your AI will never reach out unless you message it first."}
+                  {proactiveLimit > 0 && proactiveLimit <= 5 && "🔕 Minimal - only critical alerts (bills, meetings, urgent issues)."}
+                  {proactiveLimit > 5 && proactiveLimit <= 10 && "🔔 Moderate - regular reminders and opportunities."}
+                  {proactiveLimit > 10 && "🔊 Maximum - your AI will be very proactive in finding ways to help."}
+                </p>
+              </div>
+            </div>
+
             <div className="space-y-3 border-t pt-6">
               <Label>Hive Mind Venting</Label>
               <p className="text-sm text-muted-foreground">
@@ -633,7 +682,7 @@ export default function SettingsPage() {
               </div>
 
               {agentCard.is_frozen && (
-                <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800">
+                <div className="flex items-center gap-2 p-3 bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg text-yellow-800 dark:text-yellow-300">
                   <span>Card is frozen</span>
                 </div>
               )}

@@ -16,6 +16,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -44,13 +45,38 @@ export default function LoginPage() {
     }
   };
 
+  const handleDemoLogin = async () => {
+    setError(null);
+    setDemoLoading(true);
+
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithPassword({
+        email: "test-e2e@aevoy.com",
+        password: "TestPass123!",
+      });
+
+      if (error) {
+        setError("Demo account unavailable. Please create an account instead.");
+        return;
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch {
+      setError("Demo account unavailable");
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
   return (
     <div>
       <FadeIn>
-        <h1 className="text-3xl font-bold text-stone-900 tracking-tight">
+        <h1 className="text-3xl font-bold text-foreground tracking-tight">
           Welcome back
         </h1>
-        <p className="mt-2 text-stone-500">
+        <p className="mt-2 text-muted-foreground">
           Sign in to your account to continue
         </p>
       </FadeIn>
@@ -59,7 +85,7 @@ export default function LoginPage() {
         <ShakeOnError error={error}>
           {error && (
             <FadeIn direction="none" className="mb-6">
-              <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl">
+              <div className="p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl">
                 {error}
               </div>
             </FadeIn>
@@ -69,7 +95,7 @@ export default function LoginPage() {
         <StaggerContainer className="space-y-5" staggerDelay={0.1} delayStart={0.15}>
           <StaggerItem>
             <div className="space-y-2">
-              <Label htmlFor="email" className="text-stone-700 font-medium">Email</Label>
+              <Label htmlFor="email" className="text-foreground/80 font-medium">Email</Label>
               <Input
                 id="email"
                 type="email"
@@ -84,7 +110,7 @@ export default function LoginPage() {
 
           <StaggerItem>
             <div className="space-y-2">
-              <Label htmlFor="password" className="text-stone-700 font-medium">Password</Label>
+              <Label htmlFor="password" className="text-foreground/80 font-medium">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -116,14 +142,46 @@ export default function LoginPage() {
               )}
             </Button>
           </StaggerItem>
+
+          <StaggerItem>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-border" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">or</span>
+              </div>
+            </div>
+          </StaggerItem>
+
+          <StaggerItem>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full h-12 rounded-xl text-base font-medium"
+              onClick={handleDemoLogin}
+              disabled={demoLoading}
+            >
+              {demoLoading ? (
+                <>
+                  <span className="opacity-0">Try Demo Account</span>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-5 h-5 border-2 border-muted-foreground/30 border-t-muted-foreground rounded-full animate-spin" />
+                  </div>
+                </>
+              ) : (
+                "Try Demo Account"
+              )}
+            </Button>
+          </StaggerItem>
         </StaggerContainer>
 
         <FadeIn delay={0.5} className="mt-6 text-center">
-          <p className="text-sm text-stone-500">
+          <p className="text-sm text-muted-foreground">
             Don&apos;t have an account?{" "}
             <Link
               href="/signup"
-              className="text-stone-900 font-medium hover:underline underline-offset-4 transition-all"
+              className="text-foreground font-medium hover:underline underline-offset-4 transition-all"
             >
               Sign up
             </Link>

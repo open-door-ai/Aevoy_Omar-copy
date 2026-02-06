@@ -36,6 +36,7 @@ export async function GET() {
     agent_card_limit_transaction: 5000,
     agent_card_limit_monthly: 20000,
     virtual_phone: null,
+    proactive_daily_limit: 10,
   };
 
   return NextResponse.json(response);
@@ -76,6 +77,17 @@ export async function PUT(request: Request) {
       );
     }
 
+    // Validate proactive_daily_limit
+    if (body.proactive_daily_limit !== undefined) {
+      const limit = parseInt(body.proactive_daily_limit);
+      if (isNaN(limit) || limit < 0 || limit > 20) {
+        return NextResponse.json(
+          { error: "Invalid proactive_daily_limit (must be 0-20)" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Upsert settings
     const { data, error } = await supabase
       .from("user_settings")
@@ -87,6 +99,7 @@ export async function PUT(request: Request) {
           agent_card_enabled: body.agent_card_enabled,
           agent_card_limit_transaction: body.agent_card_limit_transaction,
           agent_card_limit_monthly: body.agent_card_limit_monthly,
+          proactive_daily_limit: body.proactive_daily_limit ?? 10,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id" }

@@ -88,19 +88,19 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   const getStatusColor = (status: string) => {
     switch (status) {
       case "completed":
-        return "bg-green-100 text-green-800";
+        return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300";
       case "failed":
-        return "bg-red-100 text-red-800";
+        return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
       case "processing":
-        return "bg-blue-100 text-blue-800";
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
       case "pending":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300";
       case "needs_review":
-        return "bg-orange-100 text-orange-800";
+        return "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300";
       case "awaiting_confirmation":
-        return "bg-purple-100 text-purple-800";
+        return "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300";
       default:
-        return "bg-gray-100 text-gray-800";
+        return "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300";
     }
   };
 
@@ -126,13 +126,13 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   const getChannelBadge = (channel: string | null) => {
     switch (channel) {
       case "sms":
-        return <span className="text-xs bg-cyan-100 text-cyan-700 px-1.5 py-0.5 rounded">SMS</span>;
+        return <span className="text-xs bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300 px-1.5 py-0.5 rounded">SMS</span>;
       case "voice":
-        return <span className="text-xs bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded">Voice</span>;
+        return <span className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 px-1.5 py-0.5 rounded">Voice</span>;
       case "chat":
-        return <span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">Chat</span>;
+        return <span className="text-xs bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 px-1.5 py-0.5 rounded">Chat</span>;
       case "proactive":
-        return <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Proactive</span>;
+        return <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded">Proactive</span>;
       default:
         return null; // email is default, no badge needed
     }
@@ -141,10 +141,10 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   const getVerificationBadge = (status: string | null) => {
     if (!status) return null;
     if (status === "verified") {
-      return <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Verified</span>;
+      return <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 px-1.5 py-0.5 rounded">Verified</span>;
     }
     if (status === "unverified") {
-      return <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Unverified</span>;
+      return <span className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 px-1.5 py-0.5 rounded">Unverified</span>;
     }
     return null;
   };
@@ -170,7 +170,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
             <select
               value={channelFilter}
               onChange={(e) => setChannelFilter(e.target.value)}
-              className="text-xs border rounded-md px-2 py-1 bg-white dark:bg-stone-900"
+              className="text-xs border border-border rounded-md px-2 py-1 bg-background text-foreground"
             >
               <option value="all">All Channels</option>
               <option value="email">Email</option>
@@ -181,7 +181,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="text-xs border rounded-md px-2 py-1 bg-white dark:bg-stone-900"
+              className="text-xs border border-border rounded-md px-2 py-1 bg-background text-foreground"
             >
               <option value="all">All Status</option>
               <option value="completed">Completed</option>
@@ -207,7 +207,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
               <StaggerItem key={task.id}>
                 <div
                   className={`flex items-center justify-between p-4 border rounded-lg transition-all ${
-                    task.status === "processing" ? "border-blue-200 bg-blue-50/50 animate-pulse" : ""
+                    task.status === "processing" ? "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 animate-pulse" : ""
                   }`}
                 >
                   <div className="flex-1 min-w-0">

@@ -46,12 +46,22 @@ export class ProactiveEngine {
 
   /**
    * Check if daily proactive limit is reached for a user (database-backed).
-   * Max 2 proactive messages per user per day (high priority bypasses).
+   * User-configurable limit (0-20, default 10). High priority bypasses limit.
    */
   private async isDailyLimitReached(userId: string, priority: ProactivePriority): Promise<boolean> {
     if (priority === "high") return false; // High priority always goes through
 
     const today = new Date().toISOString().split("T")[0];
+
+    // Get user's proactive limit setting
+    const { data: settings } = await getSupabaseClient()
+      .from("user_settings")
+      .select("proactive_daily_limit")
+      .eq("user_id", userId)
+      .single();
+
+    const maxDaily = settings?.proactive_daily_limit ?? 10; // Default to 10
+    if (maxDaily === 0) return true; // 0 = proactive disabled
 
     const { data } = await getSupabaseClient()
       .from("usage")
@@ -66,7 +76,7 @@ export class ProactiveEngine {
       return false;
     }
 
-    return data.proactive_daily_count >= 2;
+    return data.proactive_daily_count >= maxDaily;
   }
 
   /**
