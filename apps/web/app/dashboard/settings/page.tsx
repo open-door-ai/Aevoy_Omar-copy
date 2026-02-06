@@ -78,6 +78,11 @@ export default function SettingsPage() {
   const [eveningTime, setEveningTime] = useState("21:00");
   const [premiumNumber, setPremiumNumber] = useState<string | null>(null);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+
+  // Email PIN state
+  const [emailPin, setEmailPin] = useState("");
+  const [savingEmailPin, setSavingEmailPin] = useState(false);
+  const [emailPinStatus, setEmailPinStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [savingPhone, setSavingPhone] = useState(false);
 
   const router = useRouter();
@@ -382,6 +387,39 @@ export default function SettingsPage() {
     }
 
     setSavingPhone(false);
+  };
+
+  const handleUpdateEmailPin = async () => {
+    if (!emailPin || !/^\d{4,6}$/.test(emailPin)) {
+      setEmailPinStatus({ success: false, message: "PIN must be 4-6 digits" });
+      return;
+    }
+
+    setSavingEmailPin(true);
+    setEmailPinStatus(null);
+
+    try {
+      const res = await fetch("/api/settings/email-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: emailPin }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to update Email PIN");
+      }
+
+      setEmailPinStatus({ success: true, message: "Email PIN updated successfully!" });
+      setEmailPin(""); // Clear input
+    } catch (error) {
+      setEmailPinStatus({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to update PIN",
+      });
+    } finally {
+      setSavingEmailPin(false);
+    }
   };
 
   const timezones = [
@@ -874,6 +912,41 @@ export default function SettingsPage() {
               </p>
             </div>
           )}
+
+          {/* Email PIN Security */}
+          <div className="border-t pt-6">
+            <h4 className="font-semibold text-sm mb-2">Email PIN</h4>
+            <p className="text-xs text-muted-foreground mb-4">
+              Required when someone emails your AI from an address other than{" "}
+              <strong>{profile?.email}</strong>
+            </p>
+
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                inputMode="numeric"
+                pattern="\d{4,6}"
+                placeholder="Set Email PIN (4-6 digits)"
+                value={emailPin}
+                onChange={(e) => setEmailPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                maxLength={6}
+                className="flex-1"
+              />
+              <Button onClick={handleUpdateEmailPin} disabled={savingEmailPin}>
+                {savingEmailPin ? "Saving..." : "Set PIN"}
+              </Button>
+            </div>
+
+            {emailPinStatus && (
+              <p
+                className={`text-xs mt-2 ${
+                  emailPinStatus.success ? "text-green-600" : "text-red-600"
+                }`}
+              >
+                {emailPinStatus.message}
+              </p>
+            )}
+          </div>
 
           {/* Premium Number */}
           {premiumNumber ? (

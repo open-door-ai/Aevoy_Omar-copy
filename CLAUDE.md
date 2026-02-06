@@ -232,12 +232,12 @@ User (Email / SMS / Voice / Chat / Desktop)
 | `main/db.ts` | SQLite + better-sqlite3 local storage |
 | `main/tray.ts` | System tray integration |
 
-## Database Schema (26 tables, Supabase PostgreSQL, RLS on all)
+## Database Schema (27 tables, Supabase PostgreSQL, RLS on all)
 
 ### Core
 | Table | Key Columns | Purpose |
 |-------|-------------|---------|
-| `profiles` | id (→auth.users), username, email, timezone, subscription_tier, messages_used, messages_limit, onboarding_completed, twilio_number, proactive_enabled, allow_agent_venting | User profiles |
+| `profiles` | id (→auth.users), username, email, timezone, subscription_tier, messages_used, messages_limit, onboarding_completed, twilio_number, proactive_enabled, allow_agent_venting, email_pin, email_pin_attempts, email_pin_locked_until | User profiles |
 | `tasks` | id, user_id, status, type, email_subject, cost_usd, tokens_used, input_channel, cascade_level, checkpoint_data, verification_status | Task records |
 | `task_logs` | task_id, level, message | Task execution logs |
 | `task_queue` | task_id, user_id, priority, status | Priority queue |
@@ -261,6 +261,7 @@ User (Email / SMS / Voice / Chat / Desktop)
 | `credential_vault` | id, user_id, site_domain, username, encrypted_password | Encrypted passwords (AES-256-GCM) |
 | `oauth_connections` | id, user_id, service, access_token_encrypted, refresh_token_encrypted, expires_at | OAuth tokens (encrypted) |
 | `tfa_codes` | id, user_id, service, code, expires_at | 2FA codes (auto-extracted from Gmail) |
+| `email_pin_sessions` | id, user_id, sender_email, pin_code, email_subject, email_body, email_body_html, attachments, expires_at (10 min), verified | Temporary PIN verification sessions for unregistered sender emails |
 | `user_sessions` | id, user_id, domain, session_data, expires_at (7 days) | Persistent login sessions |
 
 ### User Preferences
@@ -317,7 +318,46 @@ User (Email / SMS / Voice / Chat / Desktop)
 
 Target: <$0.10 avg cost per task. Budget: $15/user/month.
 
-## Migrations (10 files, cumulative)
+## Email PIN Security System
+
+**Purpose**: Allow users to securely receive emails from alternate addresses (not their registered email) after PIN verification.
+
+### Flow:
+1. Email arrives from unregistered sender → email worker detects mismatch
+2. If no `email_pin` set → reject + send setup instructions to registered email
+3. If `email_pin` set → generate 6-digit PIN
+4. Store session in `email_pin_sessions` table (10-min TTL)
+5. Send PIN to registered email
+6. Send auto-reply to sender confirming receipt
+7. User replies with PIN (or submits via dashboard at `/api/settings/email-pin`)
+8. Worker verifies PIN → processes original task
+9. If 3 failed attempts → 15-minute lockout
+
+### Security:
+- PIN encrypted in database (AES-256-GCM via `encryptPin()`)
+- 10-minute expiration per session
+- 3 attempts before 15-minute lockout (`email_pin_locked_until`)
+- Sessions auto-cleanup hourly via scheduler
+- Separate from voice PIN system
+- Mirrors phone PIN architecture from Session 15
+
+### Database Tables:
+- **profiles**: Added `email_pin` (encrypted), `email_pin_attempts`, `email_pin_locked_until`
+- **email_pin_sessions**: Temporary storage for pending emails (user_id, sender_email, pin_code, email_subject, email_body, email_body_html, attachments, expires_at, verified, created_at)
+
+### Endpoints:
+- **POST /task/email-pin** (agent): Direct PIN verification from web dashboard
+- **POST /email/send** (agent): Send emails via Resend (used by worker for notifications)
+- **POST /api/settings/email-pin** (web): Set/update email PIN in settings
+
+### Files Modified:
+- `workers/email-router/src/index.ts`: Lines 245-400 replaced rejection logic with full PIN flow
+- `packages/agent/src/index.ts`: Added `/task/email-pin` and `/email/send` endpoints
+- `packages/agent/src/services/scheduler.ts`: Added hourly cleanup via `cleanup_expired_email_pin_sessions()` RPC
+- `apps/web/app/dashboard/settings/page.tsx`: Added Email PIN section to Phone & Voice card
+- `apps/web/app/api/settings/email-pin/route.ts`: New API route for PIN setup
+
+## Migrations (11 files, cumulative)
 
 | Migration | Key Changes |
 |-----------|-------------|
@@ -331,6 +371,7 @@ Target: <$0.10 avg cost per task. Budget: $15/user/month.
 | `migration_v8.sql` | oauth_connections, credential_vault, tfa_codes, skills, execution_plans, task_queue, ai_cost_log, user_twilio_numbers, 2 RPCs |
 | `migration_v9.sql` | Security: fixed mutable search_path on 5 functions, tightened learnings RLS |
 | `migration_v10.sql` | distributed_locks, processed_emails, proactive_daily_count/date on usage |
+| `migration_v15.sql` | email_pin/email_pin_attempts/email_pin_locked_until on profiles, email_pin_sessions table, 3 RPCs (increment/reset attempts, cleanup sessions) |
 
 All migrations in: `apps/web/supabase/`
 

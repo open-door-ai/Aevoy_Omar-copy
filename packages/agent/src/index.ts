@@ -381,6 +381,87 @@ app.post("/task/verification", taskLimiter, async (req, res) => {
     .finally(() => { activeTasks--; });
 });
 
+// POST /task/email-pin - Direct PIN verification (web dashboard submission)
+app.post("/task/email-pin", taskLimiter, async (req, res) => {
+  const { userId, pinCode } = req.body;
+
+  if (!userId || !pinCode) {
+    return res.status(400).json({ error: "userId and pinCode required" });
+  }
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Find matching non-verified session
+    const { data: sessions, error } = await supabase
+      .from("email_pin_sessions")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("pin_code", pinCode)
+      .eq("verified", false)
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const session = sessions && sessions.length > 0 ? sessions[0] : null;
+
+    if (error || !session) {
+      console.log(`[EMAIL-PIN] Invalid PIN: ${pinCode.slice(0, 2)}****`);
+
+      // Increment attempts
+      await supabase.rpc("increment_email_pin_attempts", { p_user_id: userId });
+
+      return res.status(401).json({
+        error: "Invalid or expired PIN",
+        message: "The PIN you entered is invalid or has expired. Please check your email.",
+      });
+    }
+
+    // Mark verified
+    await supabase
+      .from("email_pin_sessions")
+      .update({ verified: true })
+      .eq("id", session.id);
+
+    // Reset attempts
+    await supabase.rpc("reset_email_pin_attempts", { p_user_id: userId });
+
+    // Get user profile for username
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("username")
+      .eq("id", userId)
+      .single();
+
+    // Process original task
+    const taskToProcess: TaskRequest = {
+      userId: session.user_id,
+      username: profile?.username || "user",
+      from: session.sender_email,
+      subject: session.email_subject || "",
+      body: session.email_body || "",
+      bodyHtml: session.email_body_html,
+      attachments: session.attachments ? JSON.parse(session.attachments as string) : undefined,
+      inputChannel: "email",
+    };
+
+    // Process task asynchronously
+    activeTasks++;
+    processIncomingTask(taskToProcess)
+      .then((result) => console.log(`Email PIN verified task processed: ${result.taskId}`))
+      .catch((error) => console.error("Email PIN task processing failed:", error))
+      .finally(() => { activeTasks--; });
+
+    res.json({
+      success: true,
+      message: "PIN verified successfully. Task is being processed.",
+    });
+  } catch (error) {
+    console.error("[EMAIL-PIN] Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ---- Email Connection Test ----
 
 app.post("/email/test", taskLimiter, async (req, res) => {
@@ -406,6 +487,44 @@ app.post("/email/test", taskLimiter, async (req, res) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Test failed";
     return res.json({ success: false, error: msg });
+  }
+});
+
+// ---- Email Send (for email worker PIN notifications) ----
+
+app.post("/email/send", taskLimiter, async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const { to, from, subject, body, bodyHtml } = req.body;
+  if (!to || !from || !subject || (!body && !bodyHtml)) {
+    return res.status(400).json({ error: "Missing required email fields" });
+  }
+
+  try {
+    // Import Resend directly for raw HTML emails (PIN notifications, etc.)
+    const { Resend } = await import("resend");
+    const resend = new Resend(process.env.RESEND_API_KEY);
+
+    const { error } = await resend.emails.send({
+      from,
+      to,
+      subject,
+      html: bodyHtml || body,
+      text: body || bodyHtml?.replace(/<[^>]*>/g, ""),
+    });
+
+    if (error) {
+      console.error("[EMAIL] Resend error:", error);
+      return res.status(500).json({ error: "Failed to send email" });
+    }
+
+    res.json({ success: true, message: "Email sent" });
+  } catch (error) {
+    console.error("[EMAIL] Failed to send email:", error);
+    res.status(500).json({ error: "Failed to send email" });
   }
 });
 
