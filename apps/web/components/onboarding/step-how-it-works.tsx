@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mail, Bot, CheckCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { Mail, Bot, CheckCircle, ChevronLeft, ChevronRight, Moon, ArrowRight, Globe, Mouse, Keyboard, Check, Inbox, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface StepHowItWorksProps {
@@ -15,19 +15,19 @@ const panels = [
     title: "You Send Tasks",
     description: "Email, SMS, voice, or chat — send tasks any way you like",
     icon: Mail,
-    visual: "📧 ➝ 🤖",
+    visualIcons: [Mail, ArrowRight, Bot],
   },
   {
     title: "AI Takes Control",
     description: "Your AI browses, clicks, fills forms, and completes tasks like a human",
     icon: Bot,
-    visual: "🌐 🖱️ ⌨️",
+    visualIcons: [Globe, Mouse, Keyboard],
   },
   {
     title: "You Get Results",
     description: "Completed tasks delivered back to you with full details",
     icon: CheckCircle,
-    visual: "✅ 📩 😊",
+    visualIcons: [Check, Inbox, Smile],
   },
 ];
 
@@ -57,8 +57,9 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
         <h2 className="text-3xl font-bold">How Aevoy Works</h2>
-        <p className="text-lg text-muted-foreground">
-          Your AI employee that never sleeps 😴
+        <p className="text-lg text-foreground/80 flex items-center justify-center gap-2">
+          Your AI employee that never sleeps
+          <Moon className="w-5 h-5 inline-block" />
         </p>
       </div>
 
@@ -83,12 +84,16 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
             </motion.div>
 
             {/* Visual representation */}
-            <div className="text-6xl">{panel.visual}</div>
+            <div className="flex items-center justify-center gap-4">
+              {panel.visualIcons.map((VisualIcon, idx) => (
+                <VisualIcon key={idx} className="w-12 h-12 text-foreground" strokeWidth={1.5} />
+              ))}
+            </div>
 
             {/* Title and description */}
             <div className="space-y-2">
               <h3 className="text-2xl font-bold">{panel.title}</h3>
-              <p className="text-muted-foreground max-w-md mx-auto">
+              <p className="text-foreground/70 max-w-md mx-auto">
                 {panel.description}
               </p>
             </div>
@@ -127,7 +132,7 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
       <div className="text-center">
         <button
           onClick={onNext}
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors underline"
+          className="text-sm text-foreground/60 hover:text-foreground transition-colors underline"
         >
           Skip intro
         </button>

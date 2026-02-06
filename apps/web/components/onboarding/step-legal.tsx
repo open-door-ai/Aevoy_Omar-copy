@@ -49,7 +49,7 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
     <div className="space-y-6 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
         <h2 className="text-2xl font-bold">Safety & Legal Stuff</h2>
-        <p className="text-muted-foreground">
+        <p className="text-foreground/70">
           Important things you should know before we begin
         </p>
       </div>
@@ -60,8 +60,8 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
           <AlertTriangle className="w-6 h-6 text-yellow-500 flex-shrink-0 mt-0.5" />
           <div className="space-y-2">
             <h3 className="font-semibold text-lg">Aevoy is 99.9999% accurate... but not perfect</h3>
-            <p className="text-sm text-muted-foreground">
-              It might book the wrong flight, send the wrong email, or buy 500 rubber ducks 🦆
+            <p className="text-sm text-foreground/70">
+              It might book the wrong flight, send the wrong email, or buy 500 rubber ducks
             </p>
             <p className="text-sm font-medium">
               You're in control — review critical tasks, freeze your agent card anytime
@@ -146,7 +146,7 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
               <span className="flex items-center gap-2">
                 Let my AI anonymously vent about bad websites (Hive Mind)
                 <SimpleTooltip content="No personal data shared, just UX frustrations for collective learning">
-                  <Info className="w-4 h-4 text-muted-foreground" />
+                  <Info className="w-4 h-4 text-foreground/70" />
                 </SimpleTooltip>
               </span>
             }
@@ -158,7 +158,7 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
 
       {/* Footer */}
       <div className="text-center space-y-2">
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-foreground/70">
           By proceeding, you accept full responsibility for AI actions*
         </p>
         <a

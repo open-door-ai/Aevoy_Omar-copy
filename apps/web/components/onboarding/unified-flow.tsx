@@ -85,7 +85,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
 
       {/* Step counter */}
       <div className="fixed top-4 right-6 z-10">
-        <span className="text-sm text-muted-foreground font-medium tabular-nums">
+        <span className="text-sm text-foreground/70 font-medium tabular-nums">
           <motion.span
             key={step}
             initial={{ y: -10, opacity: 0 }}

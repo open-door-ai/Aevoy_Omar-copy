@@ -73,10 +73,10 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="text-center space-y-2">
         <h2 className="text-2xl font-bold">What Can Aevoy Do For You?</h2>
-        <p className="text-muted-foreground">
+        <p className="text-foreground/70">
           Select 1-3 tasks you'll use most often (helps us personalize your experience)
         </p>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm text-foreground/60">
           {selectedUseCases.length}/3 selected
         </p>
       </div>
@@ -104,10 +104,10 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
               }`}
             >
               <div className="space-y-2">
-                <Icon className={`w-8 h-8 ${isSelected ? "text-primary" : "text-muted-foreground"}`} />
+                <Icon className={`w-8 h-8 ${isSelected ? "text-primary" : "text-foreground/70"}`} />
                 <div>
                   <h3 className="font-semibold text-sm">{useCase.label}</h3>
-                  <p className="text-xs text-muted-foreground">{useCase.description}</p>
+                  <p className="text-xs text-foreground/70">{useCase.description}</p>
                 </div>
               </div>
               {isSelected && (
@@ -133,7 +133,7 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
         </Button>
       </div>
 
-      <div className="text-center text-sm text-muted-foreground">
+      <div className="text-center text-sm text-foreground/70">
         Don't worry — Aevoy can handle all of these and more!
       </div>
     </div>

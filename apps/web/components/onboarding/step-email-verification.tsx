@@ -109,7 +109,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
         <h2 className="text-2xl font-bold">
           {isVerified ? "Email Verified!" : "Check Your Email"}
         </h2>
-        <p className="text-muted-foreground">
+        <p className="text-foreground/70">
           {isVerified
             ? "Great! Let's continue setting up your account."
             : "We sent a verification link to your email address. Click the link to continue."}
@@ -118,7 +118,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
 
       {!isVerified && (
         <div className="space-y-4">
-          <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center justify-center gap-2 text-sm text-foreground/70">
             <Loader2 className="w-4 h-4 animate-spin" />
             <span>Waiting for confirmation...</span>
           </div>
@@ -135,7 +135,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
               : "Resend Verification Email"}
           </Button>
 
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-foreground/70">
             Can't find it? Check your spam folder
           </p>
 
@@ -145,7 +145,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
               animate={{ opacity: 1, y: 0 }}
               className="pt-4 border-t"
             >
-              <p className="text-sm text-muted-foreground mb-2">
+              <p className="text-sm text-foreground/70 mb-2">
                 Having trouble?
               </p>
               <a

@@ -98,7 +98,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
     <div className="space-y-6 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
         <h2 className="text-2xl font-bold">When Are You Available?</h2>
-        <p className="text-muted-foreground">
+        <p className="text-foreground/70">
           This helps us schedule tasks at the right time for you
         </p>
       </div>
@@ -116,7 +116,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
             placeholder="Search timezones..."
           />
           {detectedTimezone && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-foreground/70">
               Detected: {detectedTimezone}
               {detectedTimezone !== timezone && (
                 <button
@@ -128,7 +128,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
               )}
             </p>
           )}
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-foreground/70">
             Used for daily check-ins and quiet hours (10PM-7AM)
           </p>
         </div>
@@ -153,7 +153,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
                 onChange={(e) => setDailyCheckinTime(e.target.value)}
                 className="max-w-[200px]"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-foreground/70">
                 Your AI will call to brief you on your day
               </p>
             </div>

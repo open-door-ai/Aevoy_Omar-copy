@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { HelpCircle, Zap, Rocket, Lock, Scale, Dice6 } from "lucide-react";
 
 interface StepAIBehaviorProps {
   onNext: () => void;
@@ -14,16 +15,16 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
   const [proactiveLimit, setProactiveLimit] = useState(10);
   const [isSaving, setIsSaving] = useState(false);
 
-  const getAutonomyLabel = (value: number) => {
-    if (value <= 30) return "Ask me every time 🤔";
-    if (value <= 60) return "Smart autonomy 😎";
-    return "Full send mode 🚀";
+  const getAutonomyLabel = (value: number): { text: string; Icon: typeof HelpCircle } => {
+    if (value <= 30) return { text: "Ask me every time", Icon: HelpCircle };
+    if (value <= 60) return { text: "Smart autonomy", Icon: Zap };
+    return { text: "Full send mode", Icon: Rocket };
   };
 
-  const getRiskLabel = (value: number) => {
-    if (value <= 30) return "Safe tasks only 🔒";
-    if (value <= 60) return "Balanced ⚖️";
-    return "YOLO — buy things, send emails 🎲";
+  const getRiskLabel = (value: number): { text: string; Icon: typeof Lock } => {
+    if (value <= 30) return { text: "Safe tasks only", Icon: Lock };
+    if (value <= 60) return { text: "Balanced", Icon: Scale };
+    return { text: "YOLO — buy things, send emails", Icon: Dice6 };
   };
 
   const getProactiveLabel = (value: number) => {
@@ -61,7 +62,7 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
         <h2 className="text-2xl font-bold">How Should Your AI Behave?</h2>
-        <p className="text-muted-foreground">
+        <p className="text-foreground/70">
           These control how your AI works. You can change them anytime in Settings.
         </p>
       </div>
@@ -71,7 +72,7 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
         <div className="space-y-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Autonomy Level</label>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-foreground/70">
               How often should AI ask for permission before taking actions?
             </p>
           </div>
@@ -87,8 +88,16 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
                 background: `linear-gradient(to right, hsl(var(--primary)) 0%, hsl(var(--primary)) ${autonomyLevel}%, hsl(var(--muted)) ${autonomyLevel}%, hsl(var(--muted)) 100%)`,
               }}
             />
-            <div className="text-center text-lg font-medium">
-              {getAutonomyLabel(autonomyLevel)}
+            <div className="text-center text-lg font-medium flex items-center justify-center gap-2">
+              {(() => {
+                const { text, Icon } = getAutonomyLabel(autonomyLevel);
+                return (
+                  <>
+                    {text}
+                    <Icon className="w-5 h-5" />
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -97,7 +106,7 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
         <div className="space-y-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Risk Tolerance</label>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-foreground/70">
               What level of risk are you comfortable with?
             </p>
           </div>
@@ -113,8 +122,16 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
                 background: `linear-gradient(to right, hsl(var(--primary)) 0%, hsl(var(--primary)) ${riskTolerance}%, hsl(var(--muted)) ${riskTolerance}%, hsl(var(--muted)) 100%)`,
               }}
             />
-            <div className="text-center text-lg font-medium">
-              {getRiskLabel(riskTolerance)}
+            <div className="text-center text-lg font-medium flex items-center justify-center gap-2">
+              {(() => {
+                const { text, Icon } = getRiskLabel(riskTolerance);
+                return (
+                  <>
+                    {text}
+                    <Icon className="w-5 h-5" />
+                  </>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -123,7 +140,7 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
         <div className="space-y-4">
           <div className="space-y-1">
             <label className="text-sm font-medium">Proactive Notifications</label>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-foreground/70">
               How many daily check-ins/reminders allowed?
             </p>
           </div>
@@ -140,7 +157,7 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
               }}
             />
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">{proactiveLimit} per day</span>
+              <span className="text-foreground/70">{proactiveLimit} per day</span>
               <span className="font-medium">{getProactiveLabel(proactiveLimit)}</span>
             </div>
           </div>
