@@ -46,6 +46,7 @@ export default async function DashboardPage() {
     .single();
 
   const username = profile?.username || user?.email?.split("@")[0] || "user";
+  const botName = profile?.bot_name || null;
   const aiEmail = `${username}@aevoy.com`;
   const messagesUsed = profile?.messages_used || 0;
   const messagesLimit = profile?.messages_limit || 20;
@@ -67,7 +68,7 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-3xl font-bold">{getGreeting()}, {username}</h1>
           <p className="text-muted-foreground">
-            Here&apos;s your AI assistant overview
+            {botName ? `${botName} is at your service` : "Here's your AI assistant overview"}
           </p>
         </div>
         {isBetaUser && (
@@ -84,7 +85,7 @@ export default async function DashboardPage() {
         <StaggerItem>
           <GlassCard className="p-6">
             <div className="space-y-1 mb-4">
-              <h3 className="text-sm font-medium text-muted-foreground">Your AI Email</h3>
+              <h3 className="text-sm font-medium text-muted-foreground">{botName ? `${botName}'s Email` : "Your AI Email"}</h3>
               <p className="text-xs text-muted-foreground/70">Send tasks via email</p>
             </div>
             <div className="text-2xl font-mono bg-muted p-4 rounded-xl inline-block border border-border">

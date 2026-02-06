@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { AnimatePresence, motion, springs } from "@/components/ui/motion";
 import StepWelcome from "./step-welcome";
+import StepBotEmail from "./step-bot-email";
 import { StepEmailVerification } from "./step-email-verification";
 import { StepHowItWorks } from "./step-how-it-works";
 import { StepUseCases } from "./step-use-cases";
@@ -18,13 +19,14 @@ interface UnifiedFlowProps {
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 10;
+const TOTAL_STEPS = 11;
 
 export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) {
   const [step, setStep] = useState(1);
   const [direction, setDirection] = useState(1); // 1 = forward, -1 = back
   const [data, setData] = useState({
     username,
+    bot_name: null as string | null,
     interview: null as InterviewData | null,
   });
   const [saving, setSaving] = useState(false);
@@ -42,6 +44,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           username: data.username,
+          bot_name: data.bot_name,
           interview_method: data.interview?.method || "skipped",
           main_uses: data.interview?.main_uses || [],
           daily_checkin_enabled: data.interview?.daily_checkin_enabled || false,
@@ -132,7 +135,15 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepEmailVerification onNext={() => goTo(3)} />
+              <StepBotEmail
+                currentUsername={data.username}
+                currentBotName={data.bot_name}
+                onNext={(newUsername, botName) => {
+                  setData((d) => ({ ...d, username: newUsername, bot_name: botName }));
+                  goTo(3);
+                }}
+                onBack={() => goTo(1)}
+              />
             </motion.div>
           )}
 
@@ -147,10 +158,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepHowItWorks
-                onNext={() => goTo(4)}
-                onBack={() => goTo(2)}
-              />
+              <StepEmailVerification onNext={() => goTo(4)} />
             </motion.div>
           )}
 
@@ -165,7 +173,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepUseCases
+              <StepHowItWorks
                 onNext={() => goTo(5)}
                 onBack={() => goTo(3)}
               />
@@ -183,7 +191,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepAIBehavior
+              <StepUseCases
                 onNext={() => goTo(6)}
                 onBack={() => goTo(4)}
               />
@@ -201,7 +209,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepTimezone
+              <StepAIBehavior
                 onNext={() => goTo(7)}
                 onBack={() => goTo(5)}
               />
@@ -219,7 +227,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepVerification
+              <StepTimezone
                 onNext={() => goTo(8)}
                 onBack={() => goTo(6)}
               />
@@ -237,7 +245,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepLegal
+              <StepVerification
                 onNext={() => goTo(9)}
                 onBack={() => goTo(7)}
               />
@@ -255,11 +263,8 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepInterview
-                onNext={(interviewData) => {
-                  setData((d) => ({ ...d, interview: interviewData }));
-                  goTo(10);
-                }}
+              <StepLegal
+                onNext={() => goTo(10)}
                 onBack={() => goTo(8)}
               />
             </motion.div>
@@ -276,8 +281,30 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
+              <StepInterview
+                onNext={(interviewData) => {
+                  setData((d) => ({ ...d, interview: interviewData }));
+                  goTo(11);
+                }}
+                onBack={() => goTo(9)}
+              />
+            </motion.div>
+          )}
+
+          {step === 11 && (
+            <motion.div
+              key="step-11"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
               <StepTour
                 aiEmail={`${data.username}@aevoy.com`}
+                botName={data.bot_name}
                 onComplete={handleComplete}
               />
             </motion.div>

@@ -33,6 +33,7 @@ export async function GET() {
       email: profile.email,
       aiEmail: `${profile.username}@aevoy.com`,
       displayName: profile.display_name,
+      botName: profile.bot_name || null,
       timezone: profile.timezone,
       onboardingCompleted: profile.onboarding_completed || false,
       subscription: {
@@ -63,7 +64,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { displayName, timezone } = body;
+    const { displayName, timezone, botName } = body;
 
     const updateData: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
@@ -75,6 +76,11 @@ export async function PATCH(request: NextRequest) {
 
     if (timezone !== undefined) {
       updateData.timezone = timezone;
+    }
+
+    if (botName !== undefined) {
+      const trimmed = typeof botName === 'string' ? botName.trim().substring(0, 30) : null;
+      updateData.bot_name = trimmed || null;
     }
 
     const { data: profile, error: updateError } = await supabase
@@ -97,6 +103,7 @@ export async function PATCH(request: NextRequest) {
       email: profile.email,
       aiEmail: `${profile.username}@aevoy.com`,
       displayName: profile.display_name,
+      botName: profile.bot_name || null,
       timezone: profile.timezone,
       subscription: {
         tier: profile.subscription_tier,

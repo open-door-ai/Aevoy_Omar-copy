@@ -1818,73 +1818,208 @@ export default function AevoyLanding() {
         </div>
       </section>
       
-      {/* How It Works */}
-      <section id="how-it-works" className="py-32 bg-stone-50">
+      {/* Security Section - Built Paranoid */}
+      <section id="security" className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-20">
             <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              Three steps. That&apos;s it.
+              Built Paranoid
             </h2>
-            <p className="text-xl text-stone-500">
-              No apps to learn. No interfaces to navigate. Just email.
+            <p className="text-xl text-stone-500 max-w-2xl mx-auto">
+              We assume everyone&apos;s trying to steal your data—including us.
+              So we built it so even we can&apos;t access it. Don&apos;t trust us? Test us.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-8 md:gap-4 relative">
-            {/* Connector lines (desktop only) */}
-            <div className="hidden md:block absolute top-20 left-[33%] right-[33%] h-0.5">
-              <div className="h-full border-t-2 border-dashed border-stone-300" />
-            </div>
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {securityCards.map((card, i) => (
+              <FlipCard
+                key={i}
+                front={card.front}
+                back={card.back}
+                frontIcon={card.icon}
+                index={i}
+              />
+            ))}
+          </div>
 
+          <div className="mt-16 text-center">
+            <p className="text-stone-500 text-sm">
+              Click any card to see how to test it yourself
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Built Secure Section */}
+      <section className="py-24 bg-stone-50">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-4xl md:text-5xl font-bold mb-4">
+              Built Secure
+            </h2>
+            <p className="text-xl text-stone-500 max-w-3xl mx-auto">
+              AI agents face 15+ critical security threats.
+              Here&apos;s how we protect you from every single one.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
             {[
               {
-                step: '1',
-                title: 'Send a task',
-                description: 'Email, text, or call your AI with what you need done. Plain language, no special format.',
-                example: '"Book a table for 4 at Miku on Saturday at 7pm"',
-                icon: 'M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75',
+                name: 'Prompt Injection Attacks',
+                icon: '🛡️',
+                threat: 'Malicious instructions hidden in task requests to bypass security.',
+                solution: 'Frozen intent locking prevents runtime permission changes. Pattern matching detects injection attempts. Per-domain rate limits (20 actions/60s) prevent brute force.',
+                status: 'protected'
               },
               {
-                step: '2',
-                title: 'AI does the work',
-                description: 'Your AI opens a browser, navigates sites, fills forms, makes calls — whatever it takes.',
-                example: 'Navigating OpenTable, selecting time, confirming party size...',
-                icon: 'M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456Z',
+                name: 'Credential Theft',
+                icon: '🔐',
+                threat: 'Stolen passwords or API keys from database breaches.',
+                solution: 'AES-256-GCM encryption with random IV + salt per credential. Scrypt key derivation. Auth tag prevents tampering. Row-level security isolates user data.',
+                status: 'protected'
               },
               {
-                step: '3',
-                title: 'Get results back',
-                description: 'Receive confirmation with proof — screenshots, booking numbers, completed forms.',
-                example: 'Reservation confirmed #MKU-4821. Window table. See attached.',
-                icon: 'M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
+                name: 'Session Hijacking',
+                icon: '🚫',
+                threat: 'Intercepted session tokens used to impersonate users.',
+                solution: 'Timing-safe webhook verification prevents replay attacks. Distributed locking prevents concurrent task execution. Fresh browser contexts per task.',
+                status: 'protected'
               },
-            ].map((item, i) => {
+              {
+                name: 'Cross-User Data Leaks',
+                icon: '👥',
+                threat: 'One user accessing another\'s data or task history.',
+                solution: 'Row-level security on all 26 tables. Every query validated against user_id. Workspace isolation. Service role restricted in code.',
+                status: 'protected'
+              },
+              {
+                name: 'Malicious Task Execution',
+                icon: '⛔',
+                threat: 'Tricking the agent into harmful actions (delete files, transfer money).',
+                solution: 'Intent locking defines allowed actions per task type. Shopping tasks can\'t access payment. Email tasks limited to 20 actions. Budget controls prevent runaway costs.',
+                status: 'protected'
+              },
+              {
+                name: 'API Key Compromise',
+                icon: '🔑',
+                threat: 'Leaked AI model keys, Browserbase credentials, or Twilio secrets.',
+                solution: 'Startup validation ensures all keys present. Never embedded in code or logs. Rate limiting (100 req/min global, 10 tasks/min per user) prevents quota exhaustion.',
+                status: 'protected'
+              },
+              {
+                name: 'Bot Detection / Blocking',
+                icon: '🤖',
+                threat: 'Websites detect automation and block access.',
+                solution: 'Stealth browser patches disable detection (navigator.webdriver, chrome.runtime). Realistic user agents. Built-in CAPTCHA solving. Session persistence reduces re-login triggers.',
+                status: 'protected'
+              },
+              {
+                name: 'Rate Limit Bypass / DoS',
+                icon: '⚡',
+                threat: 'Flooding system with requests to overwhelm infrastructure.',
+                solution: 'Three-tier rate limiting: 100 req/min global, 10 tasks/min per user, 30 req/min per phone. Monthly quota system prevents runaway tasks.',
+                status: 'protected'
+              },
+              {
+                name: 'Identity Spoofing',
+                icon: '🎭',
+                threat: 'Forged emails or SMS messages to impersonate legitimate users.',
+                solution: 'Email verification via ImprovMX aliases. Twilio signature validation (HMAC-SHA1). Webhook authentication with timing-safe comparison.',
+                status: 'protected'
+              },
+              {
+                name: 'Privilege Escalation',
+                icon: '👑',
+                threat: 'Normal users gaining admin or service role access.',
+                solution: 'Clear role separation: client uses JWT tokens (RLS limited), agent uses service role (code-controlled). No client-side elevation path. Service role key never exposed.',
+                status: 'protected'
+              },
+              {
+                name: 'Supply Chain Attacks',
+                icon: '⛓️',
+                threat: 'Compromised NPM packages injecting malicious code.',
+                solution: 'Lockfile pins all dependency versions. Trusted libraries only (Playwright, Supabase official SDK). Regular dependency audits.',
+                status: 'gap'
+              },
+              {
+                name: 'Insider Threats',
+                icon: '🕵️',
+                threat: 'Rogue developer with key access stealing user data.',
+                solution: 'All user memory encrypted at rest. Database access requires ENCRYPTION_KEY. Even with database access, data is unreadable without key.',
+                status: 'gap'
+              },
+              {
+                name: 'Timing Attacks',
+                icon: '⏱️',
+                threat: 'Measuring response times to infer secrets or valid usernames.',
+                solution: 'Timing-safe comparison (crypto.timingSafeEqual) for all webhook secrets. Constant-time validation prevents character-by-character guessing.',
+                status: 'protected'
+              },
+              {
+                name: 'Memory Inference Attacks',
+                icon: '🧠',
+                threat: 'Using AI memory to infer sensitive information from other tasks.',
+                solution: 'User memory encrypted at rest. Memory indexed by embeddings (semantic search) but not plaintext. Memory decay (-0.1 importance for >30 days) prevents stale data leakage.',
+                status: 'protected'
+              },
+              {
+                name: 'Browser Fingerprinting',
+                icon: '🖥️',
+                threat: 'Sites tracking and blocking automated browser sessions.',
+                solution: 'Stealth patches hide automation signals. Cached sessions reuse cookies/auth. Browserbase provides fresh contexts with residential proxies.',
+                status: 'protected'
+              }
+            ].map((threat, i) => {
               const [ref, isVisible] = useScrollReveal(0.2);
               return (
                 <div
-                  key={item.step}
+                  key={i}
                   ref={ref}
-                  className="relative text-center"
+                  className="bg-white border border-stone-200 rounded-xl p-6 hover:shadow-lg hover:border-stone-300 transition-all duration-300"
                   style={{
                     opacity: isVisible ? 1 : 0,
-                    transform: isVisible ? 'translateY(0)' : 'translateY(40px)',
-                    transition: `all 0.8s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.2}s`,
+                    transform: isVisible ? 'scale(1)' : 'scale(0.95)',
+                    transition: `all 0.6s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.08}s`,
                   }}
                 >
-                  <div className="w-16 h-16 rounded-2xl bg-stone-900 flex items-center justify-center mx-auto mb-6 relative z-10">
-                    <svg className="w-8 h-8 text-stone-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-                    </svg>
+                  <div className="flex items-start gap-3 mb-3">
+                    <span className="text-3xl">{threat.icon}</span>
+                    <h3 className="text-lg font-bold text-stone-900 flex-1">{threat.name}</h3>
                   </div>
-                  <div className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-2">Step {item.step}</div>
-                  <h3 className="text-xl font-bold text-stone-900 mb-3">{item.title}</h3>
-                  <p className="text-stone-500 mb-4 max-w-xs mx-auto">{item.description}</p>
-                  <div className="bg-stone-100 border border-stone-200 rounded-xl px-4 py-3 inline-block">
-                    <p className="text-sm text-stone-600 italic">{item.example}</p>
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold text-stone-400 uppercase tracking-wide mb-1">Threat</p>
+                      <p className="text-sm text-stone-600">{threat.threat}</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className={`flex-shrink-0 mt-0.5 ${threat.status === 'protected' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {threat.status === 'protected' ? '✅' : '⚠️'}
+                      </span>
+                      <div className="flex-1">
+                        <p className={`text-xs font-semibold uppercase tracking-wide mb-1 ${threat.status === 'protected' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {threat.status === 'protected' ? 'Protected' : 'In Progress'}
+                        </p>
+                        <p className="text-sm text-stone-700">{threat.solution}</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
             })}
+          </div>
+
+          <div className="mt-16 text-center max-w-3xl mx-auto">
+            <p className="text-stone-600 text-sm leading-relaxed">
+              Every threat addressed. No exceptions. No handwaving.
+              <span className="block mt-2 font-semibold">
+                2 gaps identified (supply chain, audit logging). Roadmap: Q2 2026.
+              </span>
+              <span className="block mt-2">
+                Transparent about what we protect AND what we&apos;re still building.
+              </span>
+            </p>
           </div>
         </div>
       </section>
@@ -2142,7 +2277,104 @@ export default function AevoyLanding() {
           </div>
         </div>
       </section>
-      
+
+      {/* Rotating Banner */}
+      <section className="relative h-40 bg-stone-950 border-t border-stone-800 overflow-hidden">
+        <div className="absolute inset-0 flex items-center justify-center">
+          {(() => {
+            const phrases = [
+              "Proactive Jarvis Made Real",
+              "Meet AGI That Actually Works",
+              "Your AI Calls You (Not the Other Way Around)",
+              "The Future of Work Is Here",
+              "It Doesn't Just Answer—It Acts",
+              "24/7 Monitoring While You Sleep",
+              "The Assistant That Never Forgets"
+            ];
+            const [currentIndex, setCurrentIndex] = React.useState(0);
+
+            React.useEffect(() => {
+              const interval = setInterval(() => {
+                setCurrentIndex((prev) => (prev + 1) % phrases.length);
+              }, 3500);
+              return () => clearInterval(interval);
+            }, []);
+
+            return (
+              <p
+                className="text-4xl md:text-5xl font-bold text-white text-center px-6 transition-opacity duration-700"
+                style={{
+                  opacity: currentIndex >= 0 ? 1 : 0
+                }}
+              >
+                {phrases[currentIndex]}
+              </p>
+            );
+          })()}
+        </div>
+      </section>
+
+      {/* Additional Proactive Examples */}
+      <section className="py-32 bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <h2 className="text-4xl md:text-5xl font-bold text-center mb-16">
+            See it in action
+          </h2>
+          <div className="grid md:grid-cols-3 gap-8">
+            {[
+              {
+                icon: '✈️',
+                title: 'Flight delay detected',
+                description: 'Monitors your booking, calls you 2 hours before airline notifies, reschedules your ride automatically.'
+              },
+              {
+                icon: '🏷️',
+                title: 'Price drop alert',
+                description: 'Tracks prices on items you mentioned, texts you when they drop below your threshold.'
+              },
+              {
+                icon: '⏰',
+                title: 'Proactive deadline nudge',
+                description: 'Knows your calendar, calls to remind you 2 hours before critical deadlines.'
+              },
+              {
+                icon: '📦',
+                title: 'Delivery notification',
+                description: 'Tracks shipments, texts you when packages arrive, asks if you need redelivery scheduling.'
+              },
+              {
+                icon: '📅',
+                title: 'Pre-meeting brief',
+                description: 'Calls you 30 minutes before important meetings with key talking points and attendee bios.'
+              },
+              {
+                icon: '🌤️',
+                title: 'Travel weather warning',
+                description: 'Knows your flight tomorrow, texts you if severe weather expected at destination.'
+              }
+            ].map((example, i) => {
+              const [ref, isVisible] = useScrollReveal(0.2);
+              return (
+                <div
+                  key={i}
+                  ref={ref}
+                  className="bg-stone-50 border border-stone-200 rounded-2xl p-8 hover:bg-stone-100 transition-all duration-300"
+                  style={{
+                    opacity: isVisible ? 1 : 0,
+                    transform: isVisible ? 'translateX(0)' : 'translateX(100px)',
+                    transition: `all 0.8s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.12}s`,
+                  }}
+                >
+                  <span className="text-4xl block mb-4">{example.icon}</span>
+                  <h3 className="text-xl font-bold text-stone-900 mb-3">{example.title}</h3>
+                  <p className="text-stone-600 leading-relaxed">{example.description}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
       {/* Proof Wall */}
       <section id="proof" className="py-32 bg-white">
         <div className="max-w-4xl mx-auto px-6">
@@ -2174,10 +2406,10 @@ export default function AevoyLanding() {
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-20">
             <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              Does things. Wild concept.
+              Does things while you sleep
             </h2>
             <p className="text-xl text-stone-500">
-              Other AIs answer questions. Yours completes tasks.
+              Other AIs answer questions during business hours. Yours completes tasks around the clock—even at 3am.
             </p>
           </div>
           
@@ -2188,40 +2420,122 @@ export default function AevoyLanding() {
           </div>
         </div>
       </section>
-      
-      {/* Security Section */}
-      <section id="security" className="py-32 bg-white">
+
+      {/* Transparent Pricing */}
+      <section className="py-32 bg-stone-50">
         <div className="max-w-6xl mx-auto px-6">
-          <div className="text-center mb-20">
-            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              Built Paranoid
+          <div className="text-center mb-16">
+            <h2 className="text-4xl md:text-5xl font-bold mb-4">
+              Pay what it costs. Nothing more.
             </h2>
-            <p className="text-xl text-stone-500 max-w-2xl mx-auto">
-              We assume everyone&apos;s trying to steal your data—including us. 
-              That&apos;s why we built it so we can&apos;t. Don&apos;t take our word for it. Test us.
+            <p className="text-xl text-stone-500">
+              No subscriptions. No hidden fees. No surprises.
+              Just honest pricing with full transparency.
             </p>
           </div>
-          
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {securityCards.map((card, i) => (
-              <FlipCard 
-                key={i}
-                front={card.front}
-                back={card.back}
-                frontIcon={card.icon}
-                index={i}
-              />
-            ))}
+
+          <div className="grid lg:grid-cols-2 gap-12 items-start">
+            {/* Left: Pricing breakdown */}
+            <div className="bg-white border border-stone-200 rounded-2xl p-10 shadow-lg">
+              <h3 className="text-2xl font-bold text-stone-900 mb-6">How Pricing Works</h3>
+              <div className="space-y-6">
+                <div>
+                  <p className="text-lg font-semibold text-stone-900 mb-2">1. Sign up → Get $10 free credit</p>
+                  <p className="text-stone-600">(No credit card required)</p>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-stone-900 mb-2">2. Each task shows exact cost before run:</p>
+                  <ul className="space-y-1 text-stone-600">
+                    <li>• Browser tasks: <span className="font-semibold text-stone-900">$0.50</span></li>
+                    <li>• Simple tasks: <span className="font-semibold text-stone-900">$0.10</span></li>
+                    <li>• Voice calls: <span className="font-semibold text-stone-900">$0.08/minute</span></li>
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-stone-900 mb-3">3. See full breakdown after every task:</p>
+                  <div className="bg-stone-50 p-6 rounded-lg font-mono text-sm space-y-1">
+                    <div className="flex justify-between"><span>Browser automation:</span><span>$0.23</span></div>
+                    <div className="flex justify-between"><span>AI processing:</span><span>$0.02</span></div>
+                    <div className="flex justify-between"><span>Infrastructure:</span><span>$0.01</span></div>
+                    <div className="border-t border-stone-300 my-2"></div>
+                    <div className="flex justify-between"><span>Actual cost:</span><span>$0.26</span></div>
+                    <div className="flex justify-between text-stone-600"><span>Our markup (20%):</span><span>$0.05</span></div>
+                    <div className="border-t-2 border-stone-900 my-2"></div>
+                    <div className="flex justify-between font-bold"><span>You paid:</span><span>$0.31</span></div>
+                    <p className="text-xs text-stone-500 mt-2">(Rounded to $0.50 for simplicity)</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-lg font-semibold text-stone-900 mb-2">4. Only pay for what you use.</p>
+                  <p className="text-stone-600">Cancel anytime (there's nothing to cancel).</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Cost comparison table */}
+            <div className="bg-white border border-stone-200 rounded-2xl p-10 shadow-lg">
+              <h3 className="text-2xl font-bold text-stone-900 mb-6">Compare the Cost</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-stone-200">
+                      <th className="pb-3 text-sm font-semibold text-stone-600">Service</th>
+                      <th className="pb-3 text-sm font-semibold text-stone-600">Light User<br/>(10 tasks)</th>
+                      <th className="pb-3 text-sm font-semibold text-stone-600">Heavy User<br/>(50 tasks)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-200">
+                    <tr>
+                      <td className="py-4">
+                        <div className="font-semibold text-stone-900">Zapier</div>
+                        <div className="text-xs text-stone-500">$30/month subscription</div>
+                      </td>
+                      <td className="py-4 text-stone-600">$30<br/><span className="text-xs text-red-600">(overpay $25)</span></td>
+                      <td className="py-4 text-stone-600">$30<br/><span className="text-xs text-green-600">(underpay $20)</span></td>
+                    </tr>
+                    <tr>
+                      <td className="py-4">
+                        <div className="font-semibold text-stone-900">Lindy.ai</div>
+                        <div className="text-xs text-stone-500">$49/month subscription</div>
+                      </td>
+                      <td className="py-4 text-stone-600">$49<br/><span className="text-xs text-red-600">(overpay $44)</span></td>
+                      <td className="py-4 text-stone-600">$49<br/><span className="text-xs">(break even)</span></td>
+                    </tr>
+                    <tr className="bg-stone-50">
+                      <td className="py-4">
+                        <div className="font-bold text-stone-900">Aevoy</div>
+                        <div className="text-xs text-stone-600">Pay-as-you-go</div>
+                      </td>
+                      <td className="py-4 font-bold text-stone-900">$5</td>
+                      <td className="py-4 font-bold text-stone-900">$25</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-6 space-y-2 text-sm text-stone-600">
+                <p>✓ No hidden fees. Ever. If we charge you, you'll see exactly why.</p>
+                <p>✓ No subscription lock-in. Pay only when you use Aevoy.</p>
+                <p>✓ Set spending caps to control costs. Pause anytime.</p>
+                <p>✓ Full refund if a task fails due to our error (not site changes).</p>
+              </div>
+            </div>
           </div>
-          
+
+          {/* Bottom CTA */}
           <div className="mt-16 text-center">
-            <p className="text-stone-500 text-sm">
-              Click any card to see how to test it yourself
+            <MagneticButton
+              href="/signup"
+              className="px-8 py-4 bg-stone-900 text-white rounded-full text-lg font-semibold hover:bg-stone-800 transition-colors inline-block"
+            >
+              Try 25 tasks free — No credit card
+            </MagneticButton>
+            <p className="mt-4 text-sm text-stone-500">
+              Takes 30 seconds. $10 free credit. See costs before every task.
             </p>
           </div>
         </div>
       </section>
-      
+
       {/* CTA */}
       <section className="py-32 bg-stone-900 text-white">
         <div className="max-w-4xl mx-auto px-6 text-center">

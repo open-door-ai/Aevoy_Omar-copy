@@ -6,6 +6,7 @@ import { FadeIn, AnimatePresence, motion, springs } from "@/components/ui/motion
 
 interface StepTourProps {
   aiEmail: string;
+  botName?: string | null;
   onComplete: () => void;
 }
 
@@ -27,7 +28,7 @@ const TOUR_STEPS = [
   },
 ];
 
-export default function StepTour({ aiEmail, onComplete }: StepTourProps) {
+export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps) {
   const [tourStep, setTourStep] = useState(0);
   const [copied, setCopied] = useState(false);
   const [direction, setDirection] = useState(1);
@@ -97,7 +98,9 @@ export default function StepTour({ aiEmail, onComplete }: StepTourProps) {
               </svg>
             </div>
 
-            <h3 className="text-xl font-bold text-stone-900">{current.title}</h3>
+            <h3 className="text-xl font-bold text-stone-900">
+              {tourStep === 0 && botName ? `${botName}'s Email` : current.title}
+            </h3>
             <p className="text-stone-500 mt-2">{current.description}</p>
           </div>
         </motion.div>
@@ -131,7 +134,7 @@ export default function StepTour({ aiEmail, onComplete }: StepTourProps) {
             <div className="bg-gradient-to-br from-stone-800 to-stone-900 rounded-2xl p-6 text-center text-white">
               <h3 className="text-lg font-bold mb-2">Ready to send your first task?</h3>
               <p className="text-stone-300 text-sm mb-4">
-                Send an email to your AI and watch it work
+                {botName ? `Send an email to ${botName} and watch it work` : "Send an email to your AI and watch it work"}
               </p>
               <div className="bg-white/10 backdrop-blur rounded-xl p-3 font-mono text-lg mb-3">
                 {aiEmail}
