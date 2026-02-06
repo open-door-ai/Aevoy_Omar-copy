@@ -18,6 +18,8 @@ import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData }
 interface TwilioConfig {
   accountSid: string;
   authToken: string;
+  apiKeySid?: string;
+  apiKeySecret?: string;
   phoneNumber: string;
   webhookBaseUrl: string;
 }
@@ -34,6 +36,8 @@ function getTwilioConfig(): TwilioConfig | null {
   return {
     accountSid,
     authToken,
+    apiKeySid: process.env.TWILIO_API_KEY_SID || undefined,
+    apiKeySecret: process.env.TWILIO_API_KEY_SECRET || undefined,
     phoneNumber: phoneNumber || "",
     webhookBaseUrl: process.env.AGENT_WEBHOOK_BASE_URL || "https://agent.aevoy.com",
   };
@@ -54,7 +58,10 @@ async function twilioRequest(
   if (!config) throw new Error("Twilio not configured");
 
   const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}${path}`;
-  const auth = Buffer.from(`${config.accountSid}:${config.authToken}`).toString("base64");
+  // Prefer API Key auth (more secure, independently revocable) over Auth Token
+  const authUser = config.apiKeySid && config.apiKeySecret ? config.apiKeySid : config.accountSid;
+  const authPass = config.apiKeySid && config.apiKeySecret ? config.apiKeySecret : config.authToken;
+  const auth = Buffer.from(`${authUser}:${authPass}`).toString("base64");
 
   const options: RequestInit = {
     method,

@@ -23,15 +23,23 @@ function setCooldown(userId: string): void {
   }
 }
 
-function getTwilioCredentials(): { accountSid: string; authToken: string } | null {
+function getTwilioCredentials(): { accountSid: string; authToken: string; apiKeySid?: string; apiKeySecret?: string } | null {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   if (!accountSid || !authToken) return null;
-  return { accountSid, authToken };
+  return {
+    accountSid,
+    authToken,
+    apiKeySid: process.env.TWILIO_API_KEY_SID || undefined,
+    apiKeySecret: process.env.TWILIO_API_KEY_SECRET || undefined,
+  };
 }
 
-function twilioAuthHeader(creds: { accountSid: string; authToken: string }): string {
-  return "Basic " + Buffer.from(`${creds.accountSid}:${creds.authToken}`).toString("base64");
+function twilioAuthHeader(creds: { accountSid: string; authToken: string; apiKeySid?: string; apiKeySecret?: string }): string {
+  // Prefer API Key auth (more secure, independently revocable)
+  const user = creds.apiKeySid && creds.apiKeySecret ? creds.apiKeySid : creds.accountSid;
+  const pass = creds.apiKeySid && creds.apiKeySecret ? creds.apiKeySecret : creds.authToken;
+  return "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
 }
 
 /**
