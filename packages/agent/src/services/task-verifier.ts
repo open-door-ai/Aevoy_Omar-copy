@@ -10,7 +10,7 @@
 
 import type { Page } from "playwright";
 import { quickValidate, generateVisionResponse } from "./ai.js";
-import type { VerificationResult } from "../types/index.js";
+import type { VerificationResult, QualityTier } from "../types/index.js";
 
 // ---- Task-Specific Verification Criteria ----
 
@@ -238,58 +238,189 @@ const VERIFICATION_CRITERIA: Record<string, VerificationCriteria> = {
   },
 };
 
+// ---- Quality Tiers ----
+
+export const QUALITY_TIERS: Record<QualityTier, { target: number; maxStrikes: number; alwaysVision: boolean }> = {
+  financial:      { target: 99, maxStrikes: 3, alwaysVision: true },
+  browser_action: { target: 95, maxStrikes: 3, alwaysVision: false },
+  communication:  { target: 90, maxStrikes: 2, alwaysVision: false },
+  research:       { target: 80, maxStrikes: 2, alwaysVision: false },
+  simple:         { target: 70, maxStrikes: 1, alwaysVision: false },
+};
+
+export function getQualityTier(taskType: string): QualityTier {
+  switch (taskType) {
+    case 'purchase':
+    case 'payment':
+      return 'financial';
+    case 'booking':
+    case 'form':
+    case 'login':
+    case 'shopping':
+    case 'account_creation':
+    case '2fa_completion':
+      return 'browser_action';
+    case 'email':
+    case 'calendar':
+      return 'communication';
+    case 'research':
+    case 'download':
+      return 'research';
+    default:
+      return 'simple';
+  }
+}
+
+// ---- Correction Hint Generation ----
+
+function generateCorrectionHints(
+  selfCheckResult: VerificationResult,
+  evidenceResult: VerificationResult,
+  pageText: string,
+  actionSuccessRate: number
+): string[] {
+  const hints: string[] = [];
+  const criteria = VERIFICATION_CRITERIA[selfCheckResult.method] || VERIFICATION_CRITERIA.form;
+
+  // Check for error indicators on page
+  const textLower = pageText.toLowerCase();
+  const foundErrors = (criteria?.errorIndicators || []).filter(e => textLower.includes(e.toLowerCase()));
+  if (foundErrors.length > 0) {
+    hints.push(`Error indicators found on page: ${foundErrors.join(', ')}`);
+  }
+
+  // No confirmation evidence
+  if (evidenceResult.confidence < 50) {
+    hints.push('No confirmation/evidence found — task may not have completed');
+  }
+
+  // Low action success rate
+  if (actionSuccessRate < 80) {
+    const failedPct = 100 - actionSuccessRate;
+    hints.push(`Action success rate low (${actionSuccessRate}%) — ${failedPct}% of actions failed`);
+  }
+
+  // Self-check specific hints
+  if (selfCheckResult.evidence) {
+    hints.push(selfCheckResult.evidence);
+  }
+
+  return hints;
+}
+
+// ---- Composite Scoring ----
+
+function computeCompositeScore(
+  selfCheckScore: number,
+  evidenceScore: number,
+  actionSuccessRate: number | undefined,
+  needsBrowser: boolean
+): number {
+  if (needsBrowser && actionSuccessRate !== undefined) {
+    return Math.round(selfCheckScore * 0.3 + evidenceScore * 0.3 + actionSuccessRate * 0.4);
+  }
+  return Math.round(selfCheckScore * 0.55 + evidenceScore * 0.45);
+}
+
 // ---- Main Verification Function ----
 
 /**
  * Run 3-step verification on a completed task.
- * Returns verification result with confidence score.
+ * Returns verification result with confidence score and correction hints.
  */
 export async function verifyTask(
   taskType: string,
   page: Page | null,
   responseText: string,
-  additionalContext?: string
+  additionalContext?: string,
+  actionSuccessRate?: number
 ): Promise<VerificationResult> {
   const criteria = VERIFICATION_CRITERIA[taskType] || VERIFICATION_CRITERIA.form;
+  const needsBrowser = !!page;
 
   // Step 1: Self-Check (using page text or response text)
   const step1 = await selfCheck(page, responseText, criteria);
-  if (step1.confidence >= 95) {
-    return step1;
-  }
 
   // Step 2: Evidence Check (code-based, no AI)
   const step2 = await evidenceCheck(page, responseText, criteria);
-  if (step2.confidence >= 90) {
-    return step2;
+
+  // Compute composite score incorporating action success rate for browser tasks
+  let compositeScore = computeCompositeScore(
+    step1.confidence,
+    step2.confidence,
+    actionSuccessRate,
+    needsBrowser
+  );
+
+  // Early return if composite score is high enough
+  if (compositeScore >= 95) {
+    return {
+      passed: true,
+      confidence: compositeScore,
+      method: step2.confidence >= step1.confidence ? 'evidence' : 'self_check',
+      evidence: step2.evidence || step1.evidence,
+      correctionHints: [],
+    };
   }
 
-  // Combine step 1 and step 2 confidence
-  let combinedConfidence = Math.max(step1.confidence, step2.confidence);
-
-  // Verification retry: if confidence < 50, wait and re-check
-  if (combinedConfidence < 50 && page) {
+  // Verification retry: if score < 50, wait and re-check
+  if (compositeScore < 50 && page) {
     console.log("[VERIFY] Low confidence, retrying verification after 2s...");
     await new Promise(resolve => setTimeout(resolve, 2000));
     const retryStep1 = await selfCheck(page, responseText, criteria);
     const retryStep2 = await evidenceCheck(page, responseText, criteria);
-    const retryConfidence = Math.max(retryStep1.confidence, retryStep2.confidence);
-    if (retryConfidence > combinedConfidence) {
-      combinedConfidence = retryConfidence;
-      console.log(`[VERIFY] Retry improved confidence to ${retryConfidence}%`);
+    const retryScore = computeCompositeScore(
+      retryStep1.confidence,
+      retryStep2.confidence,
+      actionSuccessRate,
+      needsBrowser
+    );
+    if (retryScore > compositeScore) {
+      compositeScore = retryScore;
+      console.log(`[VERIFY] Retry improved composite score to ${retryScore}%`);
     }
   }
 
-  // Step 3: Smart Review (Claude Sonnet) — only if confidence < 90%
-  if (combinedConfidence < 90 && page && criteria.requiresScreenshot) {
+  // Step 3: Smart Review (Claude Sonnet) — only if composite score < 90%
+  if (compositeScore < 90 && page && criteria.requiresScreenshot) {
     const step3 = await smartReview(page, taskType, additionalContext);
-    return step3;
+
+    // Generate correction hints from all steps
+    let pageText = '';
+    try {
+      pageText = (await page.textContent('body')) || '';
+    } catch {
+      // Page unavailable
+    }
+    const hints = generateCorrectionHints(step1, step2, pageText, actionSuccessRate ?? 100);
+
+    return {
+      ...step3,
+      correctionHints: hints,
+    };
   }
 
-  // Return the best result from steps 1+2
-  return combinedConfidence >= 70
-    ? { passed: true, confidence: combinedConfidence, method: "self_check", evidence: step2.evidence }
-    : { passed: false, confidence: combinedConfidence, method: "evidence" };
+  // Generate correction hints for results below threshold
+  let pageText = '';
+  if (page) {
+    try {
+      pageText = (await page.textContent('body')) || '';
+    } catch {
+      // Page unavailable
+    }
+  }
+  const hints = compositeScore < 90
+    ? generateCorrectionHints(step1, step2, pageText, actionSuccessRate ?? 100)
+    : [];
+
+  const passed = compositeScore >= 70;
+  return {
+    passed,
+    confidence: compositeScore,
+    method: step2.confidence >= step1.confidence ? 'evidence' : 'self_check',
+    evidence: step2.evidence || step1.evidence,
+    correctionHints: hints,
+  };
 }
 
 // ---- Step 1: Self-Check ----

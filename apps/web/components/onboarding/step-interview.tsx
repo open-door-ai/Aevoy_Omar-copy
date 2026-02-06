@@ -38,6 +38,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
   const [checkinTime, setCheckinTime] = useState("09:00");
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  const [showSkipWarning, setShowSkipWarning] = useState(false);
 
   const toggleUse = (id: string) => {
     setSelectedUses((prev) =>
@@ -187,17 +188,65 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
           </StaggerItem>
         </StaggerContainer>
 
-        {/* Skip with guilt trip */}
-        <FadeIn delay={0.5} className="mt-8 flex flex-col items-center gap-3">
-          <button
-            onClick={() => onNext({ method: "skipped" })}
-            className="text-stone-400 hover:text-stone-600 text-sm transition-colors underline underline-offset-4"
-          >
-            Skip this step
-          </button>
-          <p className="text-xs text-stone-300 max-w-sm text-center">
-            Your AI will still work, but it won&apos;t know your preferences, habits, or context — so it&apos;ll be less effective
-          </p>
+        {/* Skip with scary warning */}
+        <FadeIn delay={0.5} className="mt-8 w-full">
+          {!showSkipWarning ? (
+            <div className="flex flex-col items-center gap-3">
+              <button
+                onClick={() => setShowSkipWarning(true)}
+                className="text-stone-400 hover:text-stone-600 text-sm transition-colors underline underline-offset-4"
+              >
+                Skip this step
+              </button>
+              <p className="text-xs text-stone-300 max-w-sm text-center">
+                Your AI will still work, but it won&apos;t know your preferences, habits, or context — so it&apos;ll be less effective
+              </p>
+            </div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={springs.default}
+              className="bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800 rounded-xl p-6 space-y-4"
+            >
+              <div className="flex items-start gap-3">
+                <svg className="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                </svg>
+                <div className="space-y-2 flex-1">
+                  <h3 className="font-semibold text-red-900 dark:text-red-100">Are you sure you want to skip?</h3>
+                  <p className="text-sm text-red-800 dark:text-red-200">
+                    Your AI won&apos;t know:
+                  </p>
+                  <ul className="text-sm text-red-700 dark:text-red-300 space-y-1 list-disc list-inside">
+                    <li>Your work schedule</li>
+                    <li>Favorite services</li>
+                    <li>Communication preferences</li>
+                    <li>Personal habits</li>
+                  </ul>
+                  <p className="text-sm font-medium text-red-900 dark:text-red-100 pt-2">
+                    This will make it WAY less effective 📉
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowSkipWarning(false)}
+                  className="flex-1"
+                >
+                  Go back
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => onNext({ method: "skipped" })}
+                  className="flex-1"
+                >
+                  Yes, skip anyway
+                </Button>
+              </div>
+            </motion.div>
+          )}
         </FadeIn>
 
         <div className="mt-6 w-full">

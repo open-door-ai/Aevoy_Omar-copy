@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select } from "@/components/ui/select";
+import { Toggle } from "@/components/ui/toggle";
 
 interface Profile {
   id: string;
@@ -395,18 +397,17 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="timezone">Timezone</Label>
-            <select
+            <Select
               id="timezone"
               value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
-              className="w-full h-10 px-3 border rounded-md bg-background"
-            >
-              {timezones.map((tz) => (
-                <option key={tz} value={tz}>
-                  {tz}
-                </option>
-              ))}
-            </select>
+              onChange={setTimezone}
+              options={timezones.map((tz) => ({ label: tz, value: tz }))}
+              searchable
+              placeholder="Search timezones..."
+            />
+            <p className="text-xs text-muted-foreground">
+              Used for daily check-ins and quiet hours (10PM-7AM)
+            </p>
           </div>
         </CardContent>
         <CardFooter>

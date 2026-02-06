@@ -33,9 +33,11 @@ export async function GET(request: NextRequest) {
 
     // Get task counts for the month
     const startDate = `${month}-01T00:00:00Z`;
+    const [yearNum, monNum] = month.split('-').map(Number);
+    const lastDay = new Date(yearNum, monNum, 0).getDate();
     const endDate = month === new Date().toISOString().slice(0, 7)
       ? new Date().toISOString()
-      : `${month}-31T23:59:59Z`;
+      : `${month}-${String(lastDay).padStart(2, '0')}T23:59:59Z`;
 
     const { count: totalTasks } = await supabase
       .from("tasks")

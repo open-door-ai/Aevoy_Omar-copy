@@ -198,6 +198,31 @@ export interface VerificationResult {
   method: 'self_check' | 'evidence' | 'smart_review';
   evidence?: string;
   screenshotBase64?: string;
+  correctionHints?: string[];
+}
+
+// ---- Strike-Based Verification ----
+
+export type QualityTier = 'financial' | 'browser_action' | 'communication' | 'research' | 'simple';
+
+export interface StrikeContext {
+  attempt: number;
+  maxAttempts: number;
+  qualityTier: QualityTier;
+  targetScore: number;
+  bestResult: VerificationResult | null;
+  bestScore: number;
+  correctionHints: string[];
+  totalVerificationCost: number;
+  attempts: StrikeRecord[];
+}
+
+export interface StrikeRecord {
+  attempt: number;
+  score: number;
+  method: string;
+  correctionHints: string[];
+  cost: number;
 }
 
 // ---- Proactive ----

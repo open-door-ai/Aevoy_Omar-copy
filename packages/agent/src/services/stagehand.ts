@@ -34,6 +34,8 @@ export interface StagehandConfig {
   apiKey?: string;
   projectId?: string;
   useLocal?: boolean;
+  contextId?: string;  // Browserbase persistent context ID
+  userId?: string;     // For context lookup/creation
 }
 
 interface StagehandSession {
@@ -42,6 +44,8 @@ interface StagehandSession {
   context: BrowserContext;
   browser: Browser;
   isCloud: boolean;
+  bbSessionId?: string;  // Browserbase session ID for Live View
+  liveViewUrl?: string;  // Shareable Live View URL
 }
 
 interface ActResult {
@@ -66,18 +70,81 @@ interface ObserveResult {
   error?: string;
 }
 
+// ---- Browserbase SDK Client (for Contexts + Live View) ----
+
+interface BrowserbaseClient {
+  contexts: {
+    create: (opts: { projectId: string }) => Promise<{ id: string }>;
+  };
+  sessions: {
+    create: (opts: {
+      projectId: string;
+      browserSettings?: { context?: { id: string; persist: boolean } };
+    }) => Promise<{ id: string; connectUrl: string }>;
+    debug: (sessionId: string) => Promise<{
+      debuggerUrl: string;
+      debuggerFullscreenUrl: string;
+      wsUrl: string;
+    }>;
+  };
+}
+
+async function getBrowserbaseClient(apiKey: string): Promise<BrowserbaseClient> {
+  try {
+    const mod = await import("@anthropic-ai/browserbase" as string);
+    const Browserbase = mod.Browserbase || mod.default;
+    return new Browserbase({ apiKey }) as BrowserbaseClient;
+  } catch {
+    // Fallback: direct API calls if SDK not available
+    return {
+      contexts: {
+        create: async (opts) => {
+          const res = await fetch("https://api.browserbase.com/v1/contexts", {
+            method: "POST",
+            headers: { "x-bb-api-key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: opts.projectId }),
+          });
+          if (!res.ok) throw new Error(`Browserbase context create failed: ${res.status}`);
+          return res.json();
+        },
+      },
+      sessions: {
+        create: async (opts) => {
+          const res = await fetch("https://api.browserbase.com/v1/sessions", {
+            method: "POST",
+            headers: { "x-bb-api-key": apiKey, "Content-Type": "application/json" },
+            body: JSON.stringify(opts),
+          });
+          if (!res.ok) throw new Error(`Browserbase session create failed: ${res.status}`);
+          return res.json();
+        },
+        debug: async (sessionId) => {
+          const res = await fetch(`https://api.browserbase.com/v1/sessions/${sessionId}/debug`, {
+            headers: { "x-bb-api-key": apiKey },
+          });
+          if (!res.ok) throw new Error(`Browserbase debug failed: ${res.status}`);
+          return res.json();
+        },
+      },
+    };
+  }
+}
+
 // ---- Stagehand Service ----
 
 export class StagehandService {
   private config: StagehandConfig;
-  private session: StagehandSession | null = null;
+  session: StagehandSession | null = null;
   private stagehand: StagehandInstance | null = null;
+  private bbClient: BrowserbaseClient | null = null;
 
   constructor(config?: StagehandConfig) {
     this.config = {
       apiKey: config?.apiKey || process.env.BROWSERBASE_API_KEY,
       projectId: config?.projectId || process.env.BROWSERBASE_PROJECT_ID,
       useLocal: config?.useLocal ?? false,
+      contextId: config?.contextId,
+      userId: config?.userId,
     };
   }
 
@@ -101,10 +168,19 @@ export class StagehandService {
 
   private async initCloud(): Promise<Page> {
     try {
+      // Initialize Browserbase client for Contexts + Live View
+      this.bbClient = await getBrowserbaseClient(this.config.apiKey!);
+
+      // Resolve or create persistent context for this user
+      let contextId = this.config.contextId;
+      if (!contextId && this.config.userId) {
+        contextId = await this.resolveOrCreateContext(this.config.userId);
+      }
+
       // Dynamic import to avoid errors when not installed
       const { Stagehand } = await import("@browserbasehq/stagehand");
 
-      const stagehand = new Stagehand({
+      const stagehandOpts: Record<string, unknown> = {
         env: "BROWSERBASE",
         apiKey: this.config.apiKey,
         projectId: this.config.projectId,
@@ -112,7 +188,20 @@ export class StagehandService {
         modelClientOptions: {
           apiKey: process.env.GOOGLE_API_KEY || "",
         },
-      });
+      };
+
+      // Attach persistent context if available
+      if (contextId) {
+        stagehandOpts.browserbaseSessionCreateParams = {
+          projectId: this.config.projectId,
+          browserSettings: {
+            context: { id: contextId, persist: true },
+          },
+        };
+        console.log(`[STAGEHAND] Using persistent context: ${contextId}`);
+      }
+
+      const stagehand = new Stagehand(stagehandOpts);
 
       // 30s timeout on init
       await Promise.race([
@@ -124,19 +213,78 @@ export class StagehandService {
       const page = stagehand.page;
       const context = stagehand.context;
 
+      // Extract Browserbase session ID for Live View
+      const bbSessionId = (stagehand as unknown as Record<string, unknown>).sessionId as string
+        || (stagehand as unknown as Record<string, unknown>).browserbaseSessionID as string
+        || undefined;
+
+      // Get Live View URL
+      let liveViewUrl: string | undefined;
+      if (bbSessionId && this.bbClient) {
+        try {
+          const debugInfo = await this.bbClient.sessions.debug(bbSessionId);
+          liveViewUrl = debugInfo.debuggerFullscreenUrl;
+          console.log(`[STAGEHAND] Live View URL available: ${liveViewUrl?.substring(0, 60)}...`);
+        } catch (debugError) {
+          console.warn("[STAGEHAND] Could not get Live View URL:", debugError);
+        }
+      }
+
       this.session = {
-        id: `bb-${Date.now()}`,
+        id: bbSessionId || `bb-${Date.now()}`,
         page,
         context,
         browser: null as unknown as Browser,
         isCloud: true,
+        bbSessionId,
+        liveViewUrl,
       };
 
-      console.log("[STAGEHAND] Browserbase session initialized");
+      console.log(`[STAGEHAND] Browserbase session initialized${contextId ? ' (persistent context)' : ''}`);
       return page;
     } catch (error) {
       console.error("[STAGEHAND] Cloud init error:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Resolve an existing Browserbase context for a user, or create a new one.
+   * Stores the context ID on the user's profile for reuse across tasks.
+   */
+  private async resolveOrCreateContext(userId: string): Promise<string | undefined> {
+    if (!this.bbClient || !this.config.projectId) return undefined;
+
+    try {
+      // Check if user already has a context ID
+      const { getSupabaseClient } = await import("../utils/supabase.js");
+      const { data: profile } = await getSupabaseClient()
+        .from("profiles")
+        .select("browserbase_context_id")
+        .eq("id", userId)
+        .single();
+
+      if (profile?.browserbase_context_id) {
+        console.log(`[STAGEHAND] Found existing context for user: ${profile.browserbase_context_id}`);
+        return profile.browserbase_context_id;
+      }
+
+      // Create a new persistent context
+      const newContext = await this.bbClient.contexts.create({
+        projectId: this.config.projectId,
+      });
+
+      // Save to user's profile
+      await getSupabaseClient()
+        .from("profiles")
+        .update({ browserbase_context_id: newContext.id })
+        .eq("id", userId);
+
+      console.log(`[STAGEHAND] Created new persistent context for user: ${newContext.id}`);
+      return newContext.id;
+    } catch (error) {
+      console.warn("[STAGEHAND] Context resolution failed, proceeding without persistent context:", error);
+      return undefined;
     }
   }
 
@@ -378,6 +526,21 @@ export class StagehandService {
    */
   isCloud(): boolean {
     return this.session?.isCloud || false;
+  }
+
+  /**
+   * Get the Live View URL for the current session.
+   * Returns a shareable URL the user can open on their phone to see/interact with the browser.
+   */
+  getLiveViewUrl(): string | null {
+    return this.session?.liveViewUrl || null;
+  }
+
+  /**
+   * Get the Browserbase session ID.
+   */
+  getBrowserbaseSessionId(): string | null {
+    return this.session?.bbSessionId || null;
   }
 
   /**

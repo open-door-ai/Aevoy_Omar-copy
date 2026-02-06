@@ -65,27 +65,20 @@ export class ExecutionEngine {
     this.userId = userId;
     this.domain = domain;
 
-    // Try to load saved session if userId and domain provided
-    let savedSession = null;
-    if (userId && domain) {
-      savedSession = await sessionManager.loadSession(userId, domain);
-      if (savedSession) {
-        console.log(`[ENGINE] Found saved session for ${domain}, will restore after browser init`);
-      }
-    }
     if (this.useStagehand) {
       try {
-        this.stagehand = new StagehandService();
+        // Pass userId so Browserbase can use persistent contexts (always signed in)
+        this.stagehand = new StagehandService({ userId });
         this.page = await this.stagehand.init();
         this.context = this.stagehand.session?.context || null;
 
-        // Restore session if available
-        if (savedSession && this.context && this.page) {
-          await sessionManager.restoreSession(this.context, this.page, savedSession);
-          console.log("[ENGINE] Restored session into Stagehand browser");
+        // Browserbase Contexts handle session persistence natively — no manual cookie restore needed
+        const liveUrl = this.stagehand.getLiveViewUrl();
+        if (liveUrl) {
+          console.log(`[ENGINE] Live View available for user interaction`);
         }
 
-        console.log("[ENGINE] Initialized with Stagehand (cloud)");
+        console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context)");
         return;
       } catch (error) {
         console.warn("[ENGINE] Stagehand init failed, falling back to local Playwright:", error);
@@ -93,7 +86,15 @@ export class ExecutionEngine {
       }
     }
 
-    // Local Playwright fallback with stealth
+    // Local Playwright fallback with stealth + manual session restore
+    let savedSession = null;
+    if (userId && domain) {
+      savedSession = await sessionManager.loadSession(userId, domain);
+      if (savedSession) {
+        console.log(`[ENGINE] Found saved session for ${domain}, will restore after browser init`);
+      }
+    }
+
     this.browser = await chromium.launch({
       headless: true,
       args: [
@@ -111,12 +112,10 @@ export class ExecutionEngine {
       timezoneId: 'America/New_York',
     });
 
-    // Apply stealth patches to avoid bot detection
     await applyStealthPatches(this.context);
-
     this.page = await this.context.newPage();
 
-    // Restore session if available
+    // Manual session restore only for local Playwright (Browserbase handles this natively)
     if (savedSession && this.context && this.page) {
       await sessionManager.restoreSession(this.context, this.page, savedSession);
       console.log("[ENGINE] Restored session into local Playwright browser");
@@ -126,8 +125,8 @@ export class ExecutionEngine {
   }
 
   async cleanup(): Promise<void> {
-    // Save session before cleanup if userId and domain are set
-    if (this.userId && this.domain && this.page && this.context) {
+    // Save session before cleanup — only for local Playwright (Browserbase persists via Contexts automatically)
+    if (!this.stagehand && this.userId && this.domain && this.page && this.context) {
       try {
         await sessionManager.saveSession(this.userId, this.domain, this.context, this.page, true);
         console.log(`[ENGINE] Saved session for ${this.domain} before cleanup`);
@@ -137,6 +136,7 @@ export class ExecutionEngine {
     }
 
     if (this.stagehand) {
+      // Browserbase sessions with persist:true auto-save context on close
       await this.stagehand.close();
       this.stagehand = null;
     } else {
@@ -162,6 +162,50 @@ export class ExecutionEngine {
 
   getCurrentUrl(): string {
     return this.page?.url() || '';
+  }
+
+  /**
+   * Get the Live View URL for the current browser session.
+   * Users can open this on their phone to see/interact with the browser in real time.
+   * Only available when using Browserbase (cloud).
+   */
+  getLiveViewUrl(): string | null {
+    return this.stagehand?.getLiveViewUrl() || null;
+  }
+
+  getActionSuccessRate(): number {
+    if (this.results.length === 0) return 100;
+    const successes = this.results.filter(r => r.success).length;
+    return Math.round((successes / this.results.length) * 100);
+  }
+
+  async retryFailedSteps(): Promise<{ success: boolean; improved: number }> {
+    const failed = this.results.filter(r => !r.success);
+    if (failed.length === 0) return { success: true, improved: 0 };
+
+    let improved = 0;
+    for (const failedResult of failed) {
+      const step: ExecutionStep = {
+        action: failedResult.action,
+        params: (failedResult.data as Record<string, unknown>) || {},
+      };
+
+      try {
+        const retryResult = await this.executeStep(step);
+        if (retryResult.success) {
+          improved++;
+          // Replace the failed result in the results array
+          const idx = this.results.indexOf(failedResult);
+          if (idx !== -1) {
+            this.results[idx] = retryResult;
+          }
+        }
+      } catch {
+        // Continue with next failed step
+      }
+    }
+
+    return { success: improved > 0, improved };
   }
 
   /**

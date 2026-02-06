@@ -14,10 +14,10 @@ import { ActionValidator } from "../security/validator.js";
 import { ExecutionEngine } from "../execution/engine.js";
 import { getFailureMemory, recordFailure, learnSolution } from "../memory/failure-db.js";
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
-import { verifyTask, quickVerify } from "./task-verifier.js";
+import { verifyTask, quickVerify, getQualityTier, QUALITY_TIERS } from "./task-verifier.js";
 import { detectWorkflow, createWorkflow } from "./workflow.js";
 import { getSupabaseClient } from "../utils/supabase.js";
-import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel } from "../types/index.js";
+import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, StrikeContext, StrikeRecord, VerificationResult } from "../types/index.js";
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -696,7 +696,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
-    const aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId);
+    let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId);
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
@@ -709,12 +709,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     if (needsBrowser && classification.needsBrowser) {
       // Initialize execution engine for browser tasks
+      // Browserbase handles session persistence natively via Contexts API (always signed in)
+      // Local Playwright fallback still uses domain allowlist for manual cookie persistence
       executionEngine = new ExecutionEngine(lockedIntent);
 
-      // Extract primary domain for session persistence (only for allowlisted domains)
       let domain = classification.domains?.[0] || null;
 
-      // Check if domain is in persistent domains allowlist
+      // Domain allowlist only matters for local Playwright session persistence
+      // Browserbase persists ALL domains via the user's context
       if (domain) {
         try {
           const allowlistPath = join(process.cwd(), 'config', 'persistent-domains.json');
@@ -722,30 +724,32 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           const isPersistable = allowlist.domains.some((d: string) =>
             domain!.includes(d) || d.includes(domain!)
           );
-
           if (!isPersistable) {
-            console.log(`[SESSION] Domain ${domain} not in allowlist, skipping session persistence`);
-            domain = null;
+            domain = null; // Only affects local Playwright path
           }
-        } catch (error) {
-          console.warn('[SESSION] Failed to load persistent domains allowlist, skipping persistence');
+        } catch {
           domain = null;
         }
       }
 
       await executionEngine.initialize(userId, domain || undefined);
+      console.log(`[BROWSER] Execution engine initialized`);
 
-      if (domain) {
-        console.log(`[BROWSER] Execution engine initialized (session persistence enabled for ${domain})`);
-      } else {
-        console.log(`[BROWSER] Execution engine initialized (no session persistence)`);
+      // Log Live View URL availability
+      const liveViewUrl = executionEngine.getLiveViewUrl();
+      if (liveViewUrl) {
+        console.log(`[BROWSER] Live View URL available for user interaction`);
       }
     }
 
-    // Send progress update for long tasks
+    // Send progress update for long tasks (include Live View link if available)
     if (aiResponse.actions.length > 3) {
-      await sendProgressEmail(from, `${username}@aevoy.com`, subject, 
-        `Working on your request. Processing ${aiResponse.actions.length} actions...`);
+      const liveViewUrl = executionEngine?.getLiveViewUrl();
+      let progressMsg = `Working on your request. Processing ${aiResponse.actions.length} actions...`;
+      if (liveViewUrl) {
+        progressMsg += `\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`;
+      }
+      await sendProgressEmail(from, `${username}@aevoy.com`, subject, progressMsg);
     }
     
     for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
@@ -878,27 +882,142 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // 8. Run 3-step verification on browser tasks
+    // 8. Strike-based verification loop
     let verificationResult = null;
-    if (executionEngine && classification.taskType) {
-      try {
-        const page = executionEngine.getPage?.() || null;
-        verificationResult = await verifyTask(
-          classification.taskType,
-          page,
-          aiResponse.content,
-          `Task: ${subject} ${body}`
-        );
-        console.log(
-          `[VERIFY] ${verificationResult.passed ? "PASSED" : "FAILED"} (${verificationResult.confidence}% confidence, method: ${verificationResult.method})`
-        );
+    const tier = getQualityTier(classification.taskType || 'simple');
+    const tierConfig = QUALITY_TIERS[tier];
 
-        // If verification fails with retries remaining, retry once
-        if (!verificationResult.passed && verificationResult.confidence < 50) {
-          console.log("[VERIFY] Low confidence, but continuing (retry logic deferred)");
+    if (executionEngine && classification.taskType) {
+      const strikeCtx: StrikeContext = {
+        attempt: 1,
+        maxAttempts: tierConfig.maxStrikes,
+        qualityTier: tier,
+        targetScore: tierConfig.target,
+        bestResult: null,
+        bestScore: 0,
+        correctionHints: [],
+        totalVerificationCost: 0,
+        attempts: [],
+      };
+
+      console.log(`[STRIKE] Quality tier: ${tier} (target: ${tierConfig.target}%, max strikes: ${tierConfig.maxStrikes})`);
+
+      while (strikeCtx.attempt <= strikeCtx.maxAttempts) {
+        try {
+          const page = executionEngine.getPage?.() || null;
+          const actionSuccessRate = executionEngine.getActionSuccessRate();
+          const result = await verifyTask(
+            classification.taskType,
+            page,
+            aiResponse.content,
+            `Task: ${subject} ${body}`,
+            actionSuccessRate
+          );
+
+          const attemptCost = result.method === 'smart_review' ? 0.05 : 0;
+          strikeCtx.totalVerificationCost += attemptCost;
+
+          // Track this attempt
+          const record: StrikeRecord = {
+            attempt: strikeCtx.attempt,
+            score: result.confidence,
+            method: result.method,
+            correctionHints: result.correctionHints || [],
+            cost: attemptCost,
+          };
+          strikeCtx.attempts.push(record);
+
+          // Track best result
+          if (result.confidence > strikeCtx.bestScore) {
+            strikeCtx.bestScore = result.confidence;
+            strikeCtx.bestResult = result;
+          }
+
+          console.log(
+            `[STRIKE] Attempt ${strikeCtx.attempt}/${strikeCtx.maxAttempts}: ${result.passed ? "PASSED" : "FAILED"} (${result.confidence}% confidence, target: ${tierConfig.target}%)`
+          );
+
+          // Success: score meets or exceeds target
+          if (result.confidence >= strikeCtx.targetScore) {
+            verificationResult = result;
+            break;
+          }
+
+          // Used all strikes
+          if (strikeCtx.attempt >= strikeCtx.maxAttempts) {
+            verificationResult = strikeCtx.bestResult;
+            break;
+          }
+
+          // Budget check — stop if accumulated cost > $2
+          const currentTaskCost = (aiResponse.cost || 0) + (executionEngine.getTotalCost() || 0) + strikeCtx.totalVerificationCost;
+          if (currentTaskCost > 2.0) {
+            console.log(`[STRIKE] Budget cap reached ($${currentTaskCost.toFixed(2)}), stopping strikes`);
+            verificationResult = strikeCtx.bestResult;
+            break;
+          }
+
+          // Prepare correction hints for re-execution
+          const corrections = result.correctionHints || [];
+          strikeCtx.correctionHints = corrections;
+          strikeCtx.attempt++;
+
+          if (strikeCtx.attempt === 2) {
+            // Strike 2: Re-generate with same model + correction hints
+            console.log(`[STRIKE] Strike 2: Re-generating with corrections: ${corrections.join('; ')}`);
+            const correctionSuffix = corrections.length > 0
+              ? `\n\n[CORRECTION NEEDED] Previous attempt issues:\n${corrections.map(h => `- ${h}`).join('\n')}\nPlease fix these issues.`
+              : '';
+            aiResponse = await generateResponse(
+              memory, subject, bodyWithLearnings + correctionSuffix, username, aiTaskType, userId, taskId
+            );
+
+            // Re-run failed browser actions if engine is alive
+            if (executionEngine.getPage()) {
+              const retryResult = await executionEngine.retryFailedSteps();
+              if (retryResult.improved > 0) {
+                console.log(`[STRIKE] Retried failed steps, improved ${retryResult.improved} actions`);
+              }
+            }
+          } else if (strikeCtx.attempt === 3) {
+            // Strike 3: Escalate to Claude Sonnet (reason task type) + full corrections
+            console.log(`[STRIKE] Strike 3: Escalating to Claude Sonnet with full corrections`);
+            const correctionSuffix = `\n\n[CRITICAL CORRECTION - ATTEMPT 3] Previous attempts failed verification:\n${strikeCtx.attempts.map(a => `- Attempt ${a.attempt}: ${a.score}% (${a.correctionHints.join('; ') || 'no hints'})`).join('\n')}\nPlease carefully complete this task, addressing all issues above.`;
+            aiResponse = await generateResponse(
+              memory, subject, bodyWithLearnings + correctionSuffix, username, 'reason' as const, userId, taskId
+            );
+
+            // Re-run all browser actions from scratch if possible
+            if (executionEngine.getPage()) {
+              const retryResult = await executionEngine.retryFailedSteps();
+              if (retryResult.improved > 0) {
+                console.log(`[STRIKE] Retried failed steps on strike 3, improved ${retryResult.improved} actions`);
+              }
+            }
+          }
+        } catch (verifyError) {
+          console.error(`[STRIKE] Verification error on attempt ${strikeCtx.attempt}:`, verifyError);
+          // If verification itself errors, still track the attempt
+          strikeCtx.attempts.push({
+            attempt: strikeCtx.attempt,
+            score: 0,
+            method: 'error',
+            correctionHints: ['Verification process failed'],
+            cost: 0,
+          });
+          verificationResult = strikeCtx.bestResult;
+          break;
         }
-      } catch (verifyError) {
-        console.error("[VERIFY] Verification error:", verifyError);
+      }
+
+      // Store strike metadata for the verification_data field
+      if (verificationResult) {
+        (verificationResult as VerificationResult & { _strikeData?: unknown })._strikeData = {
+          strikes: strikeCtx.attempts,
+          totalAttempts: strikeCtx.attempts.length,
+          qualityTier: tier,
+          targetScore: tierConfig.target,
+        };
       }
     } else if (aiResponse.content) {
       // Quick verify for non-browser tasks
@@ -912,7 +1031,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // Cleanup browser if used
+    // Cleanup browser if used (AFTER strike loop so browser stays alive between attempts)
     if (executionEngine) {
       await executionEngine.cleanup();
       console.log(`[BROWSER] Execution engine cleaned up`);
@@ -1010,6 +1129,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           confidence: verificationResult.confidence,
           method: verificationResult.method,
           evidence: verificationResult.evidence,
+          ...((verificationResult as VerificationResult & { _strikeData?: Record<string, unknown> })._strikeData || {}),
         } : null,
       })
       .eq("id", taskId);
