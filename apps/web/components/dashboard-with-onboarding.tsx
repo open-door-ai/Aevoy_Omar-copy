@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import OnboardingFlow from "./onboarding/onboarding-flow";
+import UnifiedFlow from "./onboarding/unified-flow";
 
 interface DashboardWithOnboardingProps {
   username: string;
@@ -15,11 +15,10 @@ export default function DashboardWithOnboarding({ username, children }: Dashboar
   useEffect(() => {
     async function checkOnboardingStatus() {
       try {
-        const response = await fetch("/api/settings");
+        const response = await fetch("/api/user");
         if (response.ok) {
-          const settings = await response.json();
-          // Show onboarding if settings were never created (no user_id means defaults returned)
-          if (!settings.user_id || settings.user_id === undefined) {
+          const user = await response.json();
+          if (!user.onboardingCompleted) {
             setShowOnboarding(true);
           }
         } else if (response.status === 404) {
@@ -46,7 +45,7 @@ export default function DashboardWithOnboarding({ username, children }: Dashboar
   return (
     <>
       {showOnboarding && (
-        <OnboardingFlow
+        <UnifiedFlow
           username={username}
           onComplete={handleOnboardingComplete}
         />

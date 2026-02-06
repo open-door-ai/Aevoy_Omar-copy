@@ -269,15 +269,20 @@ export async function sendVerificationCodeRequest(
   to: string,
   from: string,
   taskId: string,
-  context: string
+  context: string,
+  liveViewUrl?: string
 ): Promise<boolean> {
+  const liveViewSection = liveViewUrl
+    ? `\n\n**Or enter it yourself:** ${liveViewUrl}\nOpen this link on any device to see and control the browser directly.\n`
+    : '';
+
   const body = `🔐 **Need verification code to continue**
 
 I'm trying to ${context} but need a verification code.
 
 A code was just sent to your phone/email.
 
-**Reply with the code and I'll continue.**
+**Reply with the code and I'll continue.**${liveViewSection}
 
 (This request expires in 10 minutes)
 

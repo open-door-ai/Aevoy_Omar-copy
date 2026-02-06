@@ -153,7 +153,8 @@ export async function requestVerificationCode(
   userEmail: string,
   agentEmail: string,
   context: string,
-  detection: VerificationDetectionResult
+  detection: VerificationDetectionResult,
+  liveViewUrl?: string
 ): Promise<string | void> {
   // Try auto-extraction before asking user
 
@@ -199,15 +200,16 @@ export async function requestVerificationCode(
     })
     .eq("id", taskId);
 
-  // Send email requesting code
+  // Send email requesting code (include Live View URL so user can interact directly)
   await sendVerificationCodeRequest(
     userEmail,
     agentEmail,
     taskId,
-    contextMessage
+    contextMessage,
+    liveViewUrl
   );
 
-  console.log(`[VERIFICATION] Code requested for task ${taskId}`);
+  console.log(`[VERIFICATION] Code requested for task ${taskId}${liveViewUrl ? ' (Live View link included)' : ''}`);
 }
 
 /**

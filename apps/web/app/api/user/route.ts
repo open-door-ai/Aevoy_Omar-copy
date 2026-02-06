@@ -34,6 +34,7 @@ export async function GET() {
       aiEmail: `${profile.username}@aevoy.com`,
       displayName: profile.display_name,
       timezone: profile.timezone,
+      onboardingCompleted: profile.onboarding_completed || false,
       subscription: {
         tier: profile.subscription_tier,
         messagesUsed: profile.messages_used,
