@@ -12,6 +12,7 @@ import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } fro
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
+let checkinInterval: NodeJS.Timeout | null = null;
 
 /**
  * Start the scheduler - runs every minute
@@ -47,6 +48,18 @@ export function startScheduler(): void {
   }, 60 * 60 * 1000); // Every hour
 
   console.log('[SCHEDULER] Proactive engine started - checking hourly');
+
+  // Start daily check-in calls (every 5 minutes)
+  runCheckinCalls().catch(console.error);
+  checkinInterval = setInterval(async () => {
+    try {
+      await runCheckinCalls();
+    } catch (error) {
+      console.error('[SCHEDULER] Check-in call error:', error);
+    }
+  }, 5 * 60 * 1000); // Every 5 minutes
+
+  console.log('[SCHEDULER] Check-in engine started - checking every 5 minutes');
 }
 
 /**
@@ -60,6 +73,10 @@ export function stopScheduler(): void {
   if (proactiveInterval) {
     clearInterval(proactiveInterval);
     proactiveInterval = null;
+  }
+  if (checkinInterval) {
+    clearInterval(checkinInterval);
+    checkinInterval = null;
   }
   console.log('[SCHEDULER] Stopped');
 }
@@ -142,6 +159,116 @@ async function runProactiveChecks(): Promise<void> {
   }
 
   await releaseDistributedLock("scheduler_proactive");
+}
+
+/**
+ * Run daily check-in calls for opted-in users.
+ * Checks if current time matches morning or evening check-in time (±5 min window).
+ * Uses a distributed lock so only one instance runs at a time.
+ */
+async function runCheckinCalls(): Promise<void> {
+  const acquired = await acquireDistributedLock("scheduler_checkins", 5 * 60_000);
+  if (!acquired) {
+    return; // Another instance is handling check-ins
+  }
+
+  try {
+    const now = new Date();
+    const currentHour = now.getUTCHours();
+    const currentMinute = now.getUTCMinutes();
+
+    // Query users who have daily check-ins enabled
+    const { data: profiles } = await getSupabaseClient()
+      .from("profiles")
+      .select("id, username, timezone, phone_number, daily_checkin_morning_time, daily_checkin_evening_time")
+      .eq("daily_checkin_enabled", true)
+      .not("phone_number", "is", null);
+
+    if (!profiles || profiles.length === 0) {
+      await releaseDistributedLock("scheduler_checkins");
+      return;
+    }
+
+    for (const profile of profiles) {
+      try {
+        const userTimezone = profile.timezone || "America/Vancouver";
+        const morningTime = profile.daily_checkin_morning_time || "09:00:00";
+        const eveningTime = profile.daily_checkin_evening_time || "21:00:00";
+
+        // Check if current time matches morning or evening (±5 min window)
+        const shouldCallMorning = isTimeMatch(currentHour, currentMinute, morningTime, userTimezone);
+        const shouldCallEvening = isTimeMatch(currentHour, currentMinute, eveningTime, userTimezone);
+
+        if (!shouldCallMorning && !shouldCallEvening) continue;
+
+        const callType = shouldCallMorning ? "morning" : "evening";
+
+        // Check if already called today
+        const { data: recentCalls } = await getSupabaseClient()
+          .from("call_history")
+          .select("id")
+          .eq("user_id", profile.id)
+          .eq("call_type", `checkin_${callType}`)
+          .gte("created_at", new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString())
+          .limit(1);
+
+        if (recentCalls && recentCalls.length > 0) {
+          console.log(`[SCHEDULER] Already called ${profile.username} for ${callType} check-in today`);
+          continue;
+        }
+
+        // Make check-in call
+        console.log(`[SCHEDULER] Initiating ${callType} check-in call for ${profile.username}`);
+        const { makeCheckinCall } = await import("./checkin.js");
+        await makeCheckinCall(profile.id, profile.phone_number, callType);
+      } catch (error) {
+        console.error(`[SCHEDULER] Error making check-in call for user ${profile.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Check-in calls error:', error);
+  }
+
+  await releaseDistributedLock("scheduler_checkins");
+}
+
+/**
+ * Check if current UTC time matches user's local time (±5min window).
+ * Converts user's local HH:MM time to UTC and compares.
+ */
+function isTimeMatch(currentHourUTC: number, currentMinuteUTC: number, targetTime: string, timezone: string): boolean {
+  // Parse targetTime (HH:MM:SS)
+  const [hour, minute] = targetTime.split(":").map(Number);
+
+  // Timezone offset mapping (UTC offset in hours)
+  const timezoneOffsets: Record<string, number> = {
+    "America/Vancouver": -8,
+    "America/Los_Angeles": -8,
+    "America/Denver": -7,
+    "America/Chicago": -6,
+    "America/New_York": -5,
+    "America/Toronto": -5,
+    "Europe/London": 0,
+    "Europe/Paris": 1,
+    "Asia/Dubai": 4,
+    "Asia/Kolkata": 5.5,
+    "Asia/Shanghai": 8,
+    "Asia/Tokyo": 9,
+    "Australia/Sydney": 11
+  };
+
+  const offset = timezoneOffsets[timezone] || 0;
+
+  // Convert local time to UTC (subtract offset)
+  const targetHourUTC = (hour - offset + 24) % 24;
+
+  // Calculate time difference in minutes
+  const currentTotalMinutes = currentHourUTC * 60 + currentMinuteUTC;
+  const targetTotalMinutes = targetHourUTC * 60 + minute;
+  const diffMinutes = Math.abs(currentTotalMinutes - targetTotalMinutes);
+
+  // Match if within ±5 minutes
+  return diffMinutes <= 5;
 }
 
 /**

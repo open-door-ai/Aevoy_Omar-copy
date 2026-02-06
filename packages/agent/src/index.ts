@@ -117,6 +117,32 @@ const twilioLimiter = rateLimit({
   validate: false,
 });
 
+// ---- Daily Call Limit Tracker (50 calls/day per user) ----
+
+const dailyCallLimits = new Map<string, { count: number; resetAt: number }>();
+
+function checkDailyCallLimit(userId: string): boolean {
+  const now = Date.now();
+  const userLimit = dailyCallLimits.get(userId);
+
+  if (!userLimit || now > userLimit.resetAt) {
+    // Reset counter (new day)
+    dailyCallLimits.set(userId, {
+      count: 1,
+      resetAt: now + 24 * 60 * 60 * 1000, // 24 hours
+    });
+    return true;
+  }
+
+  if (userLimit.count >= 50) {
+    console.log(`[SECURITY] User ${userId.slice(0, 8)} exceeded daily call limit (50)`);
+    return false;
+  }
+
+  userLimit.count++;
+  return true;
+}
+
 // ---- Middleware ----
 
 // Restrict CORS to known origins
@@ -575,6 +601,490 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
 <Response>
   <Message>Sorry, an error occurred. Please try again.</Message>
 </Response>`);
+  }
+});
+
+// ==== INCOMING PHONE SYSTEM WEBHOOKS ====
+
+// ---- Incoming Voice Calls (Caller Identification) ----
+
+app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const callerNumber = req.body.From || "";
+  const twilioNumber = req.body.To || "";
+  const callSid = req.body.CallSid || "";
+
+  console.log(`[VOICE] Incoming call from ${callerNumber} to ${twilioNumber}`);
+
+  try {
+    const supabase = getSupabaseClient();
+    const { normalizePhone } = await import("./utils/phone.js");
+    const normalized = normalizePhone(callerNumber);
+
+    // Lookup user by phone number
+    const { data: profile, error: lookupError } = await supabase
+      .from("profiles")
+      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, timezone")
+      .eq("phone_number", normalized)
+      .single();
+
+    if (lookupError || !profile) {
+      // Unknown caller - block
+      console.log(`[VOICE] Unknown caller: ${callerNumber}`);
+
+      await supabase.from("call_history").insert({
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "unknown",
+        pin_required: true,
+        pin_success: false
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Sorry, I don't recognize this phone number. Please sign up at aevoy dot com first, or call from your registered number.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    const userId = profile.id;
+
+    // Check daily call limit (50/day per user)
+    if (!checkDailyCallLimit(userId)) {
+      console.log(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit`);
+
+      await supabase.from("call_history").insert({
+        user_id: userId,
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "rate_limited",
+        pin_required: false,
+        pin_success: null
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">You've reached your daily call limit of 50 calls. Please try again tomorrow or contact us at aevoy dot com.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Check if PIN-locked (3 failed attempts = 15min lockout)
+    if (profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date()) {
+      console.log(`[VOICE] User ${userId.slice(0, 8)} is PIN-locked until ${profile.voice_pin_locked_until}`);
+
+      await supabase.from("call_history").insert({
+        user_id: userId,
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "blocked",
+        pin_required: true,
+        pin_success: false
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Your account is temporarily locked due to too many failed PIN attempts. Please try again in 15 minutes, or contact support.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Verified caller - route to task handler
+    console.log(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
+
+    await supabase.from("call_history").insert({
+      user_id: userId,
+      call_sid: callSid,
+      direction: "inbound",
+      from_number: callerNumber,
+      to_number: twilioNumber,
+      call_type: "task",
+      pin_required: false,
+      pin_success: null
+    });
+
+    // Generate TwiML for task request
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Hey! What can I help you with?</Say>
+  <Record maxLength="60" playBeep="false" transcribe="true" transcribeCallback="${process.env.AGENT_URL}/webhook/voice/recording/${userId}" />
+</Response>`);
+  } catch (error) {
+    console.error("[VOICE] Incoming call error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Sorry, something went wrong. Please try again or contact support at aevoy dot com.</Say>
+  <Hangup/>
+</Response>`);
+  }
+});
+
+// ---- Incoming SMS (Caller Identification) ----
+
+app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const senderNumber = req.body.From || "";
+  const message = req.body.Body || "";
+  const twilioNumber = req.body.To || "";
+  const messageSid = req.body.MessageSid || "";
+
+  console.log(`[SMS] Incoming from ${senderNumber}: "${message.slice(0, 50)}..."`);
+
+  try {
+    const supabase = getSupabaseClient();
+    const { normalizePhone } = await import("./utils/phone.js");
+    const normalized = normalizePhone(senderNumber);
+
+    // Lookup user
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, username")
+      .eq("phone_number", normalized)
+      .single();
+
+    if (!profile) {
+      // Unknown sender
+      console.log(`[SMS] Unknown sender: ${senderNumber}`);
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Sorry, I don't recognize this number. Sign up at aevoy.com first 👋</Message>
+</Response>`);
+    }
+
+    const userId = profile.id;
+    console.log(`[SMS] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
+
+    // Process SMS as task
+    const { processTask } = await import("./services/processor.js");
+    await processTask({
+      userId,
+      username: profile.username,
+      from: senderNumber,
+      subject: "[SMS]",
+      body: message,
+      inputChannel: "sms"
+    });
+
+    // Send empty TwiML (task response will be sent separately via Twilio API)
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  } catch (error) {
+    console.error("[SMS] Incoming SMS error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Oops, something went wrong. Please try again or email support@aevoy.com</Message>
+</Response>`);
+  }
+});
+
+// ---- PIN Verification for Unknown Callers ----
+
+app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const enteredPin = req.body.Digits || "";
+  const callerNumber = req.body.From || "";
+  const callSid = req.body.CallSid || "";
+
+  console.log(`[PIN] Verification attempt from ${callerNumber}, entered: ${enteredPin.slice(0, 2)}**`);
+
+  try {
+    const supabase = getSupabaseClient();
+    const { normalizePhone } = await import("./utils/phone.js");
+    const normalized = normalizePhone(callerNumber);
+
+    // Find user by PIN (plaintext for now, will encrypt later)
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, phone_number");
+
+    if (!profiles || profiles.length === 0) {
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">No account found with that PIN. Please sign up at aevoy dot com.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Match PIN
+    const matchedProfile = profiles.find(p => p.voice_pin === enteredPin);
+
+    if (!matchedProfile) {
+      // Failed PIN attempt
+      console.log(`[PIN] Invalid PIN from ${callerNumber}`);
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Incorrect PIN. You have 2 attempts remaining.</Say>
+  <Gather action="${process.env.AGENT_URL}/webhook/voice/pin-verify" numDigits="4" timeout="10">
+    <Say voice="Polly.Amy">Please enter your 4 to 6 digit PIN.</Say>
+  </Gather>
+  <Hangup/>
+</Response>`);
+    }
+
+    const userId = matchedProfile.id;
+    console.log(`[PIN] Successful verification for ${matchedProfile.username} (${userId.slice(0, 8)})`);
+
+    // Reset PIN attempts
+    await supabase
+      .from("profiles")
+      .update({ voice_pin_attempts: 0, voice_pin_locked_until: null })
+      .eq("id", userId);
+
+    // Log successful PIN auth
+    await supabase.from("call_history").insert({
+      user_id: userId,
+      call_sid: callSid,
+      direction: "inbound",
+      from_number: callerNumber,
+      to_number: "+17789008951",
+      call_type: "task",
+      pin_required: true,
+      pin_success: true
+    });
+
+    // Route to task handler
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">PIN verified. What can I help you with?</Say>
+  <Record maxLength="60" playBeep="false" transcribe="true" transcribeCallback="${process.env.AGENT_URL}/webhook/voice/recording/${userId}" />
+</Response>`);
+  } catch (error) {
+    console.error("[PIN] Verification error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Sorry, something went wrong. Please try again.</Say>
+  <Hangup/>
+</Response>`);
+  }
+});
+
+// ---- Premium Number Voice (Direct User Routing) ----
+
+app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const from = req.body.From || "";
+  const to = req.body.To || "";
+  const callSid = req.body.CallSid || "";
+
+  console.log(`[VOICE-PREMIUM] Call to user ${userId.slice(0, 8)} from ${from}`);
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Check daily call limit (50/day per user)
+    if (!checkDailyCallLimit(userId)) {
+      console.log(`[VOICE-PREMIUM] User ${userId.slice(0, 8)} exceeded daily call limit`);
+
+      await supabase.from("call_history").insert({
+        user_id: userId,
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: from,
+        to_number: to,
+        call_type: "rate_limited"
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">You've reached your daily call limit of 50 calls. Please try again tomorrow.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Log call
+    await supabase.from("call_history").insert({
+      user_id: userId,
+      call_sid: callSid,
+      direction: "inbound",
+      from_number: from,
+      to_number: to,
+      call_type: "task"
+    });
+
+    // Route directly to task handler (no caller ID needed)
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Hey! What can I help you with?</Say>
+  <Record maxLength="60" playBeep="false" transcribe="true" transcribeCallback="${process.env.AGENT_URL}/webhook/voice/recording/${userId}" />
+</Response>`);
+  } catch (error) {
+    console.error("[VOICE-PREMIUM] Error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Sorry, something went wrong. Please try again.</Say>
+  <Hangup/>
+</Response>`);
+  }
+});
+
+// ---- Premium Number SMS ----
+
+app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const from = req.body.From || "";
+  const message = req.body.Body || "";
+  const messageSid = req.body.MessageSid || "";
+
+  console.log(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${from}: "${message.slice(0, 50)}..."`);
+
+  try {
+    // Process as task
+    const supabase = getSupabaseClient();
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("username")
+      .eq("id", userId)
+      .single();
+
+    const { processTask } = await import("./services/processor.js");
+    await processTask({
+      userId,
+      username: profile?.username || "user",
+      from,
+      subject: "[SMS Premium]",
+      body: message,
+      inputChannel: "sms"
+    });
+
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  } catch (error) {
+    console.error("[SMS-PREMIUM] Error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Oops, something went wrong. Please try again.</Message>
+</Response>`);
+  }
+});
+
+// ---- Daily Check-in Call Webhook ----
+
+app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const callType = req.query.type as string || "morning";
+  const from = req.body.From || "";
+  const to = req.body.To || "";
+  const callSid = req.body.CallSid || "";
+
+  console.log(`[CHECKIN] ${callType} call webhook for user ${userId.slice(0, 8)}`);
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Get user context
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("username, display_name, bot_name")
+      .eq("id", userId)
+      .single();
+
+    const userName = profile?.display_name || profile?.username || "there";
+    const botName = profile?.bot_name || "your AI assistant";
+
+    // Generate dynamic greeting using AI
+    const { generateCheckinGreeting } = await import("./services/checkin.js");
+    const greeting = await generateCheckinGreeting(userName, botName, callType as "morning" | "evening");
+
+    // TwiML: Say greeting, listen for response, process as task
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">${greeting}</Say>
+  <Record maxLength="60" playBeep="false" transcribe="true" transcribeCallback="${process.env.AGENT_URL}/webhook/checkin/response/${userId}?type=${callType}" />
+  <Say voice="Polly.Amy">Thanks for chatting! I'll let you know if I can help with anything.</Say>
+</Response>`);
+  } catch (error) {
+    console.error("[CHECKIN] Webhook error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Amy">Sorry, something went wrong with your check-in. Have a great day!</Say>
+  <Hangup/>
+</Response>`);
+  }
+});
+
+// ---- Check-in Response Handler ----
+
+app.post("/webhook/checkin/response/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const transcription = req.body.TranscriptionText || "";
+  const callType = req.query.type as string || "morning";
+
+  console.log(`[CHECKIN] Response from ${userId.slice(0, 8)}: "${transcription.slice(0, 50)}..."`);
+
+  try {
+    const supabase = getSupabaseClient();
+
+    if (!transcription || transcription.trim().length < 5) {
+      // No meaningful response
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+    }
+
+    // Save to episodic memory
+    const { encryptWithServerKey } = await import("./security/encryption.js");
+    const memoryContent = {
+      type: `daily_checkin_${callType}`,
+      response: transcription,
+      timestamp: new Date().toISOString()
+    };
+
+    const encrypted = await encryptWithServerKey(JSON.stringify(memoryContent));
+
+    await supabase.from("user_memory").insert({
+      user_id: userId,
+      memory_type: "episodic",
+      encrypted_data: encrypted,
+      importance: 0.7
+    });
+
+    // If user mentioned a task, process it
+    const looksLikeTask = /book|schedule|remind|buy|order|research|find|email|call/i.test(transcription);
+
+    if (looksLikeTask) {
+      const { data: userProfile } = await supabase
+        .from("profiles")
+        .select("username")
+        .eq("id", userId)
+        .single();
+
+      const { processTask } = await import("./services/processor.js");
+      await processTask({
+        userId,
+        username: userProfile?.username || "user",
+        from: req.body.From || "",
+        subject: `[Check-in ${callType}]`,
+        body: transcription,
+        inputChannel: "voice"
+      });
+    }
+
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  } catch (error) {
+    console.error("[CHECKIN] Response handler error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
   }
 });
 

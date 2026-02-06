@@ -114,3 +114,51 @@ export async function decryptWithServerKey(encryptedData: string): Promise<strin
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
+
+/**
+ * Encrypt voice PIN for storage (4-6 digit numeric PIN)
+ * Uses user ID as salt for deterministic encryption (allows lookup)
+ */
+export async function encryptPin(pin: string, userId: string): Promise<string> {
+  // Use user ID as part of salt for deterministic encryption
+  const salt = Buffer.from(userId.slice(0, 16).padEnd(16, '0'));
+  const key = await scryptAsync(getServerSecret(), salt, 32) as Buffer;
+  const iv = randomBytes(16);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(pin, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+/**
+ * Decrypt voice PIN
+ */
+export async function decryptPin(encryptedPin: string, userId: string): Promise<string> {
+  const [ivB64, authTagB64, dataB64] = encryptedPin.split(':');
+
+  if (!ivB64 || !authTagB64 || !dataB64) {
+    throw new Error('Invalid encrypted PIN format');
+  }
+
+  const salt = Buffer.from(userId.slice(0, 16).padEnd(16, '0'));
+  const key = await scryptAsync(getServerSecret(), salt, 32) as Buffer;
+  const iv = Buffer.from(ivB64, 'base64');
+  const authTag = Buffer.from(authTagB64, 'base64');
+  const encrypted = Buffer.from(dataB64, 'base64');
+
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+}
+
+/**
+ * Verify an entered PIN against an encrypted PIN
+ */
+export async function verifyPin(enteredPin: string, encryptedPin: string, userId: string): Promise<boolean> {
+  try {
+    const decryptedPin = await decryptPin(encryptedPin, userId);
+    return decryptedPin === enteredPin;
+  } catch {
+    return false;
+  }
+}

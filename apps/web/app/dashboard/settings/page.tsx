@@ -9,12 +9,15 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
+import { Phone } from "lucide-react";
+import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 
 interface Profile {
   id: string;
   username: string;
   email: string;
   display_name: string | null;
+  bot_name: string | null;
   timezone: string;
   subscription_tier: string;
   subscription_status: string | null;
@@ -43,6 +46,7 @@ interface AgentCard {
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [displayName, setDisplayName] = useState("");
+  const [botName, setBotName] = useState("");
   const [timezone, setTimezone] = useState("America/Los_Angeles");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -66,6 +70,16 @@ export default function SettingsPage() {
   const [phoneLoading, setPhoneLoading] = useState(false);
   const [phoneAreaCode, setPhoneAreaCode] = useState("604");
 
+  // Phone & Voice state
+  const [userPhoneNumber, setUserPhoneNumber] = useState("");
+  const [voicePin, setVoicePin] = useState("");
+  const [dailyCheckinEnabled, setDailyCheckinEnabled] = useState(false);
+  const [morningTime, setMorningTime] = useState("09:00");
+  const [eveningTime, setEveningTime] = useState("21:00");
+  const [premiumNumber, setPremiumNumber] = useState<string | null>(null);
+  const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [savingPhone, setSavingPhone] = useState(false);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -83,8 +97,16 @@ export default function SettingsPage() {
       if (data) {
         setProfile(data);
         setDisplayName(data.display_name || "");
+        setBotName(data.bot_name || "");
         setTimezone(data.timezone || "America/Los_Angeles");
         setAllowVenting(data.allow_agent_venting || false);
+
+        // Load phone & voice settings
+        setUserPhoneNumber(data.phone_number || "");
+        setVoicePin("");  // Don't display existing PIN for security
+        setDailyCheckinEnabled(data.daily_checkin_enabled || false);
+        setMorningTime(data.daily_checkin_morning_time || "09:00");
+        setEveningTime(data.daily_checkin_evening_time || "21:00");
       }
     }
 
@@ -141,6 +163,7 @@ export default function SettingsPage() {
       .from("profiles")
       .update({
         display_name: displayName || null,
+        bot_name: botName.trim() || null,
         timezone,
         updated_at: new Date().toISOString(),
       })
@@ -318,6 +341,49 @@ export default function SettingsPage() {
     setCardAction(null);
   };
 
+  const handleSavePhoneSettings = async () => {
+    if (!profile) return;
+
+    setSavingPhone(true);
+    setMessage(null);
+
+    try {
+      const updateData: any = {
+        phone_number: userPhoneNumber.trim() || null,
+        daily_checkin_enabled: dailyCheckinEnabled,
+        daily_checkin_morning_time: morningTime,
+        daily_checkin_evening_time: eveningTime,
+        updated_at: new Date().toISOString(),
+      };
+
+      // Only update PIN if user entered a new one
+      if (voicePin.trim()) {
+        if (!/^\d{4,6}$/.test(voicePin)) {
+          setMessage({ type: "error", text: "PIN must be 4-6 digits" });
+          setSavingPhone(false);
+          return;
+        }
+        updateData.voice_pin = voicePin;
+      }
+
+      const { error } = await createClient()
+        .from("profiles")
+        .update(updateData)
+        .eq("id", profile.id);
+
+      if (error) {
+        setMessage({ type: "error", text: "Failed to save phone settings" });
+      } else {
+        setMessage({ type: "success", text: "Phone settings saved successfully" });
+        setVoicePin(""); // Clear PIN field after save
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to save phone settings" });
+    }
+
+    setSavingPhone(false);
+  };
+
   const timezones = [
     "America/Los_Angeles",
     "America/Denver",
@@ -380,7 +446,20 @@ export default function SettingsPage() {
             </p>
           </div>
           <div className="space-y-2">
-            <Label>AI Email Address</Label>
+            <Label htmlFor="botName">Bot Name</Label>
+            <Input
+              id="botName"
+              value={botName}
+              onChange={(e) => setBotName(e.target.value.replace(/[^a-zA-Z0-9 '\-]/g, "").slice(0, 30))}
+              placeholder="Name your AI assistant"
+              maxLength={30}
+            />
+            <p className="text-xs text-muted-foreground">
+              Give your AI assistant a name (shown on your dashboard)
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>{botName.trim() ? `${botName.trim()}'s Email` : "AI Email Address"}</Label>
             <Input value={`${profile.username}@aevoy.com`} disabled />
             <p className="text-xs text-muted-foreground">
               This is your AI&apos;s email address
@@ -747,6 +826,161 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* Phone & Voice Settings */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Phone className="w-5 h-5" />
+            <CardTitle>Phone & Voice</CardTitle>
+          </div>
+          <CardDescription>
+            Manage your phone number, voice calls, and daily check-ins
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Registered Phone Number */}
+          <div>
+            <Label htmlFor="userPhone">Registered Phone Number</Label>
+            <Input
+              id="userPhone"
+              type="tel"
+              value={userPhoneNumber}
+              onChange={(e) => setUserPhoneNumber(e.target.value)}
+              placeholder="+1 (778) 123-4567"
+              className="mt-2"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Call or text <span className="font-mono font-semibold">+1 (778) 900-8951</span> from this number anytime
+            </p>
+          </div>
+
+          {/* Voice PIN */}
+          {userPhoneNumber.trim() && (
+            <div>
+              <Label htmlFor="voicePin">Security PIN (4-6 digits)</Label>
+              <Input
+                id="voicePin"
+                type="password"
+                inputMode="numeric"
+                pattern="\d{4,6}"
+                placeholder="Enter new PIN (leave blank to keep current)"
+                value={voicePin}
+                onChange={(e) => setVoicePin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                maxLength={6}
+                className="mt-2"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Required when calling from unknown numbers
+              </p>
+            </div>
+          )}
+
+          {/* Premium Number */}
+          {premiumNumber ? (
+            <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-semibold text-sm">Your Dedicated Number</h4>
+                  <p className="text-2xl font-mono mt-1">{premiumNumber}</p>
+                  <p className="text-xs text-foreground/70 mt-1">
+                    $2/mo • Next billing: {new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString()}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (confirm("Cancel your premium number? You'll lose this number.")) {
+                      setPremiumNumber(null);
+                      setMessage({ type: "success", text: "Premium number cancelled" });
+                    }
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-50 dark:bg-slate-900 border rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <Phone className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <h4 className="font-semibold text-sm">Get Your Own Number</h4>
+                  <p className="text-xs text-foreground/70 mt-1">
+                    Purchase a dedicated number for $2/mo. Choose your area code and pattern!
+                  </p>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => setShowPurchaseModal(true)}
+                  >
+                    Purchase Number
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Daily Check-ins */}
+          {userPhoneNumber.trim() && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <Label>Daily Check-in Calls</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    AI calls you twice a day with personalized greetings
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={dailyCheckinEnabled}
+                    onChange={(e) => setDailyCheckinEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 dark:peer-focus:ring-primary/30 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+                </label>
+              </div>
+
+              {dailyCheckinEnabled && (
+                <div className="grid grid-cols-2 gap-4 pl-4 border-l-2 border-primary/20">
+                  <div>
+                    <Label htmlFor="morningTime" className="text-xs">
+                      Morning Time ({timezone})
+                    </Label>
+                    <Input
+                      id="morningTime"
+                      type="time"
+                      value={morningTime}
+                      onChange={(e) => setMorningTime(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="eveningTime" className="text-xs">
+                      Evening Time ({timezone})
+                    </Label>
+                    <Input
+                      id="eveningTime"
+                      type="time"
+                      value={eveningTime}
+                      onChange={(e) => setEveningTime(e.target.value)}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+        <CardFooter>
+          <Button onClick={handleSavePhoneSettings} disabled={savingPhone}>
+            {savingPhone ? "Saving..." : "Save Phone Settings"}
+          </Button>
+        </CardFooter>
+      </Card>
+
       {/* Danger Zone */}
       <Card className="border-red-200">
         <CardHeader>
@@ -773,6 +1007,16 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Purchase Number Modal */}
+      <PurchaseNumberModal
+        isOpen={showPurchaseModal}
+        onClose={() => setShowPurchaseModal(false)}
+        onSuccess={(number) => {
+          setPremiumNumber(number);
+          setMessage({ type: "success", text: `Number ${number} purchased successfully!` });
+        }}
+      />
     </div>
   );
 }

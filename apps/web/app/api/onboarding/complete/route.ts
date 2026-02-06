@@ -38,6 +38,14 @@ export async function POST(request: Request) {
       }
     }
 
+    // Bot name
+    if (body.bot_name && typeof body.bot_name === 'string') {
+      const botName = body.bot_name.trim().substring(0, 30);
+      if (botName.length >= 1) {
+        profileUpdate.bot_name = botName;
+      }
+    }
+
     // Main uses
     if (Array.isArray(body.main_uses)) {
       profileUpdate.main_uses = body.main_uses;

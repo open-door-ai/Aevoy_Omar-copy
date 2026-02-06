@@ -67,6 +67,17 @@ export async function POST(request: Request) {
     // Normalize to E.164 format
     const phoneNumber = normalizePhone(rawPhoneNumber);
 
+    // Save phone number to database for future caller identification
+    const { error: updateError } = await supabase
+      .from("profiles")
+      .update({ phone_number: phoneNumber })
+      .eq("id", user.id);
+
+    if (updateError) {
+      console.error("[ONBOARDING] Failed to save phone number:", updateError);
+      // Don't fail the request, but log for debugging
+    }
+
     // Check Twilio credentials
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;

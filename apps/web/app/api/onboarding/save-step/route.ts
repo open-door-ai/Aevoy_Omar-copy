@@ -109,20 +109,58 @@ export async function POST(request: Request) {
         }
         break;
 
-      case 7: // Verification setup
-        if (data.verification_method) {
-          const { error } = await supabase
-            .from("user_settings")
-            .upsert(
-              {
-                user_id: user.id,
-                verification_method: data.verification_method,
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "user_id" }
-            );
+      case 7: // Verification setup (phone, PIN, check-ins)
+        {
+          const profileUpdates: Record<string, any> = {};
 
-          if (error) throw error;
+          if (data.phone_number) {
+            profileUpdates.phone_number = data.phone_number;
+          }
+
+          if (data.voice_pin) {
+            const pin = data.voice_pin.toString().slice(0, 6);
+            if (!/^\d{4,6}$/.test(pin)) {
+              return NextResponse.json({ error: "PIN must be 4-6 digits" }, { status: 400 });
+            }
+            profileUpdates.voice_pin = pin;
+          }
+
+          if (typeof data.daily_checkin_enabled === "boolean") {
+            profileUpdates.daily_checkin_enabled = data.daily_checkin_enabled;
+          }
+
+          if (data.daily_checkin_morning_time) {
+            profileUpdates.daily_checkin_morning_time = data.daily_checkin_morning_time;
+          }
+
+          if (data.daily_checkin_evening_time) {
+            profileUpdates.daily_checkin_evening_time = data.daily_checkin_evening_time;
+          }
+
+          if (Object.keys(profileUpdates).length > 0) {
+            const { error } = await supabase
+              .from("profiles")
+              .update(profileUpdates)
+              .eq("id", user.id);
+
+            if (error) throw error;
+          }
+
+          // Also save verification method to user_settings
+          if (data.verification_method) {
+            const { error: settingsError } = await supabase
+              .from("user_settings")
+              .upsert(
+                {
+                  user_id: user.id,
+                  verification_method: data.verification_method,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: "user_id" }
+              );
+
+            if (settingsError) throw settingsError;
+          }
         }
         break;
 
