@@ -27,9 +27,8 @@ export async function GET() {
     );
   }
 
-  // Return defaults if no settings exist
+  // Return defaults if no settings exist (omit user_id so onboarding triggers)
   const response = settings || {
-    user_id: user.id,
     confirmation_mode: "unclear",
     verification_method: "forward",
     agent_card_enabled: false,

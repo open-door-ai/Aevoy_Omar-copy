@@ -72,31 +72,29 @@ export async function POST(request: Request) {
       );
     }
 
-    // Upsert user settings (confirmation mode, verification method, agent card)
-    if (body.confirmation_mode || body.verification_method || body.agent_card_enabled !== undefined) {
-      const settingsData: Record<string, unknown> = {
-        user_id: user.id,
-        updated_at: new Date().toISOString(),
-      };
+    // Always upsert user settings on onboarding completion
+    const settingsData: Record<string, unknown> = {
+      user_id: user.id,
+      updated_at: new Date().toISOString(),
+    };
 
-      const validModes = ["always", "unclear", "risky", "never"];
-      if (body.confirmation_mode && validModes.includes(body.confirmation_mode)) {
-        settingsData.confirmation_mode = body.confirmation_mode;
-      }
-
-      const validVerification = ["forward", "virtual_number"];
-      if (body.verification_method && validVerification.includes(body.verification_method)) {
-        settingsData.verification_method = body.verification_method;
-      }
-
-      if (typeof body.agent_card_enabled === "boolean") {
-        settingsData.agent_card_enabled = body.agent_card_enabled;
-      }
-
-      await supabase
-        .from("user_settings")
-        .upsert(settingsData, { onConflict: "user_id" });
+    const validModes = ["always", "unclear", "risky", "never"];
+    if (body.confirmation_mode && validModes.includes(body.confirmation_mode)) {
+      settingsData.confirmation_mode = body.confirmation_mode;
     }
+
+    const validVerification = ["forward", "virtual_number"];
+    if (body.verification_method && validVerification.includes(body.verification_method)) {
+      settingsData.verification_method = body.verification_method;
+    }
+
+    if (typeof body.agent_card_enabled === "boolean") {
+      settingsData.agent_card_enabled = body.agent_card_enabled;
+    }
+
+    await supabase
+      .from("user_settings")
+      .upsert(settingsData, { onConflict: "user_id" });
 
     // Create agent card if requested
     if (body.agent_card_enabled) {
