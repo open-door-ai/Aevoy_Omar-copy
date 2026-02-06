@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Sparkles } from "lucide-react";
 
 interface BetaPaymentModalProps {
   onComplete: (skipped: boolean) => void;
@@ -50,7 +51,7 @@ export function BetaPaymentModal({ onComplete, userEmail }: BetaPaymentModalProp
       <Card className="w-full max-w-md animate-in fade-in zoom-in duration-300">
         <CardHeader className="text-center pb-2">
           <div className="mx-auto mb-4 w-16 h-16 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
-            <span className="text-2xl">🎉</span>
+            <Sparkles className="w-8 h-8 text-white" />
           </div>
           <CardTitle className="text-2xl bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
             Beta Payment Wall

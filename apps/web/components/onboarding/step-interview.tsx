@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FadeIn, StaggerContainer, StaggerItem, AnimatePresence, motion, springs } from "@/components/ui/motion";
+import { TrendingDown } from "lucide-react";
 
 interface StepInterviewProps {
   onNext: (data: InterviewData) => void;
@@ -224,8 +225,9 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                     <li>Communication preferences</li>
                     <li>Personal habits</li>
                   </ul>
-                  <p className="text-sm font-medium text-red-900 dark:text-red-100 pt-2">
-                    This will make it WAY less effective 📉
+                  <p className="text-sm font-medium text-red-900 dark:text-red-100 pt-2 flex items-center gap-1.5">
+                    This will make it WAY less effective
+                    <TrendingDown className="w-4 h-4" />
                   </p>
                 </div>
               </div>
