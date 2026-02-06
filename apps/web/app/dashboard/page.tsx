@@ -3,7 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ScheduledTasks } from "@/components/scheduled-tasks";
 import { RecentActivity } from "@/components/recent-activity";
 import DashboardWithOnboarding from "@/components/dashboard-with-onboarding";
-import { StaggerContainer, StaggerItem, GlassCard } from "@/components/ui/motion";
+import { StaggerContainer, StaggerItem, GlassCard, motion } from "@/components/ui/motion";
+import { Suspense } from "react";
+import { SkeletonCard } from "@/components/ui/skeleton";
 
 export const dynamic = "force-dynamic";
 
@@ -69,9 +71,13 @@ export default async function DashboardPage() {
           </p>
         </div>
         {isBetaUser && (
-          <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2">
+          <motion.div
+            className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2"
+            animate={{ scale: [1, 1.05, 1] }}
+            transition={{ duration: 2, repeat: Infinity, repeatDelay: 3 }}
+          >
             <span>Beta User</span>
-          </div>
+          </motion.div>
         )}
       </div>
 
@@ -119,12 +125,11 @@ export default async function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
-                <div
-                  className="bg-primary h-2 rounded-full transition-all duration-1000 ease-out"
-                  style={{
-                    width: `${usagePercent}%`,
-                    animationDelay: '300ms'
-                  }}
+                <motion.div
+                  className="bg-primary h-2 rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${usagePercent}%` }}
+                  transition={{ duration: 1, delay: 0.3, ease: [0.25, 0.46, 0.45, 0.94] }}
                 />
               </div>
             </CardContent>
@@ -188,20 +193,20 @@ export default async function DashboardPage() {
             <CardDescription>How tasks are being submitted</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex gap-6">
-              <div className="text-center">
+            <StaggerContainer className="flex gap-6" staggerDelay={0.1}>
+              <StaggerItem className="text-center">
                 <div className="text-2xl font-bold">{emailTasks}</div>
                 <div className="text-sm text-muted-foreground">Email</div>
-              </div>
-              <div className="text-center">
+              </StaggerItem>
+              <StaggerItem className="text-center">
                 <div className="text-2xl font-bold">{smsTasks}</div>
                 <div className="text-sm text-muted-foreground">SMS</div>
-              </div>
-              <div className="text-center">
+              </StaggerItem>
+              <StaggerItem className="text-center">
                 <div className="text-2xl font-bold">{voiceTasks}</div>
                 <div className="text-sm text-muted-foreground">Voice</div>
-              </div>
-            </div>
+              </StaggerItem>
+            </StaggerContainer>
           </CardContent>
         </Card>
       )}

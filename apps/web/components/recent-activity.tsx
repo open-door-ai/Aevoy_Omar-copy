@@ -3,6 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StaggerContainer, StaggerItem } from "@/components/ui/motion";
+import { SkeletonList } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
+import { Mail, Filter } from "lucide-react";
+import Link from "next/link";
 
 interface Task {
   id: string;
@@ -27,6 +32,8 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [loading, setLoading] = useState(!initialTasks.length);
   const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [channelFilter, setChannelFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -142,28 +149,61 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
     return null;
   };
 
+  // Filter tasks
+  const filteredTasks = tasks.filter((task) => {
+    if (channelFilter !== "all" && task.input_channel !== channelFilter) return false;
+    if (statusFilter !== "all" && task.status !== statusFilter) return false;
+    return true;
+  });
+
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
-        <div>
-          <CardTitle>Recent Activity</CardTitle>
-          <CardDescription>
-            Your latest tasks and their status
-          </CardDescription>
+      <CardHeader>
+        <div className="flex items-start justify-between">
+          <div>
+            <CardTitle>Recent Activity</CardTitle>
+            <CardDescription>
+              Your latest tasks and their status
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={channelFilter}
+              onChange={(e) => setChannelFilter(e.target.value)}
+              className="text-xs border rounded-md px-2 py-1 bg-white dark:bg-stone-900"
+            >
+              <option value="all">All Channels</option>
+              <option value="email">Email</option>
+              <option value="sms">SMS</option>
+              <option value="voice">Voice</option>
+              <option value="proactive">Proactive</option>
+            </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="text-xs border rounded-md px-2 py-1 bg-white dark:bg-stone-900"
+            >
+              <option value="all">All Status</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="processing">Processing</option>
+              <option value="pending">Pending</option>
+            </select>
+            <Link href="/dashboard/activity">
+              <Button variant="outline" size="sm">View All</Button>
+            </Link>
+          </div>
         </div>
-        <div className="text-xs text-muted-foreground">
+        <div className="text-xs text-muted-foreground mt-2">
           Updated {formatTime(lastUpdate.toISOString())}
         </div>
       </CardHeader>
       <CardContent>
         {loading ? (
-          <div className="text-center py-8">
-            <div className="animate-spin w-6 h-6 border-2 border-primary border-t-transparent rounded-full mx-auto mb-2"></div>
-            <p className="text-sm text-muted-foreground">Loading tasks...</p>
-          </div>
-        ) : tasks.length > 0 ? (
+          <SkeletonList count={3} variant="task" />
+        ) : filteredTasks.length > 0 ? (
           <StaggerContainer className="space-y-3" staggerDelay={0.05}>
-            {tasks.map((task) => (
+            {filteredTasks.map((task) => (
               <StaggerItem key={task.id}>
                 <div
                   className={`flex items-center justify-between p-4 border rounded-lg transition-all ${
@@ -215,14 +255,26 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
             ))}
           </StaggerContainer>
         ) : (
-          <div className="text-center py-8">
-            <p className="text-muted-foreground mb-2">No tasks yet</p>
-            <p className="text-sm text-muted-foreground">
-              Send an email to{" "}
-              <span className="font-mono bg-muted px-1 rounded">{aiEmail}</span>{" "}
-              to get started!
-            </p>
-          </div>
+          <EmptyState
+            icon={Mail}
+            title={channelFilter === "all" && statusFilter === "all" ? "No tasks yet" : "No tasks match your filters"}
+            description={
+              channelFilter === "all" && statusFilter === "all"
+                ? `Send an email to ${aiEmail} to get started!`
+                : "Try adjusting your filters to see more tasks."
+            }
+            action={
+              channelFilter === "all" && statusFilter === "all"
+                ? undefined
+                : {
+                    label: "Clear Filters",
+                    onClick: () => {
+                      setChannelFilter("all");
+                      setStatusFilter("all");
+                    },
+                  }
+            }
+          />
         )}
       </CardContent>
     </Card>

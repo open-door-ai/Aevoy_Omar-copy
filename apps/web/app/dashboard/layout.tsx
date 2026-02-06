@@ -5,7 +5,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, Activity, Settings, LogOut, Menu, X } from "lucide-react";
+import { LayoutDashboard, Activity, Settings, LogOut, Menu, X, Moon, Sun } from "lucide-react";
+import { useTheme } from "@/lib/theme";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -22,6 +23,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { theme, setTheme, resolvedTheme } = useTheme();
 
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -59,7 +61,15 @@ export default function DashboardLayout({
           );
         })}
       </nav>
-      <div className="p-3 mt-auto border-t border-stone-200/60">
+      <div className="p-3 mt-auto border-t border-stone-200/60 space-y-1">
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-3 text-stone-500 hover:text-stone-900"
+          onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+        >
+          {resolvedTheme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          {resolvedTheme === "dark" ? "Light mode" : "Dark mode"}
+        </Button>
         <Button
           variant="ghost"
           className="w-full justify-start gap-3 text-stone-500 hover:text-stone-900"
