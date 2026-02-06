@@ -1,0 +1,16 @@
+[project]
+ref = "eawoquqgfndmphogwjeu"
+
+[auth]
+enabled = true
+site_url = "https://www.aevoy.com"
+additional_redirect_urls = ["https://www.aevoy.com/**", "http://localhost:3000/**"]
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+
+[auth.hook.send_email]
+enabled = true
+uri = "https://eawoquqgfndmphogwjeu.supabase.co/functions/v1/send-email"

@@ -18,6 +18,8 @@ import { verifyTask, quickVerify } from "./task-verifier.js";
 import { detectWorkflow, createWorkflow } from "./workflow.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel } from "../types/index.js";
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 /**
  * Send a message back to the user via the same channel they used.
@@ -708,8 +710,36 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     if (needsBrowser && classification.needsBrowser) {
       // Initialize execution engine for browser tasks
       executionEngine = new ExecutionEngine(lockedIntent);
-      await executionEngine.initialize();
-      console.log(`[BROWSER] Execution engine initialized`);
+
+      // Extract primary domain for session persistence (only for allowlisted domains)
+      let domain = classification.domains?.[0] || null;
+
+      // Check if domain is in persistent domains allowlist
+      if (domain) {
+        try {
+          const allowlistPath = join(process.cwd(), 'config', 'persistent-domains.json');
+          const allowlist = JSON.parse(readFileSync(allowlistPath, 'utf-8'));
+          const isPersistable = allowlist.domains.some((d: string) =>
+            domain!.includes(d) || d.includes(domain!)
+          );
+
+          if (!isPersistable) {
+            console.log(`[SESSION] Domain ${domain} not in allowlist, skipping session persistence`);
+            domain = null;
+          }
+        } catch (error) {
+          console.warn('[SESSION] Failed to load persistent domains allowlist, skipping persistence');
+          domain = null;
+        }
+      }
+
+      await executionEngine.initialize(userId, domain || undefined);
+
+      if (domain) {
+        console.log(`[BROWSER] Execution engine initialized (session persistence enabled for ${domain})`);
+      } else {
+        console.log(`[BROWSER] Execution engine initialized (no session persistence)`);
+      }
     }
 
     // Send progress update for long tasks

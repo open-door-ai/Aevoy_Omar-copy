@@ -35,8 +35,8 @@ export default function DashboardLayout({
 
   const NavContent = () => (
     <>
-      <div className="p-4 border-b border-stone-200/60">
-        <Link href="/" className="text-2xl font-bold text-stone-900">
+      <div className="p-4 border-b border-border">
+        <Link href="/" className="text-2xl font-bold text-foreground">
           Aevoy
         </Link>
       </div>
@@ -51,8 +51,8 @@ export default function DashboardLayout({
               onClick={() => setMobileOpen(false)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative ${
                 isActive
-                  ? "bg-stone-900 text-white shadow-sm"
-                  : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}
             >
               <Icon className="w-4 h-4" />
@@ -61,10 +61,10 @@ export default function DashboardLayout({
           );
         })}
       </nav>
-      <div className="p-3 mt-auto border-t border-stone-200/60 space-y-1">
+      <div className="p-3 mt-auto border-t border-border space-y-1">
         <Button
           variant="ghost"
-          className="w-full justify-start gap-3 text-stone-500 hover:text-stone-900"
+          className="w-full justify-start gap-3 text-muted-foreground hover:text-foreground"
           onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
         >
           {resolvedTheme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
@@ -72,7 +72,7 @@ export default function DashboardLayout({
         </Button>
         <Button
           variant="ghost"
-          className="w-full justify-start gap-3 text-stone-500 hover:text-stone-900"
+          className="w-full justify-start gap-3 text-muted-foreground hover:text-foreground"
           onClick={handleSignOut}
           disabled={signingOut}
         >
@@ -84,21 +84,21 @@ export default function DashboardLayout({
   );
 
   return (
-    <div className="min-h-screen flex bg-stone-50/50">
+    <div className="min-h-screen flex bg-background">
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex w-64 flex-col border-r border-stone-200/60 bg-white/80 backdrop-blur-sm sticky top-0 h-screen">
+      <aside className="hidden md:flex w-64 flex-col border-r border-border bg-card/80 backdrop-blur-sm sticky top-0 h-screen">
         <NavContent />
       </aside>
 
       {/* Mobile header */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-white/80 backdrop-blur-sm border-b border-stone-200/60">
+      <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-card/80 backdrop-blur-sm border-b border-border">
         <div className="flex items-center justify-between px-4 py-3">
-          <Link href="/" className="text-xl font-bold text-stone-900">
+          <Link href="/" className="text-xl font-bold text-foreground">
             Aevoy
           </Link>
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-2 rounded-lg hover:bg-stone-100 transition-colors"
+            className="p-2 rounded-lg hover:bg-accent transition-colors text-foreground"
           >
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
@@ -112,7 +112,7 @@ export default function DashboardLayout({
             className="absolute inset-0 bg-black/20 backdrop-blur-sm"
             onClick={() => setMobileOpen(false)}
           />
-          <div className="absolute left-0 top-0 bottom-0 w-64 bg-white shadow-xl flex flex-col animate-in slide-in-from-left duration-200">
+          <div className="absolute left-0 top-0 bottom-0 w-64 bg-card shadow-xl flex flex-col animate-in slide-in-from-left duration-200">
             <NavContent />
           </div>
         </div>

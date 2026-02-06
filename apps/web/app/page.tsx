@@ -1642,7 +1642,7 @@ export default function AevoyLanding() {
   ];
   
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-900 overflow-x-hidden">
+    <div className="min-h-screen bg-stone-50 text-stone-900 overflow-x-hidden force-light">
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         

@@ -83,10 +83,10 @@ export default function SignupPage() {
     <>
       <div>
         <FadeIn>
-          <h1 className="text-3xl font-bold text-stone-900 tracking-tight">
+          <h1 className="text-3xl font-bold text-foreground tracking-tight">
             Get your AI employee
           </h1>
-          <p className="mt-2 text-stone-500">
+          <p className="mt-2 text-muted-foreground">
             <span className="text-[oklch(0.55_0.15_270)] font-semibold">Free during beta</span>
             {" "}&mdash; create your account to get started
           </p>
@@ -96,7 +96,7 @@ export default function SignupPage() {
           <ShakeOnError error={error}>
             {error && (
               <FadeIn direction="none" className="mb-6">
-                <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl">
+                <div className="p-3 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl">
                   {error}
                 </div>
               </FadeIn>
@@ -106,7 +106,7 @@ export default function SignupPage() {
           <StaggerContainer className="space-y-5" staggerDelay={0.1} delayStart={0.15}>
             <StaggerItem>
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-stone-700 font-medium">Email</Label>
+                <Label htmlFor="email" className="text-foreground/80 font-medium">Email</Label>
                 <Input
                   id="email"
                   type="email"
@@ -121,7 +121,7 @@ export default function SignupPage() {
 
             <StaggerItem>
               <div className="space-y-2">
-                <Label htmlFor="password" className="text-stone-700 font-medium">Password</Label>
+                <Label htmlFor="password" className="text-foreground/80 font-medium">Password</Label>
                 <Input
                   id="password"
                   type="password"
@@ -139,12 +139,12 @@ export default function SignupPage() {
                         <div
                           key={i}
                           className={`h-1 flex-1 rounded-full transition-all duration-300 ${
-                            i < passwordStrength ? strengthColors[passwordStrength] : "bg-stone-200"
+                            i < passwordStrength ? strengthColors[passwordStrength] : "bg-muted"
                           }`}
                         />
                       ))}
                     </div>
-                    <p className="text-xs text-stone-400">{strengthLabels[passwordStrength]}</p>
+                    <p className="text-xs text-muted-foreground/70">{strengthLabels[passwordStrength]}</p>
                   </div>
                 )}
               </div>
@@ -152,7 +152,7 @@ export default function SignupPage() {
 
             <StaggerItem>
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword" className="text-stone-700 font-medium">
+                <Label htmlFor="confirmPassword" className="text-foreground/80 font-medium">
                   Confirm Password
                 </Label>
                 <div className="relative">
@@ -204,11 +204,11 @@ export default function SignupPage() {
           </StaggerContainer>
 
           <FadeIn delay={0.5} className="mt-6 text-center">
-            <p className="text-sm text-stone-500">
+            <p className="text-sm text-muted-foreground">
               Already have an account?{" "}
               <Link
                 href="/login"
-                className="text-stone-900 font-medium hover:underline underline-offset-4 transition-all"
+                className="text-foreground font-medium hover:underline underline-offset-4 transition-all"
               >
                 Sign in
               </Link>

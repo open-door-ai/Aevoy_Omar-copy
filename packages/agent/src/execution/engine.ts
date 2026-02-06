@@ -19,6 +19,8 @@ import { dismissPopups } from './popup-handler.js';
 import { waitForSPAReady } from './dynamic-content.js';
 import { checkAndHandleAntiBot } from './antibot.js';
 import { handleCaptchaIfPresent } from './captcha.js';
+import { sessionManager } from './session-manager.js';
+import { RetryPolicy } from './retry.js';
 
 // Timeouts
 const TASK_TIMEOUT_MS = 180000;  // 3 minutes per task
@@ -50,6 +52,8 @@ export class ExecutionEngine {
   private results: StepResult[] = [];
   private stagehand: StagehandService | null = null;
   private useStagehand: boolean;
+  private userId?: string;
+  private domain?: string;
 
   constructor(intent: LockedIntent) {
     this.intent = intent;
@@ -57,11 +61,30 @@ export class ExecutionEngine {
     this.useStagehand = !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
   }
 
-  async initialize(): Promise<void> {
+  async initialize(userId?: string, domain?: string): Promise<void> {
+    this.userId = userId;
+    this.domain = domain;
+
+    // Try to load saved session if userId and domain provided
+    let savedSession = null;
+    if (userId && domain) {
+      savedSession = await sessionManager.loadSession(userId, domain);
+      if (savedSession) {
+        console.log(`[ENGINE] Found saved session for ${domain}, will restore after browser init`);
+      }
+    }
     if (this.useStagehand) {
       try {
         this.stagehand = new StagehandService();
         this.page = await this.stagehand.init();
+        this.context = this.stagehand.session?.context || null;
+
+        // Restore session if available
+        if (savedSession && this.context && this.page) {
+          await sessionManager.restoreSession(this.context, this.page, savedSession);
+          console.log("[ENGINE] Restored session into Stagehand browser");
+        }
+
         console.log("[ENGINE] Initialized with Stagehand (cloud)");
         return;
       } catch (error) {
@@ -92,10 +115,27 @@ export class ExecutionEngine {
     await applyStealthPatches(this.context);
 
     this.page = await this.context.newPage();
+
+    // Restore session if available
+    if (savedSession && this.context && this.page) {
+      await sessionManager.restoreSession(this.context, this.page, savedSession);
+      console.log("[ENGINE] Restored session into local Playwright browser");
+    }
+
     console.log("[ENGINE] Initialized with local Playwright (stealth)");
   }
 
   async cleanup(): Promise<void> {
+    // Save session before cleanup if userId and domain are set
+    if (this.userId && this.domain && this.page && this.context) {
+      try {
+        await sessionManager.saveSession(this.userId, this.domain, this.context, this.page, true);
+        console.log(`[ENGINE] Saved session for ${this.domain} before cleanup`);
+      } catch (error) {
+        console.warn('[ENGINE] Failed to save session during cleanup:', error);
+      }
+    }
+
     if (this.stagehand) {
       await this.stagehand.close();
       this.stagehand = null;
@@ -132,15 +172,19 @@ export class ExecutionEngine {
     try {
       if (this.page.isClosed()) {
         console.warn('[ENGINE] Page closed unexpectedly, re-initializing...');
+        const savedUserId = this.userId;
+        const savedDomain = this.domain;
         await this.cleanup();
-        await this.initialize();
+        await this.initialize(savedUserId, savedDomain);
         return !!this.page;
       }
       return true;
     } catch {
       console.warn('[ENGINE] Page health check failed, re-initializing...');
+      const savedUserId = this.userId;
+      const savedDomain = this.domain;
       await this.cleanup();
-      await this.initialize();
+      await this.initialize(savedUserId, savedDomain);
       return !!this.page;
     }
   }
@@ -207,27 +251,45 @@ export class ExecutionEngine {
       this.results.push(result);
 
       if (!result.success) {
-        // Step-level retry: retry once after 2s for transient failures
+        // Step-level retry: exponential backoff (1s, 2s, 4s) for transient failures
         if (step.action !== 'verify' && step.action !== 'wait') {
-          console.log(`[ENGINE] Step '${step.action}' failed, retrying once...`);
-          await delay(2000);
+          console.log(`[ENGINE] Step '${step.action}' failed, retrying with exponential backoff...`);
 
-          const alive = await this.ensurePageAlive();
-          if (alive) {
-            try {
-              const retryResult = await withTimeout(
-                this.executeStep(step),
-                STEP_TIMEOUT_MS,
-                `Step retry: ${step.action}`
-              );
-              if (retryResult.success) {
-                // Replace the failed result
-                this.results[this.results.length - 1] = retryResult;
-                continue;
-              }
-            } catch {
-              // Retry also failed, use original error
-            }
+          const retryPolicy = new RetryPolicy({
+            maxRetries: 2,       // 2 retries = 3 total attempts
+            baseDelayMs: 1000,   // 1s, 2s, 4s
+            maxDelayMs: 8000,
+          });
+
+          try {
+            const retryResult = await retryPolicy.execute(
+              async (attempt) => {
+                const alive = await this.ensurePageAlive();
+                if (!alive) {
+                  throw new Error('Page not available');
+                }
+
+                const res = await withTimeout(
+                  this.executeStep(step),
+                  STEP_TIMEOUT_MS,
+                  `Step retry ${attempt + 1}: ${step.action}`
+                );
+
+                if (!res.success) {
+                  throw new Error(res.error || 'Step failed');
+                }
+
+                return res;
+              },
+              `Step ${step.action}`
+            );
+
+            // Replace the failed result
+            this.results[this.results.length - 1] = retryResult;
+            continue;
+          } catch (error) {
+            console.warn(`[ENGINE] All retries failed for ${step.action}:`, error);
+            // Use original error, continue to failure handling
           }
         }
 
@@ -267,6 +329,40 @@ export class ExecutionEngine {
         action: step.action,
         error: `Action blocked: ${validation.reason}`
       };
+    }
+
+    // Pre-execution learning: Check if we've failed this action before and have a learned solution
+    if (this.domain && (step.action === 'click' || step.action === 'fill')) {
+      const selector = (step.params?.selector || step.params?.target) as string | undefined;
+      if (selector) {
+        const learning = await getFailureMemory({
+          site: this.domain,
+          actionType: step.action,
+          selector,
+        });
+
+        if (learning?.solution) {
+          console.log(`[LEARNING] Applying pre-execution learning for ${step.action} on ${this.domain}`);
+          console.log(`[LEARNING] Solution: ${learning.solution.method || 'alternative selector'}`);
+
+          // Apply the learned solution to params
+          if (learning.solution.selector && learning.solution.selector !== selector) {
+            console.log(`[LEARNING] Using learned selector: ${learning.solution.selector}`);
+            step.params = {
+              ...step.params,
+              selector: learning.solution.selector,
+              originalSelector: selector, // Keep original for reference
+            };
+          }
+
+          if (learning.solution.method) {
+            step.params = {
+              ...step.params,
+              preferredMethod: learning.solution.method,
+            };
+          }
+        }
+      }
     }
 
     try {

@@ -124,7 +124,7 @@ export default function HowItWorksPage() {
   const active = capabilities.find((c) => c.id === activeCap) || capabilities[0];
 
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-900">
+    <div className="min-h-screen bg-stone-50 text-stone-900 force-light">
       {/* Nav */}
       <nav className="bg-stone-50/90 backdrop-blur-xl border-b border-stone-200 sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">

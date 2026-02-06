@@ -7,6 +7,7 @@
 
 import type { BrowserContext, Page } from 'playwright';
 import { getSupabaseClient } from '../utils/supabase.js';
+import { encryptWithServerKey, decryptWithServerKey } from '../security/encryption.js';
 
 interface SessionData {
   cookies: Array<{
@@ -119,15 +120,16 @@ export class SessionManager {
     this.cache.set(key, { key, data, lastUsed: Date.now() });
     this.evictIfNeeded();
 
-    // Persist to database
+    // Persist to database (encrypted)
     if (persist) {
       try {
+        const encrypted = await encryptWithServerKey(JSON.stringify(data));
         await getSupabaseClient()
           .from('user_sessions')
           .upsert({
             user_id: userId,
             domain,
-            session_data: data,
+            session_data_encrypted: encrypted,
             last_used_at: new Date().toISOString(),
             expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
           }, { onConflict: 'user_id,domain' });
@@ -155,25 +157,27 @@ export class SessionManager {
       return cached.data;
     }
 
-    // Check database
+    // Check database (decrypt if encrypted)
     try {
       const { data } = await getSupabaseClient()
         .from('user_sessions')
-        .select('session_data')
+        .select('session_data_encrypted')
         .eq('user_id', userId)
         .eq('domain', domain)
         .gt('expires_at', new Date().toISOString())
         .single();
 
-      if (data?.session_data) {
-        const sessionData = data.session_data as SessionData;
+      if (data?.session_data_encrypted) {
+        const decrypted = await decryptWithServerKey(data.session_data_encrypted);
+        const sessionData = JSON.parse(decrypted) as SessionData;
         // Cache it
         this.cache.set(key, { key, data: sessionData, lastUsed: Date.now() });
         this.evictIfNeeded();
+        console.log(`[SESSION] Loaded encrypted session for ${domain} (${sessionData.cookies.length} cookies)`);
         return sessionData;
       }
-    } catch {
-      // No saved session
+    } catch (error) {
+      console.warn(`[SESSION] Failed to load session for ${domain}:`, error);
     }
 
     return null;

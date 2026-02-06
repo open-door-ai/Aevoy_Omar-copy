@@ -105,6 +105,14 @@ export async function solveCaptcha(page: Page, detection: CaptchaDetection): Pro
     }
 
     case 'image': {
+      // Prioritize 2captcha (90% success) over Claude Vision (75% success)
+      if (apiKey) {
+        const result = await solveImageWith2Captcha(page, apiKey);
+        if (result.success) {
+          return result;
+        }
+        console.log('[CAPTCHA] 2captcha failed for image, falling back to Claude Vision');
+      }
       return await solveImageCaptcha(page);
     }
 
@@ -206,6 +214,84 @@ async function solveWith2Captcha(
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: `2captcha error: ${message}` };
+  }
+}
+
+/**
+ * Solve image CAPTCHA using 2captcha API.
+ */
+async function solveImageWith2Captcha(page: Page, apiKey: string): Promise<CaptchaSolveResult> {
+  try {
+    // Find and screenshot the CAPTCHA image
+    const captchaEl = await page.$('img[src*="captcha"], img[alt*="captcha" i], img[class*="captcha" i], #captcha-image');
+    if (!captchaEl) {
+      return { success: false, error: 'Could not find CAPTCHA image element' };
+    }
+
+    const screenshot = await captchaEl.screenshot({ type: 'png' });
+    const base64 = screenshot.toString('base64');
+
+    // Submit to 2captcha image recognition endpoint
+    const createResponse = await fetch('https://api.2captcha.com/createTask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientKey: apiKey,
+        task: {
+          type: 'ImageToTextTask',
+          body: base64,
+        },
+      }),
+    });
+
+    const createResult = await createResponse.json() as { errorId: number; taskId?: string; errorDescription?: string };
+    if (createResult.errorId !== 0) {
+      return { success: false, error: `2captcha image error: ${createResult.errorDescription}` };
+    }
+
+    const taskId = createResult.taskId;
+    if (!taskId) {
+      return { success: false, error: '2captcha did not return task ID' };
+    }
+
+    // Poll for result (max 30 seconds for image CAPTCHAs)
+    for (let i = 0; i < 6; i++) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      const getResponse = await fetch('https://api.2captcha.com/getTaskResult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey: apiKey, taskId }),
+      });
+
+      const getResult = await getResponse.json() as {
+        errorId: number;
+        status: string;
+        solution?: { text?: string };
+        errorDescription?: string;
+      };
+
+      if (getResult.status === 'ready' && getResult.solution?.text) {
+        const solution = getResult.solution.text.trim().replace(/[^a-zA-Z0-9]/g, '');
+
+        // Find input field near the CAPTCHA and enter solution
+        const inputEl = await page.$('input[name*="captcha" i], input[id*="captcha" i], input[placeholder*="captcha" i]');
+        if (inputEl) {
+          await inputEl.fill(solution);
+        }
+
+        return { success: true, solution };
+      }
+
+      if (getResult.errorId !== 0) {
+        return { success: false, error: `2captcha image solve error: ${getResult.errorDescription}` };
+      }
+    }
+
+    return { success: false, error: '2captcha image solve timed out' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: `2captcha image error: ${message}` };
   }
 }
 
