@@ -123,6 +123,16 @@ async function runProactiveChecks(): Promise<void> {
     // Non-critical
   }
 
+  // Cleanup expired email PIN sessions
+  try {
+    const { data: cleanupResult } = await getSupabaseClient().rpc('cleanup_expired_email_pin_sessions');
+    if (cleanupResult && cleanupResult > 0) {
+      console.log(`[SCHEDULER] Cleaned up ${cleanupResult} expired email PIN sessions`);
+    }
+  } catch {
+    // Non-critical
+  }
+
   // Refresh expiring OAuth tokens
   try {
     const { checkAndRefreshExpiring } = await import("./oauth-manager.js");

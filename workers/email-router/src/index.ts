@@ -23,6 +23,9 @@ interface Profile {
   email: string;
   messages_used: number;
   messages_limit: number;
+  email_pin?: string | null;
+  email_pin_attempts?: number;
+  email_pin_locked_until?: string | null;
 }
 
 type EmailType = 'confirmation_reply' | 'verification_reply' | 'magic_link' | 'new_task';
@@ -219,6 +222,133 @@ async function fetchWithRetry(
   throw lastError || new Error("fetchWithRetry failed");
 }
 
+/**
+ * Send email via Resend (using agent's email service)
+ */
+async function sendEmailViaAgent(params: {
+  to: string;
+  from: string;
+  subject: string;
+  html: string;
+  agentUrl: string;
+  webhookSecret: string;
+}): Promise<void> {
+  try {
+    await fetch(`${params.agentUrl}/email/send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": params.webhookSecret,
+      },
+      body: JSON.stringify({
+        to: params.to,
+        from: params.from,
+        subject: params.subject,
+        body: params.html,
+        bodyHtml: params.html,
+      }),
+    });
+  } catch (error) {
+    console.error("[EMAIL] Failed to send email via agent:", error);
+  }
+}
+
+/**
+ * Create Supabase client for worker
+ */
+function getSupabaseClient(url: string, key: string) {
+  return {
+    from: (table: string) => ({
+      select: (fields: string) => ({
+        eq: (column: string, value: unknown) => ({
+          single: async () => {
+            const response = await fetch(
+              `${url}/rest/v1/${table}?${column}=eq.${value}&select=${fields}`,
+              {
+                headers: {
+                  apikey: key,
+                  Authorization: `Bearer ${key}`,
+                },
+              }
+            );
+            const data = await response.json();
+            return { data: Array.isArray(data) && data.length > 0 ? data[0] : null, error: null };
+          },
+          gt: (column2: string, value2: unknown) => ({
+            order: (column3: string, opts: { desc: boolean }) => ({
+              limit: (n: number) => ({
+                single: async () => {
+                  let query = `${url}/rest/v1/${table}?${column}=eq.${value}&${column2}=gt.${value2}&select=${fields}&limit=${n}`;
+                  if (opts.desc) query += `&order=${column3}.desc`;
+                  const response = await fetch(query, {
+                    headers: {
+                      apikey: key,
+                      Authorization: `Bearer ${key}`,
+                    },
+                  });
+                  const data = await response.json();
+                  return { data: Array.isArray(data) && data.length > 0 ? data[0] : null, error: data.length === 0 ? { message: 'Not found' } : null };
+                },
+              }),
+            }),
+          }),
+        }),
+      }),
+      insert: (values: unknown) => ({
+        select: () => ({
+          single: async () => {
+            const response = await fetch(`${url}/rest/v1/${table}`, {
+              method: "POST",
+              headers: {
+                apikey: key,
+                Authorization: `Bearer ${key}`,
+                "Content-Type": "application/json",
+                Prefer: "return=representation",
+              },
+              body: JSON.stringify(values),
+            });
+            const data = await response.json();
+            return { data: Array.isArray(data) && data.length > 0 ? data[0] : data, error: response.ok ? null : data };
+          },
+        }),
+      }),
+      update: (values: unknown) => ({
+        eq: (column: string, value: unknown) => ({
+          execute: async () => {
+            const response = await fetch(
+              `${url}/rest/v1/${table}?${column}=eq.${value}`,
+              {
+                method: "PATCH",
+                headers: {
+                  apikey: key,
+                  Authorization: `Bearer ${key}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify(values),
+              }
+            );
+            return { error: response.ok ? null : await response.json() };
+          },
+        }),
+      }),
+    }),
+    rpc: (fn: string, params: unknown) => ({
+      execute: async () => {
+        const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
+          method: "POST",
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(params),
+        });
+        return { error: response.ok ? null : await response.json() };
+      },
+    }),
+  };
+}
+
 export default {
   async email(message: EmailMessage, env: Env): Promise<void> {
     try {
@@ -244,11 +374,240 @@ export default {
 
       // Validate sender matches registered user email
       const senderEmail = message.from.toLowerCase().trim();
-      if (user.email && senderEmail !== user.email.toLowerCase().trim()) {
-        console.log(`[EMAIL] Sender mismatch for user ${username}`);
-        message.setReject("Sender email does not match registered user");
+      const registeredEmail = user.email?.toLowerCase().trim() || "";
+
+      // EMAIL PIN VERIFICATION FLOW
+      if (registeredEmail && senderEmail !== registeredEmail) {
+        console.log(`[EMAIL] Unregistered sender ${senderEmail} for user ${username}`);
+
+        const supabase = getSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+
+        // Check if user has email PIN configured
+        if (!user.email_pin) {
+          // No PIN - send setup instructions to registered email
+          await sendEmailViaAgent({
+            to: registeredEmail,
+            from: "security@aevoy.com",
+            subject: "🔒 Security Alert: Email from Unregistered Sender",
+            html: `
+              <p>Someone tried to email your AI from <strong>${senderEmail}</strong>.</p>
+              <p>To allow emails from other addresses, set up an <strong>Email PIN</strong> in Settings → Security.</p>
+              <p>Subject: ${(await parseEmail(message.raw)).subject}</p>
+            `,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
+
+          message.setReject("Email PIN not configured for this account");
+          return;
+        }
+
+        // Check if PIN locked (3 failed attempts)
+        if (user.email_pin_locked_until && new Date(user.email_pin_locked_until) > new Date()) {
+          console.log(`[EMAIL] User ${user.id} email PIN locked until ${user.email_pin_locked_until}`);
+
+          await sendEmailViaAgent({
+            to: registeredEmail,
+            from: "security@aevoy.com",
+            subject: "🔒 Email PIN Locked",
+            html: `
+              <p>Too many failed PIN attempts from <strong>${senderEmail}</strong>.</p>
+              <p>Email verification is locked for 15 minutes.</p>
+            `,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
+
+          message.setReject("Email PIN temporarily locked");
+          return;
+        }
+
+        // Parse email early for PIN check
+        const { subject, body, bodyHtml, attachments } = await parseEmail(message.raw);
+
+        // Check if this is a PIN verification reply
+        const pinMatch = body?.match(/\b\d{6}\b/); // Extract 6-digit PIN
+        const isReplyToPinRequest = subject?.toLowerCase().includes("email pin required");
+
+        if (pinMatch && isReplyToPinRequest) {
+          const enteredPin = pinMatch[0];
+          console.log(`[EMAIL] PIN verification attempt: ${enteredPin.slice(0, 2)}****`);
+
+          // Find matching session
+          const { data: session, error: sessionError } = await supabase
+            .from("email_pin_sessions")
+            .select("*")
+            .eq("user_id", user.id)
+            .eq("pin_code", enteredPin)
+            .gt("expires_at", new Date().toISOString())
+            .order("created_at", { desc: true })
+            .limit(1)
+            .single();
+
+          if (!sessionError && session) {
+            // PIN VERIFIED! Process original email
+            console.log(`[EMAIL] PIN verified for ${session.sender_email}`);
+
+            // Mark session as verified
+            await supabase
+              .from("email_pin_sessions")
+              .update({ verified: true })
+              .eq("id", session.id)
+              .execute();
+
+            // Reset PIN attempts
+            await supabase.rpc("reset_email_pin_attempts", { p_user_id: user.id }).execute();
+
+            // Forward original task to agent
+            await fetchWithRetry(`${env.AGENT_URL}/task/incoming`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
+              },
+              body: JSON.stringify({
+                userId: user.id,
+                username: user.username,
+                from: session.sender_email,
+                subject: session.email_subject,
+                body: session.email_body,
+                bodyHtml: session.email_body_html,
+                attachments: session.attachments,
+                inputChannel: "email",
+              }),
+            });
+
+            // Confirm to user
+            await sendEmailViaAgent({
+              to: registeredEmail,
+              from: "security@aevoy.com",
+              subject: "✅ Email Verified",
+              html: `
+                <p>PIN verified successfully!</p>
+                <p>Your AI is now processing the task from <strong>${session.sender_email}</strong>.</p>
+                <p><em>Original subject: ${session.email_subject}</em></p>
+              `,
+              agentUrl: env.AGENT_URL,
+              webhookSecret: env.AGENT_WEBHOOK_SECRET,
+            });
+
+            message.setReject("PIN verified - task forwarded to agent");
+            return;
+          } else {
+            // Invalid or expired PIN
+            console.log(`[EMAIL] Invalid PIN attempt from ${senderEmail}`);
+
+            // Increment attempts
+            await supabase.rpc("increment_email_pin_attempts", { p_user_id: user.id }).execute();
+
+            // Check if should lock
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("email_pin_attempts")
+              .eq("id", user.id)
+              .single();
+
+            if (profile && profile.email_pin_attempts >= 3) {
+              // Lock for 15 minutes
+              const lockUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+              await supabase
+                .from("profiles")
+                .update({ email_pin_locked_until: lockUntil })
+                .eq("id", user.id)
+                .execute();
+
+              await sendEmailViaAgent({
+                to: registeredEmail,
+                from: "security@aevoy.com",
+                subject: "🔒 Email PIN Locked",
+                html: `
+                  <p>Too many failed PIN attempts.</p>
+                  <p>Email verification locked for 15 minutes.</p>
+                `,
+                agentUrl: env.AGENT_URL,
+                webhookSecret: env.AGENT_WEBHOOK_SECRET,
+              });
+            } else {
+              const remaining = 3 - (profile?.email_pin_attempts || 0);
+              await sendEmailViaAgent({
+                to: registeredEmail,
+                from: "security@aevoy.com",
+                subject: "❌ Invalid PIN",
+                html: `
+                  <p>The PIN you entered was invalid or expired.</p>
+                  <p>Attempts remaining: <strong>${remaining}</strong></p>
+                `,
+                agentUrl: env.AGENT_URL,
+                webhookSecret: env.AGENT_WEBHOOK_SECRET,
+              });
+            }
+
+            message.setReject("Invalid PIN");
+            return;
+          }
+        }
+
+        // Generate new PIN and create session
+        const pinCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit PIN
+
+        const { data: newSession, error: sessionInsertError } = await supabase
+          .from("email_pin_sessions")
+          .insert({
+            user_id: user.id,
+            sender_email: senderEmail,
+            pin_code: pinCode,
+            email_subject: subject,
+            email_body: body,
+            email_body_html: bodyHtml,
+            attachments: attachments ? JSON.stringify(attachments) : null,
+            expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 min
+          })
+          .select()
+          .single();
+
+        if (sessionInsertError) {
+          console.error("[EMAIL] Failed to create PIN session:", sessionInsertError);
+          message.setReject("Internal error creating PIN session");
+          return;
+        }
+
+        // Send PIN to registered email
+        await sendEmailViaAgent({
+          to: registeredEmail,
+          from: "security@aevoy.com",
+          subject: `🔐 Email PIN Required: ${senderEmail}`,
+          html: `
+            <h3>Someone from ${senderEmail} sent you a task:</h3>
+            <p><strong>Subject:</strong> ${subject}</p>
+            <p><strong>Preview:</strong> ${body?.substring(0, 200)}...</p>
+            <hr>
+            <h2 style="color: #0066ff; font-size: 32px; letter-spacing: 4px;">${pinCode}</h2>
+            <p>To process this task, <strong>reply to this email with the PIN above</strong>.</p>
+            <p><em>This PIN expires in 10 minutes.</em></p>
+            <p><small>If you didn't expect this, ignore this email. The task will not be processed.</small></p>
+          `,
+          agentUrl: env.AGENT_URL,
+          webhookSecret: env.AGENT_WEBHOOK_SECRET,
+        });
+
+        // Send auto-reply to sender
+        await sendEmailViaAgent({
+          to: senderEmail,
+          from: `${username}@aevoy.com`,
+          subject: `Re: ${subject}`,
+          html: `
+            <p>Your message has been received and is awaiting verification.</p>
+            <p>A PIN has been sent to the account owner for approval.</p>
+            <p>You'll be notified once your request is processed.</p>
+          `,
+          agentUrl: env.AGENT_URL,
+          webhookSecret: env.AGENT_WEBHOOK_SECRET,
+        });
+
+        message.setReject("Awaiting PIN verification");
         return;
       }
+      // END EMAIL PIN VERIFICATION FLOW
 
       // Check quota
       if (user.messages_used >= user.messages_limit) {
