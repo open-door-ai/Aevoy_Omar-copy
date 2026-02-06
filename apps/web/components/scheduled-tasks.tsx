@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AnimatePresence, motion, springs } from "@/components/ui/motion";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Calendar } from "lucide-react";
 
 interface ScheduledTask {
   id: string;
@@ -196,9 +198,11 @@ export function ScheduledTasks() {
         ) : tasks.length > 0 ? (
           <div className="space-y-3">
             {tasks.map((task) => (
-              <div
+              <motion.div
                 key={task.id}
-                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+                whileHover={{ y: -2 }}
+                transition={springs.micro}
+                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer"
               >
                 <div className="flex-1 min-w-0">
                   <p className="font-medium truncate">{task.task_template}</p>
@@ -219,16 +223,19 @@ export function ScheduledTasks() {
                 >
                   Cancel
                 </Button>
-              </div>
+              </motion.div>
             ))}
           </div>
         ) : (
-          <div className="text-center py-8">
-            <p className="text-muted-foreground mb-2">No scheduled tasks</p>
-            <p className="text-sm text-muted-foreground">
-              Create recurring tasks that run automatically on a schedule.
-            </p>
-          </div>
+          <EmptyState
+            icon={Calendar}
+            title="No scheduled tasks"
+            description="Create recurring tasks that run automatically on a schedule."
+            action={{
+              label: "Create Task",
+              onClick: () => setShowForm(true),
+            }}
+          />
         )}
       </CardContent>
     </Card>
