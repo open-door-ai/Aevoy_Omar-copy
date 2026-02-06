@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { StaggerContainer, StaggerItem } from "@/components/ui/motion";
 
 interface Task {
   id: string;
@@ -84,7 +85,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
       case "failed":
         return "bg-red-100 text-red-800";
       case "processing":
-        return "bg-blue-100 text-blue-800 animate-pulse";
+        return "bg-blue-100 text-blue-800";
       case "pending":
         return "bg-yellow-100 text-yellow-800";
       case "needs_review":
@@ -161,57 +162,58 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
             <p className="text-sm text-muted-foreground">Loading tasks...</p>
           </div>
         ) : tasks.length > 0 ? (
-          <div className="space-y-3">
+          <StaggerContainer className="space-y-3" staggerDelay={0.05}>
             {tasks.map((task) => (
-              <div
-                key={task.id}
-                className={`flex items-center justify-between p-4 border rounded-lg transition-all ${
-                  task.status === "processing" ? "border-blue-200 bg-blue-50/50" : ""
-                }`}
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">
-                    {task.email_subject || "Task"}
-                  </p>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="text-sm text-muted-foreground">
-                      {formatTime(task.created_at)}
-                    </span>
-                    {getChannelBadge(task.input_channel)}
-                    {task.type && (
-                      <span className="text-xs bg-muted px-2 py-0.5 rounded">
-                        {task.type}
+              <StaggerItem key={task.id}>
+                <div
+                  className={`flex items-center justify-between p-4 border rounded-lg transition-all ${
+                    task.status === "processing" ? "border-blue-200 bg-blue-50/50 animate-pulse" : ""
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">
+                      {task.email_subject || "Task"}
+                    </p>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-sm text-muted-foreground">
+                        {formatTime(task.created_at)}
                       </span>
-                    )}
-                    {getVerificationBadge(task.verification_status)}
-                    {task.tokens_used > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        {task.tokens_used.toLocaleString()} tokens
-                      </span>
-                    )}
-                    {task.cost_usd != null && task.cost_usd > 0 && (
-                      <span className="text-xs text-muted-foreground">
-                        ${task.cost_usd.toFixed(4)}
-                      </span>
+                      {getChannelBadge(task.input_channel)}
+                      {task.type && (
+                        <span className="text-xs bg-muted px-2 py-0.5 rounded">
+                          {task.type}
+                        </span>
+                      )}
+                      {getVerificationBadge(task.verification_status)}
+                      {task.tokens_used > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          {task.tokens_used.toLocaleString()} tokens
+                        </span>
+                      )}
+                      {task.cost_usd != null && task.cost_usd > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          ${task.cost_usd.toFixed(4)}
+                        </span>
+                      )}
+                    </div>
+                    {task.error_message && (
+                      <p className="text-xs text-red-500 mt-1 truncate">
+                        {task.error_message}
+                      </p>
                     )}
                   </div>
-                  {task.error_message && (
-                    <p className="text-xs text-red-500 mt-1 truncate">
-                      {task.error_message}
-                    </p>
-                  )}
+                  <span
+                    className={`px-3 py-1 text-xs rounded-full flex items-center gap-1 ${getStatusColor(
+                      task.status
+                    )}`}
+                  >
+                    <span>{getStatusIcon(task.status)}</span>
+                    {task.status}
+                  </span>
                 </div>
-                <span
-                  className={`px-3 py-1 text-xs rounded-full flex items-center gap-1 ${getStatusColor(
-                    task.status
-                  )}`}
-                >
-                  <span>{getStatusIcon(task.status)}</span>
-                  {task.status}
-                </span>
-              </div>
+              </StaggerItem>
             ))}
-          </div>
+          </StaggerContainer>
         ) : (
           <div className="text-center py-8">
             <p className="text-muted-foreground mb-2">No tasks yet</p>

@@ -8,7 +8,7 @@
 import { processTask } from './processor.js';
 import { getProactiveEngine } from './proactive.js';
 import { compressOldMemories, decayMemories } from './memory.js';
-import { getSupabaseClient } from '../utils/supabase.js';
+import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -66,8 +66,15 @@ export function stopScheduler(): void {
 
 /**
  * Run proactive checks for all enabled users.
+ * Uses a distributed lock so only one instance runs at a time.
  */
 async function runProactiveChecks(): Promise<void> {
+  const acquired = await acquireDistributedLock("scheduler_proactive", 5 * 60_000);
+  if (!acquired) {
+    console.log("[SCHEDULER] Proactive check skipped — another instance holds the lock");
+    return;
+  }
+
   try {
     const engine = getProactiveEngine();
     const count = await engine.runForAllUsers();
@@ -122,6 +129,19 @@ async function runProactiveChecks(): Promise<void> {
   } catch {
     // Non-critical
   }
+
+  // Clean up old processed_emails (>7 days)
+  try {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    await getSupabaseClient()
+      .from("processed_emails")
+      .delete()
+      .lt("processed_at", sevenDaysAgo);
+  } catch {
+    // Non-critical
+  }
+
+  await releaseDistributedLock("scheduler_proactive");
 }
 
 /**
@@ -198,11 +218,25 @@ async function runDataRetention(): Promise<void> {
 }
 
 /**
- * Run all scheduled tasks that are due
+ * Run all scheduled tasks that are due.
+ * Uses a distributed lock so only one instance runs at a time.
  */
 async function runDueScheduledTasks(): Promise<void> {
+  const acquired = await acquireDistributedLock("scheduler_tasks", 2 * 60_000);
+  if (!acquired) {
+    return; // Another instance is handling scheduled tasks
+  }
+
+  try {
+    await runDueScheduledTasksInner();
+  } finally {
+    await releaseDistributedLock("scheduler_tasks");
+  }
+}
+
+async function runDueScheduledTasksInner(): Promise<void> {
   const now = new Date().toISOString();
-  
+
   // Get all active tasks that are due
   const { data: dueTasks, error } = await getSupabaseClient()
     .from('scheduled_tasks')

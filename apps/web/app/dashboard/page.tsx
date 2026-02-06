@@ -3,8 +3,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ScheduledTasks } from "@/components/scheduled-tasks";
 import { RecentActivity } from "@/components/recent-activity";
 import DashboardWithOnboarding from "@/components/dashboard-with-onboarding";
+import { StaggerContainer, StaggerItem, GlassCard } from "@/components/ui/motion";
 
 export const dynamic = "force-dynamic";
+
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -48,14 +56,16 @@ export default async function DashboardPage() {
   const smsTasks = tasks?.filter(t => t.input_channel === 'sms').length || 0;
   const voiceTasks = tasks?.filter(t => t.input_channel === 'voice').length || 0;
 
+  const usagePercent = Math.min((messagesUsed / messagesLimit) * 100, 100);
+
   return (
     <DashboardWithOnboarding username={username}>
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Dashboard</h1>
+          <h1 className="text-3xl font-bold">{getGreeting()}, {username}</h1>
           <p className="text-muted-foreground">
-            Welcome back! Here&apos;s your AI assistant overview.
+            Here&apos;s your AI assistant overview
           </p>
         </div>
         {isBetaUser && (
@@ -65,103 +75,110 @@ export default async function DashboardPage() {
         )}
       </div>
 
-      {/* Contact Info Cards */}
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>Your AI Email</CardTitle>
-            <CardDescription>
-              Send tasks via email
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-mono bg-muted p-4 rounded-md inline-block">
+      {/* Contact Info Cards — Glass */}
+      <StaggerContainer className="grid md:grid-cols-2 gap-4" staggerDelay={0.08}>
+        <StaggerItem>
+          <GlassCard className="p-6">
+            <div className="space-y-1 mb-4">
+              <h3 className="text-sm font-medium text-stone-500">Your AI Email</h3>
+              <p className="text-xs text-stone-400">Send tasks via email</p>
+            </div>
+            <div className="text-2xl font-mono bg-stone-50 dark:bg-stone-900/30 p-4 rounded-xl inline-block border border-stone-200 dark:border-stone-700">
               {aiEmail}
             </div>
-          </CardContent>
-        </Card>
+          </GlassCard>
+        </StaggerItem>
 
         {twilioNumber && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Your AI Phone</CardTitle>
-              <CardDescription>
-                Call or text tasks
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-mono bg-muted p-4 rounded-md inline-block">
+          <StaggerItem>
+            <GlassCard className="p-6">
+              <div className="space-y-1 mb-4">
+                <h3 className="text-sm font-medium text-stone-500">Your AI Phone</h3>
+                <p className="text-xs text-stone-400">Call or text tasks</p>
+              </div>
+              <div className="text-2xl font-mono bg-stone-50 dark:bg-stone-900/30 p-4 rounded-xl inline-block border border-stone-200 dark:border-stone-700">
                 {twilioNumber}
               </div>
               <p className="text-sm text-muted-foreground mt-2">
                 Voice + SMS enabled
               </p>
+            </GlassCard>
+          </StaggerItem>
+        )}
+      </StaggerContainer>
+
+      {/* Stats — Staggered */}
+      <StaggerContainer className="grid md:grid-cols-4 gap-4" staggerDelay={0.08} delayStart={0.2}>
+        <StaggerItem>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Messages Used</CardDescription>
+              <CardTitle className="text-3xl">
+                {messagesUsed} / {messagesLimit}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-primary h-2 rounded-full transition-all duration-1000 ease-out"
+                  style={{
+                    width: `${usagePercent}%`,
+                    animationDelay: '300ms'
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>
-        )}
-      </div>
+        </StaggerItem>
 
-      {/* Stats */}
-      <div className="grid md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Messages Used</CardDescription>
-            <CardTitle className="text-3xl">
-              {messagesUsed} / {messagesLimit}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="w-full bg-muted rounded-full h-2">
-              <div
-                className="bg-primary h-2 rounded-full transition-all"
-                style={{ width: `${Math.min((messagesUsed / messagesLimit) * 100, 100)}%` }}
-              />
-            </div>
-          </CardContent>
-        </Card>
+        <StaggerItem>
+          <Card className={isBetaUser ? "border-purple-300 bg-gradient-to-br from-purple-50 to-pink-50" : ""}>
+            <CardHeader className="pb-2">
+              <CardDescription>Plan</CardDescription>
+              <CardTitle className="text-3xl capitalize">
+                {isBetaUser ? "Beta" : (profile?.subscription_tier || "Free")}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                {isBetaUser ? "Unlimited during beta" : `${messagesLimit} messages/month`}
+              </p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
 
-        <Card className={isBetaUser ? "border-purple-300 bg-gradient-to-br from-purple-50 to-pink-50" : ""}>
-          <CardHeader className="pb-2">
-            <CardDescription>Plan</CardDescription>
-            <CardTitle className="text-3xl capitalize">
-              {isBetaUser ? "Beta" : (profile?.subscription_tier || "Free")}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {isBetaUser ? "Unlimited during beta" : `${messagesLimit} messages/month`}
-            </p>
-          </CardContent>
-        </Card>
+        <StaggerItem>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total Tasks</CardDescription>
+              <CardTitle className="text-3xl">
+                {tasks?.length || 0}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                All time completed
+              </p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Tasks</CardDescription>
-            <CardTitle className="text-3xl">
-              {tasks?.length || 0}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              All time completed
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>AI Cost (Month)</CardDescription>
-            <CardTitle className="text-3xl">
-              ${((usage?.ai_cost_cents || 0) / 100).toFixed(2)}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              {currentMonth}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+        <StaggerItem>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>AI Cost (Month)</CardDescription>
+              <CardTitle className="text-3xl">
+                ${((usage?.ai_cost_cents || 0) / 100).toFixed(2)}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                {currentMonth}
+              </p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+      </StaggerContainer>
 
       {/* Channel Breakdown */}
       {(smsTasks > 0 || voiceTasks > 0) && (

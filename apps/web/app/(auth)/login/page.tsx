@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { FadeIn, StaggerContainer, StaggerItem, ShakeOnError } from "@/components/ui/motion";
 
 export const dynamic = "force-dynamic";
 
@@ -45,55 +45,91 @@ export default function LoginPage() {
   };
 
   return (
-    <Card>
-      <CardHeader className="text-center">
-        <CardTitle className="text-2xl">Welcome back</CardTitle>
-        <CardDescription>
+    <div>
+      <FadeIn>
+        <h1 className="text-3xl font-bold text-stone-900 tracking-tight">
+          Welcome back
+        </h1>
+        <p className="mt-2 text-stone-500">
           Sign in to your account to continue
-        </CardDescription>
-      </CardHeader>
-      <form onSubmit={handleSubmit}>
-        <CardContent className="space-y-4">
+        </p>
+      </FadeIn>
+
+      <form onSubmit={handleSubmit} className="mt-8">
+        <ShakeOnError error={error}>
           {error && (
-            <div className="p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md">
-              {error}
-            </div>
+            <FadeIn direction="none" className="mb-6">
+              <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl">
+                {error}
+              </div>
+            </FadeIn>
           )}
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="Your password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
-        </CardContent>
-        <CardFooter className="flex flex-col gap-4">
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Signing in..." : "Sign in"}
-          </Button>
-          <p className="text-sm text-muted-foreground text-center">
+        </ShakeOnError>
+
+        <StaggerContainer className="space-y-5" staggerDelay={0.1} delayStart={0.15}>
+          <StaggerItem>
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-stone-700 font-medium">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="h-12 rounded-xl text-base"
+              />
+            </div>
+          </StaggerItem>
+
+          <StaggerItem>
+            <div className="space-y-2">
+              <Label htmlFor="password" className="text-stone-700 font-medium">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="Your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="h-12 rounded-xl text-base"
+              />
+            </div>
+          </StaggerItem>
+
+          <StaggerItem>
+            <Button
+              type="submit"
+              className="w-full h-12 rounded-xl text-base font-semibold relative overflow-hidden"
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <span className="opacity-0">Sign in</span>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  </div>
+                  <div className="absolute inset-0 animate-shimmer" />
+                </>
+              ) : (
+                "Sign in"
+              )}
+            </Button>
+          </StaggerItem>
+        </StaggerContainer>
+
+        <FadeIn delay={0.5} className="mt-6 text-center">
+          <p className="text-sm text-stone-500">
             Don&apos;t have an account?{" "}
-            <Link href="/signup" className="text-primary hover:underline">
+            <Link
+              href="/signup"
+              className="text-stone-900 font-medium hover:underline underline-offset-4 transition-all"
+            >
               Sign up
             </Link>
           </p>
-        </CardFooter>
+        </FadeIn>
       </form>
-    </Card>
+    </div>
   );
 }

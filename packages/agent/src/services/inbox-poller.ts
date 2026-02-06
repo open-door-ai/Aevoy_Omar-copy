@@ -17,7 +17,7 @@
  *  - AGENT_INBOX_POLL_MS   — poll interval in ms (default 30000)
  */
 
-import { getSupabaseClient } from "../utils/supabase.js";
+import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from "../utils/supabase.js";
 import {
   processIncomingTask,
   handleConfirmationReply,
@@ -36,6 +36,7 @@ type EmailType =
 
 interface ParsedInboxEmail {
   uid: string;
+  messageId: string;
   from: string;
   to: string;
   subject: string;
@@ -105,6 +106,13 @@ async function pollInbox(): Promise<void> {
   if (isPolling) return; // prevent overlapping polls
   isPolling = true;
 
+  // Distributed lock — only one instance polls at a time
+  const lockAcquired = await acquireDistributedLock("inbox_poller", POLL_INTERVAL + 10_000);
+  if (!lockAcquired) {
+    isPolling = false;
+    return; // Another instance is polling
+  }
+
   try {
     const { ImapFlow } = await import("imapflow");
 
@@ -147,11 +155,19 @@ async function pollInbox(): Promise<void> {
           if (!msg || !msg.envelope) continue;
 
           const env = msg.envelope;
+          const messageId: string = env.messageId || `uid-${uid}-${Date.now()}`;
           const fromAddr: string =
             env.from?.[0]?.address?.toLowerCase() || "";
           const toAddr: string =
             env.to?.[0]?.address?.toLowerCase() || "";
           const subject: string = env.subject || "(no subject)";
+
+          // Idempotency check — skip if already processed
+          const alreadyProcessed = await isEmailProcessed(messageId);
+          if (alreadyProcessed) {
+            await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+            continue;
+          }
 
           // Parse body from raw source
           let body = "";
@@ -161,6 +177,7 @@ async function pollInbox(): Promise<void> {
 
           const parsed: ParsedInboxEmail = {
             uid: String(uid),
+            messageId,
             from: fromAddr,
             to: toAddr,
             subject,
@@ -169,6 +186,9 @@ async function pollInbox(): Promise<void> {
           };
 
           await routeEmail(parsed);
+
+          // Record as processed for idempotency
+          await markEmailProcessed(messageId, fromAddr, toAddr, subject);
 
           // Mark as read after successful processing
           await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
@@ -187,8 +207,41 @@ async function pollInbox(): Promise<void> {
   } catch (err) {
     console.error("[INBOX-POLLER] Connection error:", err);
   } finally {
+    await releaseDistributedLock("inbox_poller");
     isPolling = false;
   }
+}
+
+/**
+ * Check if an email has already been processed (idempotency).
+ */
+async function isEmailProcessed(messageId: string): Promise<boolean> {
+  const { data } = await getSupabaseClient()
+    .from("processed_emails")
+    .select("message_id")
+    .eq("message_id", messageId)
+    .limit(1);
+  return !!(data && data.length > 0);
+}
+
+/**
+ * Record an email as processed.
+ */
+async function markEmailProcessed(
+  messageId: string,
+  from: string,
+  to: string,
+  subject: string
+): Promise<void> {
+  await getSupabaseClient()
+    .from("processed_emails")
+    .upsert({
+      message_id: messageId,
+      from_addr: from,
+      to_addr: to,
+      subject: subject.substring(0, 255),
+      processed_at: new Date().toISOString(),
+    });
 }
 
 // ---------------------------------------------------------------------------

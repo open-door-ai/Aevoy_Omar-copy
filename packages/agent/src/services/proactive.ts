@@ -24,7 +24,6 @@ import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
 
 export class ProactiveEngine {
   private isRunning = false;
-  private dailyCounters = new Map<string, { count: number; date: string }>();
 
   /**
    * Check if it's quiet hours (10 PM – 7 AM) in the user's timezone.
@@ -46,33 +45,56 @@ export class ProactiveEngine {
   }
 
   /**
-   * Check if daily proactive limit is reached for a user.
+   * Check if daily proactive limit is reached for a user (database-backed).
    * Max 2 proactive messages per user per day (high priority bypasses).
    */
-  private isDailyLimitReached(userId: string, priority: ProactivePriority): boolean {
+  private async isDailyLimitReached(userId: string, priority: ProactivePriority): Promise<boolean> {
     if (priority === "high") return false; // High priority always goes through
 
     const today = new Date().toISOString().split("T")[0];
-    const counter = this.dailyCounters.get(userId);
 
-    if (!counter || counter.date !== today) {
-      return false; // New day, no limit
+    const { data } = await getSupabaseClient()
+      .from("usage")
+      .select("proactive_daily_count, proactive_daily_date")
+      .eq("user_id", userId)
+      .single();
+
+    if (!data) return false;
+
+    // If the stored date is not today, counter has reset
+    if (data.proactive_daily_date !== today) {
+      return false;
     }
 
-    return counter.count >= 2;
+    return data.proactive_daily_count >= 2;
   }
 
   /**
-   * Increment daily counter for a user.
+   * Increment daily counter for a user (database-backed).
    */
-  private incrementDailyCounter(userId: string): void {
+  private async incrementDailyCounter(userId: string): Promise<void> {
     const today = new Date().toISOString().split("T")[0];
-    const counter = this.dailyCounters.get(userId);
 
-    if (!counter || counter.date !== today) {
-      this.dailyCounters.set(userId, { count: 1, date: today });
+    const { data } = await getSupabaseClient()
+      .from("usage")
+      .select("proactive_daily_count, proactive_daily_date")
+      .eq("user_id", userId)
+      .single();
+
+    if (!data) return;
+
+    if (data.proactive_daily_date !== today) {
+      // New day — reset counter to 1
+      await getSupabaseClient()
+        .from("usage")
+        .update({ proactive_daily_count: 1, proactive_daily_date: today })
+        .eq("user_id", userId);
     } else {
-      counter.count++;
+      // Same day — increment
+      await getSupabaseClient()
+        .from("usage")
+        .update({ proactive_daily_count: (data.proactive_daily_count || 0) + 1 })
+        .eq("user_id", userId);
     }
   }
 
@@ -114,8 +136,8 @@ export class ProactiveEngine {
           const findings = await this.checkUser(user.id, tz);
 
           for (const finding of findings) {
-            // Check daily rate limit
-            if (this.isDailyLimitReached(user.id, finding.priority)) {
+            // Check daily rate limit (database-backed)
+            if (await this.isDailyLimitReached(user.id, finding.priority)) {
               console.log(`[PROACTIVE] Skipping ${finding.trigger} for ${user.username} (daily limit reached)`);
               continue;
             }
@@ -126,7 +148,7 @@ export class ProactiveEngine {
               email: user.email,
               phone: user.twilio_number,
             });
-            this.incrementDailyCounter(user.id);
+            await this.incrementDailyCounter(user.id);
             findingsCount++;
           }
         } catch (error) {
