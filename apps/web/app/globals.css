@@ -181,6 +181,17 @@
   50% { transform: translateY(-6px); }
 }
 
+/* Progress bar fill */
+@keyframes progress-fill {
+  from { width: 0; }
+}
+
+/* Badge pulse */
+@keyframes badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
 .animate-aurora {
   animation: aurora-shift 15s ease-in-out infinite;
 }
