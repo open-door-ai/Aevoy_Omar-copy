@@ -1,6 +1,39 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
+/**
+ * Normalize phone number to E.164 format
+ * Handles: +17781234567, 17781234567, 7781234567
+ */
+function normalizePhone(phone: string): string {
+  const hasPlus = phone.trim().startsWith("+");
+  const digits = phone.replace(/\D/g, "");
+
+  if (!digits) return "";
+
+  // If 11 digits starting with 1 (US/CA)
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+
+  // If 10 digits, assume US/CA
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+
+  // If had + prefix, keep as-is (international)
+  if (hasPlus) {
+    return `+${digits}`;
+  }
+
+  // Otherwise, assume US and prepend +1
+  if (digits.length >= 10) {
+    return `+${digits}`;
+  }
+
+  return phone.trim();
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
 
@@ -14,9 +47,9 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const phoneNumber = body.phone_number?.trim();
+    const rawPhoneNumber = body.phone_number?.trim();
 
-    if (!phoneNumber) {
+    if (!rawPhoneNumber) {
       return NextResponse.json(
         { error: "Phone number is required" },
         { status: 400 }
@@ -24,12 +57,15 @@ export async function POST(request: Request) {
     }
 
     // Basic phone validation: digits, +, spaces, dashes, parens
-    if (!/^[+\d\s()-]{7,20}$/.test(phoneNumber)) {
+    if (!/^[+\d\s()-]{7,20}$/.test(rawPhoneNumber)) {
       return NextResponse.json(
         { error: "Invalid phone number format" },
         { status: 400 }
       );
     }
+
+    // Normalize to E.164 format
+    const phoneNumber = normalizePhone(rawPhoneNumber);
 
     // Check Twilio credentials
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
