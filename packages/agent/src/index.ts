@@ -578,6 +578,49 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
   }
 });
 
+// ---- Onboarding Interview Webhooks ----
+
+app.post("/webhook/interview-call/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const from = req.body.From || "";
+  const to = req.body.To || "";
+  const callSid = req.body.CallSid || "";
+
+  console.log(`[ONBOARDING] Interview call initiated for user ${userId?.slice(0, 8)}`);
+
+  try {
+    const { handleInterviewCall } = await import("./services/onboarding-interview.js");
+    const twiml = await handleInterviewCall({ userId, from, to, callSid });
+    res.type("text/xml");
+    res.send(twiml);
+  } catch (error) {
+    console.error("[ONBOARDING] Interview call error:", error);
+    const { generateErrorTwiml } = await import("./services/onboarding-interview.js");
+    res.type("text/xml");
+    res.send(generateErrorTwiml("Sorry, we couldn't start your interview. Please try again from the dashboard."));
+  }
+});
+
+app.post("/webhook/interview-call/response/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const transcription = req.body.TranscriptionText || req.body.SpeechResult || "";
+  const questionIndex = parseInt(req.query.question as string || "0");
+
+  console.log(`[ONBOARDING] Interview response from ${userId?.slice(0, 8)}, Q${questionIndex}: "${transcription.slice(0, 50)}..."`);
+
+  try {
+    const { processInterviewResponse } = await import("./services/onboarding-interview.js");
+    const twiml = await processInterviewResponse(userId, questionIndex, transcription);
+    res.type("text/xml");
+    res.send(twiml);
+  } catch (error) {
+    console.error("[ONBOARDING] Interview response error:", error);
+    const { generateErrorTwiml } = await import("./services/onboarding-interview.js");
+    res.type("text/xml");
+    res.send(generateErrorTwiml("Sorry, something went wrong. Let's continue via email instead."));
+  }
+});
+
 // ---- Error Handler ----
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
