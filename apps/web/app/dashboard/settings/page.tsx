@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
-import { Phone } from "lucide-react";
+import { Phone, Mail, Cloud } from "lucide-react";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 
 interface Profile {
@@ -85,6 +85,12 @@ export default function SettingsPage() {
   const [emailPinStatus, setEmailPinStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [savingPhone, setSavingPhone] = useState(false);
 
+  // Integrations state
+  const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
+  const [microsoftStatus, setMicrosoftStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
+  const [integrationsLoading, setIntegrationsLoading] = useState(true);
+  const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -152,10 +158,26 @@ export default function SettingsPage() {
       }
     }
 
+    async function loadIntegrations() {
+      setIntegrationsLoading(true);
+      try {
+        const [gmailRes, msRes] = await Promise.all([
+          fetch("/api/integrations/gmail"),
+          fetch("/api/integrations/microsoft"),
+        ]);
+        if (gmailRes.ok) setGmailStatus(await gmailRes.json());
+        if (msRes.ok) setMicrosoftStatus(await msRes.json());
+      } catch (error) {
+        console.error("Failed to load integrations:", error);
+      }
+      setIntegrationsLoading(false);
+    }
+
     loadProfile();
     loadSettings();
     loadAgentCard();
     loadPhone();
+    loadIntegrations();
   }, []);
 
   const handleSave = async () => {
@@ -421,6 +443,73 @@ export default function SettingsPage() {
       setSavingEmailPin(false);
     }
   };
+
+  const handleConnect = async (provider: "gmail" | "microsoft") => {
+    setConnectingProvider(provider);
+    setMessage(null);
+
+    try {
+      const endpoint = provider === "gmail" ? "/api/integrations/gmail" : "/api/integrations/microsoft";
+      const res = await fetch(endpoint, { method: "POST" });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Failed to connect ${provider}`);
+      }
+
+      const { authUrl } = await res.json();
+      window.location.href = authUrl;
+    } catch (error) {
+      setMessage({ type: "error", text: error instanceof Error ? error.message : `Failed to connect ${provider}` });
+      setConnectingProvider(null);
+    }
+  };
+
+  const handleDisconnect = async (provider: "gmail" | "microsoft") => {
+    if (!confirm(`Disconnect ${provider === "gmail" ? "Google" : "Microsoft"}? Your AI will no longer be able to access this account's email, calendar, and files.`)) {
+      return;
+    }
+
+    setConnectingProvider(provider);
+    setMessage(null);
+
+    try {
+      const endpoint = provider === "gmail" ? "/api/integrations/gmail" : "/api/integrations/microsoft";
+      const res = await fetch(endpoint, { method: "DELETE" });
+
+      if (!res.ok) throw new Error("Failed to disconnect");
+
+      if (provider === "gmail") {
+        setGmailStatus({ connected: false, email: null, connectedAt: null });
+      } else {
+        setMicrosoftStatus({ connected: false, email: null, connectedAt: null });
+      }
+      setMessage({ type: "success", text: `${provider === "gmail" ? "Google" : "Microsoft"} disconnected` });
+    } catch {
+      setMessage({ type: "error", text: `Failed to disconnect ${provider}` });
+    }
+
+    setConnectingProvider(null);
+  };
+
+  // Check URL params for OAuth callback results
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gmail") === "connected") {
+      setMessage({ type: "success", text: "Gmail connected successfully!" });
+      setGmailStatus(prev => prev ? { ...prev, connected: true } : { connected: true, email: null, connectedAt: new Date().toISOString() });
+      window.history.replaceState({}, "", "/dashboard/settings");
+    }
+    if (params.get("microsoft") === "connected") {
+      setMessage({ type: "success", text: "Microsoft connected successfully!" });
+      setMicrosoftStatus(prev => prev ? { ...prev, connected: true } : { connected: true, email: null, connectedAt: new Date().toISOString() });
+      window.history.replaceState({}, "", "/dashboard/settings");
+    }
+    if (params.get("error")) {
+      setMessage({ type: "error", text: `Connection failed: ${params.get("error")}` });
+      window.history.replaceState({}, "", "/dashboard/settings");
+    }
+  }, []);
 
   const timezones = [
     "America/Los_Angeles",
@@ -860,6 +949,118 @@ export default function SettingsPage() {
                 Tip: Email &quot;add $50 to my card&quot; to quickly add funds, or &quot;freeze my card&quot; to temporarily disable it.
               </p>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Integrations */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Cloud className="w-5 h-5" />
+            <CardTitle>Integrations</CardTitle>
+          </div>
+          <CardDescription>
+            Connect your accounts so your AI can read and send emails, manage calendar events, and access files on your behalf
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {integrationsLoading ? (
+            <p className="text-sm text-muted-foreground">Loading integrations...</p>
+          ) : (
+            <>
+              {/* Google / Gmail */}
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-red-50 dark:bg-red-950/30 flex items-center justify-center">
+                    <Mail className="w-5 h-5 text-red-600 dark:text-red-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium">Google</p>
+                    {gmailStatus?.connected ? (
+                      <>
+                        <p className="text-sm text-green-600 dark:text-green-400">
+                          Connected{gmailStatus.email ? ` - ${gmailStatus.email}` : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Gmail, Calendar, Drive
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        Gmail, Calendar, Drive access
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {gmailStatus?.connected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDisconnect("gmail")}
+                    disabled={connectingProvider === "gmail"}
+                  >
+                    {connectingProvider === "gmail" ? "..." : "Disconnect"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => handleConnect("gmail")}
+                    disabled={connectingProvider === "gmail"}
+                  >
+                    {connectingProvider === "gmail" ? "Connecting..." : "Connect"}
+                  </Button>
+                )}
+              </div>
+
+              {/* Microsoft / Outlook */}
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center">
+                    <Mail className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium">Microsoft</p>
+                    {microsoftStatus?.connected ? (
+                      <>
+                        <p className="text-sm text-green-600 dark:text-green-400">
+                          Connected{microsoftStatus.email ? ` - ${microsoftStatus.email}` : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Outlook, Calendar, OneDrive
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        Outlook, Calendar, OneDrive access
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {microsoftStatus?.connected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDisconnect("microsoft")}
+                    disabled={connectingProvider === "microsoft"}
+                  >
+                    {connectingProvider === "microsoft" ? "..." : "Disconnect"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => handleConnect("microsoft")}
+                    disabled={connectingProvider === "microsoft"}
+                  >
+                    {connectingProvider === "microsoft" ? "Connecting..." : "Connect"}
+                  </Button>
+                )}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Your tokens are encrypted with AES-256-GCM and automatically refreshed. Disconnect anytime.
+              </p>
+            </>
           )}
         </CardContent>
       </Card>
