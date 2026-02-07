@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -36,6 +37,16 @@ interface Credential {
 }
 
 export default function ConnectedAppsPage() {
+  return (
+    <Suspense>
+      <ConnectedAppsContent />
+    </Suspense>
+  );
+}
+
+function ConnectedAppsContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [googleStatus, setGoogleStatus] = useState<IntegrationStatus | null>(null);
   const [microsoftStatus, setMicrosoftStatus] = useState<IntegrationStatus | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
@@ -85,6 +96,29 @@ export default function ConnectedAppsPage() {
     fetchIntegrations();
     fetchCredentials();
   }, [fetchIntegrations, fetchCredentials]);
+
+  useEffect(() => {
+    const gmail = searchParams.get('gmail');
+    const microsoft = searchParams.get('microsoft');
+
+    if (gmail === 'connected') {
+      toast.success('Google account connected successfully');
+      fetchIntegrations();
+    } else if (gmail && gmail !== 'connected') {
+      toast.error(`Google connection failed: ${gmail}`);
+    }
+
+    if (microsoft === 'connected') {
+      toast.success('Microsoft account connected successfully');
+      fetchIntegrations();
+    } else if (microsoft && microsoft !== 'connected') {
+      toast.error(`Microsoft connection failed: ${microsoft}`);
+    }
+
+    if (gmail || microsoft) {
+      router.replace('/dashboard/apps', { scroll: false });
+    }
+  }, [searchParams]);
 
   const handleConnectGoogle = async () => {
     setConnectingGoogle(true);

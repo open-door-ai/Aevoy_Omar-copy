@@ -169,7 +169,7 @@ export default function ScheduledTasksPage() {
         <div>
           <h1 className="text-3xl font-bold">Scheduled Tasks</h1>
           <p className="text-muted-foreground">
-            Recurring tasks that run automatically on a schedule
+            Set up recurring tasks that your AI runs automatically. Perfect for daily email summaries, weekly reports, or any routine task.
           </p>
         </div>
         <Button

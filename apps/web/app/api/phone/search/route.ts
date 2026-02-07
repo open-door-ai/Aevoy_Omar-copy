@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+const CANADIAN_AREA_CODES = new Set([
+  '204','226','236','249','250','289','306','343','365','367','382',
+  '403','416','418','431','437','438','450','506','514','519','548',
+  '579','581','587','604','613','639','647','672','683','705','709',
+  '742','778','780','782','807','819','825','867','873','902','905'
+]);
+
+function getCountryForAreaCode(areaCode: string): string {
+  return CANADIAN_AREA_CODES.has(areaCode) ? 'CA' : 'US';
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -18,7 +29,7 @@ export async function POST(request: Request) {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
 
-    const searchUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/AvailablePhoneNumbers/US/Local.json?AreaCode=${areaCode}&Limit=10`;
+    const searchUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/AvailablePhoneNumbers/${getCountryForAreaCode(areaCode)}/Local.json?AreaCode=${areaCode}&Limit=10`;
 
     const twilioRes = await fetch(searchUrl, {
       headers: {

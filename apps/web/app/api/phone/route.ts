@@ -1,6 +1,17 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
+const CANADIAN_AREA_CODES = new Set([
+  '204','226','236','249','250','289','306','343','365','367','382',
+  '403','416','418','431','437','438','450','506','514','519','548',
+  '579','581','587','604','613','639','647','672','683','705','709',
+  '742','778','780','782','807','819','825','867','873','902','905'
+]);
+
+function getCountryForAreaCode(areaCode: string): string {
+  return CANADIAN_AREA_CODES.has(areaCode) ? 'CA' : 'US';
+}
+
 // Simple in-memory rate limiting: one provisioning per user per 60s
 const provisionCooldowns = new Map<string, number>();
 
@@ -132,7 +143,7 @@ export async function POST(request: Request) {
     });
 
     const searchRes = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${creds.accountSid}/AvailablePhoneNumbers/US/Local.json?${searchParams}`,
+      `https://api.twilio.com/2010-04-01/Accounts/${creds.accountSid}/AvailablePhoneNumbers/${getCountryForAreaCode(areaCode)}/Local.json?${searchParams}`,
       {
         headers: { Authorization: twilioAuthHeader(creds) },
       }

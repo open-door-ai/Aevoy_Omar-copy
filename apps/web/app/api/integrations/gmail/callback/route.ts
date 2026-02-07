@@ -21,13 +21,13 @@ export async function GET(request: Request) {
 
     if (error) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?gmail=error", request.url)
+        new URL("/dashboard/apps?gmail=error", request.url)
       );
     }
 
     if (!code || !state) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?gmail=missing", request.url)
+        new URL("/dashboard/apps?gmail=missing", request.url)
       );
     }
 
@@ -39,14 +39,14 @@ export async function GET(request: Request) {
       );
     } catch {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?gmail=invalid", request.url)
+        new URL("/dashboard/apps?gmail=invalid", request.url)
       );
     }
 
     // Verify state is recent (within 10 minutes)
     if (Date.now() - stateData.ts > 600_000) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?gmail=expired", request.url)
+        new URL("/dashboard/apps?gmail=expired", request.url)
       );
     }
 
@@ -58,7 +58,7 @@ export async function GET(request: Request) {
 
     if (!user || user.id !== stateData.userId) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?gmail=unauthorized", request.url)
+        new URL("/dashboard/apps?gmail=unauthorized", request.url)
       );
     }
 
@@ -78,7 +78,7 @@ export async function GET(request: Request) {
     if (!tokenRes.ok) {
       console.error("[GMAIL] Token exchange failed:", await tokenRes.text());
       return NextResponse.redirect(
-        new URL("/dashboard/settings?gmail=token_error", request.url)
+        new URL("/dashboard/apps?gmail=token_error", request.url)
       );
     }
 
@@ -111,7 +111,7 @@ export async function GET(request: Request) {
     ];
 
     // Dual-write: new oauth_connections table (primary)
-    await supabase.from("oauth_connections").upsert(
+    const { error: upsertError } = await supabase.from("oauth_connections").upsert(
       {
         user_id: user.id,
         provider: "google",
@@ -124,6 +124,10 @@ export async function GET(request: Request) {
       },
       { onConflict: "user_id,provider,account_email" }
     );
+
+    if (upsertError) {
+      console.error("[GMAIL] oauth_connections upsert error:", upsertError);
+    }
 
     // Backward compat: also write to user_credentials (encrypted)
     const tokenData = await encrypt(JSON.stringify({
@@ -144,12 +148,12 @@ export async function GET(request: Request) {
     );
 
     return NextResponse.redirect(
-      new URL("/dashboard/settings?gmail=connected", request.url)
+      new URL("/dashboard/apps?gmail=connected", request.url)
     );
   } catch (err) {
     console.error("[GMAIL] Callback error:", err);
     return NextResponse.redirect(
-      new URL("/dashboard/settings?gmail=error", request.url)
+      new URL("/dashboard/apps?gmail=error", request.url)
     );
   }
 }

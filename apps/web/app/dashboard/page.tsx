@@ -75,6 +75,7 @@ export default async function DashboardPage() {
   const username = profile?.username || user?.email?.split("@")[0] || "user";
   const botName = profile?.bot_name || null;
   const aiEmail = `${username}@aevoy.com`;
+  const userEmail = profile?.email || user?.email || null;
   const messagesUsed = profile?.messages_used || 0;
   const messagesLimit = profile?.messages_limit || 20;
   const twilioNumber = profile?.twilio_number || null;
@@ -108,21 +109,21 @@ export default async function DashboardPage() {
         <SendTaskInput />
       </Suspense>
 
-      {/* Quick Stats */}
+      {/* Your Info + Quick Stats */}
       <StaggerContainer className="grid grid-cols-2 md:grid-cols-4 gap-4" staggerDelay={0.08}>
         <StaggerItem>
           <Card>
             <CardContent className="pt-4 pb-4">
-              <p className="text-sm text-muted-foreground">Tasks Today</p>
-              <p className="text-2xl font-bold">{todayCount || 0}</p>
+              <p className="text-sm text-muted-foreground">Your Email</p>
+              <p className="text-sm font-medium truncate mt-1" title={userEmail || undefined}>{userEmail || "Not set"}</p>
             </CardContent>
           </Card>
         </StaggerItem>
         <StaggerItem>
           <Card>
             <CardContent className="pt-4 pb-4">
-              <p className="text-sm text-muted-foreground">This Week</p>
-              <p className="text-2xl font-bold">{weekCount || 0}</p>
+              <p className="text-sm text-muted-foreground">Your Phone</p>
+              <p className="text-sm font-medium mt-1">{twilioNumber || "Not provisioned"}</p>
             </CardContent>
           </Card>
         </StaggerItem>
@@ -139,6 +140,26 @@ export default async function DashboardPage() {
             <CardContent className="pt-4 pb-4">
               <p className="text-sm text-muted-foreground">Monthly Cost</p>
               <p className="text-2xl font-bold">${monthlyCost}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+      </StaggerContainer>
+
+      {/* Task Stats */}
+      <StaggerContainer className="grid grid-cols-2 md:grid-cols-2 gap-4" staggerDelay={0.08}>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">Tasks Today</p>
+              <p className="text-2xl font-bold">{todayCount || 0}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">This Week</p>
+              <p className="text-2xl font-bold">{weekCount || 0}</p>
             </CardContent>
           </Card>
         </StaggerItem>

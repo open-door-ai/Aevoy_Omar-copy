@@ -197,9 +197,24 @@ export default async function ActivityPage() {
                             </span>
                           )}
                         </div>
+                        {task.status === "completed" && !task.error_message && (
+                          <p className="text-xs text-green-600 dark:text-green-400 mt-1.5 truncate">
+                            Completed successfully{task.tokens_used ? ` (${task.tokens_used.toLocaleString()} tokens)` : ""}
+                          </p>
+                        )}
                         {task.error_message && (
-                          <p className="text-xs text-red-500 mt-1 truncate">
+                          <p className="text-xs text-red-500 mt-1.5 truncate">
                             {task.error_message}
+                          </p>
+                        )}
+                        {task.status === "processing" && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400 mt-1.5">
+                            Processing now...
+                          </p>
+                        )}
+                        {(task.status === "awaiting_confirmation" || task.status === "needs_review") && (
+                          <p className="text-xs text-orange-600 dark:text-orange-400 mt-1.5">
+                            Waiting for your response
                           </p>
                         )}
                       </div>
