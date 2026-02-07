@@ -66,6 +66,14 @@ async function executeSkill(
       return gmailSearch(accessToken, step.params);
     case "google_drive_list":
       return googleDriveList(accessToken, step.params);
+    case "google_sheets_create":
+      return googleSheetsCreate(accessToken, step.params);
+    case "google_sheets_append":
+      return googleSheetsAppend(accessToken, step.params);
+    case "google_sheets_read":
+      return googleSheetsRead(accessToken, step.params);
+    case "google_sheets_update":
+      return googleSheetsUpdate(accessToken, step.params);
     case "microsoft_calendar_create":
       return microsoftCalendarCreate(accessToken, step.params);
     case "microsoft_mail_send":
@@ -221,6 +229,189 @@ async function googleDriveList(
   if (!res.ok) return { success: false, error: "Drive list failed" };
   const data = await res.json();
   return { success: true, result: { files: data.files || [] } };
+}
+
+// ---- Google Sheets Skills (Session 17: Autonomous AI Employee) ----
+
+async function googleSheetsCreate(
+  token: string,
+  params: Record<string, unknown>
+): Promise<ApiActionResult> {
+  // Create spreadsheet
+  const createRes = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      properties: {
+        title: params.title || "Untitled Spreadsheet",
+      },
+      sheets: [
+        {
+          properties: {
+            title: params.sheetName || "Sheet1",
+          },
+        },
+      ],
+    }),
+  });
+
+  if (!createRes.ok) {
+    const err = await createRes.text();
+    return { success: false, error: `Failed to create spreadsheet: ${err}` };
+  }
+
+  const sheet = await createRes.json();
+  const spreadsheetId = sheet.spreadsheetId;
+
+  // Populate with initial data if provided
+  if (params.data && Array.isArray(params.data)) {
+    const appendResult = await googleSheetsAppend(token, {
+      spreadsheetId,
+      range: "A1",
+      data: params.data,
+    });
+
+    if (!appendResult.success) {
+      return {
+        success: true,
+        result: {
+          spreadsheetId,
+          url: sheet.spreadsheetUrl,
+          title: sheet.properties.title,
+          warning: "Spreadsheet created but initial data failed to append",
+        },
+      };
+    }
+  }
+
+  return {
+    success: true,
+    result: {
+      spreadsheetId,
+      url: sheet.spreadsheetUrl,
+      title: sheet.properties.title,
+    },
+  };
+}
+
+async function googleSheetsAppend(
+  token: string,
+  params: Record<string, unknown>
+): Promise<ApiActionResult> {
+  const spreadsheetId = params.spreadsheetId as string;
+  const range = (params.range as string) || "A1";
+  const values = params.data as unknown[][];
+
+  if (!spreadsheetId) {
+    return { success: false, error: "spreadsheetId is required" };
+  }
+
+  if (!values || !Array.isArray(values)) {
+    return { success: false, error: "data must be a 2D array" };
+  }
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values }),
+    }
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    return { success: false, error: `Append failed: ${err}` };
+  }
+
+  const result = await res.json();
+  return {
+    success: true,
+    result: {
+      updatedRows: result.updates.updatedRows,
+      updatedCells: result.updates.updatedCells,
+    },
+  };
+}
+
+async function googleSheetsRead(
+  token: string,
+  params: Record<string, unknown>
+): Promise<ApiActionResult> {
+  const spreadsheetId = params.spreadsheetId as string;
+  const range = (params.range as string) || "A1:Z1000";
+
+  if (!spreadsheetId) {
+    return { success: false, error: "spreadsheetId is required" };
+  }
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    return { success: false, error: `Read failed: ${err}` };
+  }
+
+  const data = await res.json();
+  return {
+    success: true,
+    result: {
+      values: data.values || [],
+      range: data.range,
+    },
+  };
+}
+
+async function googleSheetsUpdate(
+  token: string,
+  params: Record<string, unknown>
+): Promise<ApiActionResult> {
+  const spreadsheetId = params.spreadsheetId as string;
+  const range = params.range as string;
+  const values = params.data as unknown[][];
+
+  if (!spreadsheetId || !range) {
+    return { success: false, error: "spreadsheetId and range are required" };
+  }
+
+  if (!values || !Array.isArray(values)) {
+    return { success: false, error: "data must be a 2D array" };
+  }
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values }),
+    }
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    return { success: false, error: `Update failed: ${err}` };
+  }
+
+  const result = await res.json();
+  return {
+    success: true,
+    result: {
+      updatedRows: result.updatedRows,
+      updatedCells: result.updatedCells,
+    },
+  };
 }
 
 // ---- Microsoft Skills ----

@@ -9,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
-import { Phone, Mail, Cloud } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Phone, Mail, Cloud, Zap } from "lucide-react";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 
 interface Profile {
@@ -33,6 +34,12 @@ interface UserSettings {
   agent_card_limit_monthly: number;
   virtual_phone: string | null;
   proactive_daily_limit?: number;
+  auto_install_skills?: boolean;
+  auto_acquire_oauth?: boolean;
+  auto_signup_free_trial?: boolean;
+  parallel_execution?: boolean;
+  iterative_deepening?: boolean;
+  monthly_budget?: number;
 }
 
 interface AgentCard {
@@ -850,6 +857,111 @@ export default function SettingsPage() {
               {savingSettings ? "Saving..." : "Save AI Settings"}
             </Button>
           </CardFooter>
+        </Card>
+      )}
+
+      {/* Autonomous Features */}
+      {settings && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5" />
+              <CardTitle>Autonomous Features</CardTitle>
+            </div>
+            <CardDescription>
+              Enable AI to autonomously acquire capabilities and execute tasks without prompting
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Auto-install skills */}
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <Label className="font-semibold">Auto-Install Skills</Label>
+                <p className="text-xs text-muted-foreground">
+                  AI can automatically install pre-vetted skills from the library (Google Sheets, Slack, etc.)
+                </p>
+              </div>
+              <Switch
+                checked={settings.auto_install_skills ?? true}
+                onCheckedChange={(checked) => setSettings({ ...settings, auto_install_skills: checked })}
+              />
+            </div>
+
+            {/* Auto-acquire OAuth */}
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <Label className="font-semibold">Auto-Acquire OAuth</Label>
+                <p className="text-xs text-muted-foreground">
+                  AI can autonomously navigate to services and acquire OAuth tokens via browser automation
+                </p>
+              </div>
+              <Switch
+                checked={settings.auto_acquire_oauth ?? true}
+                onCheckedChange={(checked) => setSettings({ ...settings, auto_acquire_oauth: checked })}
+              />
+            </div>
+
+            {/* Auto-signup free trials */}
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <Label className="font-semibold">Auto-Signup Free Trials</Label>
+                <p className="text-xs text-muted-foreground">
+                  AI can sign up for free API services (Gemini, DeepSeek) without entering payment info
+                </p>
+              </div>
+              <Switch
+                checked={settings.auto_signup_free_trial ?? true}
+                onCheckedChange={(checked) => setSettings({ ...settings, auto_signup_free_trial: checked })}
+              />
+            </div>
+
+            {/* Parallel execution */}
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <Label className="font-semibold">Parallel Execution</Label>
+                <p className="text-xs text-muted-foreground">
+                  AI can run multiple browser sessions simultaneously (e.g., compare 10 hotel sites)
+                </p>
+              </div>
+              <Switch
+                checked={settings.parallel_execution ?? true}
+                onCheckedChange={(checked) => setSettings({ ...settings, parallel_execution: checked })}
+              />
+            </div>
+
+            {/* Iterative deepening */}
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <Label className="font-semibold">Iterative Deepening</Label>
+                <p className="text-xs text-muted-foreground">
+                  AI can keep searching iteratively until finding the absolute best result
+                </p>
+              </div>
+              <Switch
+                checked={settings.iterative_deepening ?? true}
+                onCheckedChange={(checked) => setSettings({ ...settings, iterative_deepening: checked })}
+              />
+            </div>
+
+            {/* Budget limit */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Monthly Budget Limit</Label>
+              <div className="flex items-center gap-4">
+                <Input
+                  type="number"
+                  value={settings.monthly_budget ?? 15}
+                  onChange={(e) => setSettings({ ...settings, monthly_budget: parseFloat(e.target.value) })}
+                  min={5}
+                  max={100}
+                  step={5}
+                  className="w-32"
+                />
+                <span className="text-sm text-muted-foreground">
+                  AI can spend up to ${settings.monthly_budget ?? 15}/month autonomously
+                </span>
+              </div>
+            </div>
+          </CardContent>
         </Card>
       )}
 
