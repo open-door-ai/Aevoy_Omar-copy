@@ -83,6 +83,52 @@ export async function getCredential(
 }
 
 /**
+ * List all stored credential domains for a user (domain names only, no secrets).
+ */
+export async function listCredentials(
+  userId: string
+): Promise<string[]> {
+  try {
+    const { data } = await getSupabaseClient()
+      .from("credential_vault")
+      .select("site_domain")
+      .eq("user_id", userId);
+
+    return (data || []).map(row => row.site_domain);
+  } catch (error) {
+    console.error(`[VAULT] Failed to list credentials:`, error);
+    return [];
+  }
+}
+
+/**
+ * Delete credentials for a specific domain.
+ */
+export async function deleteCredential(
+  userId: string,
+  siteDomain: string
+): Promise<boolean> {
+  try {
+    const { error } = await getSupabaseClient()
+      .from("credential_vault")
+      .delete()
+      .eq("user_id", userId)
+      .eq("site_domain", siteDomain);
+
+    if (error) {
+      console.error(`[VAULT] Failed to delete credential for ${siteDomain}:`, error);
+      return false;
+    }
+
+    console.log(`[VAULT] Deleted credentials for ${siteDomain}`);
+    return true;
+  } catch (error) {
+    console.error(`[VAULT] Failed to delete credential for ${siteDomain}:`, error);
+    return false;
+  }
+}
+
+/**
  * Update 2FA status for a site (e.g., after switching to Twilio number).
  */
 export async function updateTfaStatus(

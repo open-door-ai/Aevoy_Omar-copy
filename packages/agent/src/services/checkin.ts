@@ -19,7 +19,11 @@ export async function makeCheckinCall(
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const apiKeySid = process.env.TWILIO_API_KEY_SID;
   const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
-  const twilioNumber = process.env.TWILIO_PHONE_NUMBER || "+17789008951";
+  const twilioNumber = process.env.TWILIO_PHONE_NUMBER || "";
+  if (!twilioNumber) {
+    console.error("[CHECKIN] TWILIO_PHONE_NUMBER env var not set, cannot make check-in call");
+    return;
+  }
   const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
 
   if (!accountSid || !authToken || !twilioNumber) {

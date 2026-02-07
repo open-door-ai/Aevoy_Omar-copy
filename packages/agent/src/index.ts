@@ -617,7 +617,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
     // Send message to user via email and SMS
     if (speechResult.trim()) {
       const { data: profile } = await getSupabaseClient()
-        .from("profiles").select("username, email, twilio_number").eq("id", userId).single();
+        .from("profiles").select("username, email, twilio_number, phone_number").eq("id", userId).single();
 
       if (profile) {
         const { sendResponse: sendEmail } = await import("./services/email.js");
@@ -633,11 +633,11 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
           body: messageBody,
         });
 
-        // SMS the user if they have a phone
-        if (profile.twilio_number) {
+        // SMS the user if they have a personal phone number
+        if (profile.phone_number) {
           await sendSms({
             userId,
-            to: profile.email, // This would need to be their personal phone
+            to: profile.phone_number,
             body: `[Aevoy] Missed call from ${callerNumber}: "${speechResult.substring(0, 140)}"`,
           });
         }
@@ -922,31 +922,44 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     const { normalizePhone } = await import("./utils/phone.js");
     const normalized = normalizePhone(callerNumber);
 
-    // Find user by PIN (plaintext for now, will encrypt later)
-    const { data: profiles } = await supabase
+    // Look up user by caller phone number (not all profiles)
+    const { data: profile } = await supabase
       .from("profiles")
-      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, phone_number");
+      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, phone_number")
+      .eq("phone_number", normalized)
+      .single();
 
-    if (!profiles || profiles.length === 0) {
+    if (!profile || !profile.voice_pin) {
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">No account found with that PIN. Please sign up at aevoy dot com.</Say>
+  <Say voice="Polly.Amy">No account found for this phone number. Please sign up at aevoy dot com.</Say>
   <Hangup/>
 </Response>`);
     }
 
-    // Match PIN
-    const matchedProfile = profiles.find(p => p.voice_pin === enteredPin);
+    // Timing-safe PIN comparison
+    const pinBuffer = Buffer.from(enteredPin);
+    const storedPinBuffer = Buffer.from(profile.voice_pin);
+    const pinMatch = pinBuffer.length === storedPinBuffer.length &&
+      crypto.timingSafeEqual(pinBuffer, storedPinBuffer);
 
-    if (!matchedProfile) {
-      // Failed PIN attempt
-      console.log(`[PIN] Invalid PIN from ${callerNumber}`);
+    if (!pinMatch) {
+      // Failed PIN attempt — increment attempts
+      const attempts = (profile.voice_pin_attempts || 0) + 1;
+      const updateData: Record<string, unknown> = { voice_pin_attempts: attempts };
+      if (attempts >= 3) {
+        updateData.voice_pin_locked_until = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      }
+      await supabase.from("profiles").update(updateData).eq("id", profile.id);
+
+      const remaining = Math.max(0, 3 - attempts);
+      console.log(`[PIN] Invalid PIN from ${callerNumber}, ${remaining} attempts remaining`);
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">Incorrect PIN. You have 2 attempts remaining.</Say>
+  <Say voice="Polly.Amy">Incorrect PIN. You have ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.</Say>
   <Gather action="${process.env.AGENT_URL}/webhook/voice/pin-verify" numDigits="4" timeout="10">
     <Say voice="Polly.Amy">Please enter your 4 to 6 digit PIN.</Say>
   </Gather>
@@ -954,8 +967,8 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
 </Response>`);
     }
 
-    const userId = matchedProfile.id;
-    console.log(`[PIN] Successful verification for ${matchedProfile.username} (${userId.slice(0, 8)})`);
+    const userId = profile.id;
+    console.log(`[PIN] Successful verification for ${profile.username} (${userId.slice(0, 8)})`);
 
     // Reset PIN attempts
     await supabase
@@ -969,7 +982,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
       call_sid: callSid,
       direction: "inbound",
       from_number: callerNumber,
-      to_number: "+17789008951",
+      to_number: process.env.TWILIO_PHONE_NUMBER || "",
       call_type: "task",
       pin_required: true,
       pin_success: true

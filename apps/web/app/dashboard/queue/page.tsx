@@ -1,493 +1,379 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   CheckCircle2,
   Circle,
   Clock,
   AlertCircle,
   PlayCircle,
-  PauseCircle,
-  Eye,
-  Trash2,
-  Filter,
+  XCircle,
   Search,
-  ChevronRight,
-  Monitor,
-  Smartphone,
-  Laptop,
-  Globe,
-  Zap,
-  Brain,
-  Target,
+  Inbox,
+  Loader2,
+  Send,
+  Mail,
+  MessageSquare,
+  Phone,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { SkeletonList } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { useToast } from '@/components/ui/toast';
 
-interface QueueTask {
+interface Task {
   id: string;
-  title: string;
-  description: string;
-  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed';
-  priority: 'low' | 'medium' | 'high' | 'urgent';
-  progress: number;
-  estimatedTime: string;
-  assignedTo: 'ai' | 'browser' | 'human';
-  device?: 'desktop' | 'mobile' | 'tablet';
-  browserSession?: {
-    url: string;
-    screenshot?: string;
-    active: boolean;
-  };
-  createdAt: string;
-  startedAt?: string;
-  completedAt?: string;
+  email_subject: string | null;
+  status: string;
+  type: string | null;
+  input_channel: string | null;
+  created_at: string;
+  completed_at: string | null;
+  tokens_used: number;
+  cost_usd: number | null;
+  error_message: string | null;
+  verification_status: string | null;
+  cascade_level: string | null;
 }
 
-const MOCK_TASKS: QueueTask[] = [
-  {
-    id: '1',
-    title: 'Research market trends for Q1 2026',
-    description: 'Analyze competitor data and market sentiment across 15 sources',
-    status: 'running',
-    priority: 'high',
-    progress: 67,
-    estimatedTime: '2m remaining',
-    assignedTo: 'ai',
-    device: 'desktop',
-    createdAt: '2026-02-07T06:30:00Z',
-    startedAt: '2026-02-07T06:35:00Z',
-  },
-  {
-    id: '2',
-    title: 'Book hotel for March trip',
-    description: '4-star hotel in San Francisco, check-in March 15, checkout March 20',
-    status: 'pending',
-    priority: 'urgent',
-    progress: 0,
-    estimatedTime: '5m',
-    assignedTo: 'browser',
-    device: 'desktop',
-    browserSession: {
-      url: 'https://booking.com',
-      active: false,
-    },
-    createdAt: '2026-02-07T06:40:00Z',
-  },
-  {
-    id: '3',
-    title: 'Update Q4 expense report',
-    description: 'Categorize 47 transactions in Google Sheets',
-    status: 'completed',
-    priority: 'medium',
-    progress: 100,
-    estimatedTime: 'Done',
-    assignedTo: 'ai',
-    device: 'mobile',
-    createdAt: '2026-02-07T05:00:00Z',
-    startedAt: '2026-02-07T05:05:00Z',
-    completedAt: '2026-02-07T05:12:00Z',
-  },
-  {
-    id: '4',
-    title: 'Schedule team standup for next week',
-    description: 'Find common availability across 8 calendars',
-    status: 'paused',
-    priority: 'medium',
-    progress: 34,
-    estimatedTime: 'Paused',
-    assignedTo: 'ai',
-    device: 'tablet',
-    createdAt: '2026-02-07T04:00:00Z',
-    startedAt: '2026-02-07T04:10:00Z',
-  },
-  {
-    id: '5',
-    title: 'Download and summarize latest research papers',
-    description: 'ArXiv search: "transformer attention mechanisms" (last 30 days)',
-    status: 'failed',
-    priority: 'low',
-    progress: 15,
-    estimatedTime: 'Failed',
-    assignedTo: 'browser',
-    device: 'desktop',
-    createdAt: '2026-02-07T03:00:00Z',
-    startedAt: '2026-02-07T03:05:00Z',
-  },
-];
+type StatusFilter = 'all' | 'pending' | 'processing' | 'awaiting_confirmation' | 'awaiting_user_input';
 
 export default function TaskQueuePage() {
-  const [tasks, setTasks] = useState<QueueTask[]>(MOCK_TASKS);
-  const [selectedTask, setSelectedTask] = useState<QueueTask | null>(null);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [showBrowserPortal, setShowBrowserPortal] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const toast = useToast();
+
+  const fetchTasks = useCallback(async () => {
+    try {
+      const statuses = 'pending,processing,awaiting_confirmation,awaiting_user_input';
+      const response = await fetch(`/api/tasks?status=${statuses}&limit=50`);
+      const data = await response.json();
+      if (data.tasks) {
+        setTasks(data.tasks);
+      }
+    } catch (err) {
+      console.error('Error fetching queue tasks:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTasks();
+    // Poll every 5 seconds for active queue
+    const interval = setInterval(fetchTasks, 5000);
+    return () => clearInterval(interval);
+  }, [fetchTasks]);
+
+  const handleCancel = async (taskId: string) => {
+    setCancellingId(taskId);
+    try {
+      // Optimistic update
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      toast.success('Task cancelled');
+    } catch {
+      toast.error('Failed to cancel task');
+      fetchTasks();
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   const filteredTasks = tasks.filter((task) => {
     const matchesStatus = filterStatus === 'all' || task.status === filterStatus;
-    const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase()) || task.description.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch =
+      !searchQuery ||
+      (task.email_subject || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesStatus && matchesSearch;
   });
 
+  // Group tasks by status
+  const groupedTasks: Record<string, Task[]> = {};
+  const statusOrder = ['processing', 'pending', 'awaiting_confirmation', 'awaiting_user_input'];
+  for (const task of filteredTasks) {
+    const key = task.status;
+    if (!groupedTasks[key]) groupedTasks[key] = [];
+    groupedTasks[key].push(task);
+  }
+
   const stats = {
     pending: tasks.filter((t) => t.status === 'pending').length,
-    running: tasks.filter((t) => t.status === 'running').length,
-    completed: tasks.filter((t) => t.status === 'completed').length,
-    failed: tasks.filter((t) => t.status === 'failed').length,
+    processing: tasks.filter((t) => t.status === 'processing').length,
+    awaiting: tasks.filter(
+      (t) => t.status === 'awaiting_confirmation' || t.status === 'awaiting_user_input'
+    ).length,
+    total: tasks.length,
   };
 
-  const getStatusIcon = (status: QueueTask['status']) => {
+  const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle2 className="w-5 h-5 text-green-400" />;
-      case 'running':
-        return <PlayCircle className="w-5 h-5 text-blue-400 animate-pulse" />;
-      case 'paused':
-        return <PauseCircle className="w-5 h-5 text-yellow-400" />;
+        return <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />;
+      case 'processing':
+        return <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />;
       case 'failed':
-        return <AlertCircle className="w-5 h-5 text-red-400" />;
+        return <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />;
+      case 'awaiting_confirmation':
+      case 'awaiting_user_input':
+        return <AlertCircle className="w-4 h-4 text-orange-600 dark:text-orange-400" />;
       default:
-        return <Circle className="w-5 h-5 text-gray-400" />;
+        return <Circle className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />;
     }
   };
 
-  const getPriorityColor = (priority: QueueTask['priority']) => {
-    switch (priority) {
-      case 'urgent':
-        return 'border-red-500/50 bg-red-500/5';
-      case 'high':
-        return 'border-orange-500/50 bg-orange-500/5';
-      case 'medium':
-        return 'border-blue-500/50 bg-blue-500/5';
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300';
+      case 'processing':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300';
+      case 'failed':
+        return 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300';
+      case 'awaiting_confirmation':
+      case 'awaiting_user_input':
+        return 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300';
       default:
-        return 'border-gray-500/50 bg-gray-500/5';
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300';
     }
   };
 
-  const getAssignedIcon = (assignedTo: QueueTask['assignedTo']) => {
-    switch (assignedTo) {
-      case 'ai':
-        return <Brain className="w-4 h-4 text-purple-400" />;
-      case 'browser':
-        return <Globe className="w-4 h-4 text-blue-400" />;
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'processing':
+        return 'Processing';
+      case 'pending':
+        return 'Pending';
+      case 'awaiting_confirmation':
+        return 'Awaiting Confirmation';
+      case 'awaiting_user_input':
+        return 'Awaiting Input';
       default:
-        return <Target className="w-4 h-4 text-gray-400" />;
+        return status;
     }
   };
 
-  const getDeviceIcon = (device?: QueueTask['device']) => {
-    switch (device) {
-      case 'mobile':
-        return <Smartphone className="w-4 h-4 text-gray-400" />;
-      case 'tablet':
-        return <Laptop className="w-4 h-4 text-gray-400" />;
+  const getChannelIcon = (channel: string | null) => {
+    switch (channel) {
+      case 'sms':
+        return <MessageSquare className="w-3 h-3" />;
+      case 'voice':
+        return <Phone className="w-3 h-3" />;
+      case 'web':
+        return <Send className="w-3 h-3" />;
       default:
-        return <Monitor className="w-4 h-4 text-gray-400" />;
+        return <Mail className="w-3 h-3" />;
     }
   };
+
+  const formatTime = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+
+    if (diff < 60 * 1000) return 'Just now';
+    if (diff < 60 * 60 * 1000) {
+      const mins = Math.floor(diff / (60 * 1000));
+      return `${mins}m ago`;
+    }
+    if (diff < 24 * 60 * 60 * 1000) {
+      const hours = Math.floor(diff / (60 * 60 * 1000));
+      return `${hours}h ago`;
+    }
+    return date.toLocaleDateString();
+  };
+
+  const statusFilters: { value: StatusFilter; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'processing', label: 'Processing' },
+    { value: 'pending', label: 'Pending' },
+    { value: 'awaiting_confirmation', label: 'Awaiting' },
+  ];
 
   return (
-    <div className="min-h-screen bg-black p-4 md:p-6 lg:p-8">
-      <div className="max-w-[1920px] mx-auto">
-        {/* Liquid Glass Header */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8"
-        >
-          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-white/10 via-white/5 to-transparent backdrop-blur-xl border border-white/20 p-6 md:p-8">
-            {/* Gradient overlay */}
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 via-blue-500/10 to-pink-500/10" />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold">Task Queue</h1>
+        <p className="text-muted-foreground">
+          Active and pending tasks being processed by your AI
+        </p>
+      </div>
 
-            <div className="relative z-10">
-              <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold text-white mb-2 bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
-                Task Queue
-              </h1>
-              <p className="text-gray-400 text-sm md:text-base">
-                Real-time orchestration of {tasks.length} autonomous tasks
-              </p>
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2">
+              <PlayCircle className="w-4 h-4 text-blue-500" />
+              <span className="text-sm text-muted-foreground">Processing</span>
+            </div>
+            <p className="text-2xl font-bold mt-1">{stats.processing}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-yellow-500" />
+              <span className="text-sm text-muted-foreground">Pending</span>
+            </div>
+            <p className="text-2xl font-bold mt-1">{stats.pending}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-orange-500" />
+              <span className="text-sm text-muted-foreground">Awaiting</span>
+            </div>
+            <p className="text-2xl font-bold mt-1">{stats.awaiting}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2">
+              <Inbox className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Total in Queue</span>
+            </div>
+            <p className="text-2xl font-bold mt-1">{stats.total}</p>
+          </CardContent>
+        </Card>
+      </div>
 
-              {/* Stats Pills */}
-              <div className="mt-6 flex flex-wrap gap-3">
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-blue-500/20 border border-blue-500/30 backdrop-blur-sm">
-                  <PlayCircle className="w-4 h-4 text-blue-400" />
-                  <span className="text-white font-medium">{stats.running} Running</span>
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-gray-500/20 border border-gray-500/30 backdrop-blur-sm">
-                  <Circle className="w-4 h-4 text-gray-400" />
-                  <span className="text-white font-medium">{stats.pending} Pending</span>
-                </div>
-                <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/20 border border-green-500/30 backdrop-blur-sm">
-                  <CheckCircle2 className="w-4 h-4 text-green-400" />
-                  <span className="text-white font-medium">{stats.completed} Done</span>
-                </div>
-                {stats.failed > 0 && (
-                  <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-500/20 border border-red-500/30 backdrop-blur-sm">
-                    <AlertCircle className="w-4 h-4 text-red-400" />
-                    <span className="text-white font-medium">{stats.failed} Failed</span>
-                  </div>
-                )}
-              </div>
+      {/* Filters & Search */}
+      <Card>
+        <CardContent className="pt-4 pb-4">
+          <div className="flex flex-col md:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search tasks..."
+                className="pl-10"
+              />
+            </div>
+            <div className="flex gap-2 overflow-x-auto">
+              {statusFilters.map((sf) => (
+                <Button
+                  key={sf.value}
+                  variant={filterStatus === sf.value ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setFilterStatus(sf.value)}
+                >
+                  {sf.label}
+                </Button>
+              ))}
             </div>
           </div>
-        </motion.div>
+        </CardContent>
+      </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Panel - Task List */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Filters & Search */}
-            <div className="rounded-2xl bg-gradient-to-br from-white/10 via-white/5 to-transparent backdrop-blur-xl border border-white/20 p-4">
-              <div className="flex flex-col md:flex-row gap-3">
-                {/* Search */}
-                <div className="flex-1 relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search tasks..."
-                    className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 transition-all"
-                  />
+      {/* Task List */}
+      {loading ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Loading queue...</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <SkeletonList count={4} variant="task" />
+          </CardContent>
+        </Card>
+      ) : filteredTasks.length === 0 ? (
+        <Card>
+          <CardContent className="py-6">
+            <EmptyState
+              icon={Inbox}
+              title="Nothing in the queue right now"
+              description="You're all caught up! Send a task via email, SMS, or the dashboard to get started."
+            />
+          </CardContent>
+        </Card>
+      ) : (
+        statusOrder.map((status) => {
+          const group = groupedTasks[status];
+          if (!group || group.length === 0) return null;
+          return (
+            <Card key={status}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  {getStatusIcon(status)}
+                  <CardTitle className="text-lg">{getStatusLabel(status)}</CardTitle>
+                  <span className="text-sm text-muted-foreground">({group.length})</span>
                 </div>
-
-                {/* Status Filter */}
-                <div className="flex gap-2 overflow-x-auto pb-2 md:pb-0">
-                  {['all', 'running', 'pending', 'paused', 'completed', 'failed'].map((status) => (
-                    <button
-                      key={status}
-                      onClick={() => setFilterStatus(status)}
-                      className={`px-4 py-2 rounded-xl font-medium whitespace-nowrap transition-all ${
-                        filterStatus === status
-                          ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/50'
-                          : 'bg-white/5 text-gray-400 hover:bg-white/10'
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {group.map((task) => (
+                    <div
+                      key={task.id}
+                      className={`flex items-center justify-between p-4 border rounded-lg transition-all ${
+                        task.status === 'processing'
+                          ? 'border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20'
+                          : ''
                       }`}
                     >
-                      {status.charAt(0).toUpperCase() + status.slice(1)}
-                    </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          {getStatusIcon(task.status)}
+                          <p className="font-medium truncate">
+                            {task.email_subject || 'Task'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap ml-6">
+                          <span className="text-sm text-muted-foreground flex items-center gap-1">
+                            {getChannelIcon(task.input_channel)}
+                            {task.input_channel || 'email'}
+                          </span>
+                          <span className="text-sm text-muted-foreground">
+                            {formatTime(task.created_at)}
+                          </span>
+                          {task.type && (
+                            <span className="text-xs bg-muted px-2 py-0.5 rounded">
+                              {task.type}
+                            </span>
+                          )}
+                          <span
+                            className={`px-2 py-0.5 text-xs rounded-full ${getStatusColor(
+                              task.status
+                            )}`}
+                          >
+                            {getStatusLabel(task.status)}
+                          </span>
+                        </div>
+                        {task.error_message && (
+                          <p className="text-xs text-red-500 mt-1 ml-6 truncate">
+                            {task.error_message}
+                          </p>
+                        )}
+                      </div>
+                      {task.status === 'pending' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20 shrink-0"
+                          onClick={() => handleCancel(task.id)}
+                          disabled={cancellingId === task.id}
+                        >
+                          {cancellingId === task.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            'Cancel'
+                          )}
+                        </Button>
+                      )}
+                    </div>
                   ))}
                 </div>
-              </div>
-            </div>
-
-            {/* Task Cards */}
-            <AnimatePresence mode="popLayout">
-              {filteredTasks.map((task, index) => (
-                <motion.div
-                  key={task.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ delay: index * 0.05 }}
-                  onClick={() => setSelectedTask(task)}
-                  className={`relative overflow-hidden rounded-2xl border-2 ${getPriorityColor(
-                    task.priority
-                  )} backdrop-blur-xl cursor-pointer group hover:scale-[1.02] transition-all duration-300`}
-                >
-                  {/* Background gradient */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-
-                  <div className="relative p-5 md:p-6">
-                    <div className="flex items-start gap-4">
-                      {/* Status Icon */}
-                      <div className="flex-shrink-0 mt-1">{getStatusIcon(task.status)}</div>
-
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <h3 className="text-white font-semibold text-base md:text-lg group-hover:text-purple-300 transition-colors">
-                            {task.title}
-                          </h3>
-
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            {getAssignedIcon(task.assignedTo)}
-                            {getDeviceIcon(task.device)}
-                          </div>
-                        </div>
-
-                        <p className="text-gray-400 text-sm mb-4 line-clamp-2">{task.description}</p>
-
-                        {/* Progress Bar */}
-                        {task.status === 'running' || task.status === 'paused' ? (
-                          <div className="mb-3">
-                            <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                              <span>Progress</span>
-                              <span>{task.progress}%</span>
-                            </div>
-                            <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                              <motion.div
-                                className="h-full bg-gradient-to-r from-purple-500 to-blue-500"
-                                initial={{ width: 0 }}
-                                animate={{ width: `${task.progress}%` }}
-                                transition={{ duration: 0.5 }}
-                              />
-                            </div>
-                          </div>
-                        ) : null}
-
-                        {/* Footer */}
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-xs text-gray-500">
-                            <Clock className="w-3 h-3" />
-                            <span>{task.estimatedTime}</span>
-                          </div>
-
-                          <button className="flex items-center gap-1 text-purple-400 hover:text-purple-300 text-xs font-medium transition-colors">
-                            View Details
-                            <ChevronRight className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-
-            {filteredTasks.length === 0 && (
-              <div className="text-center py-12 rounded-2xl bg-white/5 border border-white/10">
-                <Filter className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                <p className="text-gray-400">No tasks match your filters</p>
-              </div>
-            )}
-          </div>
-
-          {/* Right Panel - Task Details & Browser Portal */}
-          <div className="space-y-4">
-            <AnimatePresence mode="wait">
-              {selectedTask ? (
-                <motion.div
-                  key={selectedTask.id}
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  className="rounded-2xl bg-gradient-to-br from-white/10 via-white/5 to-transparent backdrop-blur-xl border border-white/20 p-6 sticky top-6"
-                >
-                  <h2 className="text-xl font-bold text-white mb-4">Task Details</h2>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-xs text-gray-400 uppercase tracking-wider">Title</label>
-                      <p className="text-white font-medium mt-1">{selectedTask.title}</p>
-                    </div>
-
-                    <div>
-                      <label className="text-xs text-gray-400 uppercase tracking-wider">Description</label>
-                      <p className="text-gray-300 text-sm mt-1">{selectedTask.description}</p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Status</label>
-                        <div className="flex items-center gap-2 mt-1">
-                          {getStatusIcon(selectedTask.status)}
-                          <span className="text-white capitalize">{selectedTask.status}</span>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Priority</label>
-                        <p className="text-white capitalize mt-1">{selectedTask.priority}</p>
-                      </div>
-                    </div>
-
-                    {selectedTask.browserSession && (
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Browser Session</label>
-                        <div className="mt-2 p-3 bg-white/5 rounded-lg border border-white/10">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Globe className="w-4 h-4 text-blue-400" />
-                            <span className="text-white text-sm truncate">{selectedTask.browserSession.url}</span>
-                          </div>
-                          <button
-                            onClick={() => setShowBrowserPortal(true)}
-                            className="w-full mt-2 px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2"
-                          >
-                            <Eye className="w-4 h-4" />
-                            Open Browser Portal
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Actions */}
-                    <div className="grid grid-cols-2 gap-2 pt-4 border-t border-white/10">
-                      {selectedTask.status === 'running' && (
-                        <button className="px-4 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 border border-yellow-500/30 text-yellow-300 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2">
-                          <PauseCircle className="w-4 h-4" />
-                          Pause
-                        </button>
-                      )}
-                      {(selectedTask.status === 'paused' || selectedTask.status === 'pending') && (
-                        <button className="px-4 py-2 bg-green-500/20 hover:bg-green-500/30 border border-green-500/30 text-green-300 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2">
-                          <PlayCircle className="w-4 h-4" />
-                          Resume
-                        </button>
-                      )}
-                      <button className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2">
-                        <Trash2 className="w-4 h-4" />
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                </motion.div>
-              ) : (
-                <div className="rounded-2xl bg-white/5 border border-white/10 p-12 text-center">
-                  <Target className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                  <p className="text-gray-400">Select a task to view details</p>
-                </div>
-              )}
-            </AnimatePresence>
-
-            {/* Browser Portal Modal */}
-            <AnimatePresence>
-              {showBrowserPortal && selectedTask?.browserSession && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-                  onClick={() => setShowBrowserPortal(false)}
-                >
-                  <motion.div
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.9, opacity: 0 }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-full max-w-6xl h-[80vh] rounded-3xl bg-gradient-to-br from-white/10 via-white/5 to-transparent backdrop-blur-xl border border-white/20 overflow-hidden"
-                  >
-                    {/* Browser Header */}
-                    <div className="bg-white/10 border-b border-white/10 px-6 py-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3 flex-1">
-                        <Globe className="w-5 h-5 text-blue-400" />
-                        <input
-                          type="text"
-                          value={selectedTask.browserSession.url}
-                          readOnly
-                          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-white text-sm"
-                        />
-                      </div>
-                      <button
-                        onClick={() => setShowBrowserPortal(false)}
-                        className="ml-4 px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300 rounded-lg text-sm font-medium transition-colors"
-                      >
-                        Close
-                      </button>
-                    </div>
-
-                    {/* Browser Content */}
-                    <div className="h-full bg-white/5 flex items-center justify-center">
-                      <div className="text-center">
-                        <Monitor className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-                        <p className="text-gray-400 mb-2">Browser automation in progress</p>
-                        <p className="text-gray-500 text-sm">Live session will appear here</p>
-                      </div>
-                    </div>
-                  </motion.div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
-      </div>
+              </CardContent>
+            </Card>
+          );
+        })
+      )}
     </div>
   );
 }

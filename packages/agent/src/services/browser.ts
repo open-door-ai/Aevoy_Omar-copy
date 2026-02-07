@@ -1,7 +1,11 @@
+/**
+ * @deprecated Use ExecutionEngine instead. This module is kept for backward compatibility.
+ * Each call creates its own browser instance to avoid concurrency hazards.
+ */
+
 import { chromium, Browser, BrowserContext, Page } from "playwright";
 import Anthropic from "@anthropic-ai/sdk";
 
-let browser: Browser | null = null;
 let anthropic: Anthropic | null = null;
 
 function getAnthropicClient(): Anthropic {
@@ -14,24 +18,28 @@ function getAnthropicClient(): Anthropic {
 }
 
 export async function launchBrowser(): Promise<Browser> {
-  if (!browser) {
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-      ],
-    });
+  // Each call creates its own browser instance to avoid concurrency hazards
+  const isProduction = process.env.NODE_ENV === 'production';
+  const args = [
+    "--disable-dev-shm-usage",
+    "--disable-setuid-sandbox",
+  ];
+  // Only use --no-sandbox in development
+  if (!isProduction) {
+    args.push("--no-sandbox");
   }
-  return browser;
+  return chromium.launch({
+    headless: true,
+    args,
+  });
 }
 
+/**
+ * @deprecated Each launchBrowser() call now creates its own instance.
+ * Close the browser instance directly instead.
+ */
 export async function closeBrowser(): Promise<void> {
-  if (browser) {
-    await browser.close();
-    browser = null;
-  }
+  // No-op: browser instances are now scoped to callers
 }
 
 export async function createContext(): Promise<BrowserContext> {

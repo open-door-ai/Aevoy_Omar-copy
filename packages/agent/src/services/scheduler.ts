@@ -10,6 +10,7 @@ import { getProactiveEngine } from './proactive.js';
 import { compressOldMemories, decayMemories } from './memory.js';
 import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
 import { detectPatterns } from './pattern-detector.js';
+import { CronExpressionParser } from 'cron-parser';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -392,39 +393,57 @@ async function runCheckinCalls(): Promise<void> {
 }
 
 /**
- * Check if current UTC time matches user's local time (±5min window).
- * Converts user's local HH:MM time to UTC and compares.
+ * Get the current hour in a user's timezone, handling DST automatically.
+ */
+function getUserLocalHour(timezone: string): number {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || "UTC",
+      hour: "numeric",
+      hour12: false,
+    });
+    return parseInt(formatter.format(new Date()), 10);
+  } catch {
+    return new Date().getUTCHours();
+  }
+}
+
+/**
+ * Get the current minute in a user's timezone, handling DST automatically.
+ */
+function getUserLocalMinute(timezone: string): number {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || "UTC",
+      minute: "numeric",
+    });
+    return parseInt(formatter.format(new Date()), 10);
+  } catch {
+    return new Date().getUTCMinutes();
+  }
+}
+
+/**
+ * Check if current time matches user's local time (±5min window).
+ * Uses Intl.DateTimeFormat for DST-aware timezone conversion.
  */
 function isTimeMatch(currentHourUTC: number, currentMinuteUTC: number, targetTime: string, timezone: string): boolean {
   // Parse targetTime (HH:MM:SS)
-  const [hour, minute] = targetTime.split(":").map(Number);
+  const [targetHour, targetMinute] = targetTime.split(":").map(Number);
 
-  // Timezone offset mapping (UTC offset in hours)
-  const timezoneOffsets: Record<string, number> = {
-    "America/Vancouver": -8,
-    "America/Los_Angeles": -8,
-    "America/Denver": -7,
-    "America/Chicago": -6,
-    "America/New_York": -5,
-    "America/Toronto": -5,
-    "Europe/London": 0,
-    "Europe/Paris": 1,
-    "Asia/Dubai": 4,
-    "Asia/Kolkata": 5.5,
-    "Asia/Shanghai": 8,
-    "Asia/Tokyo": 9,
-    "Australia/Sydney": 11
-  };
+  // Get current time in user's timezone (DST-aware)
+  const userHour = getUserLocalHour(timezone);
+  const userMinute = getUserLocalMinute(timezone);
 
-  const offset = timezoneOffsets[timezone] || 0;
+  // Calculate time difference in minutes between user's local time and target time
+  const currentTotalMinutes = userHour * 60 + userMinute;
+  const targetTotalMinutes = targetHour * 60 + targetMinute;
+  let diffMinutes = Math.abs(currentTotalMinutes - targetTotalMinutes);
 
-  // Convert local time to UTC (subtract offset)
-  const targetHourUTC = (hour - offset + 24) % 24;
-
-  // Calculate time difference in minutes
-  const currentTotalMinutes = currentHourUTC * 60 + currentMinuteUTC;
-  const targetTotalMinutes = targetHourUTC * 60 + minute;
-  const diffMinutes = Math.abs(currentTotalMinutes - targetTotalMinutes);
+  // Handle midnight wrap-around
+  if (diffMinutes > 12 * 60) {
+    diffMinutes = 24 * 60 - diffMinutes;
+  }
 
   // Match if within ±5 minutes
   return diffMinutes <= 5;
@@ -463,16 +482,60 @@ async function runMemoryCompression(): Promise<void> {
   }
 }
 
-// Track last retention run date to avoid running more than once per day
+// In-memory cache to avoid DB reads on every hourly check
 let lastRetentionDate = "";
+
+/**
+ * Get the last retention run date from DB (persists across restarts).
+ */
+async function getPersistedRetentionDate(): Promise<string> {
+  try {
+    const { data } = await getSupabaseClient()
+      .from("distributed_locks")
+      .select("acquired_at")
+      .eq("lock_name", "retention_last_run")
+      .single();
+    if (data?.acquired_at) {
+      return new Date(data.acquired_at).toISOString().split("T")[0];
+    }
+  } catch {
+    // Table may not have the row yet
+  }
+  return "";
+}
+
+/**
+ * Persist the retention run date to DB.
+ */
+async function persistRetentionDate(date: string): Promise<void> {
+  try {
+    await getSupabaseClient()
+      .from("distributed_locks")
+      .upsert(
+        { lock_name: "retention_last_run", acquired_at: new Date(date).toISOString(), expires_at: new Date("2099-12-31").toISOString() },
+        { onConflict: "lock_name" }
+      );
+  } catch {
+    // Non-critical
+  }
+}
 
 /**
  * Delete completed/failed tasks and action_history older than 90 days.
  * Runs once per day (checked on each hourly invocation).
+ * Persists last run date to DB so it survives restarts.
  */
 async function runDataRetention(): Promise<void> {
   const today = new Date().toISOString().split("T")[0];
+
+  // Check in-memory cache first
   if (lastRetentionDate === today) return;
+
+  // Check DB-persisted date (survives restarts)
+  if (!lastRetentionDate) {
+    lastRetentionDate = await getPersistedRetentionDate();
+    if (lastRetentionDate === today) return;
+  }
 
   const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -501,6 +564,7 @@ async function runDataRetention(): Promise<void> {
   }
 
   lastRetentionDate = today;
+  await persistRetentionDate(today);
 }
 
 /**
@@ -579,94 +643,29 @@ async function runDueScheduledTasksInner(): Promise<void> {
 }
 
 /**
- * Calculate next run time based on cron expression
- * Simplified version - supports basic patterns:
- * - "daily" or "0 9 * * *" - runs daily at 9am
- * - "weekly" or "0 9 * * 1" - runs weekly on Monday at 9am
- * - "monthly" or "0 9 1 * *" - runs monthly on 1st at 9am
- * - "hourly" - runs every hour
+ * Calculate next run time based on cron expression.
+ * Uses cron-parser for proper cron expression parsing.
+ * Supports keyword shortcuts: hourly, daily, weekly, monthly.
  */
-function calculateNextRun(cronExpression: string, timezone: string = 'America/Los_Angeles'): string {
-  const now = new Date();
-  let next: Date;
-  
-  const cron = cronExpression.toLowerCase().trim();
-  
-  switch (cron) {
-    case 'hourly':
-      next = new Date(now.getTime() + 60 * 60 * 1000);
-      break;
-    case 'daily':
-      next = new Date(now);
-      next.setDate(next.getDate() + 1);
-      next.setHours(9, 0, 0, 0);
-      break;
-    case 'weekly':
-      next = new Date(now);
-      next.setDate(next.getDate() + 7);
-      next.setHours(9, 0, 0, 0);
-      break;
-    case 'monthly':
-      next = new Date(now);
-      next.setMonth(next.getMonth() + 1);
-      next.setDate(1);
-      next.setHours(9, 0, 0, 0);
-      break;
-    default:
-      // For standard cron expressions, use a simple parser
-      next = parseCronToNextRun(cronExpression, now);
-  }
-  
-  return next.toISOString();
-}
+function calculateNextRun(cronExpression: string, _timezone: string = 'America/Los_Angeles'): string {
+  const keywords: Record<string, string> = {
+    'hourly': '0 * * * *',
+    'daily': '0 9 * * *',
+    'weekly': '0 9 * * 1',
+    'monthly': '0 9 1 * *',
+  };
 
-/**
- * Simple cron parser for standard expressions
- * Format: minute hour day month weekday
- */
-function parseCronToNextRun(cron: string, from: Date): Date {
-  const parts = cron.split(' ');
-  if (parts.length !== 5) {
-    // Invalid cron, default to daily
-    const next = new Date(from);
-    next.setDate(next.getDate() + 1);
-    next.setHours(9, 0, 0, 0);
-    return next;
+  const cron = cronExpression.toLowerCase().trim();
+  const expr = keywords[cron] || cronExpression;
+
+  try {
+    const interval = CronExpressionParser.parse(expr);
+    return interval.next().toDate().toISOString();
+  } catch (error) {
+    console.warn(`[SCHEDULER] Invalid cron expression "${cronExpression}", defaulting to 24h from now:`, error);
+    const fallback = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    return fallback.toISOString();
   }
-  
-  const [minute, hour, day, month, weekday] = parts;
-  const next = new Date(from);
-  
-  // Set time
-  if (hour !== '*') next.setHours(parseInt(hour) || 9);
-  if (minute !== '*') next.setMinutes(parseInt(minute) || 0);
-  next.setSeconds(0);
-  next.setMilliseconds(0);
-  
-  // If the time has passed today, move to tomorrow
-  if (next <= from) {
-    next.setDate(next.getDate() + 1);
-  }
-  
-  // Handle day of month
-  if (day !== '*') {
-    const targetDay = parseInt(day) || 1;
-    if (next.getDate() > targetDay) {
-      next.setMonth(next.getMonth() + 1);
-    }
-    next.setDate(targetDay);
-  }
-  
-  // Handle weekday (0 = Sunday, 1 = Monday, etc.)
-  if (weekday !== '*') {
-    const targetWeekday = parseInt(weekday) || 0;
-    const currentWeekday = next.getDay();
-    let daysToAdd = targetWeekday - currentWeekday;
-    if (daysToAdd <= 0) daysToAdd += 7;
-    next.setDate(next.getDate() + daysToAdd);
-  }
-  
-  return next;
 }
 
 /**

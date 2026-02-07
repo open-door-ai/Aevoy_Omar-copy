@@ -34,7 +34,8 @@ export async function POST(request: NextRequest) {
     if (!verifyStripeSignature(body, signature, process.env.STRIPE_WEBHOOK_SECRET)) {
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }
-  } else if (process.env.SKIP_PAYMENT_CHECKS !== "true") {
+  } else {
+    // TODO: Stripe webhook secret not configured. Reject in production.
     return NextResponse.json({ error: "Stripe not configured" }, { status: 500 });
   }
 

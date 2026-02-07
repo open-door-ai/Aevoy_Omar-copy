@@ -86,7 +86,16 @@ export async function DELETE() {
     // 18. User credentials
     await supabase.from("user_credentials").delete().eq("user_id", userId);
 
-    // 19. Profile (last — other tables reference it)
+    // 19. Email PIN sessions (Session 12)
+    await supabase.from("email_pin_sessions").delete().eq("user_id", userId);
+
+    // 20. User Twilio numbers (Session 8)
+    await supabase.from("user_twilio_numbers").delete().eq("user_id", userId);
+
+    // 21. Agent sync log (Session 5)
+    await supabase.from("agent_sync_log").delete().eq("user_id", userId);
+
+    // 22. Profile (last — other tables reference it)
     await supabase.from("profiles").delete().eq("id", userId);
 
     return NextResponse.json({ success: true });

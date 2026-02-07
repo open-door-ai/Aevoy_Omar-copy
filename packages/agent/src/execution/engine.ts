@@ -10,16 +10,19 @@ import { LockedIntent } from '../security/intent-lock.js';
 import { ActionValidator } from '../security/validator.js';
 import { executeClick } from './actions/click.js';
 import { executeFill } from './actions/fill.js';
+import { executeLogin } from './actions/login.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
+import { getCredential } from '../services/credential-vault.js';
 import { StagehandService } from '../services/stagehand.js';
 import { withTimeout, delay } from '../utils/timeout.js';
-import { applyStealthPatches, getRealisticUserAgent } from './stealth.js';
+import { applyStealthPatches, getRealisticUserAgent, humanizeInteraction } from './stealth.js';
 import { dismissPopups } from './popup-handler.js';
 import { waitForSPAReady } from './dynamic-content.js';
-import { checkAndHandleAntiBot } from './antibot.js';
+import { checkAndHandleAntiBot, getProxyConfig } from './antibot.js';
 import { handleCaptchaIfPresent } from './captcha.js';
 import { sessionManager } from './session-manager.js';
+import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
 
 // Timeouts
@@ -95,14 +98,24 @@ export class ExecutionEngine {
       }
     }
 
+    // Only use --no-sandbox in development
+    const isProduction = process.env.NODE_ENV === 'production';
+    const launchArgs = [
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+    ];
+    if (!isProduction) {
+      launchArgs.push('--no-sandbox');
+    }
+
+    // Wire proxy config if available (for anti-bot bypass)
+    const proxyConfig = getProxyConfig();
+
     this.browser = await chromium.launch({
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-      ]
+      args: launchArgs,
+      ...(proxyConfig ? { proxy: proxyConfig } : {}),
     });
 
     this.context = await this.browser.newContext({
@@ -114,6 +127,9 @@ export class ExecutionEngine {
 
     await applyStealthPatches(this.context);
     this.page = await this.context.newPage();
+
+    // Apply humanized interaction delays to reduce bot detection
+    await humanizeInteraction(this.page);
 
     // Manual session restore only for local Playwright (Browserbase handles this natively)
     if (savedSession && this.context && this.page) {
@@ -256,7 +272,10 @@ export class ExecutionEngine {
   }
 
   private async _executeStepsInner(steps: ExecutionStep[]): Promise<{ success: boolean; data?: unknown; error?: string }> {
-    for (const step of steps) {
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
+      const step = steps[stepIndex];
+      const stepStart = Date.now();
+
       // Ensure page is still alive before each step
       const alive = await this.ensurePageAlive();
       if (!alive) {
@@ -276,20 +295,40 @@ export class ExecutionEngine {
         result = { success: false, action: step.action, error: message };
       }
 
-      // Post-action wait for click, fill, submit, select
-      if (['click', 'fill', 'submit', 'select'].includes(step.action) && this.page && !this.page.isClosed()) {
+      const stepDuration = Date.now() - stepStart;
+
+      // Post-action wait for click, fill, submit, select, login
+      if (['click', 'fill', 'submit', 'select', 'login'].includes(step.action) && this.page && !this.page.isClosed()) {
         await this.page.waitForLoadState('networkidle').catch(() => {});
         await delay(POST_ACTION_WAIT_MS);
       }
 
-      // Capture post-action screenshot for evidence
+      // Capture post-action screenshot for evidence (JPEG, quality 60 for efficiency)
       if (this.page && !this.page.isClosed() && step.action !== 'screenshot' && step.action !== 'wait') {
         try {
-          const buffer = await this.page.screenshot({ type: 'png' });
+          const buffer = await this.page.screenshot({ type: 'jpeg', quality: 60 });
           result.screenshot = buffer.toString('base64');
         } catch {
           // Non-critical
         }
+      }
+
+      // Log every step to task_logs for audit trail
+      if (this.userId) {
+        const target = (step.params?.selector || step.params?.url || step.params?.text || step.action) as string;
+        logTaskStep(
+          step.params?.taskId as string || '',
+          this.userId,
+          stepIndex,
+          step.action,
+          target,
+          result.method || step.action,
+          result.success,
+          result.screenshot ? `data:image/jpeg;base64,${result.screenshot.substring(0, 100)}...` : undefined,
+          result.error,
+          stepDuration,
+          { params: step.params }
+        ).catch(() => {}); // fire-and-forget
       }
 
       this.results.push(result);
@@ -441,6 +480,9 @@ export class ExecutionEngine {
         case 'verify':
           return await this.handleVerify(step.params);
 
+        case 'login':
+          return await this.handleLogin(step.params);
+
         default:
           return {
             success: false,
@@ -452,6 +494,73 @@ export class ExecutionEngine {
       const message = error instanceof Error ? error.message : 'Unknown error';
       return { success: false, action: step.action, error: message };
     }
+  }
+
+  private async handleLogin(params: Record<string, unknown>): Promise<StepResult> {
+    const url = params.url as string;
+    const username = params.username as string | undefined;
+    const password = params.password as string | undefined;
+    const domain = params.domain as string | undefined;
+
+    if (!url) {
+      return { success: false, action: 'login', error: 'Login URL is required' };
+    }
+
+    // Step 1: Check for saved session first
+    if (this.userId && domain) {
+      const savedSession = await sessionManager.loadSession(this.userId, domain);
+      if (savedSession && this.context && this.page) {
+        await sessionManager.restoreSession(this.context, this.page, savedSession);
+        await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await this.page.waitForTimeout(2000);
+        // Check if session restored us to a logged-in state
+        const pageUrl = this.page.url().toLowerCase();
+        if (!pageUrl.includes('/login') && !pageUrl.includes('/signin') && !pageUrl.includes('/sign-in')) {
+          console.log('[LOGIN] Session restore succeeded');
+          return { success: true, action: 'login', method: 'session_restore' };
+        }
+      }
+    }
+
+    // Step 2: Check credential vault for stored credentials
+    let loginUsername = username;
+    let loginPassword = password;
+    if (this.userId && domain && (!loginUsername || !loginPassword)) {
+      const cred = await getCredential(this.userId, domain);
+      if (cred) {
+        loginUsername = loginUsername || cred.username;
+        loginPassword = loginPassword || cred.password;
+        console.log(`[LOGIN] Found credentials in vault for ${domain}`);
+      }
+    }
+
+    if (!loginUsername || !loginPassword) {
+      return { success: false, action: 'login', error: 'No credentials available (not in params or vault)' };
+    }
+
+    // Step 3: Execute login with fallback chain
+    const result = await executeLogin(this.page!, {
+      url,
+      username: loginUsername,
+      password: loginPassword,
+    });
+
+    // Step 4: Save session after successful login
+    if (result.success && this.userId && domain && this.context && this.page) {
+      try {
+        await sessionManager.saveSession(this.userId, domain, this.context, this.page, true);
+        console.log(`[LOGIN] Saved session for ${domain}`);
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return {
+      success: result.success,
+      action: 'login',
+      method: result.method,
+      error: result.error,
+    };
   }
 
   private async handleNavigate(params: Record<string, unknown>): Promise<StepResult> {
@@ -584,20 +693,198 @@ export class ExecutionEngine {
   private async handleSelect(params: Record<string, unknown>): Promise<StepResult> {
     const selector = params.selector as string;
     const value = params.value as string;
+    const label = params.label as string | undefined;
+    const text = params.text as string | undefined;
+    const page = this.page!;
 
-    await this.page!.selectOption(selector, value);
-    return { success: true, action: 'select' };
+    const selectMethods: Array<{ name: string; fn: () => Promise<boolean> }> = [
+      // Method 1: selectOption by value
+      {
+        name: 'select_by_value',
+        fn: async () => {
+          if (!selector) return false;
+          await page.selectOption(selector, value);
+          return true;
+        },
+      },
+      // Method 2: selectOption by label
+      {
+        name: 'select_by_label',
+        fn: async () => {
+          if (!selector) return false;
+          await page.selectOption(selector, { label: label || value });
+          return true;
+        },
+      },
+      // Method 3: Click dropdown then click option
+      {
+        name: 'click_dropdown_option',
+        fn: async () => {
+          if (!selector) return false;
+          await page.click(selector);
+          await page.waitForTimeout(500);
+          const optionText = text || label || value;
+          const option = page.locator(`option:has-text("${optionText}"), li:has-text("${optionText}"), [role="option"]:has-text("${optionText}")`);
+          if ((await option.count()) > 0) {
+            await option.first().click();
+            return true;
+          }
+          return false;
+        },
+      },
+      // Method 4: JavaScript .value + dispatch change
+      {
+        name: 'js_set_value',
+        fn: async () => {
+          if (!selector) return false;
+          const success = await page.evaluate(({ sel, val }) => {
+            const el = document.querySelector(sel) as HTMLSelectElement;
+            if (!el) return false;
+            el.value = val;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
+          }, { sel: selector, val: value });
+          return success;
+        },
+      },
+      // Method 5: Try Stagehand act() as last resort
+      {
+        name: 'stagehand_act',
+        fn: async () => {
+          if (!this.stagehand) return false;
+          try {
+            await this.stagehand.act(`Select "${label || value}" from the dropdown${selector ? ` at ${selector}` : ''}`);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      },
+    ];
+
+    for (const method of selectMethods) {
+      try {
+        const success = await method.fn();
+        if (success) {
+          return { success: true, action: 'select', method: method.name };
+        }
+      } catch {
+        // Try next method
+      }
+    }
+
+    return { success: false, action: 'select', error: `All select methods failed for: ${selector || 'no selector'}` };
   }
 
   private async handleSubmit(params: Record<string, unknown>): Promise<StepResult> {
-    const selector = params.selector as string || 'button[type="submit"], input[type="submit"], form button';
+    const selector = params.selector as string | undefined;
     const expectedOutcome = params.expected as string;
+    const page = this.page!;
 
-    await this.page!.click(selector);
-    await this.page!.waitForLoadState('networkidle').catch(() => {});
+    const submitMethods: Array<{ name: string; fn: () => Promise<boolean> }> = [
+      // Method 1: Find [type="submit"] button and click
+      {
+        name: 'type_submit',
+        fn: async () => {
+          const sel = selector || 'button[type="submit"], input[type="submit"]';
+          const el = page.locator(sel);
+          if ((await el.count()) > 0) {
+            await el.first().click({ timeout: 5000 });
+            return true;
+          }
+          return false;
+        },
+      },
+      // Method 2: Find button with submit-like text
+      {
+        name: 'text_submit',
+        fn: async () => {
+          const submitTexts = ['submit', 'send', 'confirm', 'continue', 'next', 'save', 'done', 'go', 'sign up', 'register', 'create'];
+          for (const txt of submitTexts) {
+            const btn = page.locator(`button:has-text("${txt}"), input[value="${txt}" i]`);
+            if ((await btn.count()) > 0) {
+              await btn.first().click({ timeout: 5000 });
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+      // Method 3: Press Enter in last focused form field
+      {
+        name: 'enter_key',
+        fn: async () => {
+          const inputs = page.locator('input:visible, textarea:visible');
+          const count = await inputs.count();
+          if (count > 0) {
+            await inputs.nth(count - 1).press('Enter');
+            return true;
+          }
+          return false;
+        },
+      },
+      // Method 4: Find form and call form.submit() via JS
+      {
+        name: 'js_form_submit',
+        fn: async () => {
+          const submitted = await page.evaluate(() => {
+            const forms = document.querySelectorAll('form');
+            if (forms.length > 0) {
+              forms[forms.length - 1].submit();
+              return true;
+            }
+            return false;
+          });
+          return submitted;
+        },
+      },
+      // Method 5: Find primary/CTA button by styling
+      {
+        name: 'cta_button',
+        fn: async () => {
+          const ctaSelectors = [
+            'button.primary, button.btn-primary, button.cta',
+            'button[class*="primary"], button[class*="submit"], button[class*="cta"]',
+            'form button:last-of-type',
+            '.form-actions button, .form-footer button',
+          ];
+          for (const sel of ctaSelectors) {
+            const el = page.locator(sel);
+            if ((await el.count()) > 0) {
+              await el.first().click({ timeout: 5000 });
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+    ];
+
+    let usedMethod = 'unknown';
+    let submitted = false;
+
+    for (const method of submitMethods) {
+      try {
+        const success = await method.fn();
+        if (success) {
+          usedMethod = method.name;
+          submitted = true;
+          break;
+        }
+      } catch {
+        // Try next method
+      }
+    }
+
+    if (!submitted) {
+      return { success: false, action: 'submit', error: 'All submit methods failed' };
+    }
+
+    await page.waitForLoadState('networkidle').catch(() => {});
 
     // Check for CAPTCHAs after submit
-    await handleCaptchaIfPresent(this.page!);
+    await handleCaptchaIfPresent(page);
 
     if (expectedOutcome) {
       const verifyResult = await this.verifyActionSuccess('submit', expectedOutcome);
@@ -605,13 +892,14 @@ export class ExecutionEngine {
         return {
           success: false,
           action: 'submit',
+          method: usedMethod,
           error: `Verification failed: ${verifyResult.reason}`,
           screenshot: verifyResult.screenshot
         };
       }
     }
 
-    return { success: true, action: 'submit' };
+    return { success: true, action: 'submit', method: usedMethod };
   }
 
   /**

@@ -35,7 +35,7 @@ const CACHE_MAX_SIZE = 100;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function getCacheKey(taskType: string, prompt: string): string {
-  const input = `${taskType}:${prompt.substring(0, 200)}`;
+  const input = `${taskType}:${prompt.substring(0, 1000)}`;
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
@@ -365,21 +365,8 @@ async function trackApiCall(
   if (!userId) return;
   try {
     const costCents = Math.round(costUsd * 100);
-    const month = new Date().toISOString().slice(0, 7);
 
-    await getSupabaseClient()
-      .from("usage")
-      .upsert(
-        {
-          user_id: userId,
-          month,
-          ai_cost_cents: costCents,
-        },
-        { onConflict: "user_id,month" }
-      )
-      .select();
-
-    // If upsert didn't increment, do it manually
+    // Track usage via RPC (handles upsert + increment atomically)
     await getSupabaseClient().rpc("track_usage", {
       p_user_id: userId,
       p_task_type: "ai_call",
@@ -550,11 +537,13 @@ export async function generateResponse(
 
     try {
       const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
+      const startTime = Date.now();
       const result = await withTimeout(
         callProvider(config, systemPromptWithUser, userPrompt),
         timeout,
         `${config.provider}/${config.model}`
       );
+      const latencyMs = Date.now() - startTime;
       const cost = calculateCost(config, result.inputTokens, result.outputTokens);
       const totalTokens = result.inputTokens + result.outputTokens;
 
@@ -575,7 +564,7 @@ export async function generateResponse(
           success: true,
           tokens: totalTokens,
           costUsd: cost,
-          latencyMs: Date.now() - (Date.now() - timeout), // approximate
+          latencyMs,
         }).catch(() => {}); // fire-and-forget
       }
 
@@ -797,7 +786,8 @@ export async function quickValidate(
     }
   }
 
-  return { result: "true", cost: 0 };
+  // All models failed — fail closed for safety
+  return { result: "false", cost: 0 };
 }
 
 /**

@@ -73,7 +73,9 @@ function isTestMode(): boolean {
 }
 
 function shouldSkipPayment(): boolean {
-  return process.env.SKIP_PAYMENT_CHECKS === "true" || isTestMode();
+  // TODO: Implement proper payment/subscription check once Stripe is fully integrated.
+  // For now, always skip payment checks (quota still enforced by beta/subscription_status).
+  return true;
 }
 
 /**
@@ -743,12 +745,99 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         if (decomposed.subtasks.length > 1) {
           console.log(`[DECOMPOSITION] Broke task into ${decomposed.subtasks.length} subtasks`);
           const executionOrder = getExecutionOrder(decomposed.subtasks);
-          console.log(`[DECOMPOSITION] Execution order: ${executionOrder.length} waves (parallel within wave)`);
-          // Note: Full decomposition execution would require recursive processTask calls
-          // For now, just log the plan — future: execute subtasks sequentially/parallel
+          console.log(`[DECOMPOSITION] Execution order: ${executionOrder.length} waves`);
+
+          // Execute subtasks sequentially, collecting results
+          const subtaskResults: Array<{ subtaskId: string; description: string; success: boolean; response: string; error?: string }> = [];
+          let allSuccess = true;
+
+          for (const batch of executionOrder) {
+            for (const subtask of batch) {
+              try {
+                // Create subtask record in DB with parent reference
+                const { data: subtaskRecord } = await getSupabaseClient()
+                  .from("tasks")
+                  .insert({
+                    user_id: userId,
+                    status: "processing",
+                    email_subject: `[Subtask] ${subtask.description}`,
+                    input_text: subtask.description,
+                    parent_task_id: taskId,
+                    started_at: new Date().toISOString(),
+                  })
+                  .select("id")
+                  .single();
+
+                const subtaskId = subtaskRecord?.id || "";
+                console.log(`[DECOMPOSITION] Executing subtask ${subtask.id}: ${subtask.description}`);
+
+                const subtaskResult = await processTask({
+                  userId,
+                  username,
+                  from,
+                  subject: `[Subtask] ${subtask.description}`,
+                  body: subtask.description,
+                  taskId: subtaskId,
+                  inputChannel: task.inputChannel,
+                });
+
+                subtaskResults.push({
+                  subtaskId,
+                  description: subtask.description,
+                  success: subtaskResult.success,
+                  response: subtaskResult.response,
+                  error: subtaskResult.error,
+                });
+
+                if (!subtaskResult.success) {
+                  allSuccess = false;
+                  console.warn(`[DECOMPOSITION] Subtask ${subtask.id} failed: ${subtaskResult.error}`);
+                }
+              } catch (subtaskError) {
+                const errMsg = subtaskError instanceof Error ? subtaskError.message : "Unknown";
+                console.error(`[DECOMPOSITION] Subtask ${subtask.id} threw:`, errMsg);
+                subtaskResults.push({
+                  subtaskId: "",
+                  description: subtask.description,
+                  success: false,
+                  response: "",
+                  error: errMsg,
+                });
+                allSuccess = false;
+              }
+            }
+          }
+
+          // Aggregate results and update parent task
+          const aggregatedResponse = subtaskResults
+            .map((r, i) => `${i + 1}. ${r.description}: ${r.success ? r.response.substring(0, 200) : `FAILED: ${r.error}`}`)
+            .join("\n");
+
+          const parentStatus = allSuccess ? "completed" : "partial_failure";
+          await getSupabaseClient().from("tasks").update({
+            status: parentStatus,
+            completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - startTime,
+          }).eq("id", taskId);
+
+          // Send aggregated response
+          const responseBody = allSuccess
+            ? `All ${subtaskResults.length} subtasks completed successfully:\n\n${aggregatedResponse}`
+            : `Completed ${subtaskResults.filter(r => r.success).length}/${subtaskResults.length} subtasks:\n\n${aggregatedResponse}`;
+
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseBody);
+
+          return {
+            taskId,
+            success: allSuccess,
+            response: responseBody,
+            actions: [],
+            error: allSuccess ? undefined : "Some subtasks failed",
+          };
         }
       } catch {
-        // Non-critical — decomposition is optimization, not required
+        // Decomposition failed — fall through to monolithic execution
+        console.warn("[DECOMPOSITION] Failed, continuing with monolithic execution");
       }
     }
 
@@ -759,18 +848,65 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const { createPlan } = await import("./planner.js");
       plan = await createPlan(userId, taskId, classification, memory, learningsHint);
 
+      // Check user's confirmation_mode for plan approval
+      const userSettings = await getUserSettings(userId);
+      let approved = true;
+
+      if (userSettings.confirmationMode === 'always') {
+        // Send plan summary and pause for approval
+        approved = false;
+      } else if (userSettings.confirmationMode === 'risky') {
+        // Check if plan has irreversible steps
+        const irreversibleActions = ['submit', 'send_email', 'fill_form', 'schedule'];
+        const hasIrreversible = plan.steps.some(s => irreversibleActions.includes(s.type));
+        if (hasIrreversible) {
+          approved = false;
+        }
+      } else if (userSettings.confirmationMode === 'unclear') {
+        // Check AI confidence from the clarified task (if available from earlier step)
+        const taskConfidence = (classification as Record<string, unknown>).confidence as number | undefined ?? 1;
+        if (taskConfidence < 0.7) {
+          approved = false;
+        }
+      }
+      // 'never' mode: auto-approve (approved stays true)
+
       // Store plan in DB
       const { data: planRecord } = await getSupabaseClient().from("execution_plans").insert({
         task_id: taskId,
         user_id: userId,
         plan_steps: plan.steps,
         execution_method: plan.method,
-        approved: true,
-        status: "executing",
+        approved,
+        status: approved ? "executing" : "pending_approval",
         estimated_cost: plan.estimatedCost,
-        started_at: new Date().toISOString(),
+        started_at: approved ? new Date().toISOString() : null,
       }).select("id").single();
       planId = planRecord?.id || null;
+
+      // If plan needs approval, send summary and pause
+      if (!approved) {
+        const irreversibleActions = ['submit', 'send_email', 'fill_form', 'schedule'];
+        const planSummary = plan.steps.map((s, i) => {
+          const isIrreversible = irreversibleActions.includes(s.type);
+          return `${i + 1}. ${s.description}${isIrreversible ? ' [IRREVERSIBLE]' : ''}`;
+        }).join("\n");
+
+        const approvalMessage = `I've created a plan for your task. Please review and reply YES to proceed or NO to cancel:\n\n${planSummary}\n\nEstimated cost: $${plan.estimatedCost.toFixed(4)}`;
+
+        await getSupabaseClient().from("tasks").update({
+          status: "pending_approval",
+        }).eq("id", taskId);
+
+        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Plan Approval: ${subject}`, approvalMessage);
+
+        return {
+          taskId,
+          success: true,
+          response: "Plan sent for approval",
+          actions: [],
+        };
+      }
 
       // If auth is missing, text connect link and pause
       const missingAuth = plan.requiredAuth.filter(a => a.status === "missing");

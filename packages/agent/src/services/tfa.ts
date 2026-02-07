@@ -34,12 +34,13 @@ export async function storeTfaCode(
 }
 
 /**
- * Get the latest unused code for a specific task. Marks it as used.
+ * Get the latest unused code for a user + site domain. Marks it as used.
  */
-export async function getLatestCode(taskId: string): Promise<string | null> {
+export async function getLatestCode(userId: string, siteDomain?: string): Promise<string | null> {
   try {
     const result = await getSupabaseClient().rpc("get_latest_tfa_code", {
-      p_task_id: taskId,
+      p_user_id: userId,
+      p_site_domain: siteDomain || "",
     });
     return result.data || null;
   } catch {
