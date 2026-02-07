@@ -2162,10 +2162,17 @@ export default function AevoyLanding() {
             ];
 
             const [currentIndex, setCurrentIndex] = React.useState(0);
+            const [isFlipping, setIsFlipping] = React.useState(false);
             const [touchStart, setTouchStart] = React.useState(0);
             const [touchEnd, setTouchEnd] = React.useState(0);
 
-            const next = () => setCurrentIndex((prev) => (prev + 1) % threats.length);
+            const next = () => {
+              setIsFlipping(true);
+              setTimeout(() => {
+                setCurrentIndex((prev) => (prev + 1) % threats.length);
+                setTimeout(() => setIsFlipping(false), 50);
+              }, 300);
+            };
 
             // Auto-rotation every 8 seconds
             React.useEffect(() => {
@@ -2174,7 +2181,13 @@ export default function AevoyLanding() {
               }, 8000);
               return () => clearInterval(timer);
             }, [threats.length]);
-            const prev = () => setCurrentIndex((prev) => (prev - 1 + threats.length) % threats.length);
+            const prev = () => {
+              setIsFlipping(true);
+              setTimeout(() => {
+                setCurrentIndex((prev) => (prev - 1 + threats.length) % threats.length);
+                setTimeout(() => setIsFlipping(false), 50);
+              }, 300);
+            };
 
             const handleTouchStart = (e: React.TouchEvent) => {
               setTouchStart(e.targetTouches[0].clientX);
@@ -2233,10 +2246,10 @@ export default function AevoyLanding() {
 
                   {/* Threat content */}
                   <div
-                    className="min-h-[400px] transition-all duration-500 ease-in-out"
+                    className="min-h-[400px] transition-all duration-300 ease-in-out"
                     style={{
-                      opacity: 1,
-                      transform: 'translateX(0)'
+                      transform: isFlipping ? 'perspective(1000px) rotateY(90deg)' : 'perspective(1000px) rotateY(0deg)',
+                      transformStyle: 'preserve-3d'
                     }}
                   >
                     <h3 className="text-3xl font-bold mb-6">{threats[currentIndex].name}</h3>
@@ -2253,6 +2266,7 @@ export default function AevoyLanding() {
                       </div>
                     </div>
                   </div>
+                </div>
 
                   {/* Dots indicator */}
                   <div className="flex justify-center gap-2 mt-8">
@@ -2433,11 +2447,23 @@ export default function AevoyLanding() {
             ];
 
             const [currentIndex, setCurrentIndex] = React.useState(0);
+            const [isFlipping, setIsFlipping] = React.useState(false);
             const [touchStart, setTouchStart] = React.useState(0);
             const [touchEnd, setTouchEnd] = React.useState(0);
-
-            const next = () => setCurrentIndex((prev) => (prev + 1) % examples.length);
-            const prev = () => setCurrentIndex((prev) => (prev - 1 + examples.length) % examples.length);
+            const next = () => {
+              setIsFlipping(true);
+              setTimeout(() => {
+                setCurrentIndex((prev) => (prev + 1) % examples.length);
+                setTimeout(() => setIsFlipping(false), 50);
+              }, 300);
+            };
+            const prev = () => {
+              setIsFlipping(true);
+              setTimeout(() => {
+                setCurrentIndex((prev) => (prev - 1 + examples.length) % examples.length);
+                setTimeout(() => setIsFlipping(false), 50);
+              }, 300);
+            };
 
             const handleTouchStart = (e: React.TouchEvent) => {
               setTouchStart(e.targetTouches[0].clientX);
@@ -2468,7 +2494,8 @@ export default function AevoyLanding() {
 
             return (
               <div className="max-w-3xl mx-auto">
-                <div
+                <div style={{perspective: "1000px"}}>
+                  <div
                   className="relative bg-stone-50 border-2 border-stone-200 rounded-2xl p-12 min-h-[280px] flex items-center justify-center"
                   onTouchStart={handleTouchStart}
                   onTouchMove={handleTouchMove}
@@ -2499,6 +2526,7 @@ export default function AevoyLanding() {
                     <h3 className="text-2xl font-bold text-stone-900 mb-4">{examples[currentIndex].title}</h3>
                     <p className="text-lg text-stone-600 leading-relaxed">{examples[currentIndex].description}</p>
                   </div>
+                </div>
 
                   {/* Dots indicator */}
                   <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2">
