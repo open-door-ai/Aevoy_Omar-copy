@@ -59,8 +59,10 @@ export async function POST(request: Request) {
       .insert({
         user_id: user.id,
         phone_number: phoneNumber,
-        provider: "twilio",
-        sid: sid
+        twilio_sid: sid,
+        purpose: 'primary',
+        area_code: phoneNumber.replace(/\D/g, '').slice(1, 4),
+        is_active: true
       });
 
     if (dbError) {
@@ -78,7 +80,10 @@ export async function POST(request: Request) {
       );
     }
 
-    // 3. Create Stripe subscription ($2/mo)
+    // 3. Update profiles.twilio_number
+    await supabase.from("profiles").update({ twilio_number: phoneNumber }).eq("id", user.id);
+
+    // 4. Create Stripe subscription ($2/mo)
     // TODO: Implement Stripe integration
     // For now, just return success
 

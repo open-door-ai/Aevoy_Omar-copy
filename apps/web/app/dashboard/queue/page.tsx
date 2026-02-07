@@ -199,7 +199,7 @@ export default function TaskQueuePage() {
       <div>
         <h1 className="text-3xl font-bold">Task Queue</h1>
         <p className="text-muted-foreground">
-          Active and pending tasks being processed by your AI
+          Tasks waiting to be processed by your AI. Watch as they move from queued to completed.
         </p>
       </div>
 

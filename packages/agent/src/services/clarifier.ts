@@ -125,7 +125,7 @@ Parse this into a structured task. Fill in missing details from their preference
 
 Respond in valid JSON only:
 {
-  "taskType": "research|booking|form|email|shopping|reminder|writing|general",
+  "taskType": "research|booking|form|email|shopping|reminder|writing|conversation|general",
   "goal": "Clear description of what they want",
   "entities": {
     "date": "...",
@@ -211,28 +211,36 @@ Only include entities that are relevant. Remove empty or null values.`;
  * Determine if confirmation is needed based on settings and task
  */
 function shouldConfirm(
-  intent: StructuredIntent, 
-  confidence: number, 
+  intent: StructuredIntent,
+  confidence: number,
   settings: UserSettings
 ): boolean {
+  // Conversational/greeting messages NEVER need confirmation
+  const conversationalTypes = ['conversation', 'greeting', 'general'];
+  const greetingPatterns = /^(hi|hello|hey|howdy|sup|yo|good\s*(morning|afternoon|evening|night)|what'?s?\s*up|how\s*(are\s*you|do\s*you\s*do)|thanks|thank\s*you|bye|goodbye)/i;
+
+  if (conversationalTypes.includes(intent.taskType) &&
+      (greetingPatterns.test(intent.goal) || confidence >= 70)) {
+    return false;
+  }
+
   switch (settings.confirmationMode) {
     case 'always':
       return true;
-    
+
     case 'never':
       return false;
-    
+
     case 'risky':
-      // Only confirm for risky task types
       const riskyTypes = ['payment', 'login', 'email', 'delete', 'shopping'];
       return riskyTypes.includes(intent.taskType);
-    
+
     case 'unclear':
     default:
-      // Confirm if confidence < 80 OR there are assumptions OR unclear parts
-      return confidence < 80 || 
-             intent.assumptions.length > 0 || 
-             intent.unclearParts.length > 0;
+      // Only confirm if confidence is very low OR has unclear parts AND it's not a simple task
+      return (confidence < 60 && intent.unclearParts.length > 0) ||
+             intent.taskType === 'payment' ||
+             intent.taskType === 'delete';
   }
 }
 

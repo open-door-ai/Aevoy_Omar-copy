@@ -20,13 +20,13 @@ export async function GET(request: Request) {
 
     if (error) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?microsoft=error", request.url)
+        new URL("/dashboard/apps?microsoft=error", request.url)
       );
     }
 
     if (!code || !state) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?microsoft=missing", request.url)
+        new URL("/dashboard/apps?microsoft=missing", request.url)
       );
     }
 
@@ -37,13 +37,13 @@ export async function GET(request: Request) {
       );
     } catch {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?microsoft=invalid", request.url)
+        new URL("/dashboard/apps?microsoft=invalid", request.url)
       );
     }
 
     if (Date.now() - stateData.ts > 600_000) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?microsoft=expired", request.url)
+        new URL("/dashboard/apps?microsoft=expired", request.url)
       );
     }
 
@@ -54,7 +54,7 @@ export async function GET(request: Request) {
 
     if (!user || user.id !== stateData.userId) {
       return NextResponse.redirect(
-        new URL("/dashboard/settings?microsoft=unauthorized", request.url)
+        new URL("/dashboard/apps?microsoft=unauthorized", request.url)
       );
     }
 
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
     if (!tokenRes.ok) {
       console.error("[MSFT] Token exchange failed:", await tokenRes.text());
       return NextResponse.redirect(
-        new URL("/dashboard/settings?microsoft=token_error", request.url)
+        new URL("/dashboard/apps?microsoft=token_error", request.url)
       );
     }
 
@@ -113,7 +113,7 @@ export async function GET(request: Request) {
     ];
 
     // Write to oauth_connections
-    await supabase.from("oauth_connections").upsert(
+    const { error: upsertError } = await supabase.from("oauth_connections").upsert(
       {
         user_id: user.id,
         provider: "microsoft",
@@ -127,13 +127,17 @@ export async function GET(request: Request) {
       { onConflict: "user_id,provider,account_email" }
     );
 
+    if (upsertError) {
+      console.error("[MSFT] oauth_connections upsert error:", upsertError);
+    }
+
     return NextResponse.redirect(
-      new URL("/dashboard/settings?microsoft=connected", request.url)
+      new URL("/dashboard/apps?microsoft=connected", request.url)
     );
   } catch (err) {
     console.error("[MSFT] Callback error:", err);
     return NextResponse.redirect(
-      new URL("/dashboard/settings?microsoft=error", request.url)
+      new URL("/dashboard/apps?microsoft=error", request.url)
     );
   }
 }
