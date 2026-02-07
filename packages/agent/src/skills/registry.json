@@ -1,0 +1,93 @@
+{
+  "version": "1.0.0",
+  "skills": [
+    {
+      "id": "google_sheets_create",
+      "name": "Create Google Spreadsheet",
+      "source": "curated",
+      "provider": "google",
+      "category": "productivity",
+      "requiredScopes": [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.file"
+      ],
+      "costPerUse": 0.0,
+      "trustLevel": "verified",
+      "codeUrl": "inline",
+      "interface": {
+        "input": {
+          "title": "string",
+          "data": "array<array<any>>",
+          "sheetName": "string?"
+        },
+        "output": {
+          "spreadsheetId": "string",
+          "url": "string"
+        }
+      },
+      "sandbox": {
+        "allowedAPIs": ["fetch"],
+        "allowedDomains": ["sheets.googleapis.com", "www.googleapis.com"],
+        "memoryLimit": "50MB",
+        "timeoutMs": 30000
+      }
+    },
+    {
+      "id": "google_sheets_append",
+      "name": "Append to Google Spreadsheet",
+      "source": "curated",
+      "provider": "google",
+      "category": "productivity",
+      "requiredScopes": ["https://www.googleapis.com/auth/spreadsheets"],
+      "costPerUse": 0.0,
+      "trustLevel": "verified",
+      "codeUrl": "inline",
+      "interface": {
+        "input": {
+          "spreadsheetId": "string",
+          "range": "string",
+          "data": "array<array<any>>"
+        },
+        "output": {
+          "updatedRows": "number"
+        }
+      },
+      "sandbox": {
+        "allowedAPIs": ["fetch"],
+        "allowedDomains": ["sheets.googleapis.com"],
+        "memoryLimit": "50MB",
+        "timeoutMs": 30000
+      }
+    },
+    {
+      "id": "gmail_bulk_label",
+      "name": "Gmail Bulk Label",
+      "source": "curated",
+      "provider": "google",
+      "category": "productivity",
+      "requiredScopes": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.labels"
+      ],
+      "costPerUse": 0.0,
+      "trustLevel": "verified",
+      "codeUrl": "inline",
+      "interface": {
+        "input": {
+          "messageIds": "array<string>",
+          "labelIds": "array<string>"
+        },
+        "output": {
+          "success": "boolean",
+          "processedCount": "number"
+        }
+      },
+      "sandbox": {
+        "allowedAPIs": ["fetch"],
+        "allowedDomains": ["gmail.googleapis.com", "www.googleapis.com"],
+        "memoryLimit": "50MB",
+        "timeoutMs": 60000
+      }
+    }
+  ]
+}

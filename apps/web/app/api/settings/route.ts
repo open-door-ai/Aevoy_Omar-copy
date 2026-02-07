@@ -36,6 +36,12 @@ export async function GET() {
     agent_card_limit_monthly: 20000,
     virtual_phone: null,
     proactive_daily_limit: 10,
+    auto_install_skills: true,
+    auto_acquire_oauth: true,
+    auto_signup_free_trial: true,
+    parallel_execution: true,
+    iterative_deepening: true,
+    monthly_budget: 15.0,
   };
 
   return NextResponse.json(response);
@@ -87,6 +93,17 @@ export async function PUT(request: Request) {
       }
     }
 
+    // Validate monthly_budget
+    if (body.monthly_budget !== undefined) {
+      const budget = parseFloat(body.monthly_budget);
+      if (isNaN(budget) || budget < 5 || budget > 100) {
+        return NextResponse.json(
+          { error: "Invalid monthly_budget (must be 5-100)" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Upsert settings
     const { data, error } = await supabase
       .from("user_settings")
@@ -99,6 +116,12 @@ export async function PUT(request: Request) {
           agent_card_limit_transaction: body.agent_card_limit_transaction,
           agent_card_limit_monthly: body.agent_card_limit_monthly,
           proactive_daily_limit: body.proactive_daily_limit ?? 10,
+          auto_install_skills: body.auto_install_skills ?? true,
+          auto_acquire_oauth: body.auto_acquire_oauth ?? true,
+          auto_signup_free_trial: body.auto_signup_free_trial ?? true,
+          parallel_execution: body.parallel_execution ?? true,
+          iterative_deepening: body.iterative_deepening ?? true,
+          monthly_budget: body.monthly_budget ?? 15.0,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id" }
