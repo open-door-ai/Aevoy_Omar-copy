@@ -392,13 +392,12 @@ docker-compose up --build       # Agent in Docker
 | Component | Location | Status |
 |-----------|----------|--------|
 | Website | Vercel → https://www.aevoy.com | Live, SSL valid |
-| Agent | Koyeb → https://hissing-verile-aevoy-e721b4a6.koyeb.app | Live, healthy |
+| Agent | Koyeb → https://hissing-verile-aevoy-e721b4a6.koyeb.app | Live, healthy (IMAP poller disabled) |
 | Email Worker | Cloudflare → https://aevoy-email-router.omarkebrahim.workers.dev | Deployed, secrets configured |
 | Email Out | Resend (noreply@aevoy.com) | DKIM+SPF verified |
-| Email In | ImprovMX → Gmail IMAP (30s poll) | Working (primary) |
-| Email Routing | Cloudflare Email Routing → Worker | Ready (needs MX records update) |
-| DNS | Porkbun (A, CNAME, 3xTXT, MX) | Configured |
-| SPF | `v=spf1 include:spf.improvmx.com include:amazonses.com ~all` | Combined |
+| Email In | Cloudflare Email Routing → Worker | Active (DNS propagating, ~1hr) |
+| DNS | Porkbun: Cloudflare MX (route1/2/3.mx.cloudflare.net) | Updated |
+| SPF | `v=spf1 include:_spf.mx.cloudflare.net include:amazonses.com ~all` | Updated for Cloudflare |
 | Auth | Supabase, site URL = https://www.aevoy.com | Working |
 | Twilio | Trial, +17789008951 | Webhooks pointed to Koyeb |
 | DB | Supabase (eawoquqgfndmphogwjeu), 27 tables, RLS on all | All migrations applied (v1-v15) |

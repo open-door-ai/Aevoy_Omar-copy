@@ -1286,7 +1286,7 @@ app.listen(PORT, async () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
 
   startScheduler();
-  startInboxPoller();
+  // startInboxPoller(); // Disabled: Using Cloudflare Email Routing instead
 
   // Seed default skills (idempotent)
   try {
