@@ -1341,7 +1341,7 @@ const SCRAMBLE_WORDS = [
 const SCRAMBLE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
 const WordScramble = () => {
-  const [display, setDisplay] = useState('XXXXXX');
+  const [display, setDisplay] = useState('Employee');
   const [fixedWidth, setFixedWidth] = useState<number | null>(null);
   const wordIndex = useRef(1);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1472,7 +1472,14 @@ const FeatureCard = ({ feature, index }: { feature: { title: string; description
 // ============================================
 
 export default function AevoyLanding() {
-  const [showIntro, setShowIntro] = useState(true);
+  const [showIntro, setShowIntro] = useState(() => {
+    // Check if AGI intro was shown in last 48 hours
+    if (typeof window === 'undefined') return true;
+    const lastShown = localStorage.getItem('agi_intro_shown');
+    if (!lastShown) return true;
+    const fortyEightHours = 48 * 60 * 60 * 1000;
+    return (Date.now() - parseInt(lastShown)) > fortyEightHours;
+  });
   const [scrollY, setScrollY] = useState(0);
   const [selectedDemo, setSelectedDemo] = useState('call');
   const heroRef = useRef<HTMLElement>(null);
