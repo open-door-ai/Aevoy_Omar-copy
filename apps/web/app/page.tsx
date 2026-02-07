@@ -2159,6 +2159,14 @@ export default function AevoyLanding() {
             const [touchEnd, setTouchEnd] = React.useState(0);
 
             const next = () => setCurrentIndex((prev) => (prev + 1) % threats.length);
+
+            // Auto-rotation every 8 seconds
+            React.useEffect(() => {
+              const timer = setInterval(() => {
+                setCurrentIndex((prev) => (prev + 1) % threats.length);
+              }, 8000);
+              return () => clearInterval(timer);
+            }, [threats.length]);
             const prev = () => setCurrentIndex((prev) => (prev - 1 + threats.length) % threats.length);
 
             const handleTouchStart = (e: React.TouchEvent) => {
