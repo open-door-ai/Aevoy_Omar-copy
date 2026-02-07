@@ -42,6 +42,7 @@ export async function GET() {
     parallel_execution: true,
     iterative_deepening: true,
     monthly_budget: 15.0,
+    dashboard_tour_seen: false,
   };
 
   return NextResponse.json(response);
@@ -104,28 +105,30 @@ export async function PUT(request: Request) {
       }
     }
 
+    // Build update payload — only include fields that were sent
+    const updatePayload: Record<string, unknown> = {
+      user_id: user.id,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (body.confirmation_mode !== undefined) updatePayload.confirmation_mode = body.confirmation_mode;
+    if (body.verification_method !== undefined) updatePayload.verification_method = body.verification_method;
+    if (body.agent_card_enabled !== undefined) updatePayload.agent_card_enabled = body.agent_card_enabled;
+    if (body.agent_card_limit_transaction !== undefined) updatePayload.agent_card_limit_transaction = body.agent_card_limit_transaction;
+    if (body.agent_card_limit_monthly !== undefined) updatePayload.agent_card_limit_monthly = body.agent_card_limit_monthly;
+    if (body.proactive_daily_limit !== undefined) updatePayload.proactive_daily_limit = body.proactive_daily_limit;
+    if (body.auto_install_skills !== undefined) updatePayload.auto_install_skills = body.auto_install_skills;
+    if (body.auto_acquire_oauth !== undefined) updatePayload.auto_acquire_oauth = body.auto_acquire_oauth;
+    if (body.auto_signup_free_trial !== undefined) updatePayload.auto_signup_free_trial = body.auto_signup_free_trial;
+    if (body.parallel_execution !== undefined) updatePayload.parallel_execution = body.parallel_execution;
+    if (body.iterative_deepening !== undefined) updatePayload.iterative_deepening = body.iterative_deepening;
+    if (body.monthly_budget !== undefined) updatePayload.monthly_budget = body.monthly_budget;
+    if (body.dashboard_tour_seen !== undefined) updatePayload.dashboard_tour_seen = body.dashboard_tour_seen;
+
     // Upsert settings
     const { data, error } = await supabase
       .from("user_settings")
-      .upsert(
-        {
-          user_id: user.id,
-          confirmation_mode: body.confirmation_mode,
-          verification_method: body.verification_method,
-          agent_card_enabled: body.agent_card_enabled,
-          agent_card_limit_transaction: body.agent_card_limit_transaction,
-          agent_card_limit_monthly: body.agent_card_limit_monthly,
-          proactive_daily_limit: body.proactive_daily_limit ?? 10,
-          auto_install_skills: body.auto_install_skills ?? true,
-          auto_acquire_oauth: body.auto_acquire_oauth ?? true,
-          auto_signup_free_trial: body.auto_signup_free_trial ?? true,
-          parallel_execution: body.parallel_execution ?? true,
-          iterative_deepening: body.iterative_deepening ?? true,
-          monthly_budget: body.monthly_budget ?? 15.0,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id" }
-      )
+      .upsert(updatePayload, { onConflict: "user_id" })
       .select()
       .single();
 

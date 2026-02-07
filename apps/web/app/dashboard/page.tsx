@@ -7,6 +7,7 @@ import { StaggerContainer, StaggerItem, GlassCard } from "@/components/ui/motion
 import { SkeletonCard } from "@/components/ui/skeleton";
 import { Suspense } from "react";
 import { SendTaskInput } from "@/components/send-task-input";
+import { TakeoverBanner } from "@/components/takeover-banner";
 
 export const dynamic = "force-dynamic";
 
@@ -104,10 +105,15 @@ export default async function DashboardPage() {
         )}
       </div>
 
+      {/* Takeover Banner - shows when AI needs help */}
+      <TakeoverBanner />
+
       {/* Send Task Input */}
-      <Suspense fallback={<SkeletonCard />}>
-        <SendTaskInput />
-      </Suspense>
+      <div id="send-task-input">
+        <Suspense fallback={<SkeletonCard />}>
+          <SendTaskInput />
+        </Suspense>
+      </div>
 
       {/* Your Info + Quick Stats */}
       <StaggerContainer className="grid grid-cols-2 md:grid-cols-4 gap-4" staggerDelay={0.08}>
@@ -168,7 +174,7 @@ export default async function DashboardPage() {
       {/* Contact Info Cards */}
       <StaggerContainer className="grid md:grid-cols-2 gap-4" staggerDelay={0.08}>
         <StaggerItem>
-          <GlassCard className="p-6">
+          <GlassCard id="ai-email-card" className="p-6">
             <div className="space-y-1 mb-4">
               <h3 className="text-sm font-medium text-muted-foreground">{botName ? `${botName}'s Email` : "Your AI Email"}</h3>
               <p className="text-xs text-muted-foreground/70">Send tasks via email</p>
@@ -181,7 +187,7 @@ export default async function DashboardPage() {
 
         {twilioNumber && (
           <StaggerItem>
-            <GlassCard className="p-6">
+            <GlassCard id="ai-phone-card" className="p-6">
               <div className="space-y-1 mb-4">
                 <h3 className="text-sm font-medium text-muted-foreground">Your AI Phone</h3>
                 <p className="text-xs text-muted-foreground/70">Call or text tasks</p>
