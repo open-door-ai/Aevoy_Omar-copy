@@ -1671,7 +1671,7 @@ export default function AevoyLanding() {
         <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center">
-              <span className="text-white font-semibold text-sm">H</span>
+              <span className="text-white font-semibold text-sm">A</span>
             </div>
             <span className="font-semibold text-lg tracking-tight">Aevoy</span>
           </Link>
@@ -1799,7 +1799,7 @@ export default function AevoyLanding() {
             <div className="relative">
               <div className="aspect-square bg-gradient-to-br from-stone-100 to-stone-200 rounded-2xl overflow-hidden flex items-center justify-center">
                 <div className="text-center p-12">
-                  <div className="text-6xl mb-4">🤖</div>
+                  
                   <p className="text-2xl font-bold text-stone-700">Your AI Employee</p>
                   <p className="text-stone-500 mt-2">Actually does tasks</p>
                 </div>
@@ -1823,7 +1823,7 @@ export default function AevoyLanding() {
                 when something needs attention.
               </p>
               <a
-                href="#security"
+                href="#what-aevoy-can-do"
                 className="inline-flex items-center gap-2 text-stone-900 font-semibold hover:gap-3 transition-all"
               >
                 See what it can do
@@ -2582,57 +2582,42 @@ export default function AevoyLanding() {
             <div className="bg-white border border-stone-200 rounded-2xl p-10 shadow-lg">
               <h3 className="text-2xl font-bold text-stone-900 mb-6">Compare the Cost</h3>
               <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="border-b border-stone-200">
-                      <th className="pb-3 text-sm font-semibold text-stone-600">Service</th>
-                      <th className="pb-3 text-sm font-semibold text-stone-600">Light User<br/>(10 tasks)</th>
-                      <th className="pb-3 text-sm font-semibold text-stone-600">Heavy User<br/>(50 tasks)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-stone-200">
-                    <tr>
-                    <tr>
-                      <td className="py-4">
-                        <div className="font-semibold text-stone-900">ChatGPT Plus</div>
-                        <div className="text-xs text-stone-500">$20/month subscription</div>
-                      </td>
-                      <td className="py-4 text-stone-600">$20<br/><span className="text-xs text-amber-600">(questions only)</span></td>
-                      <td className="py-4 text-stone-600">$20<br/><span className="text-xs text-amber-600">(questions only)</span></td>
-                    </tr>
-                    <tr>
-                      <td className="py-4">
-                        <div className="font-semibold text-stone-900">Claude Pro</div>
-                        <div className="text-xs text-stone-500">$20/month subscription</div>
-                      </td>
-                      <td className="py-4 text-stone-600">$20<br/><span className="text-xs text-amber-600">(questions only)</span></td>
-                      <td className="py-4 text-stone-600">$20<br/><span className="text-xs text-amber-600">(questions only)</span></td>
-                    </tr>
-                      <td className="py-4">
-                        <div className="font-semibold text-stone-900">Zapier</div>
-                        <div className="text-xs text-stone-500">$30/month subscription</div>
-                      </td>
-                      <td className="py-4 text-stone-600">$30<br/><span className="text-xs text-red-600">(overpay $25)</span></td>
-                      <td className="py-4 text-stone-600">$30<br/><span className="text-xs text-green-600">(underpay $20)</span></td>
-                    </tr>
-                    <tr>
-                      <td className="py-4">
-                        <div className="font-semibold text-stone-900">Lindy.ai</div>
-                        <div className="text-xs text-stone-500">$49/month subscription</div>
-                      </td>
-                      <td className="py-4 text-stone-600">$49<br/><span className="text-xs text-red-600">(overpay $44)</span></td>
-                      <td className="py-4 text-stone-600">$49<br/><span className="text-xs">(break even)</span></td>
-                    </tr>
-                    <tr className="bg-stone-50">
-                      <td className="py-4">
-                        <div className="font-bold text-stone-900">Aevoy</div>
-                        <div className="text-xs text-stone-600">Pay-as-you-go</div>
-                      </td>
-                      <td className="py-4 font-bold text-stone-900">$5</td>
-                      <td className="py-4 font-bold text-stone-900">$25</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <table className="w-full">
+              <thead>
+                <tr className="border-b-2 border-stone-300">
+                  <th className="py-4 text-left font-semibold text-stone-900">Service</th>
+                  <th className="py-4 text-left font-semibold text-stone-900">Pricing</th>
+                  <th className="py-4 text-left font-semibold text-stone-900">What You Get</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-200">
+                <tr className="hover:bg-stone-50 transition-colors">
+                  <td className="py-4 text-stone-900">ChatGPT Plus</td>
+                  <td className="py-4 font-mono text-stone-700">$20/month</td>
+                  <td className="py-4 text-stone-600">Unlimited questions only</td>
+                </tr>
+                <tr className="hover:bg-stone-50 transition-colors">
+                  <td className="py-4 text-stone-900">Claude Pro</td>
+                  <td className="py-4 font-mono text-stone-700">$20/month</td>
+                  <td className="py-4 text-stone-600">Unlimited questions only</td>
+                </tr>
+                <tr className="hover:bg-stone-50 transition-colors">
+                  <td className="py-4 text-stone-900">Zapier</td>
+                  <td className="py-4 font-mono text-stone-700">$30–104/month</td>
+                  <td className="py-4 text-stone-600">750–50K automations (no AI)</td>
+                </tr>
+                <tr className="hover:bg-stone-50 transition-colors">
+                  <td className="py-4 text-stone-900">Lindy.ai</td>
+                  <td className="py-4 font-mono text-stone-700">$49–299/month</td>
+                  <td className="py-4 text-stone-600">100–10K credits</td>
+                </tr>
+                <tr className="bg-stone-100 font-semibold border-t-2 border-stone-300">
+                  <td className="py-4 text-stone-900">Aevoy</td>
+                  <td className="py-4 font-mono text-stone-900">$0.10–0.50/task</td>
+                  <td className="py-4 text-stone-900">Pay only for what you use</td>
+                </tr>
+              </tbody>
+            </table>
               </div>
               <div className="mt-6 space-y-2 text-sm text-stone-600">
                 <p>✓ No hidden fees. Ever. If we charge you, you'll see exactly why.</p>
@@ -2717,7 +2702,7 @@ export default function AevoyLanding() {
             <div>
               <Link href="/" className="flex items-center gap-3 mb-4">
                 <div className="w-8 h-8 rounded-lg bg-stone-800 flex items-center justify-center">
-                  <span className="text-white font-semibold text-sm">H</span>
+                  <span className="text-white font-semibold text-sm">A</span>
                 </div>
                 <span className="font-semibold text-lg text-white">Aevoy</span>
               </Link>
