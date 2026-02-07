@@ -259,41 +259,42 @@ async function sendEmailViaAgent(params: {
 function getSupabaseClient(url: string, key: string) {
   return {
     from: (table: string) => ({
-      select: (fields: string) => ({
-        eq: (column: string, value: unknown) => ({
+      select: (fields: string) => {
+        let filters: string[] = [];
+
+        const buildQuery = () => {
+          const filterStr = filters.length > 0 ? filters.join('&') + '&' : '';
+          return `${url}/rest/v1/${table}?${filterStr}select=${fields}`;
+        };
+
+        const chainable: any = {
           single: async () => {
-            const response = await fetch(
-              `${url}/rest/v1/${table}?${column}=eq.${value}&select=${fields}`,
-              {
-                headers: {
-                  apikey: key,
-                  Authorization: `Bearer ${key}`,
-                },
-              }
-            );
+            const response = await fetch(buildQuery(), {
+              headers: { apikey: key, Authorization: `Bearer ${key}` }
+            });
             const data = await response.json();
             return { data: Array.isArray(data) && data.length > 0 ? data[0] : null, error: null };
           },
-          gt: (column2: string, value2: unknown) => ({
-            order: (column3: string, opts: { desc: boolean }) => ({
-              limit: (n: number) => ({
-                single: async () => {
-                  let query = `${url}/rest/v1/${table}?${column}=eq.${value}&${column2}=gt.${value2}&select=${fields}&limit=${n}`;
-                  if (opts.desc) query += `&order=${column3}.desc`;
-                  const response = await fetch(query, {
-                    headers: {
-                      apikey: key,
-                      Authorization: `Bearer ${key}`,
-                    },
-                  });
-                  const data = await response.json();
-                  return { data: Array.isArray(data) && data.length > 0 ? data[0] : null, error: data.length === 0 ? { message: 'Not found' } : null };
-                },
-              }),
-            }),
-          }),
-        }),
-      }),
+          eq: (column: string, value: unknown) => {
+            filters.push(`${column}=eq.${value}`);
+            return chainable;
+          },
+          gt: (column: string, value: unknown) => {
+            filters.push(`${column}=gt.${value}`);
+            return chainable;
+          },
+          order: (column: string, opts: { desc: boolean }) => {
+            filters.push(`order=${column}${opts.desc ? '.desc' : ''}`);
+            return chainable;
+          },
+          limit: (n: number) => {
+            filters.push(`limit=${n}`);
+            return chainable;
+          },
+        };
+
+        return chainable;
+      },
       insert: (values: unknown) => ({
         select: () => ({
           single: async () => {
