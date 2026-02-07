@@ -5,14 +5,29 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, Activity, Settings, LogOut, Menu, X, Moon, Sun, Zap, ListTodo } from "lucide-react";
+import {
+  LayoutDashboard,
+  Activity,
+  Settings,
+  LogOut,
+  Menu,
+  X,
+  Moon,
+  Sun,
+  Clock,
+  Calendar,
+  Plug,
+  Sparkles,
+} from "lucide-react";
 import { useTheme } from "@/lib/theme";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/dashboard/queue", label: "Task Queue", icon: ListTodo },
-  { href: "/dashboard/skills", label: "Skills", icon: Zap },
   { href: "/dashboard/activity", label: "Activity", icon: Activity },
+  { href: "/dashboard/queue", label: "Queue", icon: Clock },
+  { href: "/dashboard/scheduled", label: "Scheduled", icon: Calendar },
+  { href: "/dashboard/apps", label: "Connected Apps", icon: Plug },
+  { href: "/dashboard/skills", label: "Skills", icon: Sparkles },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
@@ -35,6 +50,12 @@ export default function DashboardLayout({
     router.refresh();
   };
 
+  // Check if current path matches nav item (exact or starts with for nested routes)
+  const isActive = (href: string) => {
+    if (href === "/dashboard") return pathname === "/dashboard";
+    return pathname.startsWith(href);
+  };
+
   const NavContent = () => (
     <>
       <div className="p-4 border-b border-border">
@@ -44,7 +65,7 @@ export default function DashboardLayout({
       </div>
       <nav className="p-3 space-y-1 flex-1">
         {navItems.map((item) => {
-          const isActive = pathname === item.href;
+          const active = isActive(item.href);
           const Icon = item.icon;
           return (
             <Link
@@ -52,7 +73,7 @@ export default function DashboardLayout({
               href={item.href}
               onClick={() => setMobileOpen(false)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative ${
-                isActive
+                active
                   ? "bg-primary text-primary-foreground shadow-sm"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
               }`}

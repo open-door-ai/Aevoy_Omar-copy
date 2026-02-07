@@ -4,8 +4,9 @@ import { ScheduledTasks } from "@/components/scheduled-tasks";
 import { RecentActivity } from "@/components/recent-activity";
 import DashboardWithOnboarding from "@/components/dashboard-with-onboarding";
 import { StaggerContainer, StaggerItem, GlassCard } from "@/components/ui/motion";
-import { Suspense } from "react";
 import { SkeletonCard } from "@/components/ui/skeleton";
+import { Suspense } from "react";
+import { SendTaskInput } from "@/components/send-task-input";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,32 @@ export default async function DashboardPage() {
     .eq("month", currentMonth)
     .single();
 
+  // Get today's tasks count
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const { count: todayCount } = await supabase
+    .from("tasks")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", user?.id)
+    .gte("created_at", todayStart.toISOString());
+
+  // Get this week's tasks count
+  const weekStart = new Date();
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  weekStart.setHours(0, 0, 0, 0);
+  const { count: weekCount } = await supabase
+    .from("tasks")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", user?.id)
+    .gte("created_at", weekStart.toISOString());
+
+  // Get active tasks count
+  const { count: activeCount } = await supabase
+    .from("tasks")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", user?.id)
+    .in("status", ["pending", "processing"]);
+
   const username = profile?.username || user?.email?.split("@")[0] || "user";
   const botName = profile?.bot_name || null;
   const aiEmail = `${username}@aevoy.com`;
@@ -54,11 +81,7 @@ export default async function DashboardPage() {
 
   const isBetaUser = profile?.subscription_status === 'beta';
 
-  // Count tasks by input channel
-  const emailTasks = tasks?.filter(t => !t.input_channel || t.input_channel === 'email').length || 0;
-  const smsTasks = tasks?.filter(t => t.input_channel === 'sms').length || 0;
-  const voiceTasks = tasks?.filter(t => t.input_channel === 'voice').length || 0;
-
+  const monthlyCost = ((usage?.ai_cost_cents || 0) / 100).toFixed(2);
   const usagePercent = Math.min((messagesUsed / messagesLimit) * 100, 100);
 
   return (
@@ -80,7 +103,48 @@ export default async function DashboardPage() {
         )}
       </div>
 
-      {/* Contact Info Cards — Glass */}
+      {/* Send Task Input */}
+      <Suspense fallback={<SkeletonCard />}>
+        <SendTaskInput />
+      </Suspense>
+
+      {/* Quick Stats */}
+      <StaggerContainer className="grid grid-cols-2 md:grid-cols-4 gap-4" staggerDelay={0.08}>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">Tasks Today</p>
+              <p className="text-2xl font-bold">{todayCount || 0}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">This Week</p>
+              <p className="text-2xl font-bold">{weekCount || 0}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">Active Tasks</p>
+              <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{activeCount || 0}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">Monthly Cost</p>
+              <p className="text-2xl font-bold">${monthlyCost}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+      </StaggerContainer>
+
+      {/* Contact Info Cards */}
       <StaggerContainer className="grid md:grid-cols-2 gap-4" staggerDelay={0.08}>
         <StaggerItem>
           <GlassCard className="p-6">
@@ -112,8 +176,8 @@ export default async function DashboardPage() {
         )}
       </StaggerContainer>
 
-      {/* Stats — Staggered */}
-      <StaggerContainer className="grid md:grid-cols-4 gap-4" staggerDelay={0.08} delayStart={0.2}>
+      {/* Usage */}
+      <StaggerContainer className="grid md:grid-cols-2 gap-4" staggerDelay={0.08} delayStart={0.2}>
         <StaggerItem>
           <Card>
             <CardHeader className="pb-2">
@@ -148,65 +212,7 @@ export default async function DashboardPage() {
             </CardContent>
           </Card>
         </StaggerItem>
-
-        <StaggerItem>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Tasks</CardDescription>
-              <CardTitle className="text-3xl">
-                {tasks?.length || 0}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                All time completed
-              </p>
-            </CardContent>
-          </Card>
-        </StaggerItem>
-
-        <StaggerItem>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>AI Cost (Month)</CardDescription>
-              <CardTitle className="text-3xl">
-                ${((usage?.ai_cost_cents || 0) / 100).toFixed(2)}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                {currentMonth}
-              </p>
-            </CardContent>
-          </Card>
-        </StaggerItem>
       </StaggerContainer>
-
-      {/* Channel Breakdown */}
-      {(smsTasks > 0 || voiceTasks > 0) && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Task Channels</CardTitle>
-            <CardDescription>How tasks are being submitted</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <StaggerContainer className="flex gap-6" staggerDelay={0.1}>
-              <StaggerItem className="text-center">
-                <div className="text-2xl font-bold">{emailTasks}</div>
-                <div className="text-sm text-muted-foreground">Email</div>
-              </StaggerItem>
-              <StaggerItem className="text-center">
-                <div className="text-2xl font-bold">{smsTasks}</div>
-                <div className="text-sm text-muted-foreground">SMS</div>
-              </StaggerItem>
-              <StaggerItem className="text-center">
-                <div className="text-2xl font-bold">{voiceTasks}</div>
-                <div className="text-sm text-muted-foreground">Voice</div>
-              </StaggerItem>
-            </StaggerContainer>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Scheduled Tasks */}
       <ScheduledTasks />

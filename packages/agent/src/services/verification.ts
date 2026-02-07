@@ -171,7 +171,7 @@ export async function requestVerificationCode(
     }
 
     // 2. Try existing tfa_codes table (maybe SMS already arrived)
-    const smsCode = await getLatestCode(taskId);
+    const smsCode = await getLatestCode(userId, siteDomain);
     if (smsCode) {
       console.log(`[VERIFICATION] Found existing TFA code for task ${taskId}`);
       return smsCode;
