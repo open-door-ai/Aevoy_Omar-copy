@@ -16,5 +16,6 @@ compatibility_date = "2024-09-25"
 #   npx wrangler secret put SUPABASE_SERVICE_KEY   # sb_secret_xxx
 
 [vars]
-# Overridden by secrets in production
-AGENT_URL = "http://localhost:3001"
+# Production agent URL
+AGENT_URL = "https://hissing-verile-aevoy-e721b4a6.koyeb.app"
+SUPABASE_URL = "https://eawoquqgfndmphogwjeu.supabase.co"
