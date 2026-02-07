@@ -38,3 +38,5 @@ npm-debug.log*
 # Build artifacts
 packages/agent/tsconfig.tsbuildinfo
 packages/agent/dist/
+test-results/
+apps/web/test-results/
