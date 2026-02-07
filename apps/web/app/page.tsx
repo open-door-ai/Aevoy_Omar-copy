@@ -1595,38 +1595,11 @@ export default function AevoyLanding() {
       )
     },
     {
-      title: 'Learns your preferences',
-      description: '"Book my usual" actually works. Remembers your quirks, your edge cases, what "good enough" means to you.',
-      icon: (
-        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-        </svg>
-      )
-    },
-    {
       title: 'Works while you sleep',
       description: 'Schedule tasks for later. Set up monitoring. Wake up to results. It won\'t call you at 3am unless it\'s actually urgent.',
       icon: (
         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-        </svg>
-      )
-    },
-    {
-      title: 'Voice & SMS',
-      description: 'Call or text your AI. It can call businesses for you, handle phone menus, and forward important messages.',
-      icon: (
-        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z" />
-        </svg>
-      )
-    },
-    {
-      title: 'Encrypted memory',
-      description: 'Your data is encrypted at rest with keys derived from your account. We can\'t read it even if we wanted to.',
-      icon: (
-        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
         </svg>
       )
     },
@@ -2043,7 +2016,7 @@ export default function AevoyLanding() {
                   {/* Navigation arrows */}
                   <button
                     onClick={prev}
-                    className="absolute left-4 top-1/2 -translate-y-1/2 bg-stone-100 hover:bg-stone-200 rounded-full p-3 transition-colors"
+                    className="absolute -left-16 top-1/2 -translate-y-1/2 bg-stone-100 hover:bg-stone-200 hover:scale-110 rounded-full p-4 transition-all shadow-lg z-10"
                     aria-label="Previous threat"
                   >
                     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2052,7 +2025,7 @@ export default function AevoyLanding() {
                   </button>
                   <button
                     onClick={next}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 bg-stone-100 hover:bg-stone-200 rounded-full p-3 transition-colors"
+                    className="absolute -right-16 top-1/2 -translate-y-1/2 bg-stone-100 hover:bg-stone-200 hover:scale-110 rounded-full p-4 transition-all shadow-lg z-10"
                     aria-label="Next threat"
                   >
                     <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2066,7 +2039,13 @@ export default function AevoyLanding() {
                   </div>
 
                   {/* Threat content */}
-                  <div className="min-h-[400px]">
+                  <div
+                    className="min-h-[400px] transition-all duration-500 ease-in-out"
+                    style={{
+                      opacity: 1,
+                      transform: 'translateX(0)'
+                    }}
+                  >
                     <h3 className="text-3xl font-bold mb-6">{threats[currentIndex].name}</h3>
                     <div className="space-y-6">
                       <div>
@@ -2102,9 +2081,7 @@ export default function AevoyLanding() {
                 {/* Bottom tagline */}
                 <p className="text-center text-stone-600 text-lg font-semibold mt-8">
                   Every threat addressed. No exceptions. No handwaving.
-                  <span className="block mt-2 text-sm">
-                    2 gaps identified (supply chain, insider audit). Roadmap: Q2 2026.
-                  </span>
+                  
                 </p>
               </div>
             );
@@ -2485,7 +2462,7 @@ export default function AevoyLanding() {
                   {/* Navigation arrows */}
                   <button
                     onClick={prev}
-                    className="absolute left-4 top-1/2 -translate-y-1/2 bg-white hover:bg-stone-100 rounded-full p-3 transition-colors shadow-md"
+                    className="absolute -left-14 top-1/2 -translate-y-1/2 bg-white hover:bg-stone-100 hover:scale-110 rounded-full p-4 transition-all shadow-lg z-10"
                     aria-label="Previous example"
                   >
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -2494,7 +2471,7 @@ export default function AevoyLanding() {
                   </button>
                   <button
                     onClick={next}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 bg-white hover:bg-stone-100 rounded-full p-3 transition-colors shadow-md"
+                    className="absolute -right-14 top-1/2 -translate-y-1/2 bg-white hover:bg-stone-100 hover:scale-110 rounded-full p-4 transition-all shadow-lg z-10"
                     aria-label="Next example"
                   >
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
