@@ -2283,7 +2283,6 @@ export default function AevoyLanding() {
                       />
                     ))}
                   </div>
-                </div>
 
                 {/* Bottom tagline */}
                 <p className="text-center text-stone-600 text-lg font-semibold mt-8">
