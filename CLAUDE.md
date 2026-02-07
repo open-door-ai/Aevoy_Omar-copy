@@ -393,13 +393,15 @@ docker-compose up --build       # Agent in Docker
 |-----------|----------|--------|
 | Website | Vercel → https://www.aevoy.com | Live, SSL valid |
 | Agent | Koyeb → https://hissing-verile-aevoy-e721b4a6.koyeb.app | Live, healthy |
+| Email Worker | Cloudflare → https://aevoy-email-router.omarkebrahim.workers.dev | Deployed, secrets configured |
 | Email Out | Resend (noreply@aevoy.com) | DKIM+SPF verified |
-| Email In | ImprovMX → Gmail IMAP (30s poll) | Working |
+| Email In | ImprovMX → Gmail IMAP (30s poll) | Working (primary) |
+| Email Routing | Cloudflare Email Routing → Worker | Ready (needs MX records update) |
 | DNS | Porkbun (A, CNAME, 3xTXT, MX) | Configured |
 | SPF | `v=spf1 include:spf.improvmx.com include:amazonses.com ~all` | Combined |
 | Auth | Supabase, site URL = https://www.aevoy.com | Working |
 | Twilio | Trial, +17789008951 | Webhooks pointed to Koyeb |
-| DB | Supabase (eawoquqgfndmphogwjeu), 26 tables, RLS on all | All migrations applied |
+| DB | Supabase (eawoquqgfndmphogwjeu), 27 tables, RLS on all | All migrations applied (v1-v15) |
 
 ## Environment Variables (all in apps/web/.env.local)
 
@@ -430,7 +432,7 @@ Supabase, Groq, DeepSeek, Anthropic, Google (Gemini), Kimi, Browserbase, Twilio,
 - **Cascade**: API skills → cached browser → new browser → email fallback → manual fallback
 - **Never-fail**: 15 click methods, 12 fill methods, 10 login methods, 8 nav methods
 
-## Session History (11 sessions)
+## Session History (12 sessions)
 
 1. Hive Mind social network (13 files)
 2. V2 spec alignment (15 gaps closed)
@@ -443,3 +445,4 @@ Supabase, Groq, DeepSeek, Anthropic, Google (Gemini), Kimi, Browserbase, Twilio,
 9. DNS restoration, Supabase Auth fix, full E2E verification
 10. Security audit, repo cleanup, scale-readiness (distributed locks, email idempotency, DB counters)
 11. Comprehensive UI overhaul (Phases 1-3)
+12. Email PIN security system: Migration v15, PIN verification flow, Cloudflare Worker deployment, settings UI
