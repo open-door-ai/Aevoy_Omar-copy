@@ -100,6 +100,7 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(Math.max(1, parseInt(searchParams.get("limit") || "20") || 20), 100);
     const offset = Math.max(0, parseInt(searchParams.get("offset") || "0") || 0);
     const status = searchParams.get("status");
+    const needsTakeover = searchParams.get("needs_takeover");
 
     // Validate status parameter
     const validStatuses = ["pending", "processing", "completed", "failed", "cancelled", "needs_review", "awaiting_confirmation", "awaiting_user_input", "all"];
@@ -119,6 +120,10 @@ export async function GET(request: NextRequest) {
 
     if (status && status !== "all") {
       query = query.eq("status", status);
+    }
+
+    if (needsTakeover === "true") {
+      query = query.eq("needs_takeover", true);
     }
 
     query = query.range(offset, offset + limit - 1);

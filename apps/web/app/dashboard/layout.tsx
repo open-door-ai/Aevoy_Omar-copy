@@ -22,13 +22,13 @@ import {
 import { useTheme } from "@/lib/theme";
 
 const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/dashboard/activity", label: "Activity", icon: Activity },
-  { href: "/dashboard/queue", label: "Queue", icon: Clock },
-  { href: "/dashboard/scheduled", label: "Scheduled", icon: Calendar },
-  { href: "/dashboard/apps", label: "Connected Apps", icon: Plug },
-  { href: "/dashboard/skills", label: "Skills", icon: Sparkles },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, id: "nav-dashboard" },
+  { href: "/dashboard/activity", label: "Activity", icon: Activity, id: "nav-activity" },
+  { href: "/dashboard/queue", label: "Queue", icon: Clock, id: "nav-queue" },
+  { href: "/dashboard/scheduled", label: "Scheduled", icon: Calendar, id: "nav-scheduled" },
+  { href: "/dashboard/apps", label: "Connected Apps", icon: Plug, id: "nav-apps" },
+  { href: "/dashboard/skills", label: "Skills", icon: Sparkles, id: "nav-skills" },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings, id: "nav-settings" },
 ];
 
 export default function DashboardLayout({
@@ -70,6 +70,7 @@ export default function DashboardLayout({
           return (
             <Link
               key={item.href}
+              id={item.id}
               href={item.href}
               onClick={() => setMobileOpen(false)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative ${

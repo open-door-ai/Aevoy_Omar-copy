@@ -67,6 +67,59 @@ async function sendViaChannel(
   await sendResponse({ to, from: aevoyFrom, subject, body });
 }
 
+/**
+ * Request a browser takeover when the agent is stuck.
+ * Updates the task record and notifies the user.
+ */
+async function requestTakeover(
+  taskId: string,
+  reason: string,
+  userId: string,
+  from: string,
+  username: string,
+  inputChannel?: InputChannel
+): Promise<void> {
+  console.log(`[TAKEOVER] Requesting user takeover for task ${taskId.slice(0, 8)}: ${reason}`);
+
+  // Fetch the live_view_url from the task (saved during engine init)
+  const { data: task } = await getSupabaseClient()
+    .from('tasks')
+    .select('live_view_url')
+    .eq('id', taskId)
+    .single();
+
+  await getSupabaseClient()
+    .from('tasks')
+    .update({
+      needs_takeover: true,
+      takeover_reason: reason,
+      takeover_requested_at: new Date().toISOString(),
+      status: 'awaiting_user_input',
+    })
+    .eq('id', taskId);
+
+  // Notify the user
+  const reasonLabel: Record<string, string> = {
+    captcha_detected: 'a CAPTCHA that I cannot solve',
+    bot_blocked: 'bot detection blocking my progress',
+    verification_needed: 'a verification step that needs your input',
+    login_required: 'a login that requires your credentials',
+    low_success_rate: 'repeated failures on browser actions',
+  };
+  const humanReason = reasonLabel[reason] || reason;
+  const liveUrl = task?.live_view_url;
+
+  let message = `I'm stuck on your task due to ${humanReason}.`;
+  if (liveUrl) {
+    message += `\n\nTake over the browser here:\n${liveUrl}\n\nOr use your dashboard: ${process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com'}/dashboard/takeover/${taskId}`;
+  } else {
+    message += `\n\nVisit your dashboard to help: ${process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com'}/dashboard/takeover/${taskId}`;
+  }
+  message += '\n\nOnce you resolve the issue, click "I\'m Done" and I\'ll continue.';
+
+  await sendViaChannel(inputChannel, userId, from, `${username}@aevoy.com`, 'Your AI needs help', message);
+}
+
 // ---- Test Mode / Payment Skip ----
 function isTestMode(): boolean {
   return process.env.TEST_MODE === "true" || process.env.NODE_ENV === "development";
@@ -996,10 +1049,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       await executionEngine.initialize(userId, domain || undefined);
       console.log(`[BROWSER] Execution engine initialized`);
 
-      // Log Live View URL availability
+      // Save Live View URL to task record for takeover feature
       const liveViewUrl = executionEngine.getLiveViewUrl();
-      if (liveViewUrl) {
+      if (liveViewUrl && taskId) {
         console.log(`[BROWSER] Live View URL available for user interaction`);
+        await getSupabaseClient()
+          .from('tasks')
+          .update({ live_view_url: liveViewUrl })
+          .eq('id', taskId);
       }
     }
 
@@ -1115,6 +1172,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
       if (successRate < 0.7) {
         console.log(`[CASCADE] Browser success rate ${(successRate * 100).toFixed(0)}%, trying fallbacks`);
+
+        // If Live View URL is available, request user takeover before cascade fallbacks
+        const takeoverUrl = executionEngine?.getLiveViewUrl();
+        if (takeoverUrl && taskId && successRate < 0.4) {
+          await requestTakeover(taskId, 'low_success_rate', userId, from, username, task.inputChannel);
+          // Return early - user will resolve and resume
+          return {
+            taskId,
+            success: false,
+            response: 'Waiting for your help with the browser session.',
+            actions: actionResults,
+            error: 'Browser takeover requested',
+          };
+        }
+
         try {
           // Level 2: API fallback
           const { tryApiApproach } = await import("./tasks/api-fallback.js");

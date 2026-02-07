@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
 import { Switch } from "@/components/ui/switch";
-import { Phone, Mail, Cloud, Zap } from "lucide-react";
+import { Phone, Mail, Cloud, Zap, RotateCcw } from "lucide-react";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 
 interface Profile {
@@ -91,6 +91,7 @@ export default function SettingsPage() {
   const [savingEmailPin, setSavingEmailPin] = useState(false);
   const [emailPinStatus, setEmailPinStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [savingPhone, setSavingPhone] = useState(false);
+  const [restartingTour, setRestartingTour] = useState(false);
 
   // Integrations state
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
@@ -451,6 +452,21 @@ export default function SettingsPage() {
     }
   };
 
+  const handleRestartTour = async () => {
+    setRestartingTour(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dashboard_tour_seen: false }),
+      });
+      router.push("/dashboard");
+    } catch {
+      setMessage({ type: "error", text: "Failed to restart tour" });
+      setRestartingTour(false);
+    }
+  };
+
   const handleConnect = async (provider: "gmail" | "microsoft") => {
     setConnectingProvider(provider);
     setMessage(null);
@@ -562,6 +578,30 @@ export default function SettingsPage() {
           {message.text}
         </div>
       )}
+
+      {/* Help & Tour */}
+      <Card>
+        <CardContent className="pt-4 pb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">Dashboard Tour</p>
+              <p className="text-sm text-muted-foreground">
+                Replay the guided walkthrough of your dashboard
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRestartTour}
+              disabled={restartingTour}
+              className="gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              {restartingTour ? "Restarting..." : "Restart Tour"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Profile Settings */}
       <Card>
