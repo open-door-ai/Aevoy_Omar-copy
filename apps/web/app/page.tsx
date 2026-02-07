@@ -1445,6 +1445,190 @@ const WordScramble = () => {
   );
 };
 
+// ============================================
+// PHONE MOCKUP COMPONENT
+// ============================================
+const PHONE_MESSAGES = [
+  { type: 'user' as const, text: 'Cancel my Hulu subscription', time: '2:41 PM' },
+  { type: 'aevoy' as const, text: 'On it. Logging into your Hulu account now.', time: '2:41 PM' },
+  { type: 'aevoy' as const, text: 'Done \u2713 Your Hulu subscription has been cancelled. You have access until March 8.', time: '2:42 PM' },
+  { type: 'aevoy-image' as const, text: 'confirmation_screenshot.png', time: '2:42 PM' },
+  { type: 'user' as const, text: 'That was fast. Thanks', time: '2:43 PM' },
+  { type: 'aevoy' as const, text: '63 seconds. Anything else?', time: '2:43 PM' },
+];
+
+const PhoneMockup = () => {
+  const [visibleMessages, setVisibleMessages] = useState(0);
+  const [hasStarted, setHasStarted] = useState(false);
+  const [phoneRef, isPhoneVisible] = useScrollReveal(0.3);
+  const [animKey, setAnimKey] = useState(0);
+
+  // Start the message animation when scrolled into view
+  useEffect(() => {
+    if (isPhoneVisible && !hasStarted) {
+      setHasStarted(true);
+    }
+  }, [isPhoneVisible, hasStarted]);
+
+  // Animate messages one by one
+  useEffect(() => {
+    if (!hasStarted) return;
+    if (visibleMessages >= PHONE_MESSAGES.length) {
+      // After all messages shown, pause then replay
+      const replayTimer = setTimeout(() => {
+        setAnimKey(k => k + 1);
+        setVisibleMessages(0);
+      }, 4000);
+      return () => clearTimeout(replayTimer);
+    }
+
+    const delays = [600, 900, 1400, 800, 900, 800];
+    const delay = delays[visibleMessages] || 800;
+    const timer = setTimeout(() => setVisibleMessages(v => v + 1), delay);
+    return () => clearTimeout(timer);
+  }, [hasStarted, visibleMessages]);
+
+  return (
+    <div
+      ref={phoneRef}
+      className="flex flex-col items-center gap-5"
+      style={{
+        opacity: isPhoneVisible ? 1 : 0,
+        transform: isPhoneVisible ? 'translateY(0)' : 'translateY(40px)',
+        transition: 'all 0.9s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+    >
+      {/* Caption */}
+      <div className="text-center text-xs tracking-[0.08em] uppercase font-medium text-stone-400">
+        Your AI Employee
+      </div>
+
+      {/* Phone frame */}
+      <div className="phone-float relative w-[280px] h-[570px] sm:w-[300px] sm:h-[610px] bg-white rounded-[38px] border-[7px] border-stone-900 overflow-hidden flex flex-col shadow-[0_50px_100px_-20px_rgba(0,0,0,0.12),0_30px_60px_-30px_rgba(0,0,0,0.15),0_0_0_1px_rgba(0,0,0,0.03)]">
+        {/* Dynamic Island */}
+        <div className="absolute top-[9px] left-1/2 -translate-x-1/2 w-[80px] h-[22px] bg-stone-900 rounded-[16px] z-10" />
+
+        {/* Status bar */}
+        <div className="h-[50px] flex items-end justify-between px-5 pb-1.5 text-[11px] font-semibold text-stone-900 shrink-0">
+          <span>2:43 PM</span>
+          <span className="flex gap-1 items-center">
+            <svg width="13" height="9" viewBox="0 0 14 10" fill="none">
+              <rect x="0" y="6" width="2.5" height="4" rx="0.5" fill="currentColor" />
+              <rect x="3.5" y="4" width="2.5" height="6" rx="0.5" fill="currentColor" />
+              <rect x="7" y="2" width="2.5" height="8" rx="0.5" fill="currentColor" />
+              <rect x="10.5" y="0" width="2.5" height="10" rx="0.5" fill="currentColor" />
+            </svg>
+            <svg width="18" height="9" viewBox="0 0 20 10" fill="none">
+              <rect x="0.5" y="0.5" width="17" height="9" rx="2" stroke="currentColor" strokeWidth="1" />
+              <rect x="2" y="2" width="12" height="6" rx="1" fill="#34C759" />
+              <rect x="18.5" y="3" width="1.5" height="4" rx="0.5" fill="currentColor" />
+            </svg>
+          </span>
+        </div>
+
+        {/* Chat header */}
+        <div className="px-3.5 pt-1.5 pb-2.5 border-b border-stone-100 flex items-center gap-2.5 shrink-0">
+          <svg width="7" height="12" viewBox="0 0 8 14" fill="none">
+            <path d="M7 1L1 7L7 13" stroke="#007AFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <div className="relative">
+            <div className="w-[28px] h-[28px] rounded-full bg-gradient-to-br from-stone-900 to-stone-700 flex items-center justify-center text-white text-[11px] font-bold">
+              A
+            </div>
+            <div className="absolute -bottom-0.5 -right-0.5 w-[9px] h-[9px] rounded-full bg-emerald-500 border-[1.5px] border-white" />
+          </div>
+          <div>
+            <div className="text-[13px] font-semibold text-stone-900 leading-tight">Aevoy</div>
+            <div className="text-[10px] text-emerald-600 leading-tight font-medium">Online</div>
+          </div>
+        </div>
+
+        {/* Messages area */}
+        <div key={animKey} className="flex-1 overflow-hidden px-2.5 pt-2 pb-3 flex flex-col gap-1">
+          {/* Date pill */}
+          <div className="text-center text-[10px] text-stone-400 font-medium py-1.5">Today</div>
+
+          {PHONE_MESSAGES.slice(0, visibleMessages).map((msg, i) => {
+            const isUser = msg.type === 'user';
+            const isImage = msg.type === 'aevoy-image';
+
+            return (
+              <div
+                key={i}
+                className="phone-msg-in flex"
+                style={{
+                  justifyContent: isUser ? 'flex-end' : 'flex-start',
+                  marginBottom: i < visibleMessages - 1 && PHONE_MESSAGES[i + 1]?.type !== msg.type ? '4px' : '1px',
+                }}
+              >
+                <div
+                  className="max-w-[80%] px-2.5 py-[6px] text-[13px] leading-[1.35]"
+                  style={{
+                    borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                    background: isUser ? '#007AFF' : '#e9e9eb',
+                    color: isUser ? '#fff' : '#1a1a1a',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  {isImage ? (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-8 h-8 rounded-md bg-gradient-to-br from-stone-100 to-stone-200 flex items-center justify-center text-sm shrink-0">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#78716c" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="3" width="18" height="18" rx="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <path d="M21 15l-5-5L5 21" />
+                        </svg>
+                      </div>
+                      <div>
+                        <div className="text-[12px] font-medium">confirmation.png</div>
+                        <div className="text-[10px] text-stone-400">Screenshot &middot; 142 KB</div>
+                      </div>
+                    </div>
+                  ) : (
+                    msg.text
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Typing indicator */}
+          {hasStarted && visibleMessages > 0 && visibleMessages < PHONE_MESSAGES.length && (
+            <div className="flex justify-start phone-msg-in">
+              <div className="px-3 py-2.5 rounded-[16px_16px_16px_4px] bg-[#e9e9eb] flex gap-1 items-center">
+                {[0, 1, 2].map(dot => (
+                  <div
+                    key={dot}
+                    className="w-[6px] h-[6px] rounded-full bg-stone-400 phone-typing-dot"
+                    style={{ animationDelay: `${dot * 0.2}s` }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input bar */}
+        <div className="px-2.5 pt-2 pb-6 border-t border-stone-100 flex items-center gap-2 shrink-0">
+          <div className="flex-1 h-[30px] rounded-[16px] border border-stone-200 px-3 text-[13px] flex items-center text-stone-300">
+            Text Message
+          </div>
+          <div className="w-[26px] h-[26px] rounded-full bg-[#007AFF] flex items-center justify-center shrink-0">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+              <path d="M1 13L13 1M13 1H4M13 1V10" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom caption */}
+      <div className="text-center text-[12px] text-stone-400 font-normal tracking-wide">
+        Actually does tasks
+      </div>
+    </div>
+  );
+};
+
 const FeatureCard = ({ feature, index }: { feature: { title: string; description: string; icon: React.ReactNode }; index: number }) => {
   const [ref, isVisible] = useScrollReveal(0.2);
   
@@ -1648,6 +1832,49 @@ export default function AevoyLanding() {
           animation: cursorBlink 1.06s step-end infinite;
         }
 
+        @keyframes phoneMsgIn {
+          from {
+            opacity: 0;
+            transform: translateY(8px) scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
+        .phone-msg-in {
+          animation: phoneMsgIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes phoneTypingDot {
+          0%, 60%, 100% {
+            opacity: 0.3;
+            transform: scale(0.8);
+          }
+          30% {
+            opacity: 1;
+            transform: scale(1.1);
+          }
+        }
+
+        .phone-typing-dot {
+          animation: phoneTypingDot 1.4s ease-in-out infinite;
+        }
+
+        @keyframes phoneFloat {
+          0%, 100% {
+            transform: translateY(0);
+          }
+          50% {
+            transform: translateY(-8px);
+          }
+        }
+
+        .phone-float {
+          animation: phoneFloat 5s ease-in-out infinite;
+        }
+
         ::-webkit-scrollbar {
           width: 8px;
         }
@@ -1802,15 +2029,9 @@ export default function AevoyLanding() {
       <section className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
-            {/* Left: Visual */}
-            <div className="relative">
-              <div className="aspect-square bg-gradient-to-br from-stone-100 to-stone-200 rounded-2xl overflow-hidden flex items-center justify-center">
-                <div className="text-center p-12">
-                  
-                  <p className="text-2xl font-bold text-stone-700">Your AI Employee</p>
-                  <p className="text-stone-500 mt-2">Actually does tasks</p>
-                </div>
-              </div>
+            {/* Left: Phone Mockup */}
+            <div className="relative flex items-center justify-center py-8">
+              <PhoneMockup />
             </div>
 
             {/* Right: Text */}
