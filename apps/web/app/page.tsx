@@ -1836,6 +1836,184 @@ export default function AevoyLanding() {
         </div>
       </section>
 
+      {/* What Aevoy Can Do */}
+      <section className="py-32 bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+              What Aevoy can do
+            </h2>
+            <p className="text-xl text-stone-500">
+              If a human can do it in a browser or on a phone, so can your AI.
+            </p>
+          </div>
+
+          {(() => {
+            const categories = [
+              {
+                id: 'bookings',
+                label: 'Bookings',
+                tasks: [
+                  'Book a dinner reservation for 4 at Miku on Saturday at 7pm',
+                  'Reserve a hotel in Portland, pet-friendly, under $200/night',
+                  'Schedule a haircut at my usual salon for next Thursday',
+                ],
+              },
+              {
+                id: 'research',
+                label: 'Research',
+                tasks: [
+                  'Compare the top 5 CRM tools for law firms under $200/mo',
+                  'Find apartments in East Van, 2BR, under $2500, pet-friendly',
+                  'What are the tax implications of selling my rental property?',
+                ],
+              },
+              {
+                id: 'forms',
+                label: 'Forms',
+                tasks: [
+                  'Fill out the BC probate form P1 with estate details I sent',
+                  'Complete my visa renewal application using saved info',
+                  'Submit the insurance claim form with the accident photos',
+                ],
+              },
+              {
+                id: 'emails',
+                label: 'Emails',
+                tasks: [
+                  'Draft a follow-up email to the Morrison estate beneficiaries',
+                  'Reply to the catering company and confirm the vegan option',
+                  'Unsubscribe me from all marketing emails this week',
+                ],
+              },
+              {
+                id: 'calls',
+                label: 'Calls',
+                tasks: [
+                  'Call me at 3pm to remind me about the Morrison file',
+                  'Check if my prescription is ready at the pharmacy',
+                  'Call the dentist and reschedule to next Wednesday',
+                ],
+              },
+              {
+                id: 'shopping',
+                label: 'Shopping',
+                tasks: [
+                  'Monitor Sony WH-1000XM5 and alert me when under $350',
+                  'Order 2 bags of my usual dog food from Amazon',
+                  'Find the cheapest flight to Toronto next Friday under $400',
+                ],
+              },
+            ];
+            const [activeCategory, setActiveCategory] = useState('bookings');
+            const active = categories.find((c) => c.id === activeCategory) || categories[0];
+
+            return (
+              <>
+                {/* Category pills */}
+                <div className="flex flex-wrap justify-center gap-3 mb-12">
+                  {categories.map((cat) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setActiveCategory(cat.id)}
+                      className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
+                        activeCategory === cat.id
+                          ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20'
+                          : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Task cards */}
+                <div className="grid md:grid-cols-3 gap-4 max-w-4xl mx-auto">
+                  {active.tasks.map((task, i) => (
+                    <div
+                      key={`${active.id}-${i}`}
+                      className="bg-stone-50 border border-stone-200 rounded-2xl p-5 transition-all duration-300 hover:shadow-md hover:-translate-y-1"
+                      style={{
+                        animation: `fadeIn 0.4s ease-out ${i * 0.1}s both`,
+                      }}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-6 h-6 rounded-full bg-stone-200 flex items-center justify-center shrink-0 mt-0.5">
+                          <svg className="w-3 h-3 text-stone-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                          </svg>
+                        </div>
+                        <p className="text-stone-700 text-sm leading-relaxed">&ldquo;{task}&rdquo;</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </section>
+
+      {/* Demo Section */}
+      <section id="demo" className="py-32">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+              Try it yourself
+            </h2>
+            <p className="text-xl text-stone-500">
+              Pick a demo. Watch it work. No signup required.
+            </p>
+          </div>
+          
+          <div className="grid md:grid-cols-3 gap-4 mb-12">
+            <DemoOption
+              icon={
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                </svg>
+              }
+              title="Call Me Right Now"
+              description="Enter your phone number. We'll call you in 30 seconds to prove this is real."
+              time="~30 seconds"
+              isSelected={selectedDemo === 'call'}
+              onClick={() => setSelectedDemo('call')}
+              index={0}
+            />
+            <DemoOption
+              icon={
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              }
+              title="The Impossible Task"
+              description="Give us a complex search with multiple constraints. Watch us solve it."
+              time="~60 seconds"
+              isSelected={selectedDemo === 'impossible'}
+              onClick={() => setSelectedDemo('impossible')}
+              index={1}
+            />
+            <DemoOption
+              icon={
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              }
+              title="Fill This Government Form"
+              description="Watch us complete a 47-field BC probate form in under a minute."
+              time="~45 seconds"
+              isSelected={selectedDemo === 'form'}
+              onClick={() => setSelectedDemo('form')}
+              index={2}
+            />
+          </div>
+          
+          <div className="max-w-2xl mx-auto">
+            <LiveDemo demoType={selectedDemo} />
+          </div>
+        </div>
+      </section>
+      
       {/* Security Section - Built Paranoid */}
       <section id="security" className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
@@ -2089,184 +2267,6 @@ export default function AevoyLanding() {
         </div>
       </section>
 
-      {/* What Aevoy Can Do */}
-      <section className="py-32 bg-white">
-        <div className="max-w-6xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              What Aevoy can do
-            </h2>
-            <p className="text-xl text-stone-500">
-              If a human can do it in a browser or on a phone, so can your AI.
-            </p>
-          </div>
-
-          {(() => {
-            const categories = [
-              {
-                id: 'bookings',
-                label: 'Bookings',
-                tasks: [
-                  'Book a dinner reservation for 4 at Miku on Saturday at 7pm',
-                  'Reserve a hotel in Portland, pet-friendly, under $200/night',
-                  'Schedule a haircut at my usual salon for next Thursday',
-                ],
-              },
-              {
-                id: 'research',
-                label: 'Research',
-                tasks: [
-                  'Compare the top 5 CRM tools for law firms under $200/mo',
-                  'Find apartments in East Van, 2BR, under $2500, pet-friendly',
-                  'What are the tax implications of selling my rental property?',
-                ],
-              },
-              {
-                id: 'forms',
-                label: 'Forms',
-                tasks: [
-                  'Fill out the BC probate form P1 with estate details I sent',
-                  'Complete my visa renewal application using saved info',
-                  'Submit the insurance claim form with the accident photos',
-                ],
-              },
-              {
-                id: 'emails',
-                label: 'Emails',
-                tasks: [
-                  'Draft a follow-up email to the Morrison estate beneficiaries',
-                  'Reply to the catering company and confirm the vegan option',
-                  'Unsubscribe me from all marketing emails this week',
-                ],
-              },
-              {
-                id: 'calls',
-                label: 'Calls',
-                tasks: [
-                  'Call me at 3pm to remind me about the Morrison file',
-                  'Check if my prescription is ready at the pharmacy',
-                  'Call the dentist and reschedule to next Wednesday',
-                ],
-              },
-              {
-                id: 'shopping',
-                label: 'Shopping',
-                tasks: [
-                  'Monitor Sony WH-1000XM5 and alert me when under $350',
-                  'Order 2 bags of my usual dog food from Amazon',
-                  'Find the cheapest flight to Toronto next Friday under $400',
-                ],
-              },
-            ];
-            const [activeCategory, setActiveCategory] = useState('bookings');
-            const active = categories.find((c) => c.id === activeCategory) || categories[0];
-
-            return (
-              <>
-                {/* Category pills */}
-                <div className="flex flex-wrap justify-center gap-3 mb-12">
-                  {categories.map((cat) => (
-                    <button
-                      key={cat.id}
-                      onClick={() => setActiveCategory(cat.id)}
-                      className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
-                        activeCategory === cat.id
-                          ? 'bg-stone-900 text-white shadow-lg shadow-stone-900/20'
-                          : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
-                      }`}
-                    >
-                      {cat.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Task cards */}
-                <div className="grid md:grid-cols-3 gap-4 max-w-4xl mx-auto">
-                  {active.tasks.map((task, i) => (
-                    <div
-                      key={`${active.id}-${i}`}
-                      className="bg-stone-50 border border-stone-200 rounded-2xl p-5 transition-all duration-300 hover:shadow-md hover:-translate-y-1"
-                      style={{
-                        animation: `fadeIn 0.4s ease-out ${i * 0.1}s both`,
-                      }}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="w-6 h-6 rounded-full bg-stone-200 flex items-center justify-center shrink-0 mt-0.5">
-                          <svg className="w-3 h-3 text-stone-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                          </svg>
-                        </div>
-                        <p className="text-stone-700 text-sm leading-relaxed">&ldquo;{task}&rdquo;</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            );
-          })()}
-        </div>
-      </section>
-
-      {/* Demo Section */}
-      <section id="demo" className="py-32">
-        <div className="max-w-6xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              Try it yourself
-            </h2>
-            <p className="text-xl text-stone-500">
-              Pick a demo. Watch it work. No signup required.
-            </p>
-          </div>
-          
-          <div className="grid md:grid-cols-3 gap-4 mb-12">
-            <DemoOption
-              icon={
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                </svg>
-              }
-              title="Call Me Right Now"
-              description="Enter your phone number. We'll call you in 30 seconds to prove this is real."
-              time="~30 seconds"
-              isSelected={selectedDemo === 'call'}
-              onClick={() => setSelectedDemo('call')}
-              index={0}
-            />
-            <DemoOption
-              icon={
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              }
-              title="The Impossible Task"
-              description="Give us a complex search with multiple constraints. Watch us solve it."
-              time="~60 seconds"
-              isSelected={selectedDemo === 'impossible'}
-              onClick={() => setSelectedDemo('impossible')}
-              index={1}
-            />
-            <DemoOption
-              icon={
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              }
-              title="Fill This Government Form"
-              description="Watch us complete a 47-field BC probate form in under a minute."
-              time="~45 seconds"
-              isSelected={selectedDemo === 'form'}
-              onClick={() => setSelectedDemo('form')}
-              index={2}
-            />
-          </div>
-          
-          <div className="max-w-2xl mx-auto">
-            <LiveDemo demoType={selectedDemo} />
-          </div>
-        </div>
-      </section>
-      
       {/* Proactive Section - Scroll Hijack */}
       <section 
         ref={proactiveRef}
