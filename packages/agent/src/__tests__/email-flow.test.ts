@@ -109,6 +109,14 @@ vi.mock("../services/task-verifier.js", () => ({
     confidence: 90,
     method: "self_check",
   }),
+  getQualityTier: vi.fn().mockReturnValue("simple"),
+  QUALITY_TIERS: {
+    financial: { target: 99, maxStrikes: 3, alwaysVision: true },
+    browser_action: { target: 95, maxStrikes: 3, alwaysVision: false },
+    communication: { target: 90, maxStrikes: 2, alwaysVision: false },
+    research: { target: 80, maxStrikes: 2, alwaysVision: false },
+    simple: { target: 70, maxStrikes: 1, alwaysVision: false },
+  },
 }));
 
 // ---- Mock: Memory ----

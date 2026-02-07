@@ -215,7 +215,7 @@ export default function StepBotEmail({
         </div>
         <button
           onClick={() => setShuffleIndex((i) => i + 1)}
-          className="block mx-auto text-sm text-stone-400 hover:text-stone-600 transition-colors mb-6"
+          className="block mx-auto text-sm text-stone-500 hover:text-stone-700 transition-colors mb-6"
         >
           Shuffle names
         </button>
@@ -237,7 +237,7 @@ export default function StepBotEmail({
                   <span className="text-2xl md:text-3xl font-mono font-bold text-stone-900">
                     {username || "..."}
                   </span>
-                  <span className="text-2xl md:text-3xl font-mono text-stone-400">
+                  <span className="text-2xl md:text-3xl font-mono text-stone-500">
                     @aevoy.com
                   </span>
                 </div>
@@ -265,7 +265,7 @@ export default function StepBotEmail({
                 ))}
                 <button
                   onClick={reshuffleSuggestions}
-                  className="px-3 py-1 rounded-lg text-sm text-stone-400 hover:text-stone-600 border border-dashed border-stone-200 hover:border-stone-400 transition-colors"
+                  className="px-3 py-1 rounded-lg text-sm text-stone-500 hover:text-stone-700 border border-dashed border-stone-200 hover:border-stone-400 transition-colors"
                 >
                   More
                 </button>
@@ -290,7 +290,7 @@ export default function StepBotEmail({
                   className="font-mono text-lg"
                   maxLength={20}
                 />
-                <span className="text-stone-400 font-mono whitespace-nowrap">
+                <span className="text-stone-500 font-mono whitespace-nowrap">
                   @aevoy.com
                 </span>
               </div>

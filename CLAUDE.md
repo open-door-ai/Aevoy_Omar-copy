@@ -431,7 +431,7 @@ Supabase, Groq, DeepSeek, Anthropic, Google (Gemini), Kimi, Browserbase, Twilio,
 - **Cascade**: API skills → cached browser → new browser → email fallback → manual fallback
 - **Never-fail**: 15 click methods, 12 fill methods, 10 login methods, 8 nav methods
 
-## Session History (12 sessions)
+## Session History (13 sessions)
 
 1. Hive Mind social network (13 files)
 2. V2 spec alignment (15 gaps closed)
@@ -445,3 +445,4 @@ Supabase, Groq, DeepSeek, Anthropic, Google (Gemini), Kimi, Browserbase, Twilio,
 10. Security audit, repo cleanup, scale-readiness (distributed locks, email idempotency, DB counters)
 11. Comprehensive UI overhaul (Phases 1-3)
 12. Email PIN security system: Migration v15, PIN verification flow, Cloudflare Worker deployment, settings UI
+13. Onboarding fixes: UI contrast (force-light, WCAG AAA), email verification auto-bypass fix, phone call functionality, 14 files modified

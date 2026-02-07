@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { motion } from "@/components/ui/motion";
 import {
   Calendar,
   Search,
@@ -63,7 +63,7 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
       onNext();
     } catch (error) {
       console.error("Failed to save use cases:", error);
-      onNext(); // Continue anyway
+      onNext();
     } finally {
       setIsSaving(false);
     }
@@ -72,11 +72,11 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold">What Can Aevoy Do For You?</h2>
-        <p className="text-foreground/70">
-          Select 1-3 tasks you'll use most often (helps us personalize your experience)
+        <h2 className="text-2xl font-bold text-stone-900">What Can Aevoy Do For You?</h2>
+        <p className="text-stone-500">
+          Select 1-3 tasks you&apos;ll use most often (helps us personalize your experience)
         </p>
-        <p className="text-sm text-foreground/60">
+        <p className="text-sm text-stone-500">
           {selectedUseCases.length}/3 selected
         </p>
       </div>
@@ -97,24 +97,24 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
               disabled={isDisabled}
               className={`relative p-4 rounded-lg border-2 transition-all text-left ${
                 isSelected
-                  ? "border-primary bg-primary/5 scale-[1.02]"
+                  ? "border-stone-800 bg-stone-50 scale-[1.02]"
                   : isDisabled
-                  ? "border-border opacity-50 cursor-not-allowed"
-                  : "border-border hover:border-primary/50 hover:bg-accent"
+                  ? "border-stone-200 opacity-50 cursor-not-allowed"
+                  : "border-stone-200 hover:border-stone-400 hover:bg-stone-50"
               }`}
             >
               <div className="space-y-2">
-                <Icon className={`w-8 h-8 ${isSelected ? "text-primary" : "text-foreground/70"}`} />
+                <Icon className={`w-8 h-8 ${isSelected ? "text-stone-800" : "text-stone-500"}`} />
                 <div>
-                  <h3 className="font-semibold text-sm">{useCase.label}</h3>
-                  <p className="text-xs text-foreground/70">{useCase.description}</p>
+                  <h3 className="font-semibold text-sm text-stone-900">{useCase.label}</h3>
+                  <p className="text-xs text-stone-500">{useCase.description}</p>
                 </div>
               </div>
               {isSelected && (
                 <motion.div
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
-                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs"
+                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-stone-800 text-white flex items-center justify-center text-xs"
                 >
                   ✓
                 </motion.div>
@@ -133,8 +133,8 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
         </Button>
       </div>
 
-      <div className="text-center text-sm text-foreground/70">
-        Don't worry — Aevoy can handle all of these and more!
+      <div className="text-center text-sm text-stone-500">
+        Don&apos;t worry — Aevoy can handle all of these and more!
       </div>
     </div>
   );

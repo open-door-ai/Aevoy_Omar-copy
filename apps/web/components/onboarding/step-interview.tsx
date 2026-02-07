@@ -113,7 +113,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                   <p className="font-semibold text-stone-900">Phone Call Interview</p>
                   <p className="text-sm text-stone-500">Your AI calls you for a quick chat to learn your preferences</p>
                 </div>
-                <svg className="w-5 h-5 text-stone-300 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-5 h-5 text-stone-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                 </svg>
               </div>
@@ -157,7 +157,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                     <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                   </motion.svg>
                 ) : (
-                  <svg className="w-5 h-5 text-stone-300 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className="w-5 h-5 text-stone-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                   </svg>
                 )}
@@ -181,7 +181,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                   <p className="font-semibold text-stone-900">Quick Basics</p>
                   <p className="text-sm text-stone-500">Fill in a few preferences right here, right now</p>
                 </div>
-                <svg className="w-5 h-5 text-stone-300 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-5 h-5 text-stone-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                 </svg>
               </div>
@@ -195,11 +195,11 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
             <div className="flex flex-col items-center gap-3">
               <button
                 onClick={() => setShowSkipWarning(true)}
-                className="text-stone-400 hover:text-stone-600 text-sm transition-colors underline underline-offset-4"
+                className="text-stone-500 hover:text-stone-700 text-sm transition-colors underline underline-offset-4"
               >
                 Skip this step
               </button>
-              <p className="text-xs text-stone-300 max-w-sm text-center">
+              <p className="text-xs text-stone-500 max-w-sm text-center">
                 Your AI will still work, but it won&apos;t know your preferences, habits, or context — so it&apos;ll be less effective
               </p>
             </div>
@@ -208,24 +208,24 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={springs.default}
-              className="bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-800 rounded-xl p-6 space-y-4"
+              className="bg-red-50 border-2 border-red-200 rounded-xl p-6 space-y-4"
             >
               <div className="flex items-start gap-3">
                 <svg className="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                 </svg>
                 <div className="space-y-2 flex-1">
-                  <h3 className="font-semibold text-red-900 dark:text-red-100">Are you sure you want to skip?</h3>
-                  <p className="text-sm text-red-800 dark:text-red-200">
+                  <h3 className="font-semibold text-red-900">Are you sure you want to skip?</h3>
+                  <p className="text-sm text-red-800">
                     Your AI won&apos;t know:
                   </p>
-                  <ul className="text-sm text-red-700 dark:text-red-300 space-y-1 list-disc list-inside">
+                  <ul className="text-sm text-red-700 space-y-1 list-disc list-inside">
                     <li>Your work schedule</li>
                     <li>Favorite services</li>
                     <li>Communication preferences</li>
                     <li>Personal habits</li>
                   </ul>
-                  <p className="text-sm font-medium text-red-900 dark:text-red-100 pt-2 flex items-center gap-1.5">
+                  <p className="text-sm font-medium text-red-900 pt-2 flex items-center gap-1.5">
                     This will make it WAY less effective
                     <TrendingDown className="w-4 h-4" />
                   </p>

@@ -21,6 +21,7 @@ import { getCompiledPrompt } from "./personality.js";
 import type { Memory, Action, AIResponse, TaskType, ModelProvider } from "../types/index.js";
 import { withTimeout } from "../utils/timeout.js";
 import { CircuitBreaker } from "../execution/retry.js";
+import { getAdaptiveChain, recordModelOutcome } from "./model-intelligence.js";
 
 // ---- Response Cache (LRU, 100 entries, 5-min TTL) ----
 
@@ -529,8 +530,11 @@ export async function generateResponse(
     }
   }
 
-  // Get the fallback chain for this task type
-  const chain = ROUTING_TABLE[taskType] || ROUTING_TABLE.understand;
+  // Get the fallback chain for this task type — adaptive if we have history
+  const defaultChain = ROUTING_TABLE[taskType] || ROUTING_TABLE.understand;
+  const chain = userId
+    ? await getAdaptiveChain(userId, taskType, "", defaultChain)
+    : defaultChain;
 
   for (const config of chain) {
     if (!isProviderAvailable(config.provider)) {
@@ -559,6 +563,21 @@ export async function generateResponse(
 
       // Track cost
       await trackApiCall(userId, config.model, result.inputTokens, result.outputTokens, cost, config.provider, taskId, taskType);
+
+      // SELF-LEARNING: Record model success for adaptive routing
+      if (userId) {
+        recordModelOutcome({
+          userId,
+          model: config.model,
+          provider: config.provider,
+          taskType,
+          domain: "",
+          success: true,
+          tokens: totalTokens,
+          costUsd: cost,
+          latencyMs: Date.now() - (Date.now() - timeout), // approximate
+        }).catch(() => {}); // fire-and-forget
+      }
 
       const aiResponse: AIResponse = {
         content: result.content,

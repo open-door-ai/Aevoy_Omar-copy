@@ -84,9 +84,9 @@ export function createLockedIntent(params: {
   const perms = TASK_PERMISSIONS[params.taskType] || TASK_PERMISSIONS.general;
   const limits = TASK_LIMITS[params.taskType] || TASK_LIMITS.general;
 
-  // Custom allowedActions can only RESTRICT defaults, not expand them
+  // Custom allowedActions MERGE with defaults (union)
   const allowed = params.allowedActions
-    ? perms.allowed.filter(a => params.allowedActions!.includes(a))
+    ? [...new Set([...perms.allowed, ...params.allowedActions])]
     : [...perms.allowed];
   const forbidden = [...new Set([...perms.forbidden, ...(params.forbiddenActions || [])])];
 

@@ -74,12 +74,12 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
   };
 
   return (
-    <div className="fixed inset-0 bg-background z-50 overflow-auto">
+    <div className="fixed inset-0 bg-white z-50 overflow-auto force-light">
       {/* Progress bar */}
       <div className="fixed top-0 left-0 right-0 z-10">
-        <div className="h-1 bg-muted">
+        <div className="h-1 bg-stone-100">
           <motion.div
-            className="h-full bg-primary"
+            className="h-full bg-stone-800"
             animate={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
             transition={springs.default}
           />
@@ -88,7 +88,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
 
       {/* Step counter */}
       <div className="fixed top-4 right-6 z-10">
-        <span className="text-sm text-foreground/70 font-medium tabular-nums">
+        <span className="text-sm text-stone-500 font-medium tabular-nums">
           <motion.span
             key={step}
             initial={{ y: -10, opacity: 0 }}
@@ -319,7 +319,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
           e.preventDefault();
           handleComplete();
         }}
-        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:bg-primary focus:text-primary-foreground focus:px-4 focus:py-2 focus:rounded"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:bg-stone-800 focus:text-white focus:px-4 focus:py-2 focus:rounded"
       >
         Skip to dashboard
       </a>

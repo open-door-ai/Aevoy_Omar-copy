@@ -9,6 +9,7 @@ import { processTask } from './processor.js';
 import { getProactiveEngine } from './proactive.js';
 import { compressOldMemories, decayMemories } from './memory.js';
 import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
+import { detectPatterns } from './pattern-detector.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -131,6 +132,154 @@ async function runProactiveChecks(): Promise<void> {
     }
   } catch {
     // Non-critical
+  }
+
+  // SELF-LEARNING: Run cross-task pattern detection (daily, checked hourly)
+  try {
+    const now = new Date();
+    // Only run once per day (between 3:00-4:00 AM UTC)
+    if (now.getUTCHours() === 3) {
+      const patterns = await detectPatterns();
+      if (patterns.length > 0) {
+        console.log(`[SCHEDULER] Pattern detection: found ${patterns.length} cross-task patterns`);
+      }
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Pattern detection error:', error);
+  }
+
+  // AUTONOMOUS INTELLIGENCE: Run skill recommendations (daily at 4 AM UTC, after pattern detection)
+  try {
+    const now = new Date();
+    if (now.getUTCHours() === 4) {
+      const { recommendSkills, formatSkillRecommendations } = await import("./autonomous-skill-recommender.js");
+      const { sendResponse } = await import("./email.js");
+
+      // Get all users with tasks in last 30 days
+      const { data: activeUsers } = await getSupabaseClient()
+        .from("tasks")
+        .select("user_id")
+        .gte("created_at", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+        .limit(1000);
+
+      if (activeUsers && activeUsers.length > 0) {
+        const uniqueUserIds = [...new Set(activeUsers.map(u => u.user_id))];
+        console.log(`[SCHEDULER] Running skill recommendations for ${uniqueUserIds.length} active users`);
+
+        for (const userId of uniqueUserIds.slice(0, 100)) { // Limit to 100/day to avoid spam
+          try {
+            const recommendations = await recommendSkills(userId);
+            if (recommendations.length > 0) {
+              const { data: profile } = await getSupabaseClient()
+                .from("profiles")
+                .select("email, username")
+                .eq("id", userId)
+                .single();
+
+              if (profile && profile.email) {
+                const formattedRecommendations = formatSkillRecommendations(recommendations);
+                await sendResponse({
+                  to: profile.email,
+                  from: `${profile.username}@aevoy.com`,
+                  subject: "[Aevoy] Skill Recommendations",
+                  body: `I analyzed your recent task patterns and found ${recommendations.length} skills that could help:\n\n${formattedRecommendations}\n\nInstall skills at: https://www.aevoy.com/dashboard/skills`,
+                });
+                console.log(`[SCHEDULER] Sent ${recommendations.length} skill recommendations to user ${userId.slice(0, 8)}`);
+              }
+            }
+          } catch {
+            // Non-critical, continue to next user
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Skill recommendation error:', error);
+  }
+
+  // META-LEARNING: Analyze learning performance (weekly on Sundays at 5 AM UTC)
+  try {
+    const now = new Date();
+    if (now.getUTCHours() === 5 && now.getUTCDay() === 0) { // Sunday
+      const { runMetaLearningCycle, formatMetaReport } = await import("./meta-learner.js");
+      console.log(`[SCHEDULER] Running meta-learning cycle (weekly analysis)`);
+
+      const result = await runMetaLearningCycle(); // Global analysis
+      console.log(formatMetaReport(result.metrics, result.recommendations));
+      console.log(`[SCHEDULER] Meta-learning: ${result.optimizationsApplied} optimizations applied`);
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Meta-learning error:', error);
+  }
+
+  // CAPABILITY EXPANSION: Detect gaps and auto-expand (daily at 6 AM UTC)
+  try {
+    const now = new Date();
+    if (now.getUTCHours() === 6) {
+      const { detectCapabilityGaps, autoExpandCapabilities, formatCapabilityReport } = await import("./capability-expander.js");
+      console.log(`[SCHEDULER] Running capability expansion (daily scan)`);
+
+      const gaps = await detectCapabilityGaps(undefined, 30); // Global scan, last 30 days
+      const expandedCount = await autoExpandCapabilities(gaps, "system");
+      console.log(`[SCHEDULER] Capability expansion: ${gaps.length} gaps detected, ${expandedCount} auto-expanded`);
+
+      if (gaps.length > 0) {
+        console.log(formatCapabilityReport(gaps));
+      }
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Capability expansion error:', error);
+  }
+
+  // PROACTIVE PROBLEM DETECTION: Scan for issues (hourly)
+  try {
+    const { detectProblemsForUser, autoFixProblems, formatProblemsForNotification } = await import("./proactive-problem-detector.js");
+
+    // Get all active users (with tasks in last 7 days)
+    const { data: recentUsers } = await getSupabaseClient()
+      .from("tasks")
+      .select("user_id")
+      .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+      .limit(100);
+
+    if (recentUsers && recentUsers.length > 0) {
+      const uniqueUserIds = [...new Set(recentUsers.map(u => u.user_id))];
+      console.log(`[SCHEDULER] Running proactive problem detection for ${uniqueUserIds.length} active users`);
+
+      for (const userId of uniqueUserIds.slice(0, 50)) { // Limit to 50/hour to avoid overload
+        try {
+          const problems = await detectProblemsForUser(userId);
+          if (problems.length > 0) {
+            await autoFixProblems(userId, problems);
+            console.log(`[SCHEDULER] Detected ${problems.length} problems for user ${userId.slice(0, 8)}, auto-fixing applied`);
+
+            // Notify user about detected problems
+            const criticalProblems = problems.filter(p => p.severity === "critical");
+            if (criticalProblems.length > 0) {
+              const { data: profile } = await getSupabaseClient()
+                .from("profiles")
+                .select("email, username")
+                .eq("id", userId)
+                .single();
+
+              if (profile && profile.email) {
+                const { sendResponse } = await import("./email.js");
+                await sendResponse({
+                  to: profile.email,
+                  from: `${profile.username}@aevoy.com`,
+                  subject: "[Aevoy] Action Required",
+                  body: formatProblemsForNotification(criticalProblems),
+                });
+              }
+            }
+          }
+        } catch {
+          // Non-critical, continue to next user
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Proactive problem detection error:', error);
   }
 
   // Refresh expiring OAuth tokens
