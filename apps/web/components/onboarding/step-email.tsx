@@ -82,11 +82,11 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
             <span className="text-2xl md:text-3xl font-mono font-bold text-stone-900">
               {username || "..."}
             </span>
-            <span className="text-2xl md:text-3xl font-mono text-stone-400">@aevoy.com</span>
+            <span className="text-2xl md:text-3xl font-mono text-stone-500">@aevoy.com</span>
           </div>
           <button
             onClick={handleCopy}
-            className="mt-3 mx-auto block text-sm text-stone-400 hover:text-stone-600 transition-colors"
+            className="mt-3 mx-auto block text-sm text-stone-500 hover:text-stone-700 transition-colors"
           >
             <motion.span
               key={copied ? "copied" : "copy"}
@@ -123,7 +123,7 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
             {checking && (
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
-                <p className="text-sm text-stone-400">Checking availability...</p>
+                <p className="text-sm text-stone-500">Checking availability...</p>
               </div>
             )}
             {!checking && availability && (

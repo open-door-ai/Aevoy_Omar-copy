@@ -21,6 +21,18 @@ import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, Strik
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+// Self-learning intelligence imports
+import { recordModelOutcome } from "./model-intelligence.js";
+import { predictDifficulty, recordTaskDifficulty } from "./difficulty-predictor.js";
+import { recordMethodAttempt } from "./method-tracker.js";
+import { getKnownCorrections, formatCorrectionsForPrompt, recordCorrectionSuccess } from "./verification-learner.js";
+import { getPatternWarnings } from "./pattern-detector.js";
+import { executeWithDeepening, getOptimalStartingLevel } from "./iterative-deepening.js";
+import { executeInParallel, shouldUseParallelExecution } from "./parallel-execution.js";
+import { getRecentContext, storeTaskContext, formatContextForPrompt } from "./context-carryover.js";
+import { decomposeTask, getExecutionOrder } from "./task-decomposition.js";
+import { recommendSkills, formatSkillRecommendations } from "./autonomous-skill-recommender.js";
+
 /**
  * Send a message back to the user via the same channel they used.
  * SMS/voice channels get SMS replies; email/web/other get email replies.
@@ -596,10 +608,98 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 5. Load user's memory
     const memory = await loadMemory(userId);
 
-    // 5b. Query Hive learnings for known approaches
-    let learningsHint = "";
+    // 5a. SELF-LEARNING: Predict difficulty + load intelligence BEFORE execution
+    const primaryDomain = classification.domains[0] || "";
+    let difficultyPrediction: Awaited<ReturnType<typeof predictDifficulty>> | null = null;
+    let knownCorrections: string[] = [];
+    let patternWarnings: string[] = [];
+
     try {
-      const domain = classification.domains[0] || "";
+      // Run predictions in parallel for speed
+      const [diffPred, corrections, warnings] = await Promise.all([
+        predictDifficulty(primaryDomain, classification.taskType),
+        getKnownCorrections(primaryDomain, classification.taskType),
+        getPatternWarnings(primaryDomain),
+      ]);
+
+      difficultyPrediction = diffPred;
+      knownCorrections = corrections;
+      patternWarnings = warnings;
+
+      if (diffPred.confidence > 0) {
+        console.log(
+          `[INTELLIGENCE] Predicted: ${diffPred.difficulty} (${diffPred.predictedSuccessRate}% success, ` +
+          `confidence: ${diffPred.confidence}%, method: ${diffPred.recommendedMethod})`
+        );
+      }
+      if (corrections.length > 0) {
+        console.log(`[INTELLIGENCE] Pre-applying ${corrections.length} known corrections`);
+      }
+      if (warnings.length > 0) {
+        console.log(`[INTELLIGENCE] ${warnings.length} pattern warnings for ${primaryDomain}`);
+      }
+    } catch {
+      // Non-critical — intelligence is bonus, not required
+    }
+
+    // 5a-ii. ADVANCED INTELLIGENCE: Quality prediction, cost optimization, failure prevention
+    try {
+      const { predictQuality } = await import("./quality-predictor.js");
+      const { chooseOptimalPath } = await import("./cost-optimizer.js");
+      const { preventFailures } = await import("./failure-preventer.js");
+      const { applyTransferLearning } = await import("./transfer-learning.js");
+
+      // Predict quality
+      const qualityPred = await predictQuality(userId, classification.taskType, primaryDomain, body);
+      console.log(`[QUALITY] Predicted: ${qualityPred.overallScore}/100 (${qualityPred.recommendedVerification} verification)`);
+
+      // Optimize cost
+      const optimalPath = await chooseOptimalPath(userId, classification.taskType, primaryDomain, "medium");
+      console.log(`[COST] Optimal: ${optimalPath.method} ($${optimalPath.estimatedCost}, ${optimalPath.estimatedDuration}s)`);
+
+      // Prevent failures
+      const prevention = await preventFailures(userId, classification.taskType, primaryDomain, body);
+      if (!prevention.readyToExecute) {
+        console.log(`[PREVENTION] Task blocked: ${prevention.blockingIssues.join(", ")}`);
+        // Send blocking issues to user
+        await sendResponse({
+          to: from,
+          from: `${username}@aevoy.com`,
+          subject: `Action Required: ${subject}`,
+          body: `Cannot proceed with your request:\n\n${prevention.blockingIssues.map(i => `• ${i}`).join("\n")}\n\nPlease address these issues and try again.`,
+        });
+        return { taskId, success: false, response: "Blocked by prevention checks", actions: [], error: prevention.blockingIssues[0] };
+      }
+      console.log(`[PREVENTION] Risk reduced: ${prevention.originalRisk}% → ${prevention.reducedRisk}%`);
+
+      // Apply transfer learning for new domains
+      if (primaryDomain && difficultyPrediction && difficultyPrediction.confidence < 50) {
+        const transfer = await applyTransferLearning(primaryDomain, classification.taskType);
+        if (transfer.applied) {
+          console.log(`[TRANSFER] Applied knowledge from ${transfer.sourceDomain} (${transfer.confidence}% confidence)`);
+        }
+      }
+    } catch (error) {
+      console.log(`[ADVANCED-INTEL] Optional intelligence failed:`, error);
+      // Non-critical - continue without advanced intelligence
+    }
+
+    // 5b. CONTEXT CARRYOVER: Load recent context from related tasks (24hr window)
+    let contextCarryover = "";
+    try {
+      const recentContext = await getRecentContext(userId, body);
+      if (recentContext) {
+        contextCarryover = formatContextForPrompt(recentContext);
+        console.log(`[CONTEXT] Found relevant context from task ${recentContext.taskId.slice(0, 8)} (score-based match)`);
+      }
+    } catch {
+      // Non-critical — context carryover is bonus
+    }
+
+    // 5c. Query Hive learnings for known approaches
+    let learningsHint = contextCarryover; // Start with context
+    try {
+      const domain = primaryDomain;
       const { data: learnings } = await getSupabaseClient()
         .from("learnings")
         .select("steps, gotchas, difficulty")
@@ -619,7 +719,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           return parts.join(". ");
         }).filter(Boolean);
         if (hints.length > 0) {
-          learningsHint = `\n\nKnown approaches:\n${hints.join("\n")}`;
+          learningsHint += `\n\nKnown approaches:\n${hints.join("\n")}`;
           console.log(`[LEARNINGS] Found ${hints.length} relevant hints for ${domain || classification.taskType}`);
         }
       }
@@ -627,7 +727,32 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Non-critical — learnings table may not exist yet
     }
 
-    // 5c. Create execution plan
+    // 5d. SELF-LEARNING: Append pattern warnings + known corrections to learnings
+    if (patternWarnings.length > 0) {
+      learningsHint += `\n\nCross-domain intelligence:\n${patternWarnings.join("\n")}`;
+    }
+    if (knownCorrections.length > 0) {
+      learningsHint += formatCorrectionsForPrompt(knownCorrections);
+    }
+
+    // 5e. TASK DECOMPOSITION: Check if task is complex enough to benefit from decomposition
+    const isComplexTask = body.length > 200 || classification.taskType.includes("multi");
+    if (isComplexTask && difficultyPrediction && (difficultyPrediction.difficulty === "hard" || difficultyPrediction.difficulty === "nightmare")) {
+      try {
+        const decomposed = await decomposeTask(body, userId);
+        if (decomposed.subtasks.length > 1) {
+          console.log(`[DECOMPOSITION] Broke task into ${decomposed.subtasks.length} subtasks`);
+          const executionOrder = getExecutionOrder(decomposed.subtasks);
+          console.log(`[DECOMPOSITION] Execution order: ${executionOrder.length} waves (parallel within wave)`);
+          // Note: Full decomposition execution would require recursive processTask calls
+          // For now, just log the plan — future: execute subtasks sequentially/parallel
+        }
+      } catch {
+        // Non-critical — decomposition is optimization, not required
+      }
+    }
+
+    // 5f. Create execution plan
     let planId: string | null = null;
     let plan: import("../types/index.js").ExecutionPlan | null = null;
     try {
@@ -1177,6 +1302,70 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // 13. CONTEXT CARRYOVER: Store task context for future related tasks (24hr TTL)
+    try {
+      await storeTaskContext(taskId, userId, body, cleanResponse);
+      console.log(`[CONTEXT] Stored task context for carryover`);
+    } catch {
+      // Non-critical
+    }
+
+    // 14. SELF-LEARNING: Record outcomes for future intelligence (fire-and-forget)
+    try {
+      const taskSuccess = verificationResult?.passed !== false;
+      const strikeCount = verificationResult
+        ? ((verificationResult as VerificationResult & { _strikeData?: { totalAttempts?: number } })._strikeData?.totalAttempts || 1)
+        : 1;
+
+      // Record task difficulty for future predictions
+      await recordTaskDifficulty({
+        domain: primaryDomain || "unknown",
+        taskType: classification.taskType,
+        durationMs: elapsedMs,
+        strikes: strikeCount,
+        costUsd: totalCost,
+        success: taskSuccess,
+      });
+
+      // Record model performance for adaptive routing
+      if (aiResponse.model) {
+        await recordModelOutcome({
+          userId,
+          model: aiResponse.model,
+          provider: aiResponse.model.includes("claude") ? "anthropic" : aiResponse.model.includes("deepseek") ? "deepseek" : "unknown",
+          taskType: classification.taskType,
+          domain: primaryDomain || "",
+          success: taskSuccess,
+          tokens: aiResponse.tokensUsed || 0,
+          costUsd: aiResponse.cost || 0,
+          latencyMs: elapsedMs,
+        });
+      }
+
+      // Record verification learnings (corrections that worked)
+      if (strikeCount >= 2 && taskSuccess && verificationResult) {
+        const strikeData = (verificationResult as VerificationResult & { _strikeData?: { strikes?: StrikeRecord[] } })._strikeData;
+        if (strikeData?.strikes) {
+          const allHints = strikeData.strikes.flatMap(s => s.correctionHints).filter(Boolean);
+          if (allHints.length > 0) {
+            await recordCorrectionSuccess({
+              domain: primaryDomain || "unknown",
+              taskType: classification.taskType,
+              correctionHints: allHints,
+            });
+            console.log(`[INTELLIGENCE] Recorded ${allHints.length} verification corrections for future use`);
+          }
+        }
+      }
+
+      console.log(
+        `[INTELLIGENCE] Recorded: difficulty=${difficultyPrediction?.difficulty || 'unknown'}, ` +
+        `model=${aiResponse.model}, strikes=${strikeCount}, success=${taskSuccess}`
+      );
+    } catch {
+      // Non-critical — intelligence recording should never fail the task
+    }
+
     console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
 
     return {
@@ -1245,8 +1434,10 @@ async function executeActionWithLearning(
   }
 
   try {
+    const actionStart = Date.now();
     const result = await executeAction(action, userId, username, executionEngine);
-    
+    const actionDuration = Date.now() - actionStart;
+
     // If we used a learned solution and it worked, record success
     if (pastFailure && result.success) {
       console.log(`[LEARNING] Learned solution worked for ${pastFailure.siteDomain}`);
@@ -1262,6 +1453,21 @@ async function executeActionWithLearning(
       });
     }
 
+    // SELF-LEARNING: Record method-level outcome for method ranking
+    try {
+      const domain = url ? new URL(url.startsWith('http') ? url : `https://${url}`).hostname : "unknown";
+      const method = (action.params?.method as string) || action.type;
+      await recordMethodAttempt({
+        domain,
+        actionType: action.type,
+        methodName: method,
+        success: result.success,
+        durationMs: actionDuration,
+      });
+    } catch {
+      // Non-critical
+    }
+
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -1273,6 +1479,30 @@ async function executeActionWithLearning(
       selector: action.params?.selector as string,
       error: errorMessage
     });
+
+    // Try self-debugging system
+    try {
+      const { debugAndFix } = await import("./self-debugger.js");
+      const domain = url ? new URL(url).hostname : "";
+      const debugResult = await debugAndFix(action, errorMessage, {
+        userId,
+        domain,
+        taskType: action.type,
+        previousAttempts: 0, // TODO: Track attempts
+      });
+
+      if (debugResult.fixed && debugResult.appliedFix) {
+        console.log(`[DEBUG] Auto-fixed via ${debugResult.appliedFix.type} after ${debugResult.attempts} attempts`);
+        // Retry action with fix applied
+        const retryResult = await executeAction(action, userId, username, executionEngine);
+        if (retryResult.success) {
+          console.log(`[DEBUG] Retry succeeded after auto-fix`);
+          return retryResult;
+        }
+      }
+    } catch (debugError) {
+      console.log(`[DEBUG] Auto-fix failed:`, debugError);
+    }
 
     // Try specific failure handler for recovery
     try {

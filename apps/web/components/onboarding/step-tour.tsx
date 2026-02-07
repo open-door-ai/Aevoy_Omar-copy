@@ -158,7 +158,7 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
       {!isLastStep && (
         <button
           onClick={onComplete}
-          className="text-stone-400 hover:text-stone-600 text-sm transition-colors underline underline-offset-4"
+          className="text-stone-500 hover:text-stone-700 text-sm transition-colors underline underline-offset-4"
         >
           Skip tour
         </button>

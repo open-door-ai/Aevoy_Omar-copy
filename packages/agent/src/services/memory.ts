@@ -569,31 +569,66 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-// ---- Memory Decay ----
+// ---- Adaptive Memory Decay ----
 
 /**
- * Reduce importance of old memories by 0.1.
- * Targets memories older than 30 days with importance > 0.1.
+ * Adaptive memory decay based on access patterns.
+ * Instead of fixed -0.1 for all memories, decay rate varies:
+ * - Accessed in last 7 days: NO decay (actively relevant)
+ * - Accessed 7-30 days ago: decay = -0.05 (slow)
+ * - Accessed 30-90 days ago: decay = -0.1 (normal)
+ * - Never accessed after creation: decay = -0.15 (fast)
+ * - Never decay below 0.05 (retain indefinitely at minimal level)
+ *
  * Called periodically by the scheduler.
  */
 export async function decayMemories(userId: string): Promise<number> {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const now = Date.now();
+  const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const ninetyDaysAgo = new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: oldMemories, error } = await getSupabaseClient()
+  // Only decay memories older than 7 days that still have importance > 0.05
+  const { data: memories, error } = await getSupabaseClient()
     .from("user_memory")
-    .select("id, importance")
+    .select("id, importance, created_at, last_accessed_at")
     .eq("user_id", userId)
-    .gt("importance", 0.1)
-    .lt("created_at", thirtyDaysAgo)
-    .limit(100);
+    .gt("importance", 0.05)
+    .lt("created_at", sevenDaysAgo)
+    .limit(200);
 
-  if (error || !oldMemories || oldMemories.length === 0) {
+  if (error || !memories || memories.length === 0) {
     return 0;
   }
 
   let decayed = 0;
-  for (const mem of oldMemories) {
-    const newImportance = Math.max(0.1, (mem.importance || 0.5) - 0.1);
+  for (const mem of memories) {
+    const lastAccess = mem.last_accessed_at || mem.created_at;
+    const lastAccessDate = new Date(lastAccess);
+    const daysSinceAccess = (now - lastAccessDate.getTime()) / (24 * 60 * 60 * 1000);
+
+    // Determine decay rate based on access recency
+    let decayRate: number;
+    if (daysSinceAccess <= 7) {
+      continue; // Recently accessed — no decay
+    } else if (daysSinceAccess <= 30) {
+      decayRate = 0.05; // Slow decay
+    } else if (daysSinceAccess <= 90) {
+      decayRate = 0.1; // Normal decay
+    } else {
+      decayRate = 0.15; // Fast decay for abandoned memories
+    }
+
+    // If memory was never accessed (last_accessed_at === null), decay faster
+    if (!mem.last_accessed_at) {
+      decayRate = Math.min(decayRate + 0.05, 0.2);
+    }
+
+    const newImportance = Math.max(0.05, (mem.importance || 0.5) - decayRate);
+
+    // Skip if importance hasn't changed meaningfully
+    if (Math.abs(newImportance - (mem.importance || 0.5)) < 0.01) continue;
+
     const { error: updateErr } = await getSupabaseClient()
       .from("user_memory")
       .update({ importance: newImportance })
@@ -602,7 +637,26 @@ export async function decayMemories(userId: string): Promise<number> {
   }
 
   if (decayed > 0) {
-    console.log(`[MEMORY] Decayed ${decayed} memories for user ${userId.slice(0, 8)}`);
+    console.log(`[MEMORY] Adaptively decayed ${decayed} memories for user ${userId.slice(0, 8)}`);
   }
   return decayed;
+}
+
+/**
+ * Boost memory importance when accessed during a task.
+ * Called when memories are loaded for task context.
+ */
+export async function boostMemoryOnAccess(memoryIds: string[]): Promise<void> {
+  if (memoryIds.length === 0) return;
+  try {
+    // Batch update last_accessed_at for accessed memories
+    // Note: Importance boost happens automatically in decay function
+    // based on access recency, no need to modify importance here
+    await getSupabaseClient()
+      .from("user_memory")
+      .update({ last_accessed_at: new Date().toISOString() })
+      .in("id", memoryIds.slice(0, 20));
+  } catch {
+    // Non-critical — don't fail the task
+  }
 }

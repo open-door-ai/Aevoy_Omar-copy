@@ -68,8 +68,6 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
     setTimezone(detected);
   }, []);
 
-  const allTimezoneOptions = TIMEZONE_GROUPS.flatMap((group) => group.options);
-
   const handleContinue = async () => {
     setIsSaving(true);
     try {
@@ -88,7 +86,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
       onNext();
     } catch (error) {
       console.error("Failed to save timezone:", error);
-      onNext(); // Continue anyway
+      onNext();
     } finally {
       setIsSaving(false);
     }
@@ -97,8 +95,8 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold">When Are You Available?</h2>
-        <p className="text-foreground/70">
+        <h2 className="text-2xl font-bold text-stone-900">When Are You Available?</h2>
+        <p className="text-stone-500">
           This helps us schedule tasks at the right time for you
         </p>
       </div>
@@ -106,7 +104,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
       <div className="space-y-6">
         {/* Timezone */}
         <div className="space-y-2">
-          <Label htmlFor="timezone">Your Timezone</Label>
+          <Label htmlFor="timezone" className="text-stone-700">Your Timezone</Label>
           <Select
             id="timezone"
             value={timezone}
@@ -116,25 +114,25 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
             placeholder="Search timezones..."
           />
           {detectedTimezone && (
-            <p className="text-xs text-foreground/70">
+            <p className="text-xs text-stone-500">
               Detected: {detectedTimezone}
               {detectedTimezone !== timezone && (
                 <button
                   onClick={() => setTimezone(detectedTimezone)}
-                  className="ml-2 text-primary hover:underline"
+                  className="ml-2 text-stone-700 font-medium hover:underline"
                 >
                   Use detected
                 </button>
               )}
             </p>
           )}
-          <p className="text-xs text-foreground/70">
+          <p className="text-xs text-stone-500">
             Used for daily check-ins and quiet hours (10PM-7AM)
           </p>
         </div>
 
         {/* Daily Check-in */}
-        <div className="space-y-4 p-4 border rounded-lg">
+        <div className="space-y-4 p-4 border border-stone-200 rounded-lg">
           <Toggle
             checked={dailyCheckinEnabled}
             onChange={setDailyCheckinEnabled}
@@ -144,8 +142,8 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
           />
 
           {dailyCheckinEnabled && (
-            <div className="space-y-2 pl-4 border-l-2 border-primary">
-              <Label htmlFor="checkin-time">What time?</Label>
+            <div className="space-y-2 pl-4 border-l-2 border-stone-800">
+              <Label htmlFor="checkin-time" className="text-stone-700">What time?</Label>
               <Input
                 id="checkin-time"
                 type="time"
@@ -153,7 +151,7 @@ export function StepTimezone({ onNext, onBack }: StepTimezoneProps) {
                 onChange={(e) => setDailyCheckinTime(e.target.value)}
                 className="max-w-[200px]"
               />
-              <p className="text-xs text-foreground/70">
+              <p className="text-xs text-stone-500">
                 Your AI will call to brief you on your day
               </p>
             </div>

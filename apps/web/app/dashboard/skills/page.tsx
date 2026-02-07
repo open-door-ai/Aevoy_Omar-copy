@@ -39,6 +39,7 @@ export default function SkillsMarketplacePage() {
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [sources, setSources] = useState({ curated: 0, mcp: 0, n8n: 0 });
+  const [installing, setInstalling] = useState<Set<string>>(new Set());
 
   const categories = [
     'all',
@@ -100,9 +101,48 @@ export default function SkillsMarketplacePage() {
   };
 
   const installSkill = async (skillId: string) => {
-    // TODO: Implement installation via API
     console.log('[SKILLS-UI] Installing skill:', skillId);
-    alert(`Installing skill: ${skillId}\n\nThis will trigger security audit and V8 sandbox loading.`);
+    setInstalling((prev) => new Set(prev).add(skillId));
+
+    try {
+      const response = await fetch('/api/skills/install', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ skillId }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Installation failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('[SKILLS-UI] Skill installed:', result);
+
+      // Update skill status in UI
+      setSkills((prevSkills) =>
+        prevSkills.map((skill) =>
+          skill.id === skillId ? { ...skill, installed: true } : skill
+        )
+      );
+
+      // Show success message
+      setError(null);
+      alert(`✓ Skill installed successfully!\n\n${result.skillId || skillId} is now ready to use.`);
+    } catch (err) {
+      console.error('[SKILLS-UI] Install error:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Installation failed';
+      setError(`Failed to install skill: ${errorMessage}`);
+      alert(`✗ Installation failed\n\n${errorMessage}`);
+    } finally {
+      setInstalling((prev) => {
+        const next = new Set(prev);
+        next.delete(skillId);
+        return next;
+      });
+    }
   };
 
   const getTrustBadge = (trustLevel: string) => {
@@ -318,9 +358,15 @@ export default function SkillsMarketplacePage() {
                 {/* Actions */}
                 <button
                   onClick={() => installSkill(skill.id)}
-                  className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                  disabled={installing.has(skill.id) || skill.installed}
+                  className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
-                  {skill.installed ? (
+                  {installing.has(skill.id) ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Installing...
+                    </>
+                  ) : skill.installed ? (
                     <>
                       <CheckCircle className="w-4 h-4" />
                       Installed

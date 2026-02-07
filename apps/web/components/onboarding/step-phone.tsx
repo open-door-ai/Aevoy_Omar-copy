@@ -171,7 +171,7 @@ export default function StepPhone({ onNext, onBack }: StepPhoneProps) {
               </Button>
               <button
                 onClick={() => onNext(null)}
-                className="flex-1 text-stone-400 hover:text-stone-600 text-sm transition-colors underline underline-offset-4"
+                className="flex-1 text-stone-500 hover:text-stone-700 text-sm transition-colors underline underline-offset-4"
               >
                 Skip for now
               </button>
