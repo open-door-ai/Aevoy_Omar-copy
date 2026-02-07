@@ -72,6 +72,7 @@ import { handleIncomingSms, handleIncomingVoice, processVoiceCommand } from "./s
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest } from "./types/index.js";
+import skillRoutes from "./routes/skills.js";
 
 import crypto from "crypto";
 
@@ -1249,6 +1250,10 @@ app.post("/webhook/interview-call/response/:userId", twilioLimiter, validateTwil
     res.send(generateErrorTwiml("Sorry, something went wrong. Let's continue via email instead."));
   }
 });
+
+// ---- Skill System Routes ----
+
+app.use("/skills", skillRoutes);
 
 // ---- Error Handler ----
 
