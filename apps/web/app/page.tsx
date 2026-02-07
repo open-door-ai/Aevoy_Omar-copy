@@ -1818,6 +1818,51 @@ export default function AevoyLanding() {
         </div>
       </section>
       
+      {/* What is Aevoy */}
+      <section className="py-32 bg-white">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="grid lg:grid-cols-2 gap-12 items-center">
+            {/* Left: Visual */}
+            <div className="relative">
+              <div className="aspect-square bg-gradient-to-br from-stone-100 to-stone-200 rounded-2xl overflow-hidden flex items-center justify-center">
+                <div className="text-center p-12">
+                  <div className="text-6xl mb-4">🤖</div>
+                  <p className="text-2xl font-bold text-stone-700">Your AI Employee</p>
+                  <p className="text-stone-500 mt-2">Actually does tasks</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Text */}
+            <div>
+              <h2 className="text-4xl md:text-5xl font-bold mb-6">
+                What is Aevoy?
+              </h2>
+              <p className="text-xl text-stone-600 mb-6 leading-relaxed">
+                Aevoy is your AI employee that actually <em>does</em> tasks—not just answers questions.
+              </p>
+              <p className="text-lg text-stone-600 mb-6 leading-relaxed">
+                Send it a task via email, text, voice, or chat. It opens a browser, navigates sites,
+                fills forms, makes calls, books reservations—whatever it takes to get the job done.
+              </p>
+              <p className="text-lg text-stone-600 mb-8 leading-relaxed">
+                Works 24/7. Never forgets. Always follows through. The only AI that calls <em>you</em>
+                when something needs attention.
+              </p>
+              <a
+                href="#security"
+                className="inline-flex items-center gap-2 text-stone-900 font-semibold hover:gap-3 transition-all"
+              >
+                See what it can do
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                </svg>
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Security Section - Built Paranoid */}
       <section id="security" className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
@@ -1864,163 +1909,206 @@ export default function AevoyLanding() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-            {[
+          {(() => {
+            const threats = [
               {
                 name: 'Prompt Injection Attacks',
-                icon: '🛡️',
                 threat: 'Malicious instructions hidden in task requests to bypass security.',
                 solution: 'Frozen intent locking prevents runtime permission changes. Pattern matching detects injection attempts. Per-domain rate limits (20 actions/60s) prevent brute force.',
                 status: 'protected'
               },
               {
                 name: 'Credential Theft',
-                icon: '🔐',
                 threat: 'Stolen passwords or API keys from database breaches.',
                 solution: 'AES-256-GCM encryption with random IV + salt per credential. Scrypt key derivation. Auth tag prevents tampering. Row-level security isolates user data.',
                 status: 'protected'
               },
               {
                 name: 'Session Hijacking',
-                icon: '🚫',
                 threat: 'Intercepted session tokens used to impersonate users.',
                 solution: 'Timing-safe webhook verification prevents replay attacks. Distributed locking prevents concurrent task execution. Fresh browser contexts per task.',
                 status: 'protected'
               },
               {
                 name: 'Cross-User Data Leaks',
-                icon: '👥',
                 threat: 'One user accessing another\'s data or task history.',
                 solution: 'Row-level security on all 26 tables. Every query validated against user_id. Workspace isolation. Service role restricted in code.',
                 status: 'protected'
               },
               {
                 name: 'Malicious Task Execution',
-                icon: '⛔',
                 threat: 'Tricking the agent into harmful actions (delete files, transfer money).',
                 solution: 'Intent locking defines allowed actions per task type. Shopping tasks can\'t access payment. Email tasks limited to 20 actions. Budget controls prevent runaway costs.',
                 status: 'protected'
               },
               {
                 name: 'API Key Compromise',
-                icon: '🔑',
                 threat: 'Leaked AI model keys, Browserbase credentials, or Twilio secrets.',
                 solution: 'Startup validation ensures all keys present. Never embedded in code or logs. Rate limiting (100 req/min global, 10 tasks/min per user) prevents quota exhaustion.',
                 status: 'protected'
               },
               {
                 name: 'Bot Detection / Blocking',
-                icon: '🤖',
                 threat: 'Websites detect automation and block access.',
                 solution: 'Stealth browser patches disable detection (navigator.webdriver, chrome.runtime). Realistic user agents. Built-in CAPTCHA solving. Session persistence reduces re-login triggers.',
                 status: 'protected'
               },
               {
                 name: 'Rate Limit Bypass / DoS',
-                icon: '⚡',
                 threat: 'Flooding system with requests to overwhelm infrastructure.',
                 solution: 'Three-tier rate limiting: 100 req/min global, 10 tasks/min per user, 30 req/min per phone. Monthly quota system prevents runaway tasks.',
                 status: 'protected'
               },
               {
                 name: 'Identity Spoofing',
-                icon: '🎭',
                 threat: 'Forged emails or SMS messages to impersonate legitimate users.',
                 solution: 'Email verification via ImprovMX aliases. Twilio signature validation (HMAC-SHA1). Webhook authentication with timing-safe comparison.',
                 status: 'protected'
               },
               {
                 name: 'Privilege Escalation',
-                icon: '👑',
                 threat: 'Normal users gaining admin or service role access.',
                 solution: 'Clear role separation: client uses JWT tokens (RLS limited), agent uses service role (code-controlled). No client-side elevation path. Service role key never exposed.',
                 status: 'protected'
               },
               {
                 name: 'Supply Chain Attacks',
-                icon: '⛓️',
                 threat: 'Compromised NPM packages injecting malicious code.',
                 solution: 'Lockfile pins all dependency versions. Trusted libraries only (Playwright, Supabase official SDK). Regular dependency audits.',
                 status: 'gap'
               },
               {
                 name: 'Insider Threats',
-                icon: '🕵️',
                 threat: 'Rogue developer with key access stealing user data.',
                 solution: 'All user memory encrypted at rest. Database access requires ENCRYPTION_KEY. Even with database access, data is unreadable without key.',
                 status: 'gap'
               },
               {
                 name: 'Timing Attacks',
-                icon: '⏱️',
                 threat: 'Measuring response times to infer secrets or valid usernames.',
                 solution: 'Timing-safe comparison (crypto.timingSafeEqual) for all webhook secrets. Constant-time validation prevents character-by-character guessing.',
                 status: 'protected'
               },
               {
                 name: 'Memory Inference Attacks',
-                icon: '🧠',
                 threat: 'Using AI memory to infer sensitive information from other tasks.',
                 solution: 'User memory encrypted at rest. Memory indexed by embeddings (semantic search) but not plaintext. Memory decay (-0.1 importance for >30 days) prevents stale data leakage.',
                 status: 'protected'
               },
               {
                 name: 'Browser Fingerprinting',
-                icon: '🖥️',
                 threat: 'Sites tracking and blocking automated browser sessions.',
                 solution: 'Stealth patches hide automation signals. Cached sessions reuse cookies/auth. Browserbase provides fresh contexts with residential proxies.',
                 status: 'protected'
               }
-            ].map((threat, i) => {
-              const [ref, isVisible] = useScrollReveal(0.2);
-              return (
+            ];
+
+            const [currentIndex, setCurrentIndex] = React.useState(0);
+            const [touchStart, setTouchStart] = React.useState(0);
+            const [touchEnd, setTouchEnd] = React.useState(0);
+
+            const next = () => setCurrentIndex((prev) => (prev + 1) % threats.length);
+            const prev = () => setCurrentIndex((prev) => (prev - 1 + threats.length) % threats.length);
+
+            const handleTouchStart = (e: React.TouchEvent) => {
+              setTouchStart(e.targetTouches[0].clientX);
+            };
+
+            const handleTouchMove = (e: React.TouchEvent) => {
+              setTouchEnd(e.targetTouches[0].clientX);
+            };
+
+            const handleTouchEnd = () => {
+              if (touchStart - touchEnd > 75) next();
+              if (touchStart - touchEnd < -75) prev();
+            };
+
+            React.useEffect(() => {
+              const handleKeyDown = (e: KeyboardEvent) => {
+                if (e.key === 'ArrowLeft') prev();
+                if (e.key === 'ArrowRight') next();
+              };
+              window.addEventListener('keydown', handleKeyDown);
+              return () => window.removeEventListener('keydown', handleKeyDown);
+            }, []);
+
+            return (
+              <div className="max-w-4xl mx-auto">
                 <div
-                  key={i}
-                  ref={ref}
-                  className="bg-white border border-stone-200 rounded-xl p-6 hover:shadow-lg hover:border-stone-300 transition-all duration-300"
-                  style={{
-                    opacity: isVisible ? 1 : 0,
-                    transform: isVisible ? 'scale(1)' : 'scale(0.95)',
-                    transition: `all 0.6s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.08}s`,
-                  }}
+                  className="relative bg-white border-2 border-stone-200 rounded-3xl p-12 shadow-xl"
+                  onTouchStart={handleTouchStart}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={handleTouchEnd}
                 >
-                  <div className="flex items-start gap-3 mb-3">
-                    <span className="text-3xl">{threat.icon}</span>
-                    <h3 className="text-lg font-bold text-stone-900 flex-1">{threat.name}</h3>
+                  {/* Navigation arrows */}
+                  <button
+                    onClick={prev}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 bg-stone-100 hover:bg-stone-200 rounded-full p-3 transition-colors"
+                    aria-label="Previous threat"
+                  >
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={next}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 bg-stone-100 hover:bg-stone-200 rounded-full p-3 transition-colors"
+                    aria-label="Next threat"
+                  >
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+
+                  {/* Counter */}
+                  <div className="text-center text-sm text-stone-500 mb-6">
+                    {currentIndex + 1} / {threats.length}
                   </div>
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs font-semibold text-stone-400 uppercase tracking-wide mb-1">Threat</p>
-                      <p className="text-sm text-stone-600">{threat.threat}</p>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <span className={`flex-shrink-0 mt-0.5 ${threat.status === 'protected' ? 'text-emerald-500' : 'text-amber-500'}`}>
-                        {threat.status === 'protected' ? '✅' : '⚠️'}
-                      </span>
-                      <div className="flex-1">
-                        <p className={`text-xs font-semibold uppercase tracking-wide mb-1 ${threat.status === 'protected' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                          {threat.status === 'protected' ? 'Protected' : 'In Progress'}
+
+                  {/* Threat content */}
+                  <div className="min-h-[400px]">
+                    <h3 className="text-3xl font-bold mb-6">{threats[currentIndex].name}</h3>
+                    <div className="space-y-6">
+                      <div>
+                        <p className="text-sm font-semibold text-stone-500 uppercase mb-2">Threat</p>
+                        <p className="text-lg text-stone-700">{threats[currentIndex].threat}</p>
+                      </div>
+                      <div>
+                        <p className={`text-sm font-semibold uppercase mb-2 ${threats[currentIndex].status === 'protected' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {threats[currentIndex].status === 'protected' ? '✓ Protected' : '⚠ In Progress'}
                         </p>
-                        <p className="text-sm text-stone-700">{threat.solution}</p>
+                        <p className="text-lg text-stone-700">{threats[currentIndex].solution}</p>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
 
-          <div className="mt-16 text-center max-w-3xl mx-auto">
-            <p className="text-stone-600 text-sm leading-relaxed">
-              Every threat addressed. No exceptions. No handwaving.
-              <span className="block mt-2 font-semibold">
-                2 gaps identified (supply chain, audit logging). Roadmap: Q2 2026.
-              </span>
-              <span className="block mt-2">
-                Transparent about what we protect AND what we&apos;re still building.
-              </span>
-            </p>
-          </div>
+                  {/* Dots indicator */}
+                  <div className="flex justify-center gap-2 mt-8">
+                    {threats.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCurrentIndex(i)}
+                        className={`transition-all ${
+                          i === currentIndex
+                            ? 'bg-stone-900 w-8 h-2 rounded-full'
+                            : 'bg-stone-300 w-2 h-2 rounded-full hover:bg-stone-400'
+                        }`}
+                        aria-label={`Go to threat ${i + 1}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Bottom tagline */}
+                <p className="text-center text-stone-600 text-lg font-semibold mt-8">
+                  Every threat addressed. No exceptions. No handwaving.
+                  <span className="block mt-2 text-sm">
+                    2 gaps identified (supply chain, insider audit). Roadmap: Q2 2026.
+                  </span>
+                </p>
+              </div>
+            );
+          })()}
         </div>
       </section>
 
@@ -2278,100 +2366,167 @@ export default function AevoyLanding() {
         </div>
       </section>
 
-      {/* Rotating Banner */}
-      <section className="relative h-40 bg-stone-950 border-t border-stone-800 overflow-hidden">
-        <div className="absolute inset-0 flex items-center justify-center">
-          {(() => {
-            const phrases = [
+      {/* Rolling Marquee Banner */}
+      <section className="relative h-20 bg-stone-950 border-t border-stone-800 overflow-hidden">
+        <style dangerouslySetInnerHTML={{__html: `
+          @keyframes marquee {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+          }
+          .animate-marquee {
+            animation: marquee 60s linear infinite;
+          }
+          .animate-marquee:hover {
+            animation-play-state: paused;
+          }
+        `}} />
+        <div className="absolute inset-0 flex items-center">
+          <div className="flex gap-16 animate-marquee whitespace-nowrap">
+            {[
               "Proactive Jarvis Made Real",
               "Meet AGI That Actually Works",
               "Your AI Calls You (Not the Other Way Around)",
               "The Future of Work Is Here",
               "It Doesn't Just Answer—It Acts",
               "24/7 Monitoring While You Sleep",
-              "The Assistant That Never Forgets"
-            ];
-            const [currentIndex, setCurrentIndex] = React.useState(0);
-
-            React.useEffect(() => {
-              const interval = setInterval(() => {
-                setCurrentIndex((prev) => (prev + 1) % phrases.length);
-              }, 3500);
-              return () => clearInterval(interval);
-            }, []);
-
-            return (
-              <p
-                className="text-4xl md:text-5xl font-bold text-white text-center px-6 transition-opacity duration-700"
-                style={{
-                  opacity: currentIndex >= 0 ? 1 : 0
-                }}
-              >
-                {phrases[currentIndex]}
-              </p>
-            );
-          })()}
+              "The Assistant That Never Forgets",
+              "It emails you",
+              "It calls you",
+              "Daily brief delivered"
+            ].flatMap((phrase, i) => [
+              <span key={`a-${i}`} className="text-2xl md:text-3xl font-bold text-white">
+                {phrase}
+              </span>,
+              <span key={`b-${i}`} className="text-2xl md:text-3xl font-bold text-white">
+                {phrase}
+              </span>
+            ])}
+          </div>
         </div>
       </section>
 
-      {/* Additional Proactive Examples */}
+      {/* Additional Proactive Examples - Carousel */}
       <section className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
           <h2 className="text-4xl md:text-5xl font-bold text-center mb-16">
             See it in action
           </h2>
-          <div className="grid md:grid-cols-3 gap-8">
-            {[
+
+          {(() => {
+            const examples = [
               {
-                icon: '✈️',
                 title: 'Flight delay detected',
                 description: 'Monitors your booking, calls you 2 hours before airline notifies, reschedules your ride automatically.'
               },
               {
-                icon: '🏷️',
                 title: 'Price drop alert',
                 description: 'Tracks prices on items you mentioned, texts you when they drop below your threshold.'
               },
               {
-                icon: '⏰',
                 title: 'Proactive deadline nudge',
                 description: 'Knows your calendar, calls to remind you 2 hours before critical deadlines.'
               },
               {
-                icon: '📦',
                 title: 'Delivery notification',
                 description: 'Tracks shipments, texts you when packages arrive, asks if you need redelivery scheduling.'
               },
               {
-                icon: '📅',
                 title: 'Pre-meeting brief',
                 description: 'Calls you 30 minutes before important meetings with key talking points and attendee bios.'
               },
               {
-                icon: '🌤️',
                 title: 'Travel weather warning',
                 description: 'Knows your flight tomorrow, texts you if severe weather expected at destination.'
               }
-            ].map((example, i) => {
-              const [ref, isVisible] = useScrollReveal(0.2);
-              return (
+            ];
+
+            const [currentIndex, setCurrentIndex] = React.useState(0);
+            const [touchStart, setTouchStart] = React.useState(0);
+            const [touchEnd, setTouchEnd] = React.useState(0);
+
+            const next = () => setCurrentIndex((prev) => (prev + 1) % examples.length);
+            const prev = () => setCurrentIndex((prev) => (prev - 1 + examples.length) % examples.length);
+
+            const handleTouchStart = (e: React.TouchEvent) => {
+              setTouchStart(e.targetTouches[0].clientX);
+            };
+
+            const handleTouchMove = (e: React.TouchEvent) => {
+              setTouchEnd(e.targetTouches[0].clientX);
+            };
+
+            const handleTouchEnd = () => {
+              if (touchStart - touchEnd > 75) next();
+              if (touchStart - touchEnd < -75) prev();
+            };
+
+            React.useEffect(() => {
+              const handleKeyDown = (e: KeyboardEvent) => {
+                if (e.key === 'ArrowLeft') prev();
+                if (e.key === 'ArrowRight') next();
+              };
+              window.addEventListener('keydown', handleKeyDown);
+              return () => window.removeEventListener('keydown', handleKeyDown);
+            }, []);
+
+            React.useEffect(() => {
+              const interval = setInterval(next, 5000);
+              return () => clearInterval(interval);
+            }, []);
+
+            return (
+              <div className="max-w-3xl mx-auto">
                 <div
-                  key={i}
-                  ref={ref}
-                  className="bg-stone-50 border border-stone-200 rounded-2xl p-8 hover:bg-stone-100 transition-all duration-300"
-                  style={{
-                    opacity: isVisible ? 1 : 0,
-                    transform: isVisible ? 'translateX(0)' : 'translateX(100px)',
-                    transition: `all 0.8s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.12}s`,
-                  }}
+                  className="relative bg-stone-50 border-2 border-stone-200 rounded-2xl p-12 min-h-[280px] flex items-center justify-center"
+                  onTouchStart={handleTouchStart}
+                  onTouchMove={handleTouchMove}
+                  onTouchEnd={handleTouchEnd}
                 >
-                  <span className="text-4xl block mb-4">{example.icon}</span>
-                  <h3 className="text-xl font-bold text-stone-900 mb-3">{example.title}</h3>
-                  <p className="text-stone-600 leading-relaxed">{example.description}</p>
+                  {/* Navigation arrows */}
+                  <button
+                    onClick={prev}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 bg-white hover:bg-stone-100 rounded-full p-3 transition-colors shadow-md"
+                    aria-label="Previous example"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={next}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 bg-white hover:bg-stone-100 rounded-full p-3 transition-colors shadow-md"
+                    aria-label="Next example"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+
+                  {/* Content */}
+                  <div className="text-center px-16">
+                    <h3 className="text-2xl font-bold text-stone-900 mb-4">{examples[currentIndex].title}</h3>
+                    <p className="text-lg text-stone-600 leading-relaxed">{examples[currentIndex].description}</p>
+                  </div>
+
+                  {/* Dots indicator */}
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2">
+                    {examples.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCurrentIndex(i)}
+                        className={`transition-all ${
+                          i === currentIndex
+                            ? 'bg-stone-900 w-8 h-2 rounded-full'
+                            : 'bg-stone-300 w-2 h-2 rounded-full hover:bg-stone-400'
+                        }`}
+                        aria-label={`Go to example ${i + 1}`}
+                      />
+                    ))}
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+              </div>
+            );
+          })()}
         </div>
       </section>
 
