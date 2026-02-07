@@ -32,17 +32,19 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Check if user has Gmail connected
-    const { data: cred } = await supabase
-      .from("user_credentials")
-      .select("id, site_domain, created_at, updated_at")
+    // Check if user has Gmail connected (primary: oauth_connections)
+    const { data: conn } = await supabase
+      .from("oauth_connections")
+      .select("id, created_at, account_email")
       .eq("user_id", user.id)
-      .eq("site_domain", "gmail.googleapis.com")
+      .eq("provider", "google")
+      .eq("status", "active")
       .single();
 
     return NextResponse.json({
-      connected: !!cred,
-      connectedAt: cred?.created_at || null,
+      connected: !!conn,
+      connectedAt: conn?.created_at || null,
+      email: conn?.account_email || null,
     });
   } catch {
     return NextResponse.json(
@@ -112,6 +114,13 @@ export async function DELETE() {
     if (authError || !user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    // Revoke in oauth_connections (primary) and clean up legacy user_credentials
+    await supabase
+      .from("oauth_connections")
+      .update({ status: "revoked" })
+      .eq("user_id", user.id)
+      .eq("provider", "google");
 
     await supabase
       .from("user_credentials")
