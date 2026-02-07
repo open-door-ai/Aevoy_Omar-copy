@@ -5,11 +5,13 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, Activity, Settings, LogOut, Menu, X, Moon, Sun } from "lucide-react";
+import { LayoutDashboard, Activity, Settings, LogOut, Menu, X, Moon, Sun, Zap, ListTodo } from "lucide-react";
 import { useTheme } from "@/lib/theme";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard/queue", label: "Task Queue", icon: ListTodo },
+  { href: "/dashboard/skills", label: "Skills", icon: Zap },
   { href: "/dashboard/activity", label: "Activity", icon: Activity },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
