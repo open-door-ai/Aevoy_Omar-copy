@@ -63,9 +63,9 @@ export class ExecutionEngine {
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
-    // Browserbase navigation consistently fails (0 proxyBytes, CDP evaluations work but goto doesn't).
-    // Use local Playwright until Browserbase issue is resolved. Set FORCE_LOCAL_BROWSER=false to re-enable.
-    const forceLocal = process.env.FORCE_LOCAL_BROWSER !== 'false';
+    // Use Browserbase (cloud) when configured, local Playwright as fallback.
+    // Set FORCE_LOCAL_BROWSER=true env var to force local Playwright only.
+    const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
     this.useStagehand = !forceLocal && !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
   }
 
