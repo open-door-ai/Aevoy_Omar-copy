@@ -69,23 +69,39 @@ export class ExecutionEngine {
     this.domain = domain;
 
     if (this.useStagehand) {
-      try {
-        // Pass userId so Browserbase can use persistent contexts (always signed in)
-        this.stagehand = new StagehandService({ userId });
-        this.page = await this.stagehand.init();
-        this.context = this.stagehand.session?.context || null;
+      // Retry Browserbase with backoff when hitting concurrent session limits
+      const maxRetries = 3;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // Pass userId so Browserbase can use persistent contexts (always signed in)
+          this.stagehand = new StagehandService({ userId });
+          this.page = await this.stagehand.init();
+          this.context = this.stagehand.session?.context || null;
 
-        // Browserbase Contexts handle session persistence natively — no manual cookie restore needed
-        const liveUrl = this.stagehand.getLiveViewUrl();
-        if (liveUrl) {
-          console.log(`[ENGINE] Live View available for user interaction`);
+          // Browserbase Contexts handle session persistence natively — no manual cookie restore needed
+          const liveUrl = this.stagehand.getLiveViewUrl();
+          if (liveUrl) {
+            console.log(`[ENGINE] Live View available for user interaction`);
+          }
+
+          console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context)");
+          return;
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          const isRateLimit = errorMsg.includes('429') || errorMsg.includes('concurrent') || errorMsg.includes('Too Many');
+
+          if (isRateLimit && attempt < maxRetries) {
+            const waitMs = attempt * 15000; // 15s, 30s, 45s backoff
+            console.warn(`[ENGINE] Browserbase at capacity (attempt ${attempt}/${maxRetries}), waiting ${waitMs / 1000}s...`);
+            await delay(waitMs);
+            this.stagehand = null;
+            continue;
+          }
+
+          console.warn(`[ENGINE] Stagehand init failed (attempt ${attempt}/${maxRetries}), falling back to local Playwright:`, errorMsg);
+          this.stagehand = null;
+          break;
         }
-
-        console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context)");
-        return;
-      } catch (error) {
-        console.warn("[ENGINE] Stagehand init failed, falling back to local Playwright:", error);
-        this.stagehand = null;
       }
     }
 
@@ -98,16 +114,13 @@ export class ExecutionEngine {
       }
     }
 
-    // Only use --no-sandbox in development
-    const isProduction = process.env.NODE_ENV === 'production';
+    // --no-sandbox required in Docker containers (Railway runs as root)
     const launchArgs = [
+      '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
     ];
-    if (!isProduction) {
-      launchArgs.push('--no-sandbox');
-    }
 
     // Wire proxy config if available (for anti-bot bypass)
     const proxyConfig = getProxyConfig();

@@ -997,5 +997,16 @@ Task: "${userMessage.substring(0, 500)}"`;
     domains.push(urlMatch[1]);
   }
 
+  // Guard: don't route to browser for knowledge questions with no specific URLs.
+  // Research tasks only need the browser when there's a website to visit or
+  // the user explicitly asks to browse/visit/go to a site.
+  if (needsBrowser && taskType === "research" && domains.length === 0) {
+    const explicitBrowsePattern = /\b(go to|visit|open|navigate|browse|website|site|page|url|link)\b/i;
+    if (!explicitBrowsePattern.test(userMessage)) {
+      needsBrowser = false;
+      console.log(`[AI] Research task with no URLs/browse intent, skipping browser`);
+    }
+  }
+
   return { taskType, goal: userMessage, needsBrowser, domains };
 }

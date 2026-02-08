@@ -28,6 +28,9 @@ COPY packages/agent/ packages/agent/
 WORKDIR /app/packages/agent
 RUN pnpm build
 
+# Install Playwright chromium for local fallback (when Browserbase is at capacity)
+RUN npx playwright install chromium 2>/dev/null || true
+
 # Create workspaces dir
 RUN mkdir -p workspaces && chmod 777 workspaces
 
