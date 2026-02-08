@@ -287,6 +287,26 @@ export class ExecutionEngine {
 
     console.log(`[ENGINE] executeSteps called with ${steps.length} steps, taskId=${this.taskId}, userId=${this.userId}, isCloud=${this.isCloud}`);
 
+    // Direct diagnostic log entry to verify engine is reached
+    if (this.taskId) {
+      try {
+        const { getSupabaseClient } = await import('../utils/supabase.js');
+        const { error: diagError } = await getSupabaseClient().from('task_logs').insert({
+          task_id: this.taskId,
+          step: `engine_start: ${steps.length} steps`,
+          status: 'ok',
+          details: { diagnostic: true, stepsCount: steps.length, isCloud: this.isCloud, userId: this.userId }
+        });
+        if (diagError) {
+          console.error('[ENGINE] Diagnostic log insert failed:', diagError.message);
+        } else {
+          console.log('[ENGINE] Diagnostic log inserted successfully');
+        }
+      } catch (diagErr) {
+        console.error('[ENGINE] Diagnostic log exception:', diagErr);
+      }
+    }
+
     // Wrap entire execution in a task-level timeout
     try {
       return await withTimeout(
