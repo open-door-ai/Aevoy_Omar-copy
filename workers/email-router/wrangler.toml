@@ -17,5 +17,5 @@ compatibility_date = "2024-09-25"
 
 [vars]
 # Production agent URL
-AGENT_URL = "https://hissing-verile-aevoy-e721b4a6.koyeb.app"
+AGENT_URL = "https://agent-production-1339.up.railway.app"
 SUPABASE_URL = "https://eawoquqgfndmphogwjeu.supabase.co"
