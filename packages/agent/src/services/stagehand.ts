@@ -289,11 +289,12 @@ export class StagehandService {
   }
 
   private async initLocal(): Promise<Page> {
-    const args = ["--disable-dev-shm-usage"];
-    // Only use --no-sandbox in development; production should run in a proper sandbox
-    if (process.env.NODE_ENV !== "production") {
-      args.push("--no-sandbox", "--disable-setuid-sandbox");
-    }
+    // --no-sandbox required in Docker containers (Railway runs as root)
+    const args = [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ];
     const browser = await chromium.launch({
       headless: true,
       args,

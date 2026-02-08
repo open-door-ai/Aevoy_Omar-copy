@@ -84,7 +84,18 @@ export class ExecutionEngine {
             console.log(`[ENGINE] Live View available for user interaction`);
           }
 
-          console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context)");
+          // Wait for CDP connection to stabilize before first operation
+          await delay(2000);
+          // Verify page is responsive
+          try {
+            await this.page.evaluate(() => document.readyState);
+            console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context) — page responsive");
+          } catch (pageErr) {
+            console.warn("[ENGINE] Stagehand page not responsive after init:", pageErr);
+            this.stagehand = null;
+            this.page = null;
+            break; // Fall through to local Playwright
+          }
           return;
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
@@ -582,21 +593,29 @@ export class ExecutionEngine {
       return { success: false, action: 'navigate', error: 'URL is required' };
     }
 
-    await this.page!.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
+    try {
+      console.log(`[ENGINE] Navigating to: ${url}`);
+      await this.page!.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
 
-    // Use SPA-ready wait instead of just domcontentloaded
-    await waitForSPAReady(this.page!);
+      // Use SPA-ready wait instead of just domcontentloaded
+      await waitForSPAReady(this.page!);
 
-    // Check for anti-bot challenges after navigation
-    await checkAndHandleAntiBot(this.page!);
+      // Check for anti-bot challenges after navigation
+      await checkAndHandleAntiBot(this.page!);
 
-    // Check for CAPTCHAs
-    await handleCaptchaIfPresent(this.page!);
+      // Check for CAPTCHAs
+      await handleCaptchaIfPresent(this.page!);
 
-    return { success: true, action: 'navigate', data: { url } };
+      console.log(`[ENGINE] Navigation successful: ${url}`);
+      return { success: true, action: 'navigate', data: { url } };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown navigation error';
+      console.error(`[ENGINE] Navigation failed for ${url}: ${message}`);
+      return { success: false, action: 'navigate', error: `Navigation to ${url} failed: ${message}` };
+    }
   }
 
   private async handleClick(params: Record<string, unknown>): Promise<StepResult> {
@@ -993,13 +1012,21 @@ export class ExecutionEngine {
 
   private async handleExtract(params: Record<string, unknown>): Promise<StepResult> {
     const selector = params.selector as string || 'body';
-    const text = await this.page!.textContent(selector);
-
-    return {
-      success: true,
-      action: 'extract',
-      data: text?.trim().substring(0, 5000)
-    };
+    try {
+      console.log(`[ENGINE] Extracting content with selector: ${selector}`);
+      const text = await this.page!.textContent(selector);
+      const extracted = text?.trim().substring(0, 5000) || '';
+      console.log(`[ENGINE] Extracted ${extracted.length} chars`);
+      return {
+        success: true,
+        action: 'extract',
+        data: extracted
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown extract error';
+      console.error(`[ENGINE] Extract failed for selector '${selector}': ${message}`);
+      return { success: false, action: 'extract', error: `Extract failed: ${message}` };
+    }
   }
 
   private async handleScreenshot(): Promise<StepResult> {

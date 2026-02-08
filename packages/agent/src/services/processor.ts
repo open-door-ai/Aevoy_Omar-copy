@@ -1177,6 +1177,16 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // If Live View URL is available, request user takeover before cascade fallbacks
         const takeoverUrl = executionEngine?.getLiveViewUrl();
         if (takeoverUrl && taskId && successRate < 0.4) {
+          // Update cost before takeover (otherwise cost data is lost)
+          const aiCost = aiResponse.cost || 0;
+          const browserCost = executionEngine?.getTotalCost() || 0;
+          await getSupabaseClient().from("tasks").update({
+            tokens_used: aiResponse.tokensUsed || 0,
+            cost_usd: aiCost + browserCost,
+            type: taskType,
+            execution_time_ms: Date.now() - startTime,
+          }).eq("id", taskId);
+
           await requestTakeover(taskId, 'low_success_rate', userId, from, username, task.inputChannel);
           // Return early - user will resolve and resume
           return {
