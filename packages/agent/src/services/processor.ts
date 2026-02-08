@@ -127,8 +127,9 @@ function isTestMode(): boolean {
 
 function shouldSkipPayment(): boolean {
   // TODO: Implement proper payment/subscription check once Stripe is fully integrated.
-  // For now, always skip payment checks (quota still enforced by beta/subscription_status).
-  return true;
+  // For now, quota is enforced by checking messages_used >= messages_limit.
+  // Return false to enforce quota checks in production/non-test environments.
+  return process.env.SKIP_PAYMENT_CHECKS === "true";
 }
 
 /**

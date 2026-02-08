@@ -167,10 +167,10 @@ export default function StepBotEmail({
     <div className="flex flex-col items-center max-w-lg mx-auto px-6">
       {/* Section 1: Name Your AI */}
       <FadeIn>
-        <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">
+        <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">
           Name Your AI
         </h2>
-        <p className="text-stone-500 mb-6 text-center">
+        <p className="text-gray-600 mb-6 text-center">
           Give your assistant a name — it&apos;ll be yours
         </p>
       </FadeIn>
@@ -204,8 +204,8 @@ export default function StepBotEmail({
                 onClick={() => setBotName(name)}
                 className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
                   botName === name
-                    ? "bg-stone-900 text-white border-stone-900"
-                    : "bg-white text-stone-600 border-stone-200 hover:border-stone-400"
+                    ? "bg-gray-800 text-white border-gray-800"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
                 }`}
               >
                 {name}
@@ -215,7 +215,7 @@ export default function StepBotEmail({
         </div>
         <button
           onClick={() => setShuffleIndex((i) => i + 1)}
-          className="block mx-auto text-sm text-stone-500 hover:text-stone-700 transition-colors mb-6"
+          className="block mx-auto text-sm text-gray-600 hover:text-gray-800 transition-colors mb-6"
         >
           Shuffle names
         </button>
@@ -234,10 +234,10 @@ export default function StepBotEmail({
             <FadeIn delay={0.05}>
               <GlassCard className="w-full p-6 mb-4">
                 <div className="flex items-baseline justify-center gap-1 flex-wrap">
-                  <span className="text-2xl md:text-3xl font-mono font-bold text-stone-900">
+                  <span className="text-2xl md:text-3xl font-mono font-bold text-gray-900">
                     {username || "..."}
                   </span>
-                  <span className="text-2xl md:text-3xl font-mono text-stone-500">
+                  <span className="text-2xl md:text-3xl font-mono text-gray-600">
                     @aevoy.com
                   </span>
                 </div>
@@ -256,8 +256,8 @@ export default function StepBotEmail({
                     onClick={() => handleSuggestionClick(s)}
                     className={`px-3 py-1 rounded-lg text-sm font-mono border transition-colors ${
                       username === s
-                        ? "bg-stone-900 text-white border-stone-900"
-                        : "bg-stone-50 text-stone-600 border-stone-200 hover:border-stone-400"
+                        ? "bg-gray-800 text-white border-gray-800"
+                        : "bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-400"
                     }`}
                   >
                     {s}
@@ -265,7 +265,7 @@ export default function StepBotEmail({
                 ))}
                 <button
                   onClick={reshuffleSuggestions}
-                  className="px-3 py-1 rounded-lg text-sm text-stone-500 hover:text-stone-700 border border-dashed border-stone-200 hover:border-stone-400 transition-colors"
+                  className="px-3 py-1 rounded-lg text-sm text-gray-600 hover:text-gray-800 border border-dashed border-gray-200 hover:border-gray-400 transition-colors"
                 >
                   More
                 </button>
@@ -274,7 +274,7 @@ export default function StepBotEmail({
 
             {/* Custom prefix input */}
             <div className="w-full space-y-2 mb-4">
-              <Label htmlFor="email-prefix" className="text-stone-600">
+              <Label htmlFor="email-prefix" className="text-gray-600">
                 Or type your own
               </Label>
               <div className="flex items-center gap-2">
@@ -290,7 +290,7 @@ export default function StepBotEmail({
                   className="font-mono text-lg"
                   maxLength={20}
                 />
-                <span className="text-stone-500 font-mono whitespace-nowrap">
+                <span className="text-gray-600 font-mono whitespace-nowrap">
                   @aevoy.com
                 </span>
               </div>
@@ -299,8 +299,8 @@ export default function StepBotEmail({
               <div className="h-5">
                 {checking && (
                   <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
-                    <p className="text-sm text-stone-400">
+                    <div className="w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                    <p className="text-sm text-gray-500">
                       Checking availability...
                     </p>
                   </div>

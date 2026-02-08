@@ -101,17 +101,17 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
             <CheckCircle2 className="w-12 h-12 text-white" />
           </div>
         ) : (
-          <div className="w-24 h-24 rounded-full bg-stone-100 flex items-center justify-center mx-auto">
-            <Mail className="w-12 h-12 text-stone-600" />
+          <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center mx-auto">
+            <Mail className="w-12 h-12 text-gray-600" />
           </div>
         )}
       </motion.div>
 
       <div className="space-y-2">
-        <h2 className="text-2xl font-bold text-stone-900">
+        <h2 className="text-2xl font-bold text-gray-900">
           {isVerified ? "Email Verified!" : "Check Your Email"}
         </h2>
-        <p className="text-stone-500">
+        <p className="text-gray-600">
           {isVerified
             ? "Great! Click Continue to keep setting up your account."
             : "We sent a verification link to your email address. Click the link to continue."}
@@ -124,7 +124,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
         </Button>
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center justify-center gap-2 text-sm text-stone-500">
+          <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
             <Loader2 className="w-4 h-4 animate-spin" />
             <span>Waiting for confirmation...</span>
           </div>
@@ -141,7 +141,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
               : "Resend Verification Email"}
           </Button>
 
-          <p className="text-xs text-stone-500">
+          <p className="text-xs text-gray-600">
             Can&apos;t find it? Check your spam folder
           </p>
 
@@ -149,14 +149,14 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="pt-4 border-t border-stone-200"
+              className="pt-4 border-t border-gray-200"
             >
-              <p className="text-sm text-stone-500 mb-2">
+              <p className="text-sm text-gray-600 mb-2">
                 Having trouble?
               </p>
               <a
                 href="mailto:support@aevoy.com"
-                className="text-sm text-stone-700 hover:underline font-medium"
+                className="text-sm text-gray-700 hover:underline font-medium"
               >
                 Contact support@aevoy.com
               </a>
@@ -166,7 +166,7 @@ export function StepEmailVerification({ onNext }: StepEmailVerificationProps) {
           {/* Skip option for users whose email was already verified */}
           <button
             onClick={onNext}
-            className="text-stone-500 hover:text-stone-700 text-sm transition-colors underline underline-offset-4"
+            className="text-gray-600 hover:text-gray-700 text-sm transition-colors underline underline-offset-4"
           >
             Skip verification
           </button>

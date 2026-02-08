@@ -101,15 +101,15 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
       label: "Auto-Receive Codes",
       description: "Get a virtual phone number that automatically receives codes",
       price: "$1/month",
-      priceColor: "text-stone-500",
+      priceColor: "text-gray-600",
     },
   ];
 
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-stone-900">How Should I Handle 2FA Codes?</h2>
-        <p className="text-stone-500">
+        <h2 className="text-2xl font-bold text-gray-900">How Should I Handle 2FA Codes?</h2>
+        <p className="text-gray-600">
           When logging into websites for you, I may encounter verification codes
         </p>
       </div>
@@ -124,8 +124,8 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
               key={option.value}
               className={`flex items-start gap-4 p-5 border-2 rounded-xl cursor-pointer transition-all ${
                 isSelected
-                  ? "border-stone-800 bg-stone-50 scale-[1.02]"
-                  : "border-stone-200 hover:border-stone-400 hover:bg-stone-50"
+                  ? "border-gray-800 bg-gray-50 scale-[1.02]"
+                  : "border-gray-200 hover:border-gray-400 hover:bg-gray-50"
               }`}
             >
               <input
@@ -139,7 +139,7 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
 
               <div
                 className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  isSelected ? "bg-stone-800 text-white" : "bg-stone-100 text-stone-500"
+                  isSelected ? "bg-gray-800 text-white" : "bg-gray-100 text-gray-600"
                 }`}
               >
                 <Icon className="w-6 h-6" />
@@ -147,14 +147,14 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2 mb-1">
-                  <h3 className="font-semibold text-lg text-stone-900">{option.label}</h3>
+                  <h3 className="font-semibold text-lg text-gray-900">{option.label}</h3>
                   <span className={`text-sm font-medium ${option.priceColor}`}>{option.price}</span>
                 </div>
-                <p className="text-sm text-stone-500">{option.description}</p>
+                <p className="text-sm text-gray-600">{option.description}</p>
               </div>
 
               {isSelected && (
-                <div className="w-6 h-6 rounded-full bg-stone-800 text-white flex items-center justify-center flex-shrink-0">
+                <div className="w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center flex-shrink-0">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                   </svg>
@@ -166,27 +166,27 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
       </div>
 
       {verificationMethod === "virtual_number" && (
-        <div className="bg-stone-50 border border-stone-200 rounded-lg p-4">
-          <p className="text-sm text-stone-500">
-            <strong className="text-stone-700">Note:</strong> If you haven&apos;t set up your phone number yet, you can do that in Settings after onboarding.
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+          <p className="text-sm text-gray-600">
+            <strong className="text-gray-700">Note:</strong> If you haven&apos;t set up your phone number yet, you can do that in Settings after onboarding.
           </p>
         </div>
       )}
 
       {/* Phone & Voice Setup */}
-      <div className="mt-8 pt-8 border-t border-stone-200 space-y-6">
+      <div className="mt-8 pt-8 border-t border-gray-200 space-y-6">
         <div>
-          <h3 className="text-lg font-semibold text-stone-900 mb-2">Phone Setup</h3>
-          <p className="text-sm text-stone-500">
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">Phone Setup</h3>
+          <p className="text-sm text-gray-600">
             Add your phone number so you can call or text your AI anytime at{" "}
-            <span className="font-mono font-semibold text-stone-700">+1 (778) 900-8951</span>
+            <span className="font-mono font-semibold text-gray-700">+1 (778) 900-8951</span>
           </p>
         </div>
 
         <div className="space-y-4">
           {/* Phone Number Input */}
           <div>
-            <Label htmlFor="phone" className="text-stone-700">Your Phone Number (Optional)</Label>
+            <Label htmlFor="phone" className="text-gray-700">Your Phone Number (Optional)</Label>
             <Input
               id="phone"
               type="tel"
@@ -195,19 +195,19 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
               onChange={(e) => setPhoneNumber(e.target.value)}
               className="mt-2"
             />
-            <p className="text-xs text-stone-500 mt-1">
+            <p className="text-xs text-gray-600 mt-1">
               Format: (778) 123-4567 or 7781234567 or +17781234567
             </p>
           </div>
 
           {/* Test call button */}
           {phoneNumber.trim().length >= 10 && (
-            <div className="bg-stone-50 border border-stone-200 rounded-lg p-4 space-y-3">
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
               <div className="flex items-center gap-3">
-                <Phone className="w-5 h-5 text-stone-600" />
+                <Phone className="w-5 h-5 text-gray-600" />
                 <div>
-                  <p className="text-sm font-medium text-stone-900">Test your phone</p>
-                  <p className="text-xs text-stone-500">
+                  <p className="text-sm font-medium text-gray-900">Test your phone</p>
+                  <p className="text-xs text-gray-600">
                     {callStatus === "idle" && "Get a quick test call from your AI to verify the number"}
                     {callStatus === "calling" && "Initiating call..."}
                     {callStatus === "ringing" && "Your phone should be ringing! Pick up to hear from your AI."}
@@ -232,7 +232,7 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
           {/* PIN Setup */}
           {phoneNumber.trim() && (
             <div>
-              <Label htmlFor="pin" className="text-stone-700">Security PIN (4-6 digits)</Label>
+              <Label htmlFor="pin" className="text-gray-700">Security PIN (4-6 digits)</Label>
               <Input
                 id="pin"
                 type="password"
@@ -244,22 +244,22 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
                 maxLength={6}
                 className="mt-2"
               />
-              <p className="text-xs text-stone-500 mt-1">
+              <p className="text-xs text-gray-600 mt-1">
                 Used to verify your identity when calling from unknown numbers
               </p>
             </div>
           )}
 
           {/* Premium Number Upsell */}
-          <div className="bg-stone-50 border border-stone-200 rounded-lg p-4">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
             <div className="flex items-start gap-3">
-              <Phone className="w-5 h-5 text-stone-600 mt-0.5 flex-shrink-0" />
+              <Phone className="w-5 h-5 text-gray-600 mt-0.5 flex-shrink-0" />
               <div>
-                <h4 className="font-semibold text-sm text-stone-900">Want your own dedicated number?</h4>
-                <p className="text-xs text-stone-500 mt-1">
+                <h4 className="font-semibold text-sm text-gray-900">Want your own dedicated number?</h4>
+                <p className="text-xs text-gray-600 mt-1">
                   Get a personal number for just $2/mo. Choose your area code and pattern!
                 </p>
-                <p className="text-xs text-stone-500 mt-2">
+                <p className="text-xs text-gray-600 mt-2">
                   You can set this up later in Settings
                 </p>
               </div>
@@ -272,8 +272,8 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
               <div className="flex items-start gap-3">
                 <Sun className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
                 <div className="flex-1">
-                  <h4 className="font-semibold text-sm text-stone-900">Daily Check-in Calls</h4>
-                  <p className="text-xs text-stone-500 mt-1 mb-3">
+                  <h4 className="font-semibold text-sm text-gray-900">Daily Check-in Calls</h4>
+                  <p className="text-xs text-gray-600 mt-1 mb-3">
                     Your AI can call you twice a day (morning & evening) to check in and help plan your day.
                   </p>
 
@@ -285,7 +285,7 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
                       onChange={(e) => setDailyCheckinEnabled(e.target.checked)}
                       className="rounded"
                     />
-                    <Label htmlFor="checkin" className="text-sm font-normal cursor-pointer text-stone-700">
+                    <Label htmlFor="checkin" className="text-sm font-normal cursor-pointer text-gray-700">
                       Yes, I want daily check-in calls
                     </Label>
                   </div>
@@ -293,7 +293,7 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
                   {dailyCheckinEnabled && (
                     <div className="grid grid-cols-2 gap-3 mt-3">
                       <div>
-                        <Label htmlFor="morning" className="text-xs text-stone-600">
+                        <Label htmlFor="morning" className="text-xs text-gray-600">
                           Morning Time
                         </Label>
                         <Input
@@ -305,7 +305,7 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
                         />
                       </div>
                       <div>
-                        <Label htmlFor="evening" className="text-xs text-stone-600">
+                        <Label htmlFor="evening" className="text-xs text-gray-600">
                           Evening Time
                         </Label>
                         <Input

@@ -42,6 +42,21 @@ const INTERVIEW_QUESTIONS = [
 ];
 
 /**
+ * Get speech recognition hints for each interview question
+ */
+function getHintsForQuestion(index: number): string {
+  const hints: Record<number, string> = {
+    0: "my name is, call me, I go by",
+    1: "booking flights, filling forms, research, emails, shopping, scheduling, reminders",
+    2: "morning, afternoon, evening, nine to five, busy all day, weekends",
+    3: "ask first, ask me first, just do it, go ahead",
+    4: "Gmail, Amazon, LinkedIn, Google, Microsoft, Outlook, Calendar",
+    5: "yes, no, sure, yeah, nah, maybe",
+  };
+  return hints[index] || "";
+}
+
+/**
  * Generate TwiML for the first interview question
  */
 export async function handleInterviewCall({ userId, from, to, callSid }: { userId: string; from: string; to: string; callSid: string }): Promise<string> {
@@ -52,13 +67,14 @@ export async function handleInterviewCall({ userId, from, to, callSid }: { userI
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">${firstQuestion.question}</Say>
-  <Record
-    maxLength="30"
-    playBeep="false"
-    transcribe="true"
-    transcribeCallback="${agentUrl}/webhook/interview-call/response/${userId}?question=0"
-  />
+  <Say voice="Google.en-US-Neural2-F">${firstQuestion.question}</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${agentUrl}/webhook/interview-call/response/${userId}?question=0" method="POST"
+    hints="${getHintsForQuestion(0)}">
+    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+  </Gather>
+  <Say voice="Google.en-US-Neural2-F">I didn't hear anything. Let's try the next question.</Say>
+  <Redirect method="POST">${agentUrl}/webhook/interview-call/response/${userId}?question=0</Redirect>
 </Response>`;
 }
 
@@ -90,7 +106,7 @@ export async function processInterviewResponse(userId: string, questionIndex: nu
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">Perfect! I've got everything I need. You're all set up. Talk soon!</Say>
+  <Say voice="Google.en-US-Neural2-F">Perfect! I've got everything I need. You're all set up. Talk soon!</Say>
   <Hangup/>
 </Response>`;
   }
@@ -99,13 +115,15 @@ export async function processInterviewResponse(userId: string, questionIndex: nu
   const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">${nextQuestion.question}</Say>
-  <Record
-    maxLength="30"
-    playBeep="false"
-    transcribe="true"
-    transcribeCallback="${agentUrl}/webhook/interview-call/response/${userId}?question=${nextQuestionIndex}"
-  />
+  <Say voice="Google.en-US-Neural2-F">Got it!</Say>
+  <Say voice="Google.en-US-Neural2-F">${nextQuestion.question}</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${agentUrl}/webhook/interview-call/response/${userId}?question=${nextQuestionIndex}" method="POST"
+    hints="${getHintsForQuestion(nextQuestionIndex)}">
+    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+  </Gather>
+  <Say voice="Google.en-US-Neural2-F">I didn't hear anything. Let's move on.</Say>
+  <Redirect method="POST">${agentUrl}/webhook/interview-call/response/${userId}?question=${nextQuestionIndex}</Redirect>
 </Response>`;
 }
 
@@ -181,7 +199,7 @@ async function saveInterviewResponse(userId: string, field: string, answer: stri
 export function generateErrorTwiml(message: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">${message}</Say>
+  <Say voice="Google.en-US-Neural2-F">${message}</Say>
   <Hangup/>
 </Response>`;
 }

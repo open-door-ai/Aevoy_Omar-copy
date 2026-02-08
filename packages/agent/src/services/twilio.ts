@@ -4,7 +4,7 @@
  * Capabilities:
  * - Outbound calls: AI calls user (updates, questions), AI calls others (appointments)
  * - Inbound calls: User calls AI (voice tasks), AI receives calls (receptionist)
- * - TwiML generation: Voice flow responses with speech synthesis (Polly.Amy)
+ * - TwiML generation: Voice flow responses with speech synthesis (Google.en-US-Neural2-F)
  * - Speech-to-text: Transcribe voice commands
  * - SMS two-way: Send tasks via text, receive updates
  * - 2FA codes: Receive verification codes via SMS
@@ -15,7 +15,7 @@ import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData }
 
 // ---- Configuration ----
 
-interface TwilioConfig {
+export interface TwilioConfig {
   accountSid: string;
   authToken: string;
   apiKeySid?: string;
@@ -24,7 +24,7 @@ interface TwilioConfig {
   webhookBaseUrl: string;
 }
 
-function getTwilioConfig(): TwilioConfig | null {
+export function getTwilioConfig(): TwilioConfig | null {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const phoneNumber = process.env.TWILIO_PHONE_NUMBER;
@@ -49,7 +49,7 @@ export function isTwilioConfigured(): boolean {
 
 // ---- Twilio REST API helpers ----
 
-async function twilioRequest(
+export async function twilioRequest(
   path: string,
   method: "GET" | "POST" | "DELETE" = "POST",
   body?: URLSearchParams
@@ -131,13 +131,13 @@ export async function callExternal(
   try {
     // Build TwiML that speaks then optionally gathers response
     let twiml = `<Response>
-  <Say voice="Polly.Amy">${escapeXml(message)}</Say>`;
+  <Say voice="Google.en-US-Neural2-F">${escapeXml(message)}</Say>`;
 
     if (gatherAfter) {
       twiml += `
   <Gather input="speech" timeout="10" speechTimeout="auto"
           action="${config.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="Polly.Amy">I'm listening for your response.</Say>
+    <Say voice="Google.en-US-Neural2-F">I'm listening for your response.</Say>
   </Gather>`;
     }
 
@@ -179,12 +179,12 @@ export function generateIncomingCallTwiml(userId: string, userName: string): str
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">Hello ${escapeXml(userName)}! This is your Aevoy assistant. How can I help you today?</Say>
+  <Say voice="Google.en-US-Neural2-F">Hello ${escapeXml(userName)}! This is your Aevoy assistant. How can I help you today?</Say>
   <Gather input="speech" timeout="10" speechTimeout="auto"
           action="${processUrl}" method="POST">
-    <Say voice="Polly.Amy">Go ahead, I'm listening.</Say>
+    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
   </Gather>
-  <Say voice="Polly.Amy">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="Google.en-US-Neural2-F">I didn't catch that. Please call back and try again.</Say>
 </Response>`;
 }
 
@@ -194,7 +194,7 @@ export function generateIncomingCallTwiml(userId: string, userName: string): str
 export function generateResponseTwiml(message: string, voice?: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice || "Polly.Amy"}">${escapeXml(message)}</Say>
+  <Say voice="${voice || "Google.en-US-Neural2-F"}">${escapeXml(message)}</Say>
 </Response>`;
 }
 
@@ -203,7 +203,7 @@ export function generateResponseTwiml(message: string, voice?: string): string {
  */
 function generateSpeechTwiml(text: string, voice?: string): string {
   return `<Response>
-  <Say voice="${voice || "Polly.Amy"}">${escapeXml(text)}</Say>
+  <Say voice="${voice || "Google.en-US-Neural2-F"}">${escapeXml(text)}</Say>
 </Response>`;
 }
 
@@ -399,12 +399,12 @@ function generateReceptionistTwiml(userId: string, userName: string, callerNumbe
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Amy">Hello! You've reached ${escapeXml(userName)}'s assistant. ${escapeXml(userName)} is not available right now, but I can take a message and make sure they get it right away.</Say>
+  <Say voice="Google.en-US-Neural2-F">Hello! You've reached ${escapeXml(userName)}'s assistant. ${escapeXml(userName)} is not available right now, but I can take a message and make sure they get it right away.</Say>
   <Gather input="speech" timeout="15" speechTimeout="auto"
           action="${processUrl}" method="POST">
-    <Say voice="Polly.Amy">Please leave your message after this prompt. What would you like me to tell ${escapeXml(userName)}?</Say>
+    <Say voice="Google.en-US-Neural2-F">Please leave your message after this prompt. What would you like me to tell ${escapeXml(userName)}?</Say>
   </Gather>
-  <Say voice="Polly.Amy">I didn't hear a message. I'll let ${escapeXml(userName)} know you called. Goodbye!</Say>
+  <Say voice="Google.en-US-Neural2-F">I didn't hear a message. I'll let ${escapeXml(userName)} know you called. Goodbye!</Say>
 </Response>`;
 }
 

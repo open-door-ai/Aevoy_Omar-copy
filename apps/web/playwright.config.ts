@@ -24,7 +24,8 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: 'https://www.aevoy.com',
+    // Uses production URL by default - can be overridden with PLAYWRIGHT_BASE_URL env var
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'https://www.aevoy.com',
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
@@ -34,6 +35,21 @@ export default defineConfig({
 
     /* Video on failure */
     video: 'retain-on-failure',
+
+    /* Run in headed mode for debugging if HEADLESS is not set or set to false */
+    headless: process.env.HEADLESS !== 'false',
+
+    /* Viewport size */
+    viewport: { width: 1280, height: 720 },
+
+    /* Action timeout - increase for slower connections */
+    actionTimeout: 15000,
+
+    /* Navigation timeout */
+    navigationTimeout: 30000,
+
+    /* Ignore HTTPS errors for local testing */
+    ignoreHTTPSErrors: true,
   },
 
   /* Configure projects for major browsers */
@@ -42,7 +58,29 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    // Uncomment to add more browser testing
+    // {
+    //   name: 'firefox',
+    //   use: { ...devices['Desktop Firefox'] },
+    // },
+    // {
+    //   name: 'webkit',
+    //   use: { ...devices['Desktop Safari'] },
+    // },
+    // Mobile viewport testing
+    // {
+    //   name: 'Mobile Chrome',
+    //   use: { ...devices['Pixel 5'] },
+    // },
   ],
 
   /* NO LOCAL DEV SERVER - PRODUCTION ONLY */
+  /* Run tests against production by default */
+  
+  /* Output directory for test artifacts */
+  outputDir: './test-results',
+  
+  /* Global setup/teardown (optional) */
+  // globalSetup: require.resolve('./e2e/global-setup'),
+  // globalTeardown: require.resolve('./e2e/global-teardown'),
 });

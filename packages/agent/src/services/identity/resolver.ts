@@ -69,18 +69,37 @@ async function resolveByEmail(email: string): Promise<ResolvedUser | null> {
 async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
   const normalized = normalizePhone(phone);
 
-  const { data, error } = await getSupabaseClient()
+  // Try twilio_number first (AI's provisioned number)
+  const { data: twilioMatch } = await getSupabaseClient()
     .from("profiles")
-    .select("id, username, email, twilio_number")
+    .select("id, username, email, twilio_number, phone_number")
     .eq("twilio_number", normalized)
     .single();
 
-  if (error || !data) return null;
+  if (twilioMatch) {
+    return {
+      userId: twilioMatch.id,
+      username: twilioMatch.username,
+      email: twilioMatch.email,
+      phone: twilioMatch.twilio_number,
+    };
+  }
 
-  return {
-    userId: data.id,
-    username: data.username,
-    email: data.email,
-    phone: data.twilio_number,
-  };
+  // Fallback: user's personal phone number
+  const { data: phoneMatch } = await getSupabaseClient()
+    .from("profiles")
+    .select("id, username, email, twilio_number, phone_number")
+    .eq("phone_number", normalized)
+    .single();
+
+  if (phoneMatch) {
+    return {
+      userId: phoneMatch.id,
+      username: phoneMatch.username,
+      email: phoneMatch.email,
+      phone: phoneMatch.twilio_number || phoneMatch.phone_number,
+    };
+  }
+
+  return null;
 }
