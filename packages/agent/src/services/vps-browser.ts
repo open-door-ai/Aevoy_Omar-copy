@@ -288,8 +288,8 @@ export class VPSBrowserService {
         await page.goto(msg.url);
         break;
       case "screenshot":
-        const screenshot = await page.screenshot({ encoding: "base64" });
-        this.broadcast({ type: "screenshot", data: screenshot });
+        const screenshotBuffer = await page.screenshot();
+        this.broadcast({ type: "screenshot", data: screenshotBuffer.toString('base64') });
         break;
     }
   }
@@ -299,11 +299,11 @@ export class VPSBrowserService {
       if (clients.size === 0) return;
       
       try {
-        const screenshot = await page.screenshot({ 
-          encoding: "base64",
+        const screenshotBuffer = await page.screenshot({ 
           type: "jpeg",
           quality: 60,
         });
+        const screenshot = screenshotBuffer.toString('base64');
         
         clients.forEach(ws => {
           if (ws.readyState === WebSocket.OPEN) {

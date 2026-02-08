@@ -349,15 +349,14 @@ export class MultiUserBrowserService {
       }
 
       try {
-        const screenshot = await ctx.page.screenshot({
+        const screenshotBuffer = await ctx.page.screenshot({
           type: "jpeg",
           quality: 60,
-          encoding: "base64",
         });
 
         ws.send(JSON.stringify({
           type: "screenshot",
-          data: screenshot,
+          data: screenshotBuffer.toString('base64'),
           timestamp: Date.now(),
         }));
       } catch {

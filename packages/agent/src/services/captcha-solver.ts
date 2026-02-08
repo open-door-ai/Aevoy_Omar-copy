@@ -127,7 +127,9 @@ export class CaptchaSolver {
     // Inject solution
     await page.evaluate((token) => {
       (window as any).grecaptcha.getResponse = () => token;
-      (window as any).grecaptcha.enterprise?.getResponse = () => token;
+      if ((window as any).grecaptcha.enterprise) {
+        (window as any).grecaptcha.enterprise.getResponse = () => token;
+      }
       
       // Find and fill textarea
       const textarea = document.querySelector("#g-recaptcha-response") as HTMLTextAreaElement;
@@ -274,11 +276,12 @@ export class CaptchaSolver {
   private async solveWithVision(page: Page): Promise<CaptchaResult> {
     console.log("[CAPTCHA] Falling back to vision...");
     
-    const screenshot = await page.screenshot({ encoding: "base64" });
+    const screenshotBuffer = await page.screenshot();
+    const screenshot = screenshotBuffer.toString('base64');
     
     const result = await generateVisionResponse(
       "Solve the CAPTCHA in this image. Return ONLY the solution text, nothing else.",
-      screenshot,
+      `data:image/png;base64,${screenshot}`,
       "You are solving a CAPTCHA. Be precise."
     );
 

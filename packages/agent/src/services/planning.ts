@@ -169,10 +169,11 @@ Respond with JSON:
 `;
 
     const response = await generateResponse(
-      { userId: "", facts: [] },
+      { facts: "", recentLogs: "" },
       "Task Analysis",
       prompt,
-      "system"
+      "system",
+      "understand"
     );
 
     try {

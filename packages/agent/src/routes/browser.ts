@@ -5,11 +5,11 @@
  * POST /browser/cleanup - Clean up idle contexts
  */
 
-import express from "express";
+import express, { Router } from "express";
 import { MultiUserBrowserService } from "../services/multi-user-browser.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 
-const router = express.Router();
+const router: Router = express.Router();
 
 // Get browser status
 router.get("/status", async (_req, res) => {

@@ -161,10 +161,11 @@ Respond with ONLY a number 0-100.
 `;
 
     const response = await generateResponse(
-      { userId: "", facts: [] },
+      { facts: "", recentLogs: "" },
       "Quality Check",
       prompt,
-      "system"
+      "system",
+      "understand"
     );
 
     const match = response.content.match(/(\d+)/);
@@ -201,10 +202,11 @@ Respond with ONLY a number 0-100.
 `;
 
     const response = await generateResponse(
-      { userId: "", facts: [] },
+      { facts: "", recentLogs: "" },
       "Quality Check",
       prompt,
-      "system"
+      "system",
+      "understand"
     );
 
     const match = response.content.match(/(\d+)/);
@@ -229,10 +231,11 @@ Respond with ONLY a number 0-100.
 `;
 
     const response = await generateResponse(
-      { userId: "", facts: [] },
+      { facts: "", recentLogs: "" },
       "Security Check",
       prompt,
-      "system"
+      "system",
+      "understand"
     );
 
     const match = response.content.match(/(\d+)/);
@@ -273,10 +276,11 @@ Respond with ONLY a number 0-100.
 `;
 
     const response = await generateResponse(
-      { userId: "", facts: [] },
+      { facts: "", recentLogs: "" },
       "Intent Check",
       prompt,
-      "system"
+      "system",
+      "understand"
     );
 
     const match = response.content.match(/(\d+)/);
@@ -302,10 +306,11 @@ Provide the IMPROVED result only.
 `;
 
     const response = await generateResponse(
-      { userId: "", facts: [] },
+      { facts: "", recentLogs: "" },
       "Improve Result",
       prompt,
-      "system"
+      "system",
+      "understand"
     );
 
     try {
