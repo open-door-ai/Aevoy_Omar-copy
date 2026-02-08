@@ -1,8 +1,10 @@
 [build]
-dockerfilePath = "Dockerfile"
+builder = "NIXPACKS"
+buildCommand = "pnpm install && pnpm build"
 
 [deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 60
+startCommand = "AGENT_PORT=${PORT:-3001} node dist/index.js"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
