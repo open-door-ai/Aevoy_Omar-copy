@@ -69,8 +69,8 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
   return (
     <div className="flex flex-col items-center max-w-lg mx-auto px-6">
       <FadeIn>
-        <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">Your AI Email</h2>
-        <p className="text-stone-500 mb-8 text-center">
+        <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">Your AI Email</h2>
+        <p className="text-gray-600 mb-8 text-center">
           This is the email address you&apos;ll use to send tasks to your AI
         </p>
       </FadeIn>
@@ -79,14 +79,14 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
       <FadeIn delay={0.15}>
         <GlassCard className="w-full p-6 mb-6">
           <div className="flex items-baseline justify-center gap-1 flex-wrap">
-            <span className="text-2xl md:text-3xl font-mono font-bold text-stone-900">
+            <span className="text-2xl md:text-3xl font-mono font-bold text-gray-900">
               {username || "..."}
             </span>
-            <span className="text-2xl md:text-3xl font-mono text-stone-500">@aevoy.com</span>
+            <span className="text-2xl md:text-3xl font-mono text-gray-600">@aevoy.com</span>
           </div>
           <button
             onClick={handleCopy}
-            className="mt-3 mx-auto block text-sm text-stone-500 hover:text-stone-700 transition-colors"
+            className="mt-3 mx-auto block text-sm text-gray-600 hover:text-gray-700 transition-colors"
           >
             <motion.span
               key={copied ? "copied" : "copy"}
@@ -103,7 +103,7 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
       {/* Customize prefix */}
       <FadeIn delay={0.25} className="w-full">
         <div className="w-full space-y-2 mb-6">
-          <Label htmlFor="username" className="text-stone-600">
+          <Label htmlFor="username" className="text-gray-600">
             Customize your prefix
           </Label>
           <div className="flex items-center gap-2">
@@ -115,15 +115,15 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
               className="font-mono text-lg"
               maxLength={20}
             />
-            <span className="text-stone-400 font-mono whitespace-nowrap">@aevoy.com</span>
+            <span className="text-gray-500 font-mono whitespace-nowrap">@aevoy.com</span>
           </div>
 
           {/* Availability indicator */}
           <div className="h-5">
             {checking && (
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
-                <p className="text-sm text-stone-500">Checking availability...</p>
+                <div className="w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                <p className="text-sm text-gray-600">Checking availability...</p>
               </div>
             )}
             {!checking && availability && (
@@ -160,9 +160,9 @@ export default function StepEmail({ currentUsername, onNext, onBack }: StepEmail
 
       {/* Example task */}
       <FadeIn delay={0.35} className="w-full">
-        <div className="w-full bg-stone-100/50 border border-stone-200 rounded-xl p-4 mb-8">
-          <p className="text-sm text-stone-500 mb-1">Try emailing:</p>
-          <p className="text-stone-700 font-medium italic">
+        <div className="w-full bg-gray-100/50 border border-gray-200 rounded-xl p-4 mb-8">
+          <p className="text-sm text-gray-600 mb-1">Try emailing:</p>
+          <p className="text-gray-700 font-medium italic">
             &quot;Book me a dinner for 2 at Miku on Saturday at 7pm&quot;
           </p>
         </div>

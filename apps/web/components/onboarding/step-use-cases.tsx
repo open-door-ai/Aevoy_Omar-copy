@@ -72,11 +72,11 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-stone-900">What Can Aevoy Do For You?</h2>
-        <p className="text-stone-500">
+        <h2 className="text-2xl font-bold text-gray-900">What Can Aevoy Do For You?</h2>
+        <p className="text-gray-600">
           Select 1-3 tasks you&apos;ll use most often (helps us personalize your experience)
         </p>
-        <p className="text-sm text-stone-500">
+        <p className="text-sm text-gray-600">
           {selectedUseCases.length}/3 selected
         </p>
       </div>
@@ -97,24 +97,24 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
               disabled={isDisabled}
               className={`relative p-4 rounded-lg border-2 transition-all text-left ${
                 isSelected
-                  ? "border-stone-800 bg-stone-50 scale-[1.02]"
+                  ? "border-gray-800 bg-gray-50 scale-[1.02]"
                   : isDisabled
-                  ? "border-stone-200 opacity-50 cursor-not-allowed"
-                  : "border-stone-200 hover:border-stone-400 hover:bg-stone-50"
+                  ? "border-gray-200 opacity-50 cursor-not-allowed"
+                  : "border-gray-200 hover:border-gray-400 hover:bg-gray-50"
               }`}
             >
               <div className="space-y-2">
-                <Icon className={`w-8 h-8 ${isSelected ? "text-stone-800" : "text-stone-500"}`} />
+                <Icon className={`w-8 h-8 ${isSelected ? "text-gray-800" : "text-gray-600"}`} />
                 <div>
-                  <h3 className="font-semibold text-sm text-stone-900">{useCase.label}</h3>
-                  <p className="text-xs text-stone-500">{useCase.description}</p>
+                  <h3 className="font-semibold text-sm text-gray-900">{useCase.label}</h3>
+                  <p className="text-xs text-gray-600">{useCase.description}</p>
                 </div>
               </div>
               {isSelected && (
                 <motion.div
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
-                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-stone-800 text-white flex items-center justify-center text-xs"
+                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-gray-800 text-white flex items-center justify-center text-xs"
                 >
                   ✓
                 </motion.div>
@@ -133,7 +133,7 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
         </Button>
       </div>
 
-      <div className="text-center text-sm text-stone-500">
+      <div className="text-center text-sm text-gray-600">
         Don&apos;t worry — Aevoy can handle all of these and more!
       </div>
     </div>

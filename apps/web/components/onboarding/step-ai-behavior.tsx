@@ -61,8 +61,8 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-stone-900">How Should Your AI Behave?</h2>
-        <p className="text-stone-500">
+        <h2 className="text-2xl font-bold text-gray-900">How Should Your AI Behave?</h2>
+        <p className="text-gray-600">
           These control how your AI works. You can change them anytime in Settings.
         </p>
       </div>
@@ -71,8 +71,8 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
         {/* Autonomy Level */}
         <div className="space-y-4">
           <div className="space-y-1">
-            <label className="text-sm font-medium text-stone-900">Autonomy Level</label>
-            <p className="text-sm text-stone-500">
+            <label className="text-sm font-medium text-gray-900">Autonomy Level</label>
+            <p className="text-sm text-gray-600">
               How often should AI ask for permission before taking actions?
             </p>
           </div>
@@ -83,12 +83,12 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
               max="100"
               value={autonomyLevel}
               onChange={(e) => setAutonomyLevel(parseInt(e.target.value))}
-              className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer slider"
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
               style={{
-                background: `linear-gradient(to right, #292524 0%, #292524 ${autonomyLevel}%, #e7e5e4 ${autonomyLevel}%, #e7e5e4 100%)`,
+                background: `linear-gradient(to right, #1f2937 0%, #1f2937 ${autonomyLevel}%, #e5e7eb ${autonomyLevel}%, #e5e7eb 100%)`,
               }}
             />
-            <div className="text-center text-lg font-medium text-stone-900 flex items-center justify-center gap-2">
+            <div className="text-center text-lg font-medium text-gray-900 flex items-center justify-center gap-2">
               {(() => {
                 const { text, Icon } = getAutonomyLabel(autonomyLevel);
                 return (
@@ -105,8 +105,8 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
         {/* Risk Tolerance */}
         <div className="space-y-4">
           <div className="space-y-1">
-            <label className="text-sm font-medium text-stone-900">Risk Tolerance</label>
-            <p className="text-sm text-stone-500">
+            <label className="text-sm font-medium text-gray-900">Risk Tolerance</label>
+            <p className="text-sm text-gray-600">
               What level of risk are you comfortable with?
             </p>
           </div>
@@ -117,12 +117,12 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
               max="100"
               value={riskTolerance}
               onChange={(e) => setRiskTolerance(parseInt(e.target.value))}
-              className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer slider"
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
               style={{
-                background: `linear-gradient(to right, #292524 0%, #292524 ${riskTolerance}%, #e7e5e4 ${riskTolerance}%, #e7e5e4 100%)`,
+                background: `linear-gradient(to right, #1f2937 0%, #1f2937 ${riskTolerance}%, #e5e7eb ${riskTolerance}%, #e5e7eb 100%)`,
               }}
             />
-            <div className="text-center text-lg font-medium text-stone-900 flex items-center justify-center gap-2">
+            <div className="text-center text-lg font-medium text-gray-900 flex items-center justify-center gap-2">
               {(() => {
                 const { text, Icon } = getRiskLabel(riskTolerance);
                 return (
@@ -139,8 +139,8 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
         {/* Proactive Notifications */}
         <div className="space-y-4">
           <div className="space-y-1">
-            <label className="text-sm font-medium text-stone-900">Proactive Notifications</label>
-            <p className="text-sm text-stone-500">
+            <label className="text-sm font-medium text-gray-900">Proactive Notifications</label>
+            <p className="text-sm text-gray-600">
               How many daily check-ins/reminders allowed?
             </p>
           </div>
@@ -151,14 +151,14 @@ export function StepAIBehavior({ onNext, onBack }: StepAIBehaviorProps) {
               max="20"
               value={proactiveLimit}
               onChange={(e) => setProactiveLimit(parseInt(e.target.value))}
-              className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer slider"
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
               style={{
-                background: `linear-gradient(to right, #292524 0%, #292524 ${(proactiveLimit / 20) * 100}%, #e7e5e4 ${(proactiveLimit / 20) * 100}%, #e7e5e4 100%)`,
+                background: `linear-gradient(to right, #1f2937 0%, #1f2937 ${(proactiveLimit / 20) * 100}%, #e5e7eb ${(proactiveLimit / 20) * 100}%, #e5e7eb 100%)`,
               }}
             />
             <div className="flex justify-between text-sm">
-              <span className="text-stone-500">{proactiveLimit} per day</span>
-              <span className="font-medium text-stone-900">{getProactiveLabel(proactiveLimit)}</span>
+              <span className="text-gray-600">{proactiveLimit} per day</span>
+              <span className="font-medium text-gray-900">{getProactiveLabel(proactiveLimit)}</span>
             </div>
           </div>
         </div>

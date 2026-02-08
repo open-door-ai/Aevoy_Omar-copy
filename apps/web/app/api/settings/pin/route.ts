@@ -1,5 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import crypto from "crypto";
+
+function hashVoicePin(pin: string, userId: string): string {
+  return crypto.createHash('sha256').update(`${userId}:${pin}`).digest('hex');
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -20,11 +25,14 @@ export async function POST(request: Request) {
       );
     }
 
+    // Hash PIN before storing (SHA-256 with userId salt)
+    const hashedPin = hashVoicePin(newPin, user.id);
+
     // Update PIN and reset lockout
     const { error } = await supabase
       .from("profiles")
       .update({
-        voice_pin: newPin,
+        voice_pin: hashedPin,
         voice_pin_attempts: 0,
         voice_pin_locked_until: null
       })

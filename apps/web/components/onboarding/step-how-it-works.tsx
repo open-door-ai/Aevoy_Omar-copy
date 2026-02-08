@@ -56,8 +56,8 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-3xl font-bold text-stone-900">How Aevoy Works</h2>
-        <p className="text-lg text-stone-500 flex items-center justify-center gap-2">
+        <h2 className="text-3xl font-bold text-gray-900">How Aevoy Works</h2>
+        <p className="text-lg text-gray-600 flex items-center justify-center gap-2">
           Your AI employee that never sleeps
           <Moon className="w-5 h-5 inline-block" />
         </p>
@@ -78,22 +78,22 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
             <motion.div
               initial={{ scale: 0.8 }}
               animate={{ scale: 1 }}
-              className="w-20 h-20 rounded-full bg-stone-100 flex items-center justify-center mx-auto"
+              className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto"
             >
-              <Icon className="w-10 h-10 text-stone-700" />
+              <Icon className="w-10 h-10 text-gray-700" />
             </motion.div>
 
             {/* Visual representation */}
             <div className="flex items-center justify-center gap-4">
               {panel.visualIcons.map((VisualIcon, idx) => (
-                <VisualIcon key={idx} className="w-12 h-12 text-stone-700" strokeWidth={1.5} />
+                <VisualIcon key={idx} className="w-12 h-12 text-gray-700" strokeWidth={1.5} />
               ))}
             </div>
 
             {/* Title and description */}
             <div className="space-y-2">
-              <h3 className="text-2xl font-bold text-stone-900">{panel.title}</h3>
-              <p className="text-stone-500 max-w-md mx-auto">
+              <h3 className="text-2xl font-bold text-gray-900">{panel.title}</h3>
+              <p className="text-gray-600 max-w-md mx-auto">
                 {panel.description}
               </p>
             </div>
@@ -109,8 +109,8 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
             onClick={() => setCurrentPanel(index)}
             className={`h-2 rounded-full transition-all ${
               index === currentPanel
-                ? "w-8 bg-stone-800"
-                : "w-2 bg-stone-200 hover:bg-stone-400"
+                ? "w-8 bg-gray-800"
+                : "w-2 bg-gray-200 hover:bg-gray-400"
             }`}
             aria-label={`Go to panel ${index + 1}`}
           />
@@ -132,7 +132,7 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
       <div className="text-center">
         <button
           onClick={onNext}
-          className="text-sm text-stone-500 hover:text-stone-700 transition-colors underline underline-offset-4"
+          className="text-sm text-gray-600 hover:text-gray-700 transition-colors underline underline-offset-4"
         >
           Skip intro
         </button>

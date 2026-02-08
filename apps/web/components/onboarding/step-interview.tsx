@@ -90,8 +90,8 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
     return (
       <div className="flex flex-col items-center max-w-2xl mx-auto px-6">
         <FadeIn>
-          <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">Help Your AI Know You</h2>
-          <p className="text-stone-500 mb-8 text-center">
+          <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">Help Your AI Know You</h2>
+          <p className="text-gray-600 mb-8 text-center">
             The more your AI knows about you, the better it works. Choose how you&apos;d like to share:
           </p>
         </FadeIn>
@@ -101,19 +101,19 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
           <StaggerItem>
             <button
               onClick={() => setView("phone")}
-              className="w-full text-left p-5 border-2 border-stone-200 rounded-2xl hover:border-stone-400 hover:bg-stone-50 transition-all group"
+              className="w-full text-left p-5 border-2 border-gray-200 rounded-2xl hover:border-gray-400 hover:bg-gray-50 transition-all group"
             >
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-stone-100 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-stone-200 transition-colors">
-                  <svg className="w-6 h-6 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-gray-200 transition-colors">
+                  <svg className="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z" />
                   </svg>
                 </div>
                 <div>
-                  <p className="font-semibold text-stone-900">Phone Call Interview</p>
-                  <p className="text-sm text-stone-500">Your AI calls you for a quick chat to learn your preferences</p>
+                  <p className="font-semibold text-gray-900">Phone Call Interview</p>
+                  <p className="text-sm text-gray-600">Your AI calls you for a quick chat to learn your preferences</p>
                 </div>
-                <svg className="w-5 h-5 text-stone-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-5 h-5 text-gray-500 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                 </svg>
               </div>
@@ -125,19 +125,19 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
             <button
               onClick={handleEmailQuestionnaire}
               disabled={sendingEmail || emailSent}
-              className="w-full text-left p-5 border-2 border-stone-200 rounded-2xl hover:border-stone-400 hover:bg-stone-50 transition-all group disabled:opacity-60"
+              className="w-full text-left p-5 border-2 border-gray-200 rounded-2xl hover:border-gray-400 hover:bg-gray-50 transition-all group disabled:opacity-60"
             >
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-stone-100 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-stone-200 transition-colors">
-                  <svg className="w-6 h-6 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-gray-200 transition-colors">
+                  <svg className="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
                   </svg>
                 </div>
                 <div>
-                  <p className="font-semibold text-stone-900">
+                  <p className="font-semibold text-gray-900">
                     {emailSent ? "Questionnaire Sent!" : sendingEmail ? "Sending..." : "Email Questionnaire"}
                   </p>
-                  <p className="text-sm text-stone-500">
+                  <p className="text-sm text-gray-600">
                     {emailSent
                       ? "Check your inbox and reply when you're ready"
                       : "Get emailed a questionnaire — reply at your leisure"}
@@ -157,7 +157,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                     <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                   </motion.svg>
                 ) : (
-                  <svg className="w-5 h-5 text-stone-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className="w-5 h-5 text-gray-500 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                   </svg>
                 )}
@@ -169,19 +169,19 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
           <StaggerItem>
             <button
               onClick={() => setView("basics")}
-              className="w-full text-left p-5 border-2 border-stone-200 rounded-2xl hover:border-stone-400 hover:bg-stone-50 transition-all group"
+              className="w-full text-left p-5 border-2 border-gray-200 rounded-2xl hover:border-gray-400 hover:bg-gray-50 transition-all group"
             >
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-stone-100 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-stone-200 transition-colors">
-                  <svg className="w-6 h-6 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center shrink-0 group-hover:bg-gray-200 transition-colors">
+                  <svg className="w-6 h-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
                   </svg>
                 </div>
                 <div>
-                  <p className="font-semibold text-stone-900">Quick Basics</p>
-                  <p className="text-sm text-stone-500">Fill in a few preferences right here, right now</p>
+                  <p className="font-semibold text-gray-900">Quick Basics</p>
+                  <p className="text-sm text-gray-600">Fill in a few preferences right here, right now</p>
                 </div>
-                <svg className="w-5 h-5 text-stone-400 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <svg className="w-5 h-5 text-gray-500 ml-auto shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
                 </svg>
               </div>
@@ -195,11 +195,11 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
             <div className="flex flex-col items-center gap-3">
               <button
                 onClick={() => setShowSkipWarning(true)}
-                className="text-stone-500 hover:text-stone-700 text-sm transition-colors underline underline-offset-4"
+                className="text-gray-600 hover:text-gray-800 text-sm transition-colors underline underline-offset-4"
               >
                 Skip this step
               </button>
-              <p className="text-xs text-stone-500 max-w-sm text-center">
+              <p className="text-xs text-gray-600 max-w-sm text-center">
                 Your AI will still work, but it won&apos;t know your preferences, habits, or context — so it&apos;ll be less effective
               </p>
             </div>
@@ -270,8 +270,8 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
     return (
       <div className="flex flex-col items-center max-w-lg mx-auto px-6">
         <FadeIn>
-          <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">Phone Interview</h2>
-          <p className="text-stone-500 mb-8 text-center">
+          <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">Phone Interview</h2>
+          <p className="text-gray-600 mb-8 text-center">
             Enter your phone number and your AI will call you for a quick conversation
           </p>
         </FadeIn>
@@ -290,10 +290,10 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 0 0 2.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 0 1-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 0 0-1.091-.852H4.5A2.25 2.25 0 0 0 2.25 4.5v2.25Z" />
                 </svg>
               </div>
-              <p className="text-lg font-semibold text-stone-900">
+              <p className="text-lg font-semibold text-gray-900">
                 {callStatus === "in_progress" ? "Calling you now..." : "Call queued!"}
               </p>
-              <p className="text-stone-500 text-sm">
+              <p className="text-gray-600 text-sm">
                 {callStatus === "in_progress"
                   ? "Pick up when your phone rings"
                   : "We'll call you shortly when the service is ready"}
@@ -310,7 +310,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
               className="w-full space-y-6"
             >
               <div className="space-y-2">
-                <Label htmlFor="phone" className="text-stone-600">Your phone number</Label>
+                <Label htmlFor="phone" className="text-gray-600">Your phone number</Label>
                 <Input
                   id="phone"
                   type="tel"
@@ -349,8 +349,8 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
   return (
     <div className="flex flex-col items-center max-w-2xl mx-auto px-6">
       <FadeIn>
-        <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">Quick Basics</h2>
-        <p className="text-stone-500 mb-8 text-center">
+        <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">Quick Basics</h2>
+        <p className="text-gray-600 mb-8 text-center">
           Tell your AI what you&apos;ll use it for most
         </p>
       </FadeIn>
@@ -358,7 +358,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
       {/* Use case pills */}
       <FadeIn delay={0.15} className="w-full">
         <div className="w-full space-y-4 mb-8">
-          <Label className="text-stone-600">What will you use Aevoy for?</Label>
+          <Label className="text-gray-600">What will you use Aevoy for?</Label>
           <div className="flex flex-wrap gap-3">
             {USE_CASES.map((useCase) => (
               <motion.button
@@ -369,8 +369,8 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                 transition={springs.micro}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-full border-2 transition-all text-sm font-medium ${
                   selectedUses.includes(useCase.id)
-                    ? "border-stone-800 bg-stone-800 text-white"
-                    : "border-stone-200 text-stone-600 hover:border-stone-400"
+                    ? "border-gray-800 bg-gray-800 text-white"
+                    : "border-gray-200 text-gray-600 hover:border-gray-400"
                 }`}
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -385,16 +385,16 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
 
       {/* Daily check-in */}
       <FadeIn delay={0.25} className="w-full">
-        <div className="w-full bg-stone-50 border border-stone-200 rounded-2xl p-5 space-y-4 mb-8">
+        <div className="w-full bg-gray-50 border border-gray-200 rounded-2xl p-5 space-y-4 mb-8">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium text-stone-900">Daily Check-in Call</p>
-              <p className="text-sm text-stone-500">Your AI calls you each morning with a daily briefing</p>
+              <p className="font-medium text-gray-900">Daily Check-in Call</p>
+              <p className="text-sm text-gray-600">Your AI calls you each morning with a daily briefing</p>
             </div>
             <button
               onClick={() => setDailyCheckin(!dailyCheckin)}
               className={`relative w-12 h-7 rounded-full transition-colors ${
-                dailyCheckin ? "bg-stone-800" : "bg-stone-300"
+                dailyCheckin ? "bg-gray-800" : "bg-gray-300"
               }`}
             >
               <motion.div
@@ -414,8 +414,8 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
                 transition={springs.default}
                 className="overflow-hidden"
               >
-                <div className="space-y-2 pt-2 border-t border-stone-200">
-                  <Label htmlFor="checkinTime" className="text-stone-600">What time?</Label>
+                <div className="space-y-2 pt-2 border-t border-gray-200">
+                  <Label htmlFor="checkinTime" className="text-gray-600">What time?</Label>
                   <Input
                     id="checkinTime"
                     type="time"

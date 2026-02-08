@@ -4,6 +4,7 @@ import { useState, useCallback } from "react";
 import { AnimatePresence, motion, springs } from "@/components/ui/motion";
 import StepWelcome from "./step-welcome";
 import StepEmail from "./step-email";
+import { StepEmailVerification } from "./step-email-verification";
 import StepPhone from "./step-phone";
 import StepInterview, { type InterviewData } from "./step-interview";
 import StepTour from "./step-tour";
@@ -13,7 +14,7 @@ interface OnboardingFlowProps {
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 export default function OnboardingFlow({ username, onComplete }: OnboardingFlowProps) {
   const [step, setStep] = useState(1);
@@ -72,9 +73,9 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
     <div className="fixed inset-0 bg-white z-50 overflow-auto force-light">
       {/* Progress bar */}
       <div className="fixed top-0 left-0 right-0 z-10">
-        <div className="h-1 bg-stone-100">
+        <div className="h-1 bg-gray-100">
           <motion.div
-            className="h-full bg-stone-800"
+            className="h-full bg-gray-800"
             animate={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
             transition={springs.default}
           />
@@ -83,7 +84,7 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
 
       {/* Step counter */}
       <div className="fixed top-4 right-6 z-10">
-        <span className="text-sm text-stone-400 font-medium tabular-nums">
+        <span className="text-sm text-gray-500 font-medium tabular-nums">
           <motion.span
             key={step}
             initial={{ y: -10, opacity: 0 }}
@@ -152,13 +153,7 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
               transition={springs.default}
               className="w-full"
             >
-              <StepPhone
-                onNext={(phone) => {
-                  setData((d) => ({ ...d, phone }));
-                  goTo(4);
-                }}
-                onBack={() => goTo(2)}
-              />
+              <StepEmailVerification onNext={() => goTo(4)} />
             </motion.div>
           )}
 
@@ -173,9 +168,9 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
               transition={springs.default}
               className="w-full"
             >
-              <StepInterview
-                onNext={(interview) => {
-                  setData((d) => ({ ...d, interview }));
+              <StepPhone
+                onNext={(phone) => {
+                  setData((d) => ({ ...d, phone }));
                   goTo(5);
                 }}
                 onBack={() => goTo(3)}
@@ -186,6 +181,27 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
           {step === 5 && (
             <motion.div
               key="step-5"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
+              <StepInterview
+                onNext={(interview) => {
+                  setData((d) => ({ ...d, interview }));
+                  goTo(6);
+                }}
+                onBack={() => goTo(4)}
+              />
+            </motion.div>
+          )}
+
+          {step === 6 && (
+            <motion.div
+              key="step-6"
               custom={direction}
               variants={slideVariants}
               initial="enter"

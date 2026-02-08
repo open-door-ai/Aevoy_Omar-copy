@@ -50,8 +50,8 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
   return (
     <div className="flex flex-col items-center max-w-lg mx-auto px-6">
       <FadeIn>
-        <h2 className="text-3xl font-bold text-stone-900 mb-2 text-center">Your Dashboard</h2>
-        <p className="text-stone-500 mb-8 text-center">
+        <h2 className="text-3xl font-bold text-gray-900 mb-2 text-center">Your Dashboard</h2>
+        <p className="text-gray-600 mb-8 text-center">
           Here&apos;s a quick tour of what you&apos;ll find
         </p>
       </FadeIn>
@@ -63,7 +63,7 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
             key={i}
             animate={{
               scale: i === tourStep ? 1.3 : 1,
-              backgroundColor: i === tourStep ? "#1c1917" : i < tourStep ? "#a8a29e" : "#e7e5e4",
+              backgroundColor: i === tourStep ? "#111827" : i < tourStep ? "#9ca3af" : "#d1d5db",
             }}
             transition={springs.micro}
             className="w-2 h-2 rounded-full"
@@ -80,15 +80,15 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
           animate={{ x: 0, opacity: 1 }}
           exit={{ x: direction > 0 ? -40 : 40, opacity: 0 }}
           transition={springs.default}
-          className="w-full bg-white border-2 border-stone-800 rounded-2xl p-8 text-center space-y-4 mb-8 relative overflow-hidden"
+          className="w-full bg-white border-2 border-gray-800 rounded-2xl p-8 text-center space-y-4 mb-8 relative overflow-hidden"
         >
           {/* Background glow */}
-          <div className="absolute inset-0 bg-gradient-to-br from-stone-100/50 to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-transparent pointer-events-none" />
 
           <div className="relative">
-            <div className="w-16 h-16 bg-stone-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
               <svg
-                className="w-8 h-8 text-stone-700"
+                className="w-8 h-8 text-gray-700"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -98,10 +98,10 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
               </svg>
             </div>
 
-            <h3 className="text-xl font-bold text-stone-900">
+            <h3 className="text-xl font-bold text-gray-900">
               {tourStep === 0 && botName ? `${botName}'s Email` : current.title}
             </h3>
-            <p className="text-stone-500 mt-2">{current.description}</p>
+            <p className="text-gray-600 mt-2">{current.description}</p>
           </div>
         </motion.div>
       </AnimatePresence>
@@ -131,17 +131,17 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
             transition={springs.bouncy}
             className="w-full space-y-4"
           >
-            <div className="bg-gradient-to-br from-stone-800 to-stone-900 rounded-2xl p-6 text-center text-white">
+            <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 text-center text-white">
               <h3 className="text-lg font-bold mb-2">Ready to send your first task?</h3>
-              <p className="text-stone-300 text-sm mb-4">
+              <p className="text-gray-400 text-sm mb-4">
                 {botName ? `Send an email to ${botName} and watch it work` : "Send an email to your AI and watch it work"}
               </p>
-              <div className="bg-white/10 backdrop-blur rounded-xl p-3 font-mono text-lg mb-3">
+              <div className="bg-gray-700 rounded-xl p-3 font-mono text-lg mb-3">
                 {aiEmail}
               </div>
               <button
                 onClick={handleCopy}
-                className="text-stone-300 hover:text-white text-sm transition-colors underline underline-offset-4"
+                className="text-gray-400 hover:text-white text-sm transition-colors underline underline-offset-4"
               >
                 {copied ? "Copied!" : "Copy email address"}
               </button>
@@ -158,7 +158,7 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
       {!isLastStep && (
         <button
           onClick={onComplete}
-          className="text-stone-500 hover:text-stone-700 text-sm transition-colors underline underline-offset-4"
+          className="text-gray-600 hover:text-gray-700 text-sm transition-colors underline underline-offset-4"
         >
           Skip tour
         </button>

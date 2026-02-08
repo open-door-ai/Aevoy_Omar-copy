@@ -48,8 +48,8 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-stone-900">Safety & Legal Stuff</h2>
-        <p className="text-stone-500">
+        <h2 className="text-2xl font-bold text-gray-900">Safety & Legal Stuff</h2>
+        <p className="text-gray-600">
           Important things you should know before we begin
         </p>
       </div>
@@ -59,11 +59,11 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
         <div className="flex items-start gap-3">
           <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
           <div className="space-y-2">
-            <h3 className="font-semibold text-lg text-stone-900">Aevoy is 99.9999% accurate... but not perfect</h3>
-            <p className="text-sm text-stone-600">
+            <h3 className="font-semibold text-lg text-gray-900">Aevoy is 99.9999% accurate... but not perfect</h3>
+            <p className="text-sm text-gray-600">
               It might book the wrong flight, send the wrong email, or buy 500 rubber ducks
             </p>
-            <p className="text-sm font-medium text-stone-900">
+            <p className="text-sm font-medium text-gray-900">
               You&apos;re in control — review critical tasks, freeze your agent card anytime
             </p>
           </div>
@@ -71,8 +71,8 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
       </div>
 
       {/* Required Legal Checkboxes */}
-      <div className="space-y-3 border border-stone-200 rounded-lg p-4">
-        <p className="text-sm font-medium text-stone-900 mb-3">Required acknowledgments:</p>
+      <div className="space-y-3 border border-gray-200 rounded-lg p-4">
+        <p className="text-sm font-medium text-gray-900 mb-3">Required acknowledgments:</p>
 
         <Toggle
           checked={aiMistakes}
@@ -94,13 +94,13 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
           checked={agreeTerms}
           onChange={setAgreeTerms}
           label={
-            <span className="text-stone-700">
+            <span className="text-gray-700">
               I agree to{" "}
               <a
                 href="/legal/terms"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-stone-900 font-medium hover:underline"
+                className="text-gray-900 font-medium hover:underline"
                 onClick={(e) => e.stopPropagation()}
               >
                 Terms of Service
@@ -115,13 +115,13 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
           checked={consentData}
           onChange={setConsentData}
           label={
-            <span className="text-stone-700">
+            <span className="text-gray-700">
               I consent to data processing (
               <a
                 href="/legal/privacy"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-stone-900 font-medium hover:underline"
+                className="text-gray-900 font-medium hover:underline"
                 onClick={(e) => e.stopPropagation()}
               >
                 Privacy Policy
@@ -135,18 +135,18 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
       </div>
 
       {/* Optional: Hive Mind */}
-      <div className="space-y-3 border border-stone-200 rounded-lg p-4">
-        <p className="text-sm font-medium text-stone-900 mb-3">Optional:</p>
+      <div className="space-y-3 border border-gray-200 rounded-lg p-4">
+        <p className="text-sm font-medium text-gray-900 mb-3">Optional:</p>
 
         <div className="flex items-start gap-2">
           <Toggle
             checked={allowVenting}
             onChange={setAllowVenting}
             label={
-              <span className="flex items-center gap-2 text-stone-700">
+              <span className="flex items-center gap-2 text-gray-700">
                 Let my AI anonymously vent about bad websites (Hive Mind)
                 <SimpleTooltip content="No personal data shared, just UX frustrations for collective learning">
-                  <Info className="w-4 h-4 text-stone-500" />
+                  <Info className="w-4 h-4 text-gray-600" />
                 </SimpleTooltip>
               </span>
             }
@@ -158,14 +158,14 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
 
       {/* Footer */}
       <div className="text-center space-y-2">
-        <p className="text-xs text-stone-500">
+        <p className="text-xs text-gray-600">
           By proceeding, you accept full responsibility for AI actions*
         </p>
         <a
           href="/security"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sm text-stone-700 font-medium hover:underline"
+          className="inline-flex items-center gap-1 text-sm text-gray-700 font-medium hover:underline"
         >
           <Shield className="w-4 h-4" />
           Learn about our safety measures
