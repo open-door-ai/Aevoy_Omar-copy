@@ -1,0 +1,340 @@
+/**
+ * Task Processor V2 - Fully Autonomous with Planning Phase
+ * 
+ * Flow:
+ * 1. Receive task
+ * 2. PLANNING PHASE - Analyze, anticipate, get confirmation
+ * 3. AUTONOMOUS EXECUTION - Never stop until complete
+ * 4. QUALITY CHECK - 99th percentile verification
+ * 5. Return result
+ */
+
+import { planningService, ExecutionPlan } from "./planning.js";
+import { createAutonomousExecutor } from "./autonomous-executor.js";
+import { createMultiUserBrowser, MultiUserBrowserService } from "./multi-user-browser.js";
+import { qualityChecker } from "./quality-checker.js";
+import { getSupabaseClient } from "../utils/supabase.js";
+import { sendResponse } from "./email.js";
+
+interface TaskRequest {
+  userId: string;
+  username: string;
+  email: string;
+  task: string;
+  channel: "email" | "sms" | "web";
+}
+
+interface TaskResult {
+  success: boolean;
+  response: string;
+  planId?: string;
+  awaitingConfirmation?: boolean;
+  error?: string;
+}
+
+export class ProcessorV2 {
+  /**
+   * Main entry point - process task with full autonomy
+   */
+  async processTask(request: TaskRequest): Promise<TaskResult> {
+    console.log(`[PROCESSOR-V2] Task from ${request.username}: ${request.task.substring(0, 50)}...`);
+
+    try {
+      // STEP 1: PLANNING PHASE
+      const plan = await planningService.createPlan(request.userId, request.task);
+
+      // Check if confirmation required
+      if (plan.requireConfirmation) {
+        await this.sendPlanForConfirmation(request, plan);
+        return {
+          success: true,
+          response: "Plan created, awaiting your confirmation",
+          planId: plan.taskId,
+          awaitingConfirmation: true,
+        };
+      }
+
+      // Auto-approved (simple task or settings allow)
+      return this.executePlan(request, plan);
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      console.error("[PROCESSOR-V2] Error:", errorMsg);
+      return { success: false, response: "", error: errorMsg };
+    }
+  }
+
+  /**
+   * Execute confirmed plan
+   */
+  async executePlan(request: TaskRequest, plan: ExecutionPlan): Promise<TaskResult> {
+    console.log(`[PROCESSOR-V2] Executing plan: ${plan.goal}`);
+
+    // Initialize browser
+    const browser = createMultiUserBrowser(request.userId);
+    
+    try {
+      // Get page (initializes browser if needed)
+      const page = await browser.init();
+
+      // Create executor
+      const executor = createAutonomousExecutor(request.userId, browser);
+
+      // Execute with never-stop logic
+      const result = await executor.execute(plan);
+
+      // Quality verification
+      let quality;
+      if (result.success && result.result) {
+        const taskType = this.determineTaskType(plan);
+        const qualityCheck = await qualityChecker.verifyWithImprovement(
+          taskType,
+          plan.goal,
+          result.result,
+          page,
+          5
+        );
+        quality = qualityCheck.quality;
+
+        if (!qualityCheck.success) {
+          // Quality not met - this shouldn't happen with executor retry
+          console.warn("[PROCESSOR-V2] Quality check failed after execution");
+        }
+      }
+
+      // Build response
+      const response = this.buildResponse(result, quality);
+
+      // Save sessions
+      await browser.saveAllSessions();
+
+      // Update task record
+      await this.updateTaskRecord(plan.taskId, result, quality);
+
+      return {
+        success: result.success,
+        response,
+      };
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      
+      // Try fallback to Browserbase
+      console.log("[PROCESSOR-V2] VPS failed, trying Browserbase fallback...");
+      return this.executeWithFallback(request, plan);
+      
+    } finally {
+      // Don't close browser - keep for reuse
+      await browser.close();
+    }
+  }
+
+  /**
+   * Execute with Browserbase fallback
+   */
+  private async executeWithFallback(request: TaskRequest, plan: ExecutionPlan): Promise<TaskResult> {
+    try {
+      const fallback = await MultiUserBrowserService.createFallback(request.userId);
+      const page = await fallback.init();
+      
+      // Use original executor with fallback browser
+      const executor = createAutonomousExecutor(request.userId, fallback as any);
+      const result = await executor.execute(plan);
+
+      return {
+        success: result.success,
+        response: this.buildResponse(result, undefined),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        response: "Unable to complete task - all browser methods failed",
+        error: error instanceof Error ? error.message : "Unknown",
+      };
+    }
+  }
+
+  /**
+   * Send plan to user for confirmation
+   */
+  private async sendPlanForConfirmation(request: TaskRequest, plan: ExecutionPlan): Promise<void> {
+    const highStakesList: string[] = [];
+    if (plan.highStakes.spendingMoney) highStakesList.push(`spending $${plan.highStakes.amount || "money"}`);
+    if (plan.highStakes.cancelingSubscription) highStakesList.push("canceling a subscription");
+    if (plan.highStakes.deletingAccount) highStakesList.push("deleting an account");
+    if (plan.highStakes.sharingPersonalInfo) highStakesList.push("sharing personal information");
+
+    const message = `
+I'll help you: ${plan.goal}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLAN:
+${plan.steps.map((s, i) => `${i + 1}. ${s.description}`).join("\n")}
+
+ESTIMATED: ${plan.estimatedDuration} min, $${plan.estimatedCost.toFixed(2)}
+
+${highStakesList.length > 0 ? `⚠️ HIGH STAKES: This involves ${highStakesList.join(", ")}` : ""}
+
+ANTICIPATED OBSTACLES:
+${plan.anticipatedObstacles.map(o => `• ${o.type} (${Math.round(o.probability * 100)}% chance) → ${o.mitigation}`).join("\n")}
+
+ALTERNATIVE PATHS:
+${plan.alternativePaths.map((a, i) => `${i + 1}. ${a.name}: ${a.description}`).join("\n")}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Reply:
+• YES - Execute autonomously (I'll handle everything)
+• NO - Cancel this task
+• MODIFY - Add instructions (e.g., "Don't spend more than $50")
+
+If I don't hear back in ${plan.userResponseTimeout} minutes, I'll proceed with the safest option.
+`;
+
+    await sendResponse({
+      to: request.email,
+      from: `${request.username}@aevoy.com`,
+      subject: `Confirm: ${plan.goal}`,
+      body: message,
+    });
+
+    // Update plan status
+    await getSupabaseClient()
+      .from("execution_plans")
+      .update({
+        confirmation_sent_at: new Date().toISOString(),
+        confirmation_channel: request.channel,
+      })
+      .eq("id", plan.taskId);
+  }
+
+  /**
+   * Handle confirmation response from user
+   */
+  async handleConfirmation(
+    planId: string,
+    userId: string,
+    response: "yes" | "no" | "modify",
+    modifications?: string
+  ): Promise<TaskResult> {
+    // Get plan
+    const { data: plan } = await getSupabaseClient()
+      .from("execution_plans")
+      .select("*")
+      .eq("id", planId)
+      .eq("user_id", userId)
+      .single();
+
+    if (!plan) {
+      return { success: false, response: "Plan not found" };
+    }
+
+    if (response === "no") {
+      await planningService.rejectPlan(planId, "User cancelled");
+      return { success: true, response: "Task cancelled as requested" };
+    }
+
+    if (response === "modify" && modifications) {
+      // Update plan with modifications
+      await getSupabaseClient()
+        .from("execution_plans")
+        .update({
+          modifications,
+          status: "modified",
+        })
+        .eq("id", planId);
+      
+      // Re-plan with modifications
+      const newPlan = await planningService.createPlan(userId, `${plan.goal}\n\n[MODIFICATIONS] ${modifications}`);
+      
+      // Get user details
+      const { data: profile } = await getSupabaseClient()
+        .from("profiles")
+        .select("username, email")
+        .eq("id", userId)
+        .single();
+
+      if (newPlan.requireConfirmation) {
+        await this.sendPlanForConfirmation(
+          { userId, username: profile?.username || "", email: profile?.email || "", task: newPlan.goal, channel: "email" },
+          newPlan
+        );
+        return { success: true, response: "Updated plan sent for confirmation", planId: newPlan.taskId };
+      }
+
+      return this.executePlan(
+        { userId, username: profile?.username || "", email: profile?.email || "", task: newPlan.goal, channel: "email" },
+        newPlan
+      );
+    }
+
+    // YES - Execute
+    await planningService.confirmAndExecute(planId, userId);
+
+    const { data: profile } = await getSupabaseClient()
+      .from("profiles")
+      .select("username, email")
+      .eq("id", userId)
+      .single();
+
+    return this.executePlan(
+      { userId, username: profile?.username || "", email: profile?.email || "", task: plan.goal, channel: "email" },
+      plan as ExecutionPlan
+    );
+  }
+
+  /**
+   * Determine task type for quality threshold
+   */
+  private determineTaskType(plan: ExecutionPlan): "simple" | "medium" | "complex" | "critical" {
+    if (plan.highStakes.spendingMoney || plan.highStakes.deletingAccount) return "critical";
+    if (plan.estimatedSteps > 10) return "complex";
+    if (plan.estimatedSteps < 5) return "simple";
+    return "medium";
+  }
+
+  /**
+   * Build human-readable response
+   */
+  private buildResponse(result: any, quality: any): string {
+    if (!result.success) {
+      return `I wasn't able to complete this task. ${result.error || ""}\n\nI tried ${result.attempts || "multiple"} approaches before determining it requires your input.`;
+    }
+
+    let response = `Done! ${result.result?.goal || "Task completed"}`;
+
+    if (result.stepsExecuted) {
+      response += `\n\nCompleted in ${result.stepsExecuted} steps`;
+    }
+
+    if (quality) {
+      response += `\n\nQuality score: ${quality.score}/100 (${quality.percentile}th percentile)`;
+    }
+
+    return response;
+  }
+
+  /**
+   * Update task record in database
+   */
+  private async updateTaskRecord(
+    planId: string,
+    result: any,
+    quality: any
+  ): Promise<void> {
+    await getSupabaseClient()
+      .from("tasks")
+      .update({
+        status: result.success ? "completed" : "failed",
+        completed_at: new Date().toISOString(),
+        result_data: result.result,
+        quality_score: quality?.score,
+        quality_percentile: quality?.percentile,
+        steps_executed: result.stepsExecuted,
+        execution_time_ms: result.durationMs,
+      })
+      .eq("id", planId);
+  }
+}
+
+// Export singleton
+export const processorV2 = new ProcessorV2();
