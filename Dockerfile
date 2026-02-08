@@ -1,5 +1,4 @@
 # Aevoy Agent Server — Railway Deployment
-# Build from repo root to get monorepo lockfile
 FROM node:20-slim
 
 # System deps for Playwright chromium (optional, falls back to Browserbase)
@@ -14,31 +13,29 @@ RUN npm install -g pnpm@10
 
 WORKDIR /app
 
-# Copy lockfile + workspace config first for better layer caching
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+# Copy full monorepo structure needed for pnpm workspace install
+COPY package.json pnpm-workspace.yaml ./
+COPY pnpm-lock.yaml* ./
 COPY packages/agent/package.json packages/agent/package.json
 
-# Install only agent dependencies
-RUN pnpm install --filter agent... --frozen-lockfile || pnpm install --filter agent... --no-frozen-lockfile
+# Install deps - try frozen first, fall back to no-frozen
+RUN pnpm install --filter agent... --frozen-lockfile 2>/dev/null || pnpm install --filter agent...
 
-# Copy agent source
+# Copy agent source + config
 COPY packages/agent/ packages/agent/
 
 # Build TypeScript
-RUN pnpm --filter agent build
+WORKDIR /app/packages/agent
+RUN pnpm build
 
 # Create workspaces dir
-RUN mkdir -p packages/agent/workspaces && chmod 777 packages/agent/workspaces
+RUN mkdir -p workspaces && chmod 777 workspaces
 
-WORKDIR /app/packages/agent
-
-# Railway sets PORT env var; agent reads AGENT_PORT
 ENV NODE_ENV=production
 
 EXPOSE 3001
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:${AGENT_PORT:-3001}/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3001}/health || exit 1
 
-# Start script maps Railway's PORT to AGENT_PORT
 CMD ["sh", "-c", "AGENT_PORT=${PORT:-3001} node dist/index.js"]
