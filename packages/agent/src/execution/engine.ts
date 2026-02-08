@@ -431,9 +431,13 @@ export class ExecutionEngine {
     await dismissPopups(this.page).catch(() => {});
 
     // Validate action against intent
+    // For navigate actions, validate the TARGET URL, not current page (which may be about:blank)
+    const validationDomain = step.action === 'navigate' && step.params?.url
+      ? step.params.url as string
+      : this.page.url();
     const validation = await this.validator.validate({
       type: step.action,
-      domain: this.page.url(),
+      domain: validationDomain,
       ...step.params as { target?: string; value?: string }
     });
 
