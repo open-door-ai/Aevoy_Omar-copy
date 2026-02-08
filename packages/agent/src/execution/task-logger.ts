@@ -2,7 +2,7 @@
  * Task Logger
  *
  * Logs every execution step to task_logs for audit trail and debugging.
- * Called after EVERY action (click, fill, navigate, select, submit, login).
+ * Table schema: id (uuid), task_id (uuid), step (text), status (text), details (jsonb), created_at
  */
 
 import { getSupabaseClient } from '../utils/supabase.js';
@@ -20,12 +20,13 @@ export async function logTaskStep(
   durationMs?: number,
   metadata?: Record<string, unknown>
 ): Promise<void> {
+  if (!taskId) return; // Skip if no taskId
   try {
     await getSupabaseClient().from('task_logs').insert({
       task_id: taskId,
-      level: success ? 'info' : 'error',
-      message: `${actionType}: ${target} [${methodUsed}] ${success ? 'OK' : 'FAILED'}${error ? ': ' + error : ''}`,
-      metadata: { stepNumber, actionType, target, methodUsed, success, screenshotUrl, durationMs, ...metadata }
+      step: `${actionType}: ${target}`,
+      status: success ? 'ok' : 'failed',
+      details: { stepNumber, methodUsed, success, error, screenshotUrl, durationMs, userId, ...metadata }
     });
   } catch (e) {
     console.error('[TASK-LOGGER] Failed to log step:', e);

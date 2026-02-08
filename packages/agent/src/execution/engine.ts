@@ -63,7 +63,10 @@ export class ExecutionEngine {
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
-    this.useStagehand = !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
+    // Browserbase navigation consistently fails (0 proxyBytes, CDP evaluations work but goto doesn't).
+    // Use local Playwright until Browserbase issue is resolved. Set FORCE_LOCAL_BROWSER=false to re-enable.
+    const forceLocal = process.env.FORCE_LOCAL_BROWSER !== 'false';
+    this.useStagehand = !forceLocal && !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
   }
 
   async initialize(userId?: string, domain?: string, taskId?: string): Promise<void> {
