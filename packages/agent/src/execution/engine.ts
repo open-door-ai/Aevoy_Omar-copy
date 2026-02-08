@@ -57,6 +57,8 @@ export class ExecutionEngine {
   private useStagehand: boolean;
   private userId?: string;
   private domain?: string;
+  private isCloud = false;  // Whether currently using Browserbase (vs local Playwright)
+  private taskId?: string;
 
   constructor(intent: LockedIntent) {
     this.intent = intent;
@@ -64,9 +66,10 @@ export class ExecutionEngine {
     this.useStagehand = !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
   }
 
-  async initialize(userId?: string, domain?: string): Promise<void> {
+  async initialize(userId?: string, domain?: string, taskId?: string): Promise<void> {
     this.userId = userId;
     this.domain = domain;
+    this.taskId = taskId;
 
     if (this.useStagehand) {
       // Retry Browserbase with backoff when hitting concurrent session limits
@@ -89,6 +92,7 @@ export class ExecutionEngine {
           // Verify page is responsive
           try {
             await this.page.evaluate(() => document.readyState);
+            this.isCloud = true;
             console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context) — page responsive");
           } catch (pageErr) {
             console.warn("[ENGINE] Stagehand page not responsive after init:", pageErr);
@@ -341,7 +345,7 @@ export class ExecutionEngine {
       if (this.userId) {
         const target = (step.params?.selector || step.params?.url || step.params?.text || step.action) as string;
         logTaskStep(
-          step.params?.taskId as string || '',
+          this.taskId || step.params?.taskId as string || '',
           this.userId,
           stepIndex,
           step.action,
@@ -594,7 +598,7 @@ export class ExecutionEngine {
     }
 
     try {
-      console.log(`[ENGINE] Navigating to: ${url}`);
+      console.log(`[ENGINE] Navigating to: ${url} (${this.isCloud ? 'cloud' : 'local'})`);
       await this.page!.goto(url, {
         waitUntil: 'domcontentloaded',
         timeout: 30000
@@ -614,6 +618,49 @@ export class ExecutionEngine {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown navigation error';
       console.error(`[ENGINE] Navigation failed for ${url}: ${message}`);
+
+      // If cloud browser failed, fall back to local Playwright and retry
+      if (this.isCloud) {
+        console.log(`[ENGINE] Cloud navigation failed, falling back to local Playwright...`);
+        try {
+          // Clean up cloud session
+          if (this.stagehand) {
+            await this.stagehand.close().catch(() => {});
+            this.stagehand = null;
+          }
+          this.isCloud = false;
+
+          // Launch local Playwright
+          const launchArgs = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled',
+          ];
+          this.browser = await chromium.launch({ headless: true, args: launchArgs });
+          this.context = await this.browser.newContext({
+            viewport: { width: 1280, height: 800 },
+            userAgent: getRealisticUserAgent(),
+          });
+          this.page = await this.context.newPage();
+          await applyStealthPatches(this.context);
+
+          // Retry navigation with local browser
+          console.log(`[ENGINE] Retrying navigation with local Playwright: ${url}`);
+          await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await waitForSPAReady(this.page);
+          await checkAndHandleAntiBot(this.page);
+          await handleCaptchaIfPresent(this.page);
+
+          console.log(`[ENGINE] Local navigation successful: ${url}`);
+          return { success: true, action: 'navigate', data: { url }, method: 'local_fallback' };
+        } catch (localError) {
+          const localMsg = localError instanceof Error ? localError.message : 'Unknown error';
+          console.error(`[ENGINE] Local fallback also failed for ${url}: ${localMsg}`);
+          return { success: false, action: 'navigate', error: `Navigation failed (cloud + local): ${localMsg}` };
+        }
+      }
+
       return { success: false, action: 'navigate', error: `Navigation to ${url} failed: ${message}` };
     }
   }

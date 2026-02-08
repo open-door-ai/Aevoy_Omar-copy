@@ -1047,7 +1047,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
       }
 
-      await executionEngine.initialize(userId, domain || undefined);
+      await executionEngine.initialize(userId, domain || undefined, taskId);
       console.log(`[BROWSER] Execution engine initialized`);
 
       // Save Live View URL to task record for takeover feature
