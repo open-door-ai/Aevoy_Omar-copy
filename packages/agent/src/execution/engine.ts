@@ -285,6 +285,8 @@ export class ExecutionEngine {
       throw new Error('Engine not initialized. Call initialize() first.');
     }
 
+    console.log(`[ENGINE] executeSteps called with ${steps.length} steps, taskId=${this.taskId}, userId=${this.userId}, isCloud=${this.isCloud}`);
+
     // Wrap entire execution in a task-level timeout
     try {
       return await withTimeout(
@@ -347,6 +349,7 @@ export class ExecutionEngine {
       // Log every step to task_logs for audit trail
       if (this.userId) {
         const target = (step.params?.selector || step.params?.url || step.params?.text || step.action) as string;
+        console.log(`[ENGINE] Step ${stepIndex} result: action=${step.action}, success=${result.success}, error=${result.error || 'none'}, taskId=${this.taskId}, duration=${stepDuration}ms`);
         logTaskStep(
           this.taskId || step.params?.taskId as string || '',
           this.userId,
@@ -359,7 +362,11 @@ export class ExecutionEngine {
           result.error,
           stepDuration,
           { params: step.params }
-        ).catch(() => {}); // fire-and-forget
+        ).catch((logErr) => {
+          console.error('[ENGINE] logTaskStep rejected:', logErr);
+        });
+      } else {
+        console.warn(`[ENGINE] Skipping step log: no userId set`);
       }
 
       this.results.push(result);

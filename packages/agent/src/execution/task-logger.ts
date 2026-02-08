@@ -20,15 +20,23 @@ export async function logTaskStep(
   durationMs?: number,
   metadata?: Record<string, unknown>
 ): Promise<void> {
-  if (!taskId) return; // Skip if no taskId
+  if (!taskId) {
+    console.warn('[TASK-LOGGER] Skipping log: no taskId');
+    return;
+  }
   try {
-    await getSupabaseClient().from('task_logs').insert({
+    // Truncate screenshot URL to avoid huge payloads
+    const truncatedScreenshot = screenshotUrl ? screenshotUrl.substring(0, 200) : undefined;
+    const { error: dbError } = await getSupabaseClient().from('task_logs').insert({
       task_id: taskId,
       step: `${actionType}: ${target}`,
       status: success ? 'ok' : 'failed',
-      details: { stepNumber, methodUsed, success, error, screenshotUrl, durationMs, userId, ...metadata }
+      details: { stepNumber, methodUsed, success, error, screenshotUrl: truncatedScreenshot, durationMs, userId, ...metadata }
     });
+    if (dbError) {
+      console.error('[TASK-LOGGER] DB insert error:', dbError.message, dbError.code);
+    }
   } catch (e) {
-    console.error('[TASK-LOGGER] Failed to log step:', e);
+    console.error('[TASK-LOGGER] Exception:', e);
   }
 }
