@@ -36,27 +36,27 @@ const TASK_LIMITS: Record<string, { maxDuration: number; maxActions: number }> =
 
 const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] }> = {
   research: {
-    allowed: ['navigate', 'scroll', 'screenshot', 'extract', 'search', 'click'],
+    allowed: ['navigate', 'scroll', 'screenshot', 'extract', 'search', 'click', 'browse', 'remember', 'wait'],
     forbidden: ['fill', 'submit', 'login', 'payment']
   },
   booking: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'screenshot', 'extract', 'login'],
+    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'screenshot', 'extract', 'login', 'browse', 'remember', 'wait', 'search'],
     forbidden: ['payment', 'login_new_account']
   },
   form: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'upload', 'screenshot'],
+    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'upload', 'screenshot', 'browse', 'remember', 'wait', 'extract'],
     forbidden: ['payment']
   },
   shopping: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'screenshot', 'extract'],
+    allowed: ['navigate', 'click', 'fill', 'select', 'screenshot', 'extract', 'browse', 'remember', 'wait', 'search'],
     forbidden: ['payment', 'checkout'] // Require explicit approval for payment
   },
   email: {
-    allowed: ['compose', 'send'],
+    allowed: ['compose', 'send', 'send_email', 'remember'],
     forbidden: ['navigate', 'click', 'fill'] // Can only send email, nothing else
   },
   writing: {
-    allowed: ['generate', 'format', 'send_email'],
+    allowed: ['generate', 'format', 'send_email', 'remember'],
     forbidden: ['navigate', 'click', 'fill', 'payment']
   },
   reminder: {
@@ -64,7 +64,7 @@ const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] 
     forbidden: ['navigate', 'click', 'fill', 'payment']
   },
   general: {
-    allowed: ['navigate', 'click', 'scroll', 'screenshot', 'extract', 'search', 'remember', 'browse'],
+    allowed: ['navigate', 'click', 'scroll', 'screenshot', 'extract', 'search', 'remember', 'browse', 'wait'],
     forbidden: ['fill', 'submit', 'payment', 'login']
   }
 };
