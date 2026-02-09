@@ -71,7 +71,7 @@ import { startInboxPoller } from "./services/inbox-poller.js";
 import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE } from "./services/twilio.js";
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
-import type { TaskRequest } from "./types/index.js";
+import type { TaskRequest, TaskResult } from "./types/index.js";
 import skillRoutes from "./routes/skills.js";
 
 import crypto from "crypto";
@@ -212,9 +212,35 @@ async function validateTwilioSignature(req: express.Request, res: express.Respon
   next();
 }
 
-// ---- Track active tasks for health reporting ----
+// ---- Task concurrency control ----
 
 let activeTasks = 0;
+let activeBrowserTasks = 0;
+const MAX_CONCURRENT_TASKS = 10;
+const MAX_CONCURRENT_BROWSER_TASKS = 3; // Browserbase session limit
+const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
+
+function canProcessTask(needsBrowser: boolean): boolean {
+  if (activeTasks >= MAX_CONCURRENT_TASKS) return false;
+  if (needsBrowser && activeBrowserTasks >= MAX_CONCURRENT_BROWSER_TASKS) return false;
+  return true;
+}
+
+function processQueuedTasks(): void {
+  while (taskQueue.length > 0 && canProcessTask(false)) {
+    const queued = taskQueue.shift();
+    if (queued) {
+      activeTasks++;
+      processTask(queued.task)
+        .then(queued.resolve)
+        .catch(queued.reject)
+        .finally(() => {
+          activeTasks--;
+          processQueuedTasks(); // try next in queue
+        });
+    }
+  }
+}
 
 // ---- Health Check (Enhanced) ----
 
@@ -245,6 +271,10 @@ app.get("/health", async (_req, res) => {
     version: "2.0.0",
     timestamp: new Date().toISOString(),
     activeTasks,
+    activeBrowserTasks,
+    queuedTasks: taskQueue.length,
+    maxConcurrent: MAX_CONCURRENT_TASKS,
+    maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
     subsystems: checks,
   });
 });
