@@ -32,6 +32,7 @@ import { executeInParallel, shouldUseParallelExecution } from "./parallel-execut
 import { getRecentContext, storeTaskContext, formatContextForPrompt } from "./context-carryover.js";
 import { decomposeTask, getExecutionOrder } from "./task-decomposition.js";
 import { recommendSkills, formatSkillRecommendations } from "./autonomous-skill-recommender.js";
+import { findTemplate, recordTemplate, substituteVariables, recordTemplateFailure } from "./template-recorder.js";
 
 /**
  * Send a message back to the user via the same channel they used.
@@ -1051,10 +1052,44 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       plan = null;
     }
 
+    // 5c. TEACH & REPEAT: Check for matching template before AI generation
+    let templateMatch: Awaited<ReturnType<typeof findTemplate>> = null;
+    let usedTemplateId: string | null = null;
+    if (primaryDomain && classification.needsBrowser) {
+      try {
+        templateMatch = await findTemplate(userId, primaryDomain, `${subject} ${body}`);
+        if (templateMatch && templateMatch.rank > 0.1) {
+          console.log(`[TEMPLATE] Matched template "${templateMatch.taskPattern.substring(0, 50)}..." (rank=${templateMatch.rank.toFixed(3)}, used ${templateMatch.successCount} times)`);
+          usedTemplateId = templateMatch.id;
+        } else {
+          templateMatch = null;
+        }
+      } catch {
+        templateMatch = null;
+      }
+    }
+
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
     let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId);
+
+    // If we have a matching template, inject the learned steps as actions
+    if (templateMatch && templateMatch.steps.length > 0) {
+      const substitutedSteps = substituteVariables(
+        templateMatch.steps,
+        templateMatch.variables,
+        `${subject} ${body}`,
+        aiResponse.actions
+      );
+      // Prepend template steps before AI-generated actions
+      const templateActions: import("../types/index.js").Action[] = substitutedSteps.map(s => ({
+        type: s.type as import("../types/index.js").Action["type"],
+        params: s.params,
+      }));
+      console.log(`[TEMPLATE] Injecting ${templateActions.length} learned steps (replacing ${aiResponse.actions.length} AI-planned actions)`);
+      aiResponse.actions = templateActions;
+    }
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
@@ -1764,6 +1799,30 @@ OBSERVE the current page state above, then decide what to do next:
         }
       } catch {
         // Non-critical — learning is bonus
+      }
+    }
+
+    // 12b. TEACH & REPEAT: Record successful browser execution as replayable template
+    if (classification.needsBrowser && actionResults.filter(r => r.success).length >= 2) {
+      try {
+        const templateDomain = classification.domains?.[0] || "unknown";
+        await recordTemplate(
+          userId,
+          templateDomain,
+          `${subject} ${body}`,
+          classification.taskType || "browser",
+          actionResults,
+          elapsedMs,
+          totalCost
+        );
+      } catch {
+        // Non-critical — template recording is bonus
+      }
+
+      // If we used a template and it worked, it's already counted as success.
+      // If we used a template and it failed (needs_review), record the failure.
+      if (usedTemplateId && verificationResult?.passed === false) {
+        await recordTemplateFailure(usedTemplateId);
       }
     }
 
