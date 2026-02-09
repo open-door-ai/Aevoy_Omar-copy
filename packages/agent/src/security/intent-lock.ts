@@ -142,11 +142,17 @@ export function validateAction(
       return false;
     });
 
-    // Allow known redirect domains (CDNs, auth providers, payment processors)
+    // Allow known infrastructure domains (search engines, CDNs, auth providers)
     const knownRedirectDomains = [
+      // Search engines (used by agent's search action)
+      'duckduckgo.com', 'google.com', 'bing.com', 'search.yahoo.com',
+      // Auth providers
       'accounts.google.com', 'login.microsoftonline.com', 'github.com',
-      'appleid.apple.com', 'facebook.com', 'cloudflare.com',
-      'stripe.com', 'paypal.com', 'recaptcha.net', 'gstatic.com',
+      'appleid.apple.com', 'facebook.com',
+      // Infrastructure
+      'cloudflare.com', 'recaptcha.net', 'gstatic.com',
+      // Payment (for shopping tasks)
+      'stripe.com', 'paypal.com',
     ];
     const isKnownRedirect = knownRedirectDomains.some(d => domain === d || domain.endsWith('.' + d));
 
