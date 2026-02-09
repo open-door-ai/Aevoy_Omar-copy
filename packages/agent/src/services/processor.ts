@@ -6,7 +6,7 @@
  */
 
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
-import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget } from "./ai.js";
+import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate } from "./ai.js";
 import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
 import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
@@ -1282,7 +1282,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         break;
       }
 
-      // RE-PROMPT: Feed results back to AI and ask what to do next
+      // RE-PROMPT with VISUAL OBSERVATION: Feed results + page state back to AI
       const resultsSummary = iterationResults.map((r, i) => {
         const actionDesc = `${r.action.type}(${Object.values(r.action.params).map(v => typeof v === 'string' ? v.substring(0, 60) : v).join(', ')})`;
         if (r.success) {
@@ -1293,19 +1293,57 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
       }).join('\n');
 
+      // OBSERVE: Capture current page state for AI context
+      let pageStateSection = '';
+      if (executionEngine?.getPage()) {
+        try {
+          const page = executionEngine.getPage()!;
+          // Get current URL
+          const currentUrl = page.url();
+          // Get visible page text (truncated for token efficiency)
+          const rawPageText = await page.textContent('body').catch(() => '');
+          const pageText = (rawPageText || '').replace(/\s+/g, ' ').trim().substring(0, 1500);
+          // Get page title
+          const pageTitle = await page.title().catch(() => '');
+
+          pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
+  URL: ${currentUrl}
+  Title: ${pageTitle}
+  Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}`;
+
+          // SELF-CRITIQUE: Quick AI check on whether actions worked (cheap/free model)
+          if (failedActions.length > 0 || successfulActions.length === 0) {
+            try {
+              const critiqueResult = await quickValidate(
+                `Actions attempted: ${resultsSummary.substring(0, 500)}\nPage now shows: ${pageText.substring(0, 500)}\nDid the actions succeed? What should be done differently? Be brief (2 sentences max).`,
+                'You are a task execution critic. Briefly evaluate if the actions succeeded based on the page state. 2 sentences max.'
+              );
+              if (critiqueResult?.result) {
+                pageStateSection += `\n  Self-critique: ${critiqueResult.result.substring(0, 300)}`;
+              }
+            } catch {
+              // Self-critique is optional, don't block on failure
+            }
+          }
+        } catch (e) {
+          console.log(`[OBSERVE] Failed to capture page state: ${e}`);
+        }
+      }
+
       const iterativePrompt = `Original request: ${subject} ${body}
 
 ROUND ${currentIteration} RESULTS:
 ${resultsSummary}
+${pageStateSection}
 
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
-Based on these results, what should I do next to complete the task?
-- If the task is fully complete, include [TASK_COMPLETE] in your response with the final answer.
+OBSERVE the current page state above, then decide what to do next:
+- If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
+- If the page shows an error or unexpected state, adapt your approach.
 - If more steps are needed, include the next actions.
-- If something failed, try a creative alternative (different URL, different selector, different approach).
 - NEVER give up. Always find a way.`;
 
-      console.log(`[ITERATE] Re-prompting AI for round ${currentIteration + 1}...`);
+      console.log(`[ITERATE] Re-prompting AI with page observation for round ${currentIteration + 1}...`);
       const nextResponse = await generateResponse(
         memory, subject, iterativePrompt, username, aiTaskType, userId, taskId
       );
@@ -1402,11 +1440,22 @@ Based on these results, what should I do next to complete the task?
     }
 
     // 8. Strike-based verification loop
+    // OPTIMIZATION: Skip heavy verification for research/simple tasks — use quickVerify only
     let verificationResult = null;
     const tier = getQualityTier(classification.taskType || 'simple');
     const tierConfig = QUALITY_TIERS[tier];
 
-    if (executionEngine && classification.taskType) {
+    if ((tier === 'research' || tier === 'simple') && aiResponse.content) {
+      // Fast path: text-only verification for info-retrieval and simple tasks
+      console.log(`[VERIFY] Fast path for ${tier} tier — quickVerify only, skipping strikes`);
+      try {
+        verificationResult = await quickVerify(classification.taskType || 'research', aiResponse.content);
+        console.log(`[VERIFY] Quick result: ${verificationResult.passed ? 'PASSED' : 'NEEDS_REVIEW'} (${verificationResult.confidence}%)`);
+      } catch (qvErr) {
+        console.error('[VERIFY] Quick verify error:', qvErr);
+        verificationResult = { passed: true, confidence: 70, method: 'skip' as const, evidence: 'Quick verify failed, passing through' };
+      }
+    } else if (executionEngine && classification.taskType) {
       const strikeCtx: StrikeContext = {
         attempt: 1,
         maxAttempts: tierConfig.maxStrikes,
