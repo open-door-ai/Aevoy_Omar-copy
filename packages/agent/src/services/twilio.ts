@@ -47,6 +47,48 @@ export function isTwilioConfigured(): boolean {
   return getTwilioConfig() !== null;
 }
 
+// ---- Voice Configuration ----
+
+// Available voices (Twilio + Google Neural + AWS Polly)
+export const AVAILABLE_VOICES = {
+  'Google.en-US-Neural2-H': 'Google Neural (Female, warm — default)',
+  'Google.en-US-Neural2-D': 'Google Neural (Male, authoritative)',
+  'Google.en-US-Neural2-F': 'Google Neural (Female, professional)',
+  'Google.en-US-Neural2-A': 'Google Neural (Male, casual)',
+  'Google.en-US-Neural2-C': 'Google Neural (Female, bright)',
+  'Google.en-US-Neural2-J': 'Google Neural (Male, deep)',
+  'Polly.Matthew-Neural': 'AWS Polly (Male, natural)',
+  'Polly.Joanna-Neural': 'AWS Polly (Female, natural)',
+  'Polly.Stephen-Neural': 'AWS Polly (Male, British)',
+  'Polly.Amy-Neural': 'AWS Polly (Female, British)',
+} as const;
+
+export const DEFAULT_VOICE = 'Google.en-US-Neural2-H';
+
+// Cache voice preferences in memory (refreshed per call)
+const voiceCache = new Map<string, { voice: string; cachedAt: number }>();
+const VOICE_CACHE_TTL = 300000; // 5 minutes
+
+export async function getUserVoice(userId: string): Promise<string> {
+  const cached = voiceCache.get(userId);
+  if (cached && Date.now() - cached.cachedAt < VOICE_CACHE_TTL) {
+    return cached.voice;
+  }
+
+  try {
+    const { data } = await getSupabaseClient()
+      .from('user_settings')
+      .select('voice_preference')
+      .eq('user_id', userId)
+      .single();
+    const voice = data?.voice_preference || DEFAULT_VOICE;
+    voiceCache.set(userId, { voice, cachedAt: Date.now() });
+    return voice;
+  } catch {
+    return DEFAULT_VOICE;
+  }
+}
+
 // ---- Twilio REST API helpers ----
 
 export async function twilioRequest(
@@ -127,17 +169,18 @@ export async function callExternal(
 ): Promise<{ success: boolean; callSid?: string; error?: string }> {
   const config = getTwilioConfig();
   if (!config) return { success: false, error: "Twilio not configured" };
+  const voice = await getUserVoice(userId);
 
   try {
     // Build TwiML that speaks then optionally gathers response
     let twiml = `<Response>
-  <Say voice="Google.en-US-Neural2-F">${escapeXml(message)}</Say>`;
+  <Say voice="${voice}">${escapeXml(message)}</Say>`;
 
     if (gatherAfter) {
       twiml += `
   <Gather input="speech" timeout="10" speechTimeout="auto"
           action="${config.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">I'm listening for your response.</Say>
+    <Say voice="${voice}">I'm listening for your response.</Say>
   </Gather>`;
     }
 
@@ -171,30 +214,32 @@ export async function callExternal(
  * Generate TwiML for incoming voice call.
  * Greets user and starts speech gathering.
  */
-export function generateIncomingCallTwiml(userId: string, userName: string): string {
+export async function generateIncomingCallTwiml(userId: string, userName: string): Promise<string> {
   const config = getTwilioConfig();
+  const voice = await getUserVoice(userId);
   const processUrl = config
     ? `${config.webhookBaseUrl}/webhook/voice/process/${userId}`
     : "/webhook/voice/process/" + userId;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Hello ${escapeXml(userName)}! This is your Aevoy assistant. How can I help you today?</Say>
+  <Say voice="${voice}">Hello ${escapeXml(userName)}! This is your Aevoy assistant. How can I help you today?</Say>
   <Gather input="speech" timeout="10" speechTimeout="auto"
           action="${processUrl}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
-  <Say voice="Google.en-US-Neural2-F">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
 </Response>`;
 }
 
 /**
  * Generate TwiML response after processing a voice command.
  */
-export function generateResponseTwiml(message: string, voice?: string): string {
+export async function generateResponseTwiml(message: string, voiceOverride?: string, userId?: string): Promise<string> {
+  const voice = voiceOverride || (userId ? await getUserVoice(userId) : DEFAULT_VOICE);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice || "Google.en-US-Neural2-F"}">${escapeXml(message)}</Say>
+  <Say voice="${voice}">${escapeXml(message)}</Say>
 </Response>`;
 }
 
@@ -203,7 +248,7 @@ export function generateResponseTwiml(message: string, voice?: string): string {
  */
 function generateSpeechTwiml(text: string, voice?: string): string {
   return `<Response>
-  <Say voice="${voice || "Google.en-US-Neural2-F"}">${escapeXml(text)}</Say>
+  <Say voice="${voice || DEFAULT_VOICE}">${escapeXml(text)}</Say>
 </Response>`;
 }
 
@@ -364,7 +409,7 @@ export async function handleIncomingVoice(
       .single();
 
     if (!profile) {
-      return generateResponseTwiml("Sorry, this number is not associated with an Aevoy account.");
+      return await generateResponseTwiml("Sorry, this number is not associated with an Aevoy account.");
     }
 
     // Check if the caller IS the user (direct call to their AI)
@@ -374,16 +419,16 @@ export async function handleIncomingVoice(
 
     if (callerIsUser) {
       // User calling their own AI — normal assistant mode
-      return generateIncomingCallTwiml(profile.id, profile.username);
+      return await generateIncomingCallTwiml(profile.id, profile.username);
     }
 
     // Someone else is calling the user's Aevoy number (forwarded call)
     // Act as a receptionist / assistant
     console.log(`[TWILIO] Forwarded call for ${profile.username} from ${data.from}`);
-    return generateReceptionistTwiml(profile.id, profile.username, data.from);
+    return await generateReceptionistTwiml(profile.id, profile.username, data.from);
   } catch (error) {
     console.error("[TWILIO] Error handling voice:", error);
-    return generateResponseTwiml("Sorry, an error occurred. Please try again later.");
+    return await generateResponseTwiml("Sorry, an error occurred. Please try again later.");
   }
 }
 
@@ -391,20 +436,21 @@ export async function handleIncomingVoice(
  * Generate TwiML for receptionist mode (answering forwarded calls).
  * Greets caller, takes a message, and sends it to the user.
  */
-function generateReceptionistTwiml(userId: string, userName: string, callerNumber: string): string {
+async function generateReceptionistTwiml(userId: string, userName: string, callerNumber: string): Promise<string> {
   const config = getTwilioConfig();
+  const voice = await getUserVoice(userId);
   const processUrl = config
     ? `${config.webhookBaseUrl}/webhook/voice/message/${userId}?caller=${encodeURIComponent(callerNumber)}`
     : `/webhook/voice/message/${userId}?caller=${encodeURIComponent(callerNumber)}`;
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Hello! You've reached ${escapeXml(userName)}'s assistant. ${escapeXml(userName)} is not available right now, but I can take a message and make sure they get it right away.</Say>
+  <Say voice="${voice}">Hello! You've reached ${escapeXml(userName)}'s assistant. ${escapeXml(userName)} is not available right now, but I can take a message and make sure they get it right away.</Say>
   <Gather input="speech" timeout="15" speechTimeout="auto"
           action="${processUrl}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">Please leave your message after this prompt. What would you like me to tell ${escapeXml(userName)}?</Say>
+    <Say voice="${voice}">Please leave your message after this prompt. What would you like me to tell ${escapeXml(userName)}?</Say>
   </Gather>
-  <Say voice="Google.en-US-Neural2-F">I didn't hear a message. I'll let ${escapeXml(userName)} know you called. Goodbye!</Say>
+  <Say voice="${voice}">I didn't hear a message. I'll let ${escapeXml(userName)} know you called. Goodbye!</Say>
 </Response>`;
 }
 

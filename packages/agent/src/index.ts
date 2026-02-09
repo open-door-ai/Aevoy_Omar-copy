@@ -68,7 +68,7 @@ import rateLimit from "express-rate-limit";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
-import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest } from "./services/twilio.js";
+import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE } from "./services/twilio.js";
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest } from "./types/index.js";
@@ -120,28 +120,28 @@ const twilioLimiter = rateLimit({
 
 // ---- Daily Call Limit Tracker (50 calls/day per user) ----
 
-const dailyCallLimits = new Map<string, { count: number; resetAt: number }>();
-
-function checkDailyCallLimit(userId: string): boolean {
-  const now = Date.now();
-  const userLimit = dailyCallLimits.get(userId);
-
-  if (!userLimit || now > userLimit.resetAt) {
-    // Reset counter (new day)
-    dailyCallLimits.set(userId, {
-      count: 1,
-      resetAt: now + 24 * 60 * 60 * 1000, // 24 hours
+/**
+ * Check and track daily call limit using DB-backed counter.
+ * Persists across restarts (unlike the old in-memory Map).
+ */
+async function checkDailyCallLimit(userId: string): Promise<boolean> {
+  try {
+    const { data } = await getSupabaseClient().rpc('track_voice_call', {
+      p_user_id: userId,
+      p_daily_limit: 50,
     });
-    return true;
+    if (data && typeof data === 'object' && 'allowed' in data) {
+      const result = data as { allowed: boolean; calls_today: number; daily_limit: number };
+      if (!result.allowed) {
+        console.log(`[SECURITY] User ${userId.slice(0, 8)} exceeded daily call limit (${result.calls_today}/${result.daily_limit})`);
+      }
+      return result.allowed;
+    }
+    return true; // Allow on RPC failure
+  } catch (err) {
+    console.error('[CALL-LIMIT] RPC error:', err);
+    return true; // Allow on error (fail open)
   }
-
-  if (userLimit.count >= 50) {
-    console.log(`[SECURITY] User ${userId.slice(0, 8)} exceeded daily call limit (50)`);
-    return false;
-  }
-
-  userLimit.count++;
-  return true;
 }
 
 // ---- Middleware ----
@@ -533,6 +533,7 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 
 app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
   const from = req.body.From || "";
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
@@ -548,13 +549,14 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, an error occurred. Please try again later.</Say>
+  <Say voice="${voice}">Sorry, an error occurred. Please try again later.</Say>
 </Response>`);
   }
 });
 
 app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
   const speechResult = req.body.SpeechResult || "";
 
   console.log(`[TWILIO] Voice command received for user ${userId?.slice(0, 8)}`);
@@ -592,7 +594,7 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, I had trouble processing that. Please try again.</Say>
+  <Say voice="${voice}">Sorry, I had trouble processing that. Please try again.</Say>
 </Response>`);
   }
 });
@@ -601,6 +603,7 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
 
 app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
   const speechResult = req.body.SpeechResult || "";
   const callerNumber = req.query.caller as string || req.body.From || "unknown";
 
@@ -611,7 +614,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Thank you! I've recorded your message and will make sure it's delivered right away. Goodbye!</Say>
+  <Say voice="${voice}">Thank you! I've recorded your message and will make sure it's delivered right away. Goodbye!</Say>
 </Response>`);
 
     // Send message to user via email and SMS
@@ -650,7 +653,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, there was an error. Please try calling back later.</Say>
+  <Say voice="${voice}">Sorry, there was an error. Please try calling back later.</Say>
 </Response>`);
   }
 });
@@ -732,6 +735,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   const callerNumber = req.body.From || "";
   const twilioNumber = req.body.To || "";
   const callSid = req.body.CallSid || "";
+  let voice = DEFAULT_VOICE; // Will be replaced with user's preference once identified
 
   console.log(`[VOICE] Incoming call from ${callerNumber} to ${twilioNumber}`);
 
@@ -764,7 +768,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, I don't recognize this phone number. Please sign up at aevoy dot com first, or call from your registered number.</Say>
+  <Say voice="${voice}">Sorry, I don't recognize this phone number. Please sign up at aevoy dot com first, or call from your registered number.</Say>
   <Hangup/>
 </Response>`);
     }
@@ -772,7 +776,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     const userId = profile.id;
 
     // Check daily call limit (50/day per user)
-    if (!checkDailyCallLimit(userId)) {
+    if (!(await checkDailyCallLimit(userId))) {
       console.log(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit`);
 
       await supabase.from("call_history").insert({
@@ -789,7 +793,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">You've reached your daily call limit of 50 calls. Please try again tomorrow or contact us at aevoy dot com.</Say>
+  <Say voice="${voice}">You've reached your daily call limit of 50 calls. Please try again tomorrow or contact us at aevoy dot com.</Say>
   <Hangup/>
 </Response>`);
     }
@@ -812,12 +816,13 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Your account is temporarily locked due to too many failed PIN attempts. Please try again in 15 minutes, or contact support.</Say>
+  <Say voice="${voice}">Your account is temporarily locked due to too many failed PIN attempts. Please try again in 15 minutes, or contact support.</Say>
   <Hangup/>
 </Response>`);
     }
 
     // Verified caller - route to task handler
+    voice = await getUserVoice(userId);
     console.log(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
 
     await supabase.from("call_history").insert({
@@ -835,19 +840,19 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Hey! What can I help you with?</Say>
+  <Say voice="${voice}">Hey! What can I help you with?</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
-  <Say voice="Google.en-US-Neural2-F">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
 </Response>`);
   } catch (error) {
     console.error("[VOICE] Incoming call error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, something went wrong. Please try again or contact support at aevoy dot com.</Say>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again or contact support at aevoy dot com.</Say>
   <Hangup/>
 </Response>`);
   }
@@ -917,6 +922,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const enteredPin = req.body.Digits || "";
   const callerNumber = req.body.From || "";
+  let voice = DEFAULT_VOICE;
   const callSid = req.body.CallSid || "";
 
   console.log(`[PIN] Verification attempt from ${callerNumber}, entered: ${enteredPin.slice(0, 2)}**`);
@@ -937,10 +943,12 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">No account found for this phone number. Please sign up at aevoy dot com.</Say>
+  <Say voice="${voice}">No account found for this phone number. Please sign up at aevoy dot com.</Say>
   <Hangup/>
 </Response>`);
     }
+
+    voice = await getUserVoice(profile.id);
 
     // PIN verification with backward-compatible hashing
     const storedPin = profile.voice_pin;
@@ -984,9 +992,9 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Incorrect PIN. You have ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.</Say>
+  <Say voice="${voice}">Incorrect PIN. You have ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.</Say>
   <Gather action="${process.env.AGENT_URL}/webhook/voice/pin-verify" numDigits="4" timeout="10">
-    <Say voice="Google.en-US-Neural2-F">Please enter your 4 to 6 digit PIN.</Say>
+    <Say voice="${voice}">Please enter your 4 to 6 digit PIN.</Say>
   </Gather>
   <Hangup/>
 </Response>`);
@@ -1017,19 +1025,19 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">PIN verified. What can I help you with?</Say>
+  <Say voice="${voice}">PIN verified. What can I help you with?</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
-  <Say voice="Google.en-US-Neural2-F">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
 </Response>`);
   } catch (error) {
     console.error("[PIN] Verification error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, something went wrong. Please try again.</Say>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again.</Say>
   <Hangup/>
 </Response>`);
   }
@@ -1039,6 +1047,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
 
 app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
   const from = req.body.From || "";
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
@@ -1049,7 +1058,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
     const supabase = getSupabaseClient();
 
     // Check daily call limit (50/day per user)
-    if (!checkDailyCallLimit(userId)) {
+    if (!(await checkDailyCallLimit(userId))) {
       console.log(`[VOICE-PREMIUM] User ${userId.slice(0, 8)} exceeded daily call limit`);
 
       await supabase.from("call_history").insert({
@@ -1064,7 +1073,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">You've reached your daily call limit of 50 calls. Please try again tomorrow.</Say>
+  <Say voice="${voice}">You've reached your daily call limit of 50 calls. Please try again tomorrow.</Say>
   <Hangup/>
 </Response>`);
     }
@@ -1083,19 +1092,19 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Hey! What can I help you with?</Say>
+  <Say voice="${voice}">Hey! What can I help you with?</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
-  <Say voice="Google.en-US-Neural2-F">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
 </Response>`);
   } catch (error) {
     console.error("[VOICE-PREMIUM] Error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, something went wrong. Please try again.</Say>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again.</Say>
   <Hangup/>
 </Response>`);
   }
@@ -1146,6 +1155,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
 
 app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
   const callType = req.query.type as string || "morning";
   const from = req.body.From || "";
   const to = req.body.To || "";
@@ -1174,19 +1184,19 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">${greeting}</Say>
+  <Say voice="${voice}">${greeting}</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL}/webhook/checkin/response/${userId}?type=${callType}" method="POST">
-    <Say voice="Google.en-US-Neural2-F">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
-  <Say voice="Google.en-US-Neural2-F">I didn't catch that. Thanks for chatting! Have a great day.</Say>
+  <Say voice="${voice}">I didn't catch that. Thanks for chatting! Have a great day.</Say>
 </Response>`);
   } catch (error) {
     console.error("[CHECKIN] Webhook error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, something went wrong with your check-in. Have a great day!</Say>
+  <Say voice="${voice}">Sorry, something went wrong with your check-in. Have a great day!</Say>
   <Hangup/>
 </Response>`);
   }
@@ -1314,6 +1324,7 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
   }
 
   const { userId, phone } = req.body;
+  const voice = userId ? await getUserVoice(userId) : DEFAULT_VOICE;
   if (!userId || !phone) {
     return res.status(400).json({ error: "userId and phone are required" });
   }
@@ -1358,12 +1369,13 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
  */
 app.post("/webhook/voice/onboarding-gather/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
 
   console.log(`[PHONE-VERIFY] Playing gather prompt for user ${userId?.slice(0, 8)}`);
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">
+  <Say voice="${voice}">
     Hi! This is Aevoy verifying your phone number. 
     Press 1 to confirm this is your number, or press 2 if this is not your number.
   </Say>
@@ -1382,6 +1394,7 @@ app.post("/webhook/voice/onboarding-gather/:userId", twilioLimiter, validateTwil
  */
 app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
+  const voice = await getUserVoice(userId);
   const digit = req.body.Digits || "";
   const from = req.body.From || "";
 
@@ -1417,7 +1430,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Thank you! Your phone number is verified. Goodbye!</Say>
+  <Say voice="${voice}">Thank you! Your phone number is verified. Goodbye!</Say>
   <Hangup/>
 </Response>`);
     } else if (digit === "2") {
@@ -1433,7 +1446,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Verification cancelled. Please try again. Goodbye!</Say>
+  <Say voice="${voice}">Verification cancelled. Please try again. Goodbye!</Say>
   <Hangup/>
 </Response>`);
     } else {
@@ -1449,7 +1462,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">No response received. Please try again. Goodbye!</Say>
+  <Say voice="${voice}">No response received. Please try again. Goodbye!</Say>
   <Hangup/>
 </Response>`);
     }
@@ -1458,7 +1471,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Google.en-US-Neural2-F">Sorry, something went wrong. Please try again later. Goodbye!</Say>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again later. Goodbye!</Say>
   <Hangup/>
 </Response>`);
   }
