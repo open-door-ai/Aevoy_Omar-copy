@@ -1130,6 +1130,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       currentIteration++;
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
 
+      // Stream progress to dashboard via DB (fire-and-forget)
+      void Promise.resolve(getSupabaseClient().rpc('update_task_progress', {
+        p_task_id: taskId,
+        p_message: `Round ${currentIteration}: executing ${aiResponse.actions.length} action(s)...`,
+        p_step: globalActionIndex,
+        p_total: globalActionIndex + aiResponse.actions.length,
+        p_iteration: currentIteration,
+      })).catch(() => {});
+
       // Check master timeout
       if (timeoutController.signal.aborted) {
         console.log('[ITERATE] Master timeout reached, stopping');
@@ -1267,6 +1276,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
       // Merge this iteration's results into the master list
       actionResults.push(...iterationResults);
+
+      // Stream progress: round complete
+      const roundSuccesses = iterationResults.filter(r => r.success).length;
+      const totalSuccesses = actionResults.filter(r => r.success).length;
+      void Promise.resolve(getSupabaseClient().rpc('update_task_progress', {
+        p_task_id: taskId,
+        p_message: `Round ${currentIteration} done: ${roundSuccesses}/${iterationResults.length} succeeded`,
+        p_step: globalActionIndex,
+        p_actions: actionResults.length,
+        p_successes: totalSuccesses,
+      })).catch(() => {});
 
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
       if (isTaskComplete) break;

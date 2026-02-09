@@ -21,6 +21,13 @@ interface Task {
   cost_usd: number | null;
   error_message: string | null;
   verification_status: string | null;
+  progress_message: string | null;
+  progress_step: number | null;
+  progress_total: number | null;
+  iteration_count: number | null;
+  action_count: number | null;
+  action_success_count: number | null;
+  live_view_url: string | null;
 }
 
 interface RecentActivityProps {
@@ -236,6 +243,36 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                         </span>
                       )}
                     </div>
+                    {task.status === "processing" && task.progress_message && (
+                      <div className="mt-1.5 space-y-1">
+                        <p className="text-xs text-blue-600 dark:text-blue-400">
+                          {task.progress_message}
+                        </p>
+                        {task.progress_total != null && task.progress_total > 0 && (
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 bg-blue-100 dark:bg-blue-900/40 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                                style={{ width: `${Math.min(100, ((task.progress_step || 0) / task.progress_total) * 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">
+                              {task.action_success_count || 0}/{task.action_count || 0} actions
+                            </span>
+                          </div>
+                        )}
+                        {task.live_view_url && (
+                          <a
+                            href={task.live_view_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-500 hover:underline"
+                          >
+                            Watch live
+                          </a>
+                        )}
+                      </div>
+                    )}
                     {task.error_message && (
                       <p className="text-xs text-red-500 mt-1 truncate">
                         {task.error_message}
