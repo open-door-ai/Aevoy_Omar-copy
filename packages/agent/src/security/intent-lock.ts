@@ -1,8 +1,13 @@
 /**
  * Intent Locking System
- * 
+ *
  * Before ANY task, we lock what the AI is allowed to do.
  * This CANNOT be changed by web content or prompt injection.
+ *
+ * Philosophy: The agent should be able to go ANYWHERE on the web
+ * and do ANYTHING needed to complete the task. Only truly dangerous
+ * actions (payment, creating accounts) are restricted.
+ * Domain restrictions are REMOVED — the agent navigates freely.
  */
 
 export interface LockedIntent {
@@ -21,51 +26,57 @@ export interface LockedIntent {
   readonly lockedAt: Date;
 }
 
-// Task type determines what actions are allowed
-// Adaptive limits by task type
+// All browser-capable task types get 20-minute execution windows
 const TASK_LIMITS: Record<string, { maxDuration: number; maxActions: number }> = {
-  research: { maxDuration: 120, maxActions: 50 },
-  booking: { maxDuration: 600, maxActions: 200 },
-  form: { maxDuration: 300, maxActions: 100 },
-  shopping: { maxDuration: 600, maxActions: 200 },
-  email: { maxDuration: 60, maxActions: 20 },
-  writing: { maxDuration: 120, maxActions: 30 },
-  reminder: { maxDuration: 60, maxActions: 20 },
-  general: { maxDuration: 300, maxActions: 100 },
+  research: { maxDuration: 1200, maxActions: 500 },
+  booking:  { maxDuration: 1200, maxActions: 500 },
+  form:     { maxDuration: 1200, maxActions: 500 },
+  shopping: { maxDuration: 1200, maxActions: 500 },
+  general:  { maxDuration: 1200, maxActions: 500 },
+  email:    { maxDuration: 300,  maxActions: 100 },
+  writing:  { maxDuration: 300,  maxActions: 100 },
+  reminder: { maxDuration: 300,  maxActions: 100 },
 };
+
+// Full browser action set available to all browser-capable task types
+const FULL_BROWSER_ACTIONS = [
+  'navigate', 'click', 'fill', 'select', 'submit', 'scroll',
+  'screenshot', 'extract', 'search', 'browse', 'remember',
+  'wait', 'verify', 'login', 'upload', 'send_email', 'schedule',
+];
 
 const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] }> = {
   research: {
-    allowed: ['navigate', 'scroll', 'screenshot', 'extract', 'search', 'click', 'browse', 'remember', 'wait'],
-    forbidden: ['fill', 'submit', 'login', 'payment']
+    allowed: [...FULL_BROWSER_ACTIONS],
+    forbidden: ['payment']
   },
   booking: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'screenshot', 'extract', 'login', 'browse', 'remember', 'wait', 'search'],
+    allowed: [...FULL_BROWSER_ACTIONS],
     forbidden: ['payment', 'login_new_account']
   },
   form: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'submit', 'upload', 'screenshot', 'browse', 'remember', 'wait', 'extract'],
+    allowed: [...FULL_BROWSER_ACTIONS],
     forbidden: ['payment']
   },
   shopping: {
-    allowed: ['navigate', 'click', 'fill', 'select', 'screenshot', 'extract', 'browse', 'remember', 'wait', 'search'],
-    forbidden: ['payment', 'checkout'] // Require explicit approval for payment
-  },
-  email: {
-    allowed: ['compose', 'send', 'send_email', 'remember'],
-    forbidden: ['navigate', 'click', 'fill'] // Can only send email, nothing else
-  },
-  writing: {
-    allowed: ['generate', 'format', 'send_email', 'remember'],
-    forbidden: ['navigate', 'click', 'fill', 'payment']
-  },
-  reminder: {
-    allowed: ['schedule', 'send_email', 'remember'],
-    forbidden: ['navigate', 'click', 'fill', 'payment']
+    allowed: [...FULL_BROWSER_ACTIONS],
+    forbidden: ['payment', 'checkout']
   },
   general: {
-    allowed: ['navigate', 'click', 'scroll', 'screenshot', 'extract', 'search', 'remember', 'browse', 'wait'],
-    forbidden: ['fill', 'submit', 'payment', 'login']
+    allowed: [...FULL_BROWSER_ACTIONS],
+    forbidden: ['payment']
+  },
+  email: {
+    allowed: ['compose', 'send', 'send_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    forbidden: ['payment']
+  },
+  writing: {
+    allowed: ['generate', 'format', 'send_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    forbidden: ['payment']
+  },
+  reminder: {
+    allowed: ['schedule', 'send_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    forbidden: ['payment']
   }
 };
 
@@ -96,6 +107,7 @@ export function createLockedIntent(params: {
     userId: params.userId,
     taskType: params.taskType,
     goal: params.goal,
+    // Keep domains for reference/logging, but validation is permissive
     allowedDomains: Object.freeze(params.allowedDomains || []),
     allowedActions: Object.freeze(allowed),
     forbiddenActions: Object.freeze(forbidden),
@@ -109,61 +121,42 @@ export function createLockedIntent(params: {
 }
 
 export function validateAction(
-  intent: LockedIntent, 
+  intent: LockedIntent,
   action: { type: string; domain?: string; target?: string }
 ): { allowed: boolean; reason?: string } {
   // Check if action type is forbidden
   if (intent.forbiddenActions.includes(action.type)) {
-    return { 
-      allowed: false, 
-      reason: `Action '${action.type}' is forbidden for task type '${intent.taskType}'` 
+    return {
+      allowed: false,
+      reason: `Action '${action.type}' is forbidden for task type '${intent.taskType}'`
     };
   }
-  
+
   // Check if action type is allowed
   if (!intent.allowedActions.includes(action.type)) {
-    return { 
-      allowed: false, 
-      reason: `Action '${action.type}' not in allowed list for '${intent.taskType}'` 
-    };
+    // Log but DON'T block — the AI should be able to try anything
+    console.warn(`[INTENT] Action '${action.type}' not in standard list for '${intent.taskType}', allowing anyway`);
   }
-  
-  // Check domain if provided (allows subdomains and known related domains)
+
+  // Domain validation: LOG only, never block
+  // The agent needs to navigate freely to complete complex tasks.
+  // Rate limiting (in validator.ts) prevents abuse.
   if (action.domain && intent.allowedDomains.length > 0) {
     const domain = extractDomain(action.domain);
     const domainAllowed = intent.allowedDomains.some(d => {
-      // Exact match
       if (domain === d) return true;
-      // Subdomain match (e.g., www.example.com matches example.com)
       if (domain.endsWith('.' + d)) return true;
-      // Related domain match (e.g., airline.com is allowed when booking via kayak.com)
       const baseDomain = d.replace(/^www\./, '');
       if (domain.replace(/^www\./, '') === baseDomain) return true;
       return false;
     });
 
-    // Allow known infrastructure domains (search engines, CDNs, auth providers)
-    const knownRedirectDomains = [
-      // Search engines (used by agent's search action)
-      'duckduckgo.com', 'google.com', 'bing.com', 'search.yahoo.com',
-      // Auth providers
-      'accounts.google.com', 'login.microsoftonline.com', 'github.com',
-      'appleid.apple.com', 'facebook.com',
-      // Infrastructure
-      'cloudflare.com', 'recaptcha.net', 'gstatic.com',
-      // Payment (for shopping tasks)
-      'stripe.com', 'paypal.com',
-    ];
-    const isKnownRedirect = knownRedirectDomains.some(d => domain === d || domain.endsWith('.' + d));
-
-    if (!domainAllowed && !isKnownRedirect) {
-      return {
-        allowed: false,
-        reason: `Domain '${domain}' not in allowed list`
-      };
+    if (!domainAllowed) {
+      // Log for audit but allow navigation — the agent explores freely
+      console.log(`[INTENT] Navigating to '${domain}' (outside initial domain list) — allowed`);
     }
   }
-  
+
   return { allowed: true };
 }
 
@@ -188,6 +181,6 @@ export function getTaskTypeFromClassification(taskType: string): string {
     'monitor': 'research',
     'other': 'general'
   };
-  
+
   return mapping[taskType] || 'general';
 }

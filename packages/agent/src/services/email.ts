@@ -26,45 +26,60 @@ interface EmailAttachment {
 export async function sendResponse(options: EmailOptions): Promise<boolean> {
   const { to, from, subject, body, attachments } = options;
 
-  try {
-    const htmlBody = formatResponseEmail(body);
-    
-    const emailData: {
-      from: string;
-      to: string;
-      subject: string;
-      html: string;
-      text: string;
-      attachments?: { filename: string; content: Buffer }[];
-    } = {
-      from,
-      to,
-      subject: `Re: ${subject}`,
-      html: htmlBody,
-      text: body,
-    };
+  const maxRetries = 2;
 
-    if (attachments && attachments.length > 0) {
-      emailData.attachments = attachments.map((a) => ({
-        filename: a.filename,
-        content: typeof a.content === "string" 
-          ? Buffer.from(a.content, "base64") 
-          : a.content,
-      }));
-    }
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const htmlBody = formatResponseEmail(body);
 
-    const { error } = await getResendClient().emails.send(emailData);
+      const emailData: {
+        from: string;
+        to: string;
+        subject: string;
+        html: string;
+        text: string;
+        attachments?: { filename: string; content: Buffer }[];
+      } = {
+        from,
+        to,
+        subject: `Re: ${subject}`,
+        html: htmlBody,
+        text: body,
+      };
 
-    if (error) {
-      console.error("Failed to send email:", error);
+      if (attachments && attachments.length > 0) {
+        emailData.attachments = attachments.map((a) => ({
+          filename: a.filename,
+          content: typeof a.content === "string"
+            ? Buffer.from(a.content, "base64")
+            : a.content,
+        }));
+      }
+
+      const { error } = await getResendClient().emails.send(emailData);
+
+      if (error) {
+        console.error(`Failed to send email (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          continue;
+        }
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`Email service error (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        continue;
+      }
+      // Never throw — just return false on final failure
       return false;
     }
-
-    return true;
-  } catch (error) {
-    console.error("Email service error:", error);
-    return false;
   }
+
+  return false;
 }
 
 // HTML-escape to prevent XSS in email output
@@ -169,13 +184,14 @@ export async function sendErrorEmail(
   to: string,
   from: string,
   originalSubject: string,
-  errorMessage: string
+  _errorMessage: string
 ): Promise<boolean> {
-  const body = `I apologize, but I encountered an error while processing your request.
+  // Never expose raw error details to users — log internally only
+  console.error(`[EMAIL] Error for user ${to}: ${_errorMessage}`);
 
-**Error:** ${errorMessage}
+  const body = `I ran into a snag while processing your request. I'm going to try a different approach.
 
-Please try again, or if the issue persists, reach out to support.
+If this keeps happening, feel free to reach out to support or try rephrasing your request.
 
 I'm here to help when you're ready!`;
 

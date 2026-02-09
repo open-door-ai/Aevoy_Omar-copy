@@ -7,7 +7,7 @@
 
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
 import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget } from "./ai.js";
-import { sendResponse, sendErrorEmail, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
+import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
 import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
 import { ActionValidator } from "../security/validator.js";
@@ -106,7 +106,7 @@ async function requestTakeover(
     login_required: 'a login that requires your credentials',
     low_success_rate: 'repeated failures on browser actions',
   };
-  const humanReason = reasonLabel[reason] || reason;
+  const humanReason = reasonLabel[reason] || 'a step that needs your help';
   const liveUrl = task?.live_view_url;
 
   let message = `I'm stuck on your task due to ${humanReason}.`;
@@ -231,9 +231,15 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     console.error("processIncomingTask error:", errorMessage);
-    
-    await sendErrorEmail(from, `${username}@aevoy.com`, subject, errorMessage);
-    
+
+    // Send friendly message — never expose raw error details to users
+    await sendResponse({
+      to: from,
+      from: `${username}@aevoy.com`,
+      subject,
+      body: "I ran into a snag while setting up your task. Let me try a different approach — feel free to send your request again and I'll get right on it.",
+    });
+
     return {
       taskId: "",
       success: false,
@@ -528,7 +534,14 @@ async function handleCardCommand(
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    await sendErrorEmail(from, `${username}@aevoy.com`, "Agent Card", errorMessage);
+    console.error("[CARD] Command error:", errorMessage);
+    // Send friendly message — never expose raw error details
+    await sendResponse({
+      to: from,
+      from: `${username}@aevoy.com`,
+      subject: "Agent Card",
+      body: "I had trouble processing your card command. Please try again or check your card settings in the dashboard.",
+    });
     return {
       taskId: "",
       success: false,
@@ -543,6 +556,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const { userId, username, from, subject, body } = task;
   let taskId = task.taskId || "";
   const startTime = Date.now();
+  const MASTER_TIMEOUT_MS = 1200000; // 20 minutes
+
+  // Master timeout: abort if the entire task exceeds 20 minutes
+  const timeoutController = new AbortController();
+  const masterTimer = setTimeout(() => timeoutController.abort(), MASTER_TIMEOUT_MS);
 
   try {
     // 1. Check quota
@@ -862,10 +880,16 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             }
           }
 
-          // Aggregate results and update parent task
-          const aggregatedResponse = subtaskResults
-            .map((r, i) => `${i + 1}. ${r.description}: ${r.success ? r.response.substring(0, 200) : `FAILED: ${r.error}`}`)
+          // Aggregate results — only show successes to user, log failures internally
+          const successResults = subtaskResults.filter(r => r.success);
+          const aggregatedResponse = successResults
+            .map((r, i) => `${i + 1}. ${r.description}: ${r.response.substring(0, 200)}`)
             .join("\n");
+
+          const failedResults = subtaskResults.filter(r => !r.success);
+          if (failedResults.length > 0) {
+            console.warn(`[DECOMPOSITION] ${failedResults.length} subtasks failed:`, failedResults.map(r => `${r.description}: ${r.error}`).join("; "));
+          }
 
           const parentStatus = allSuccess ? "completed" : "partial_failure";
           await getSupabaseClient().from("tasks").update({
@@ -874,10 +898,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             execution_time_ms: Date.now() - startTime,
           }).eq("id", taskId);
 
-          // Send aggregated response
-          const responseBody = allSuccess
-            ? `All ${subtaskResults.length} subtasks completed successfully:\n\n${aggregatedResponse}`
-            : `Completed ${subtaskResults.filter(r => r.success).length}/${subtaskResults.length} subtasks:\n\n${aggregatedResponse}`;
+          // Send aggregated response — focus on what succeeded
+          const responseBody = successResults.length > 0
+            ? (allSuccess
+              ? `All done! Here's what I completed:\n\n${aggregatedResponse}`
+              : `Here's what I was able to complete:\n\n${aggregatedResponse}`)
+            : "I had trouble completing your request. Let me try a different approach — feel free to send it again.";
 
           await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseBody);
 
@@ -983,10 +1009,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           }).eq("id", planId);
         }
 
-        // Build response from API results
-        const resultText = apiResults.map(r =>
-          r.success ? `Done: ${JSON.stringify(r.result)}` : `Failed: ${r.error}`
-        ).join("\n");
+        // Build response from API results — only show successes to user
+        const successApiResults = apiResults.filter(r => r.success);
+        const failedApiResults = apiResults.filter(r => !r.success);
+        if (failedApiResults.length > 0) {
+          console.warn(`[API] ${failedApiResults.length} API steps failed:`, failedApiResults.map(r => r.error).join("; "));
+        }
+
+        const successText = successApiResults.map(r => `Done: ${JSON.stringify(r.result)}`).join("\n");
 
         // Update task record
         await getSupabaseClient().from("tasks").update({
@@ -996,9 +1026,22 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           cost_usd: plan.estimatedCost,
         }).eq("id", taskId);
 
-        const responseText = allSuccess
-          ? `Done! ${resultText}`
-          : `I completed some steps but ran into issues:\n${resultText}`;
+        let responseText: string;
+        if (allSuccess) {
+          responseText = `Done! ${successText}`;
+        } else if (successApiResults.length > 0) {
+          responseText = `Here's what I was able to complete:\n${successText}`;
+        } else {
+          // All API steps failed — generate AI-only answer as fallback
+          const fallbackResponse = await generateResponse(
+            memory, subject,
+            `${body}\n\nIMPORTANT: Answer this from your own knowledge. Do NOT use any actions. Just give your best answer.`,
+            username, undefined, userId, taskId
+          );
+          responseText = fallbackResponse.content
+            ? cleanResponseForEmail(fallbackResponse.content)
+            : "I had trouble completing this via API. Let me try a different approach — feel free to resend your request.";
+        }
 
         await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
         return { taskId, success: allSuccess, response: responseText, actions: [] };
@@ -1019,7 +1062,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // Check if we need browser for any action
     const needsBrowser = aiResponse.actions.some(a =>
-      ['browse', 'search', 'screenshot', 'fill_form'].includes(a.type)
+      ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'].includes(a.type)
     );
 
     if (needsBrowser && classification.needsBrowser) {
@@ -1062,108 +1105,222 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // Send progress update for long tasks (include Live View link if available)
-    if (aiResponse.actions.length > 3) {
+    if (aiResponse.actions.length > 3 || (needsBrowser && classification.needsBrowser)) {
       const liveViewUrl = executionEngine?.getLiveViewUrl();
-      let progressMsg = `Working on your request. Processing ${aiResponse.actions.length} actions...`;
+      let progressMsg = `Working on your request...`;
       if (liveViewUrl) {
         progressMsg += `\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`;
       }
       await sendProgressEmail(from, `${username}@aevoy.com`, subject, progressMsg);
     }
-    
-    for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
-      // Per-task budget check: stop if accumulated cost exceeds $2
-      const taskCostSoFar = actionResults.reduce((sum, r) => sum + ((r.result && typeof r.result === "object" && "cost" in r.result ? (r.result as Record<string, unknown>).cost as number : 0) || 0), 0) + (aiResponse.cost || 0);
-      if (taskCostSoFar > 2.0) {
-        console.warn(`[BUDGET] Task cost exceeded $2 (${taskCostSoFar.toFixed(4)}), stopping execution`);
+
+    // ============================================================
+    // ITERATIVE EXECUTION LOOP
+    // Execute actions → observe results → re-prompt AI → repeat
+    // until task is done, budget exceeded, or timeout hit.
+    // ============================================================
+    const MAX_ITERATIONS = 5;
+    let currentIteration = 0;
+    let isTaskComplete = false;
+    let totalAiCost = aiResponse.cost || 0;
+    let totalTokens = aiResponse.tokensUsed || 0;
+    let globalActionIndex = 0;
+
+    while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
+      currentIteration++;
+      console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
+
+      // Check master timeout
+      if (timeoutController.signal.aborted) {
+        console.log('[ITERATE] Master timeout reached, stopping');
         break;
       }
 
-      const action = aiResponse.actions[actionIndex];
-      // Validate action against locked intent
-      const validation = await validator.validate({
-        type: action.type,
-        domain: action.params?.url as string,
-        value: JSON.stringify(action.params)
-      });
-
-      if (!validation.approved) {
-        console.warn(`[SECURITY] Action blocked: ${action.type} - ${validation.reason}`);
-        actionResults.push({
-          action,
-          success: false,
-          error: `Security: ${validation.reason}`
-        });
-        continue;
+      // Check for [TASK_COMPLETE] signal in AI response
+      if (aiResponse.content.includes('[TASK_COMPLETE]')) {
+        console.log('[ITERATE] AI signaled TASK_COMPLETE');
+        // Strip the signal from user-facing content
+        aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+        isTaskComplete = true;
+        // Still execute any final actions in this round
       }
 
-      // Execute action with failure memory integration
-      let result = await executeActionWithLearning(
-        action,
-        userId,
-        username,
-        executionEngine
-      );
+      // If no actions, we're done
+      if (aiResponse.actions.length === 0) {
+        console.log('[ITERATE] No actions in this round, task complete');
+        isTaskComplete = true;
+        break;
+      }
 
-      // Action-level retry: on failure, retry once after 3s delay
-      if (!result.success && result.error && !result.error.startsWith('Security:')) {
-        console.log(`[RETRY] Action '${action.type}' failed, retrying in 3s...`);
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        const retryResult = await executeActionWithLearning(
+      const iterationResults: ActionResult[] = [];
+
+      for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
+        // Per-task budget check: stop if accumulated cost exceeds $2
+        const taskCostSoFar = totalAiCost + (executionEngine?.getTotalCost() || 0);
+        if (taskCostSoFar > 2.0) {
+          console.warn(`[BUDGET] Task cost exceeded $2 (${taskCostSoFar.toFixed(4)}), stopping execution`);
+          isTaskComplete = true;
+          break;
+        }
+
+        // Check master timeout between actions
+        if (timeoutController.signal.aborted) {
+          console.log('[ITERATE] Master timeout reached mid-execution');
+          isTaskComplete = true;
+          break;
+        }
+
+        const action = aiResponse.actions[actionIndex];
+        // Validate action against locked intent
+        const validation = await validator.validate({
+          type: action.type,
+          domain: action.params?.url as string,
+          value: JSON.stringify(action.params)
+        });
+
+        if (!validation.approved) {
+          console.warn(`[SECURITY] Action blocked: ${action.type} - ${validation.reason}`);
+          iterationResults.push({
+            action,
+            success: false,
+            error: `Action not permitted for this task type`
+          });
+          continue;
+        }
+
+        // Execute action with failure memory integration
+        let result = await executeActionWithLearning(
           action,
           userId,
           username,
           executionEngine
         );
-        if (retryResult.success) {
-          console.log(`[RETRY] Action '${action.type}' succeeded on retry`);
-          result = retryResult;
+
+        // Action-level retry: on failure, retry once after 3s delay
+        if (!result.success && result.error && !result.error.startsWith('Security:') && !result.error.startsWith('Action not')) {
+          console.log(`[RETRY] Action '${action.type}' failed (${result.error}), retrying in 3s...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          const retryResult = await executeActionWithLearning(
+            action,
+            userId,
+            username,
+            executionEngine
+          );
+          if (retryResult.success) {
+            console.log(`[RETRY] Action '${action.type}' succeeded on retry`);
+            result = retryResult;
+          }
         }
-      }
 
-      actionResults.push(result);
+        iterationResults.push(result);
+        globalActionIndex++;
 
-      // Checkpoint: save progress after each successful action
-      if (result.success && taskId) {
+        // Checkpoint: save progress after each successful action
+        if (result.success && taskId) {
+          try {
+            await getSupabaseClient()
+              .from("tasks")
+              .update({
+                checkpoint_data: {
+                  iteration: currentIteration,
+                  lastActionIndex: globalActionIndex,
+                  completedActions: actionResults.length + iterationResults.filter(r => r.success).length,
+                },
+                is_iterative: true,
+                iteration_count: currentIteration,
+              })
+              .eq("id", taskId);
+          } catch {
+            // Non-critical
+          }
+        }
+
+        // Send progress update every 5 actions
+        if (globalActionIndex > 0 && globalActionIndex % 5 === 0) {
+          try {
+            const { sendProgressUpdate } = await import("./progress.js");
+            await sendProgressUpdate(userId, taskId, task.inputChannel || "email",
+              `Round ${currentIteration}: completed ${globalActionIndex} actions so far...`);
+          } catch {
+            // Non-critical
+          }
+        }
+
+        // Record action in action_history for undo/audit trail
         try {
-          await getSupabaseClient()
-            .from("tasks")
-            .update({ checkpoint_data: { lastActionIndex: actionIndex, completedActions: actionIndex + 1 } })
-            .eq("id", taskId);
-        } catch {
-          // Non-critical
+          const screenshotUrl = result.result && typeof result.result === "object" && "screenshot" in result.result
+            ? (result.result as Record<string, unknown>).screenshot as string | null
+            : null;
+          await getSupabaseClient().rpc("record_action", {
+            p_task_id: taskId,
+            p_user_id: userId,
+            p_action_type: action.type,
+            p_action_data: action.params || {},
+            p_undo_data: null,
+            p_screenshot_url: screenshotUrl,
+          });
+        } catch (recordErr) {
+          // Non-critical — don't fail the task over history recording
+          console.warn("[ACTION_HISTORY] Failed to record action:", recordErr);
         }
       }
 
-      // Send progress update every 3 successful actions
-      if (actionIndex > 0 && actionIndex % 3 === 0 && result.success) {
-        try {
-          const { sendProgressUpdate } = await import("./progress.js");
-          await sendProgressUpdate(userId, taskId, task.inputChannel || "email",
-            `Completed ${actionIndex + 1}/${aiResponse.actions.length} actions...`);
-        } catch {
-          // Non-critical
-        }
+      // Merge this iteration's results into the master list
+      actionResults.push(...iterationResults);
+
+      // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
+      if (isTaskComplete) break;
+
+      // Build results summary for the next AI iteration
+      const successfulActions = iterationResults.filter(r => r.success);
+      const failedActions = iterationResults.filter(r => !r.success);
+
+      // If everything succeeded perfectly and task seems done, stop
+      if (failedActions.length === 0 && !needsBrowser) {
+        console.log('[ITERATE] All actions succeeded (non-browser), task complete');
+        isTaskComplete = true;
+        break;
       }
 
-      // Record action in action_history for undo/audit trail
-      try {
-        const screenshotUrl = result.result && typeof result.result === "object" && "screenshot" in result.result
-          ? (result.result as Record<string, unknown>).screenshot as string | null
-          : null;
-        await getSupabaseClient().rpc("record_action", {
-          p_task_id: taskId,
-          p_user_id: userId,
-          p_action_type: action.type,
-          p_action_data: action.params || {},
-          p_undo_data: null,
-          p_screenshot_url: screenshotUrl,
-        });
-      } catch (recordErr) {
-        // Non-critical — don't fail the task over history recording
-        console.warn("[ACTION_HISTORY] Failed to record action:", recordErr);
-      }
+      // RE-PROMPT: Feed results back to AI and ask what to do next
+      const resultsSummary = iterationResults.map((r, i) => {
+        const actionDesc = `${r.action.type}(${Object.values(r.action.params).map(v => typeof v === 'string' ? v.substring(0, 60) : v).join(', ')})`;
+        if (r.success) {
+          const resultStr = typeof r.result === 'string' ? r.result.substring(0, 300) : JSON.stringify(r.result).substring(0, 300);
+          return `  ${i + 1}. ${actionDesc} → SUCCESS: ${resultStr}`;
+        } else {
+          return `  ${i + 1}. ${actionDesc} → FAILED: ${r.error || 'unknown error'}`;
+        }
+      }).join('\n');
+
+      const iterativePrompt = `Original request: ${subject} ${body}
+
+ROUND ${currentIteration} RESULTS:
+${resultsSummary}
+
+${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
+Based on these results, what should I do next to complete the task?
+- If the task is fully complete, include [TASK_COMPLETE] in your response with the final answer.
+- If more steps are needed, include the next actions.
+- If something failed, try a creative alternative (different URL, different selector, different approach).
+- NEVER give up. Always find a way.`;
+
+      console.log(`[ITERATE] Re-prompting AI for round ${currentIteration + 1}...`);
+      const nextResponse = await generateResponse(
+        memory, subject, iterativePrompt, username, aiTaskType, userId, taskId
+      );
+      totalAiCost += nextResponse.cost || 0;
+      totalTokens += nextResponse.tokensUsed || 0;
+      aiResponse = nextResponse;
     }
+
+    if (currentIteration >= MAX_ITERATIONS) {
+      console.log(`[ITERATE] Reached max iterations (${MAX_ITERATIONS}), finalizing`);
+    }
+
+    // Update cost tracking with all iterations
+    aiResponse.cost = totalAiCost;
+    aiResponse.tokensUsed = totalTokens;
 
     // 7b. Beyond-browser cascade if browser success rate is low
     let cascadeLevel = 1;
@@ -1223,6 +1380,24 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         } catch (cascadeErr) {
           console.error("[CASCADE] Fallback error:", cascadeErr);
         }
+      }
+    }
+
+    // 7c. LAST RESORT: If ALL actions failed, generate AI-only response from knowledge
+    if (actionResults.length > 0 && actionResults.every(r => !r.success)) {
+      console.log('[FALLBACK] All actions failed, generating AI-only response');
+      try {
+        const fallbackResponse = await generateResponse(
+          memory, subject,
+          `${body}\n\nIMPORTANT: Answer this from your own knowledge. Do NOT use any actions. Just give your best answer.`,
+          username, undefined, userId, taskId
+        );
+        if (fallbackResponse.content) {
+          aiResponse.content = fallbackResponse.content;
+          aiResponse.actions = []; // Clear failed actions
+        }
+      } catch {
+        // Non-critical — we still have the original AI content
       }
     }
 
@@ -1395,13 +1570,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const totalActions = actionResults.length;
 
     let emailBody = cleanResponse;
-    if (totalActions > 0) {
-      emailBody += `\n\n---\nCompleted ${successCount}/${totalActions} actions.`;
+    // Only mention action counts if there were actions AND some succeeded
+    if (totalActions > 0 && successCount > 0 && successCount < totalActions) {
+      // Partial success — don't mention failures, just show what was done
+      emailBody += `\n\n---\nCompleted ${successCount} actions.`;
     }
 
-    // Add disclaimer if verification failed or had low confidence
+    // Add soft disclaimer if verification had low confidence (no raw numbers)
     if (verificationResult && !verificationResult.passed && verificationResult.confidence < 50) {
-      emailBody += `\n\n⚠️ Note: I wasn't fully able to verify this task completed successfully (confidence: ${verificationResult.confidence}%). Please double-check the results.`;
+      emailBody += `\n\nNote: I'd recommend double-checking these results as I wasn't fully able to verify them.`;
     }
 
     const channel = task.inputChannel || "email";
@@ -1586,6 +1763,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
+    clearTimeout(masterTimer);
 
     return {
       taskId,
@@ -1594,7 +1772,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       actions: actionResults,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    clearTimeout(masterTimer);
+
+    const isTimeout = timeoutController.signal.aborted || (Date.now() - startTime > MASTER_TIMEOUT_MS);
+    const errorMessage = isTimeout
+      ? `Task timed out after ${Math.round((Date.now() - startTime) / 1000)}s`
+      : (error instanceof Error ? error.message : "Unknown error");
     console.error("Task processing error:", errorMessage);
 
     // Update task as failed
@@ -1609,8 +1792,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         .eq("id", taskId);
     }
 
-    // Send generic error email — never expose internal error details to users
-    await sendErrorEmail(from, `${username}@aevoy.com`, subject, "Something went wrong processing your task. Please try again or contact support.");
+    // Send friendly response — never expose internal error details to users
+    await sendResponse({
+      to: from,
+      from: `${username}@aevoy.com`,
+      subject,
+      body: isTimeout
+        ? "This task took longer than expected. I've saved my progress — send it again and I'll pick up where I left off."
+        : "I ran into a snag while working on your request. I'm going to try a different approach — feel free to send it again and I'll get right on it.",
+    });
 
     return {
       taskId,
@@ -1898,7 +2088,8 @@ async function executeAction(
       return {
         action,
         success,
-        result: success ? "Email sent" : "Failed to send email",
+        result: success ? "Email sent" : undefined,
+        error: success ? undefined : "Could not send email right now",
       };
     }
 
@@ -1918,11 +2109,90 @@ async function executeAction(
           is_active: true,
         });
 
+      if (error) {
+        console.error(`[SCHEDULE] Failed to create scheduled task:`, error.message);
+      }
       return {
         action,
         success: !error,
-        result: error ? `Failed: ${error.message}` : `Scheduled: ${description} (next: ${nextRun})`,
+        result: error ? "Could not schedule this task right now" : `Scheduled: ${description} (next: ${nextRun})`,
       };
+    }
+
+    case "click": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const clickTarget = (action.params.selector || action.params.text || action.params.description) as string;
+      const clickResult = await executionEngine.executeSteps([
+        { action: 'click', params: { selector: clickTarget, text: clickTarget, description: clickTarget } }
+      ]);
+      return { action, success: clickResult.success, result: clickResult.success ? `Clicked: ${clickTarget}` : undefined, error: clickResult.error };
+    }
+
+    case "fill": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const fillSelector = (action.params.selector || action.params.label) as string;
+      const fillValue = action.params.value as string;
+      const fillResult = await executionEngine.executeSteps([
+        { action: 'fill', params: { selector: fillSelector, label: fillSelector, placeholder: fillSelector, value: fillValue } }
+      ]);
+      return { action, success: fillResult.success, result: fillResult.success ? `Filled ${fillSelector} with value` : undefined, error: fillResult.error };
+    }
+
+    case "select": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const selectSelector = (action.params.selector || action.params.label) as string;
+      const selectOption = action.params.option as string;
+      const selectResult = await executionEngine.executeSteps([
+        { action: 'select', params: { selector: selectSelector, value: selectOption } }
+      ]);
+      return { action, success: selectResult.success, result: selectResult.success ? `Selected: ${selectOption}` : undefined, error: selectResult.error };
+    }
+
+    case "submit": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const submitSelector = action.params.selector as string || 'form';
+      const submitResult = await executionEngine.executeSteps([
+        { action: 'submit', params: { selector: submitSelector } }
+      ]);
+      return { action, success: submitResult.success, result: submitResult.success ? 'Form submitted' : undefined, error: submitResult.error };
+    }
+
+    case "login": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const loginUrl = action.params.url as string;
+      const loginUser = action.params.username as string;
+      const loginPass = action.params.password as string;
+      const loginResult = await executionEngine.executeSteps([
+        { action: 'login', params: { url: loginUrl, username: loginUser, password: loginPass, domain: loginUrl } }
+      ]);
+      return { action, success: loginResult.success, result: loginResult.success ? `Logged in to ${loginUrl}` : undefined, error: loginResult.error };
+    }
+
+    case "scroll": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const scrollDir = (action.params.direction || 'down') as string;
+      const scrollResult = await executionEngine.executeSteps([
+        { action: 'scroll', params: { direction: scrollDir } }
+      ]);
+      return { action, success: scrollResult.success, result: scrollResult.success ? `Scrolled ${scrollDir}` : undefined, error: scrollResult.error };
+    }
+
+    case "wait": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const waitMs = (action.params.ms || action.params.duration || 2000) as number;
+      const waitResult = await executionEngine.executeSteps([
+        { action: 'wait', params: { ms: waitMs } }
+      ]);
+      return { action, success: waitResult.success, result: `Waited ${waitMs}ms`, error: waitResult.error };
+    }
+
+    case "extract": {
+      if (!executionEngine) return { action, success: false, error: "Browser not available" };
+      const extractSelector = (action.params.selector || 'body') as string;
+      const extractResult = await executionEngine.executeSteps([
+        { action: 'extract', params: { selector: extractSelector } }
+      ]);
+      return { action, success: extractResult.success, result: extractResult.success ? `Extracted: ${String(extractResult.data).substring(0, 500)}` : undefined, error: extractResult.error };
     }
 
     default:

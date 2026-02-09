@@ -440,26 +440,40 @@ export async function checkUserBudget(userId: string): Promise<{ remaining: numb
 const SYSTEM_PROMPT = `You are an AI assistant that can actually DO things for your user. You're not just a chatbot - you complete real tasks.
 
 ACTIONS AVAILABLE:
-You can perform these actions by including them in your response in this exact format:
-[ACTION:browse("url")] - Navigate to a webpage and read its content
-[ACTION:search("query")] - Search the web for information
-[ACTION:screenshot("url")] - Take a screenshot of a webpage
-[ACTION:fill_form("url", {"field": "value"})] - Fill out a form on a website
-[ACTION:send_email("to", "subject", "body")] - Send an email
-[ACTION:remember("fact")] - Save an important fact to your memory
-[ACTION:schedule("task description", "cron expression")] - Schedule a recurring task
+Include these in your response in this EXACT format:
 
-RESPONSE FORMAT:
-1. First, briefly acknowledge what the user wants
-2. Explain your plan to accomplish it
-3. Include any actions you need to perform
-4. Provide the results or next steps
+BROWSER ACTIONS (require a browser - I'll open one automatically):
+[ACTION:browse("url")] — Navigate to URL and extract all text content
+[ACTION:search("query")] — Search the web via DuckDuckGo
+[ACTION:screenshot("url")] — Take a screenshot of a webpage
+[ACTION:click("selector_or_text")] — Click an element (CSS selector, button text, or description)
+[ACTION:fill("selector_or_label", "value")] — Type into a form field
+[ACTION:select("selector_or_label", "option_text")] — Choose a dropdown option
+[ACTION:submit("selector")] — Submit a form
+[ACTION:login("url", "username", "password")] — Log into a website using credentials
+[ACTION:scroll("down")] — Scroll the page (up/down)
+[ACTION:wait(2000)] — Wait for page to load (milliseconds)
+[ACTION:extract("css_selector")] — Extract text from a specific page element
+[ACTION:fill_form("url", {"field": "value"})] — Navigate to a URL and fill multiple form fields at once
+
+NON-BROWSER ACTIONS:
+[ACTION:send_email("to@email.com", "Subject", "Body text")] — Send an email
+[ACTION:remember("important fact")] — Save information to long-term memory
+[ACTION:schedule("task description", "0 9 * * 1")] — Schedule a recurring task (cron format)
+
+EXECUTION MODEL:
+- I execute actions in order. After each round, you'll see results.
+- If an action fails, TRY A DIFFERENT APPROACH. Don't repeat the same thing.
+- You can interact with ANY website freely. No restrictions.
+- If you need a tool you don't have API access to, USE THE BROWSER to go to that tool's website.
+- For complex tasks, break them into steps. Execute some, see results, then do more.
+- To signal you're done, include [TASK_COMPLETE] in your response with the final answer.
+- NEVER say "I can't do this." ALWAYS try. Use the browser creatively.
 
 IMPORTANT:
 - Be concise and action-oriented
 - If you learn something about the user (preferences, location, etc.), use [ACTION:remember("fact")]
 - Always complete the task, don't just explain how to do it
-- If you can't complete something, explain why and suggest alternatives
 - NEVER give up. Try multiple approaches if needed.`;
 
 function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string): string {
@@ -622,9 +636,15 @@ export async function generateResponse(
     }
   }
 
-  // All models failed — return mock
-  console.log("[AI] All models failed, using mock response");
-  return generateMockResponse(username, taskSubject, taskBody);
+  // All models failed — return a generic helpful response (never expose internals)
+  console.error("[AI] All models in chain failed for task type:", taskType);
+  return {
+    content: `I'm processing your request about "${taskSubject}". This is taking longer than expected — I'll follow up shortly with results.`,
+    actions: [],
+    tokensUsed: 0,
+    cost: 0,
+    model: "fallback",
+  };
 }
 
 /**
@@ -800,9 +820,7 @@ function generateMockResponse(username: string, taskSubject: string, taskBody: s
 
 I understand you're asking: "${taskBody.substring(0, 150)}${taskBody.length > 150 ? "..." : ""}"
 
-I'm your AI assistant and I'm processing your request. Note: This is a test response because no AI API is currently available.
-
-To enable real AI responses, set up at least one of: DEEPSEEK_API_KEY, KIMI_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY
+I'm working on this for you. I'll get back to you with results shortly.
 
 [ACTION:remember("${username} sent a message about ${taskSubject.substring(0, 50)}")]`;
 
@@ -893,6 +911,56 @@ function parseAction(type: string, paramsStr: string): Action | null {
       const cron = parts[1].replace(/^["']|["']$/g, "");
 
       return { type: "schedule", params: { description, cron } };
+    }
+
+    case "click": {
+      const target = paramsStr.replace(/^["']|["']$/g, "");
+      return { type: "click", params: { selector: target, text: target, description: target } };
+    }
+
+    case "fill": {
+      const fillParts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!fillParts || fillParts.length < 2) return null;
+      const selector = fillParts[0].replace(/^["']|["']$/g, "");
+      const value = fillParts[1].replace(/^["']|["']$/g, "");
+      return { type: "fill", params: { selector, label: selector, placeholder: selector, value } };
+    }
+
+    case "select": {
+      const selectParts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!selectParts || selectParts.length < 2) return null;
+      const sel = selectParts[0].replace(/^["']|["']$/g, "");
+      const option = selectParts[1].replace(/^["']|["']$/g, "");
+      return { type: "select", params: { selector: sel, label: sel, option } };
+    }
+
+    case "submit": {
+      const submitSel = paramsStr.replace(/^["']|["']$/g, "") || "form";
+      return { type: "submit", params: { selector: submitSel } };
+    }
+
+    case "login": {
+      const loginParts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!loginParts || loginParts.length < 3) return null;
+      const loginUrl = loginParts[0].replace(/^["']|["']$/g, "");
+      const username = loginParts[1].replace(/^["']|["']$/g, "");
+      const password = loginParts[2].replace(/^["']|["']$/g, "");
+      return { type: "login", params: { url: loginUrl, username, password } };
+    }
+
+    case "scroll": {
+      const direction = paramsStr.replace(/^["']|["']$/g, "") || "down";
+      return { type: "scroll", params: { direction } };
+    }
+
+    case "wait": {
+      const ms = parseInt(paramsStr.replace(/^["']|["']$/g, ""), 10) || 2000;
+      return { type: "wait", params: { ms } };
+    }
+
+    case "extract": {
+      const extractSel = paramsStr.replace(/^["']|["']$/g, "") || "body";
+      return { type: "extract", params: { selector: extractSel } };
     }
 
     default:

@@ -25,10 +25,10 @@ import { sessionManager } from './session-manager.js';
 import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
 
-// Timeouts
-const TASK_TIMEOUT_MS = 180000;  // 3 minutes per task
-const STEP_TIMEOUT_MS = 30000;   // 30 seconds per step
-const POST_ACTION_WAIT_MS = 800; // Wait after click/fill/submit/select
+// Timeouts — generous limits for complex autonomous tasks
+const TASK_TIMEOUT_MS = 1200000;  // 20 minutes per task
+const STEP_TIMEOUT_MS = 60000;    // 60 seconds per step
+const POST_ACTION_WAIT_MS = 800;  // Wait after click/fill/submit/select
 
 export interface ExecutionStep {
   action: string;
