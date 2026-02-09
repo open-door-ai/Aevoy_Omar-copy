@@ -606,9 +606,14 @@ export class ExecutionEngine {
   }
 
   private async handleNavigate(params: Record<string, unknown>): Promise<StepResult> {
-    const url = params.url as string;
+    let url = params.url as string;
     if (!url) {
       return { success: false, action: 'navigate', error: 'URL is required' };
+    }
+
+    // Auto-prepend https:// if no protocol specified
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
     }
 
     try {
