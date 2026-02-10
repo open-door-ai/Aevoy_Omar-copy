@@ -186,7 +186,7 @@ async function processUserInbox(userId: string, config: Omit<UserInboxConfig, "u
       const alreadyProcessed = await isEmailAlreadyProcessed(userId, message.id);
       if (alreadyProcessed) continue;
 
-      await processEmail(userId, message, config);
+      await processEmail(userId, {...message, body: message.body || ""}, config);
     } catch (err) {
       console.error(`[INBOX-MANAGER] Error processing email ${message.id}:`, err);
     }

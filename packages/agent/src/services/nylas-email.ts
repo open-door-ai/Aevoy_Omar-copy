@@ -15,7 +15,7 @@ import { getSupabaseClient } from "../utils/supabase.js";
 const NYLAS_API_KEY = process.env.NYLAS_API_KEY;
 const NYLAS_API_URL = "https://api.us.nylas.com/v3";
 
-interface NylasNylasEmailMessage {
+interface NylasEmailMessage {
   id: string;
   threadId: string;
   from: string;
