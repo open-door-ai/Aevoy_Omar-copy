@@ -134,9 +134,16 @@ interface GmailOAuthTokens {
   gmail_address: string;
 }
 
+interface NylasCredentials {
+  grantId: string;
+  email: string;
+  provider: string;
+}
+
 type EmailCredentials =
   | { type: "imap"; creds: ImapCredentials }
-  | { type: "gmail_oauth"; creds: GmailOAuthTokens };
+  | { type: "gmail_oauth"; creds: GmailOAuthTokens }
+  | { type: "nylas"; creds: NylasCredentials };
 
 // ---- Message Type ----
 
@@ -158,7 +165,28 @@ async function getEmailCredentials(
 ): Promise<EmailCredentials | null> {
   const supabase = getSupabaseClient();
 
-  // Try IMAP first (simpler, no OAuth needed)
+  // Try Nylas first (one-click OAuth, no app passwords needed)
+  const { data: nylasConn } = await supabase
+    .from("oauth_connections")
+    .select("access_token_encrypted, account_email, provider_subtype")
+    .eq("user_id", userId)
+    .eq("provider", "nylas")
+    .eq("status", "active")
+    .single();
+
+  if (nylasConn?.access_token_encrypted) {
+    // Return special type that indicates Nylas should be used
+    return {
+      type: "nylas",
+      creds: {
+        grantId: nylasConn.access_token_encrypted,
+        email: nylasConn.account_email,
+        provider: nylasConn.provider_subtype || "email",
+      },
+    } as unknown as EmailCredentials;
+  }
+
+  // Fallback: IMAP + App Password
   const { data: imapCred } = await supabase
     .from("user_credentials")
     .select("encrypted_data")
@@ -177,7 +205,7 @@ async function getEmailCredentials(
     }
   }
 
-  // Fallback: Gmail OAuth (for users who connected before)
+  // Legacy: Gmail OAuth (for users who connected before)
   const { data: oauthCred } = await supabase
     .from("user_credentials")
     .select("encrypted_data")
@@ -443,6 +471,12 @@ export async function getUnreadMessages(
   const creds = await getEmailCredentials(userId);
   if (!creds) return [];
 
+  if (creds.type === "nylas") {
+    // Use Nylas service (dynamically import to avoid circular deps)
+    const { getUnreadMessages: getNylasUnread } = await import("./nylas-email.js");
+    return getNylasUnread(userId, maxResults);
+  }
+
   if (creds.type === "imap") {
     return getUnreadViaImap(creds.creds, maxResults);
   }
@@ -454,7 +488,7 @@ export async function getInboxSummary(
 ): Promise<{
   connected: boolean;
   email: string;
-  method: "imap" | "oauth";
+  method: "imap" | "oauth" | "nylas";
   provider: string;
   unreadCount: number;
   topSenders: string[];
@@ -476,12 +510,30 @@ export async function getInboxSummary(
     .slice(0, 5)
     .map(([sender]) => sender);
 
+  // Determine email and provider based on connection type
+  let email: string;
+  let provider: string;
+  let method: "imap" | "oauth" | "nylas";
+
+  if (creds.type === "nylas") {
+    email = creds.creds.email;
+    provider = creds.creds.provider;
+    method = "nylas";
+  } else if (creds.type === "imap") {
+    email = creds.creds.email;
+    provider = creds.creds.provider;
+    method = "imap";
+  } else {
+    email = creds.creds.gmail_address;
+    provider = "Gmail";
+    method = "oauth";
+  }
+
   return {
     connected: true,
-    email:
-      creds.type === "imap" ? creds.creds.email : creds.creds.gmail_address,
-    method: creds.type === "imap" ? "imap" : "oauth",
-    provider: creds.type === "imap" ? creds.creds.provider : "Gmail",
+    email,
+    method,
+    provider,
     unreadCount: messages.length,
     topSenders,
     recentSubjects: messages.slice(0, 5).map((m) => m.subject),
@@ -496,6 +548,11 @@ export async function sendViaUserEmail(
 ): Promise<boolean> {
   const creds = await getEmailCredentials(userId);
   if (!creds) return false;
+
+  if (creds.type === "nylas") {
+    const { sendEmail: sendNylasEmail } = await import("./nylas-email.js");
+    return sendNylasEmail(userId, to, subject, body);
+  }
 
   if (creds.type === "imap") {
     return sendViaSmtp(creds.creds, to, subject, body);
@@ -543,6 +600,11 @@ export async function markAsRead(
 ): Promise<boolean> {
   const creds = await getEmailCredentials(userId);
   if (!creds) return false;
+
+  if (creds.type === "nylas") {
+    const { markAsRead: markNylasRead } = await import("./nylas-email.js");
+    return markNylasRead(userId, messageId);
+  }
 
   if (creds.type === "imap") {
     return markAsReadViaImap(creds.creds, messageId);

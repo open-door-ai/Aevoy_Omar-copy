@@ -66,8 +66,10 @@ import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
+import { processorV2 } from "./services/processor-v2.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
+import { startInboxManager } from "./services/inbox-manager.js";
 import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE } from "./services/twilio.js";
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
@@ -316,6 +318,71 @@ if (process.env.NODE_ENV !== "production") {
 
 // ---- Task Endpoints ----
 
+// ---- Task Endpoints ----
+
+/**
+ * Task Processor V2 - With Planning Phase
+ * Uses autonomous execution with plan confirmation for complex tasks
+ */
+app.post("/task/v2", taskLimiter, async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized", message: "Invalid webhook secret" });
+  }
+
+  const { userId, username, from, subject, body, inputChannel } = req.body;
+
+  if (!userId || !username || !from || !body) {
+    return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
+  }
+
+  console.log(`[TASK-V2] Received`, {
+    userId: userId?.slice(0, 8),
+    channel: inputChannel || "email",
+    timestamp: new Date().toISOString(),
+  });
+
+  activeTasks++;
+  
+  try {
+    const result = await processorV2.processTask({
+      userId,
+      username,
+      email: from,
+      task: body,
+      channel: inputChannel || "email",
+    });
+
+    // If plan requires confirmation, return plan details
+    if (result.awaitingConfirmation && result.planId) {
+      res.json({ 
+        status: "awaiting_confirmation", 
+        planId: result.planId,
+        message: "Plan created, awaiting user confirmation",
+        response: result.response,
+      });
+    } else {
+      res.json({ 
+        status: "completed", 
+        success: result.success,
+        response: result.response,
+      });
+    }
+  } catch (error) {
+    console.error("[TASK-V2] Processing failed:", error);
+    res.status(500).json({ 
+      status: "error", 
+      message: error instanceof Error ? error.message : "Processing failed" 
+    });
+  } finally {
+    activeTasks--;
+  }
+});
+
+/**
+ * Legacy Task Processor V1
+ * Fallback for backward compatibility
+ */
 app.post("/task", taskLimiter, async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
   if (!verifyWebhookSecret(secret as string)) {
@@ -372,13 +439,32 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     .finally(() => { activeTasks--; });
 });
 
+/**
+ * Plan Confirmation Endpoint (V2)
+ * Handles YES/NO/MODIFY responses from user
+ */
 app.post("/task/confirm", taskLimiter, async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized", message: "Invalid webhook secret" });
   }
 
-  const { userId, username, from, taskId, replyText } = req.body;
+  const { userId, username, from, taskId, replyText, action, planId } = req.body;
+  
+  // Support both V1 (taskId + replyText) and V2 (planId + action) formats
+  if (planId && action) {
+    // V2 format
+    res.json({ status: "processing", message: "Confirmation received" });
+    
+    activeTasks++;
+    processorV2.handleConfirmation(userId, username, from, planId, action, replyText)
+      .then((result) => console.log(`[V2] Confirmation processed: ${planId}`, { success: result.success }))
+      .catch((error) => console.error("[V2] Confirmation processing failed:", error))
+      .finally(() => { activeTasks--; });
+    return;
+  }
+  
+  // V1 format (legacy)
   if (!userId || !username || !from || !taskId || !replyText) {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
@@ -625,6 +711,31 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Sorry, I had trouble processing that. Please try again.</Say>
+</Response>`);
+  }
+});
+
+// ---- Email Voice Decision Webhook ----
+
+app.post("/webhook/voice/email-decision/:userId/:queueId", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const userId = req.params.userId;
+  const queueId = req.params.queueId;
+  const speechResult = req.body.SpeechResult || "";
+
+  console.log(`[TWILIO] Email decision received for user ${userId?.slice(0, 8)}, queue ${queueId?.slice(0, 8)}`);
+
+  try {
+    const { processEmailVoiceDecision } = await import("./services/twilio.js");
+    const twiml = await processEmailVoiceDecision(userId, queueId, speechResult);
+    
+    res.type("text/xml");
+    res.send(twiml);
+  } catch (error) {
+    console.error("[TWILIO] Email decision error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${DEFAULT_VOICE}">Sorry, I had trouble processing your response. I'll queue this in your dashboard for you to review later.</Say>
 </Response>`);
   }
 });
@@ -1547,6 +1658,7 @@ app.listen(PORT, async () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
 
   startScheduler();
+  startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)
   // startInboxPoller(); // Disabled: Using Cloudflare Email Routing instead
 
   // Seed default skills (idempotent)

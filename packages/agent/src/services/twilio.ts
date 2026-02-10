@@ -670,6 +670,274 @@ async function trackSmsUsage(userId: string, count: number): Promise<void> {
   }
 }
 
+// ---- Natural Voice Conversations for Email Decisions ----
+
+/**
+ * Initiate a natural voice conversation about a complex email.
+ * This creates an interactive call where the AI explains the situation
+ * and the user can respond naturally (yes/no/ask questions).
+ */
+export async function initiateEmailConversation(
+  userId: string,
+  email: {
+    from: string;
+    subject: string;
+    body: string;
+    queueId: string;
+  }
+): Promise<{ success: boolean; callSid?: string; error?: string }> {
+  const config = getTwilioConfig();
+  if (!config) return { success: false, error: "Twilio not configured" };
+
+  const voice = await getUserVoice(userId);
+  const { data: profile } = await getSupabaseClient()
+    .from("profiles")
+    .select("phone_number, username")
+    .eq("id", userId)
+    .single();
+
+  if (!profile?.phone_number) {
+    return { success: false, error: "User has no phone number on file" };
+  }
+
+  // Generate natural opening message
+  const senderName = email.from.split("<")[0].trim();
+  const openingMessage = `Hi ${profile.username}! This is your Aevoy assistant. I received an email from ${senderName} about "${email.subject}". This needs your input. Let me read it to you.`;
+
+  // Build TwiML with conversation flow
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">${escapeXml(openingMessage)}</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">${escapeXml(email.body.substring(0, 500))}</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Here's what I think: This looks like it needs your personal input. Would you like me to draft a response for you to review, or would you prefer to handle this one yourself?</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto"
+          action="${config.webhookBaseUrl}/webhook/voice/email-decision/${userId}/${email.queueId}" 
+          method="POST">
+    <Say voice="${voice}">You can say: draft a response, handle it myself, or give me more details.</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't hear a response. I'll queue this in your dashboard for you to review later. Goodbye!</Say>
+</Response>`;
+
+  try {
+    const params = new URLSearchParams({
+      To: profile.phone_number,
+      From: config.phoneNumber,
+      Twiml: twiml,
+    });
+
+    const response = await twilioRequest("/Calls.json", "POST", params);
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      return { success: false, error: `Twilio error: ${response.status} ${errorData}` };
+    }
+
+    const data = await response.json() as { sid: string };
+    await trackVoiceUsage(userId, 1);
+
+    console.log(`[TWILIO] Email conversation initiated: ${data.sid}`);
+    return { success: true, callSid: data.sid };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Process user's voice response about an email decision.
+ * Uses AI to understand natural language responses (not just button presses).
+ */
+export async function processEmailVoiceDecision(
+  userId: string,
+  queueId: string,
+  speechResult: string
+): Promise<string> {
+  if (!speechResult || speechResult.trim().length === 0) {
+    return generateResponseTwiml("I didn't catch that. Let me queue this for you to review in your dashboard.");
+  }
+
+  const voice = await getUserVoice(userId);
+  const config = getTwilioConfig();
+
+  try {
+    // Use AI to understand the user's intent from natural speech
+    const prompt = `The user received a call about an email that needs their input. They said: "${speechResult}"
+
+Classify their response into exactly one of these categories:
+- "draft": User wants the AI to draft a response
+- "handle_self": User wants to handle it themselves
+- "more_info": User wants more details about the email
+- "approve": User approves the suggested action
+- "reject": User rejects/rejects the suggested action
+- "unclear": Could not determine intent
+
+Respond with JSON only: {"intent": "category", "confidence": 0.0-1.0}`;
+
+    // Use cheap model for classification
+    const groqKey = process.env.GROQ_API_KEY;
+    let intent = "unclear";
+    
+    if (groqKey) {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${groqKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          max_tokens: 100,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content || "";
+        const json = text.match(/\{[\s\S]*\}/)?.[0];
+        if (json) {
+          const parsed = JSON.parse(json);
+          intent = parsed.intent || "unclear";
+        }
+      }
+    }
+
+    // Handle based on intent
+    switch (intent) {
+      case "draft":
+        // Generate draft response
+        await getSupabaseClient()
+          .from("inbox_queue")
+          .update({ 
+            status: "pending",
+            user_decision: "User requested draft via voice call"
+          })
+          .eq("id", queueId);
+        
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Perfect! I'll draft a response and queue it in your dashboard for review. You'll get a notification when it's ready.</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Is there anything else you need help with?</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" action="${config?.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
+    <Say voice="${voice}">I'm listening.</Say>
+  </Gather>
+</Response>`;
+
+      case "handle_self":
+        // User wants to handle it
+        await getSupabaseClient()
+          .from("inbox_queue")
+          .update({ 
+            status: "rejected",
+            user_decision: "User chose to handle via voice call"
+          })
+          .eq("id", queueId);
+        
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">No problem! I'll leave this one for you. It's marked in your dashboard so you know I didn't take action.</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Anything else I can help you with today?</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" action="${config?.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
+    <Say voice="${voice}">I'm listening.</Say>
+  </Gather>
+</Response>`;
+
+      case "more_info":
+        // Read more of the email
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Of course. Let me read you the full email content...</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Would you like me to draft a response now, or handle this yourself?</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto" action="${config?.webhookBaseUrl}/webhook/voice/email-decision/${userId}/${queueId}" method="POST">
+    <Say voice="${voice}">Say: draft a response, or I'll handle it.</Say>
+  </Gather>
+</Response>`;
+
+      case "approve":
+        await getSupabaseClient()
+          .from("inbox_queue")
+          .update({ 
+            status: "approved",
+            executed_at: new Date().toISOString(),
+          })
+          .eq("id", queueId);
+        
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Great! I'll take care of this right away. Done!</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Is there anything else you need?</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" action="${config?.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
+    <Say voice="${voice}">I'm listening.</Say>
+  </Gather>
+</Response>`;
+
+      case "reject":
+        await getSupabaseClient()
+          .from("inbox_queue")
+          .update({ status: "rejected" })
+          .eq("id", queueId);
+        
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Understood. I'll leave this one alone and it's marked as handled.</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Anything else I can help with?</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" action="${config?.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
+    <Say voice="${voice}">I'm listening.</Say>
+  </Gather>
+</Response>`;
+
+      default:
+        // Unclear - ask again
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">I'm not sure I understood. Let me give you the options again:</Say>
+  <Pause length="1"/>
+  <Say voice="${voice}">Would you like me to draft a response for you to review, or would you prefer to handle this email yourself?</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto" action="${config?.webhookBaseUrl}/webhook/voice/email-decision/${userId}/${queueId}" method="POST">
+    <Say voice="${voice}">Say: draft a response, or I'll handle it.</Say>
+  </Gather>
+  <Say voice="${voice}">I'll queue this in your dashboard for you to review later. Goodbye!</Say>
+</Response>`;
+    }
+  } catch (error) {
+    console.error("[TWILIO] Email voice decision error:", error);
+    return generateResponseTwiml("Sorry, I had trouble processing your response. I'll queue this in your dashboard for you to review.");
+  }
+}
+
+/**
+ * Simple wrapper to call user about an email
+ */
+export async function processVoiceCall(
+  userId: string,
+  message: string
+): Promise<void> {
+  const config = getTwilioConfig();
+  if (!config) return;
+
+  const { data: profile } = await getSupabaseClient()
+    .from("profiles")
+    .select("phone_number")
+    .eq("id", userId)
+    .single();
+
+  if (!profile?.phone_number) return;
+
+  await callUser({
+    userId,
+    to: profile.phone_number,
+    message,
+  });
+}
+
 // ---- Helpers ----
 
 function escapeXml(text: string): string {

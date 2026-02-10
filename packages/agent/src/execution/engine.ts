@@ -15,6 +15,7 @@ import { getFailureMemory, recordFailure, learnSolution } from '../memory/failur
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
 import { StagehandService } from '../services/stagehand.js';
+import { MultiUserBrowserService, createMultiUserBrowser } from '../services/multi-user-browser.js';
 import { withTimeout, delay } from '../utils/timeout.js';
 import { applyStealthPatches, getRealisticUserAgent, humanizeInteraction } from './stealth.js';
 import { dismissPopups } from './popup-handler.js';
@@ -54,19 +55,36 @@ export class ExecutionEngine {
   private totalCost = 0;
   private results: StepResult[] = [];
   private stagehand: StagehandService | null = null;
+  private multiUserBrowser: MultiUserBrowserService | null = null;
   private useStagehand: boolean;
+  private useMultiUser: boolean;
   private userId?: string;
   private domain?: string;
   private isCloud = false;  // Whether currently using Browserbase (vs local Playwright)
+  private isMultiUser = false; // Whether using multi-user VPS browser
   private taskId?: string;
 
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
-    // Use Browserbase (cloud) when configured, local Playwright as fallback.
+    
+    // Priority: Multi-User Browser (VPS) > Browserbase > Local Playwright
     // Set FORCE_LOCAL_BROWSER=true env var to force local Playwright only.
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
-    this.useStagehand = !forceLocal && !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
+    
+    // Check for VPS Multi-User Browser (preferred for autonomy)
+    this.useMultiUser = !forceLocal && !!(process.env.VPS_BROWSER_HOST);
+    
+    // Fallback to Browserbase if VPS not configured
+    this.useStagehand = !forceLocal && !this.useMultiUser && !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
+    
+    if (this.useMultiUser) {
+      console.log('[ENGINE] Will use Multi-User Browser (VPS) as primary');
+    } else if (this.useStagehand) {
+      console.log('[ENGINE] Will use Browserbase (cloud) as primary');
+    } else {
+      console.log('[ENGINE] Will use local Playwright only');
+    }
   }
 
   async initialize(userId?: string, domain?: string, taskId?: string): Promise<void> {
@@ -74,6 +92,35 @@ export class ExecutionEngine {
     this.domain = domain;
     this.taskId = taskId;
 
+    // PRIORITY 1: Multi-User Browser (VPS) - Best for autonomy
+    if (this.useMultiUser && userId) {
+      try {
+        console.log('[ENGINE] Initializing Multi-User Browser (VPS)...');
+        this.multiUserBrowser = createMultiUserBrowser(userId);
+        this.page = await this.multiUserBrowser.init();
+        this.isMultiUser = true;
+        this.isCloud = false;
+        
+        // Verify page is responsive
+        try {
+          await this.page.evaluate(() => document.readyState);
+          console.log("[ENGINE] Initialized with Multi-User Browser (VPS) — page responsive");
+          return;
+        } catch (pageErr) {
+          console.warn("[ENGINE] Multi-User Browser page not responsive:", pageErr);
+          this.multiUserBrowser = null;
+          this.page = null;
+          // Fall through to next option
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[ENGINE] Multi-User Browser init failed:`, errorMsg);
+        this.multiUserBrowser = null;
+        // Fall through to next option
+      }
+    }
+
+    // PRIORITY 2: Browserbase (cloud) - Fallback if VPS fails
     if (this.useStagehand) {
       // Retry Browserbase with backoff when hitting concurrent session limits
       const maxRetries = 3;
@@ -172,8 +219,20 @@ export class ExecutionEngine {
   }
 
   async cleanup(): Promise<void> {
-    // Save session before cleanup — only for local Playwright (Browserbase persists via Contexts automatically)
-    if (!this.stagehand && this.userId && this.domain && this.page && this.context) {
+    // Save session before cleanup
+    // Multi-User Browser: saves via its own method
+    // Local Playwright: manual save
+    // Browserbase: auto-saves on close
+    if (this.multiUserBrowser) {
+      try {
+        await this.multiUserBrowser.saveAllSessions();
+        console.log('[ENGINE] Saved Multi-User Browser sessions');
+      } catch (error) {
+        console.warn('[ENGINE] Failed to save Multi-User sessions:', error);
+      }
+      await this.multiUserBrowser.close();
+      this.multiUserBrowser = null;
+    } else if (!this.stagehand && this.userId && this.domain && this.page && this.context) {
       try {
         await sessionManager.saveSession(this.userId, this.domain, this.context, this.page, true);
         console.log(`[ENGINE] Saved session for ${this.domain} before cleanup`);
@@ -186,7 +245,8 @@ export class ExecutionEngine {
       // Browserbase sessions with persist:true auto-save context on close
       await this.stagehand.close();
       this.stagehand = null;
-    } else {
+    } else if (!this.multiUserBrowser) {
+      // Only close local browser if not using multi-user
       if (this.context) await this.context.close().catch(() => {});
       if (this.browser) await this.browser.close().catch(() => {});
     }

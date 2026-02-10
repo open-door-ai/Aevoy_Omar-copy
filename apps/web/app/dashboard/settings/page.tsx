@@ -12,6 +12,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { Switch } from "@/components/ui/switch";
 import { Phone, Mail, Cloud, Zap, RotateCcw } from "lucide-react";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
+import InboxManagementSettings from "@/components/settings/inbox-management";
 
 interface Profile {
   id: string;
@@ -96,6 +97,13 @@ export default function SettingsPage() {
   // Integrations state
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
   const [microsoftStatus, setMicrosoftStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
+  const [nylasStatus, setNylasStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
+
+  // Credential Vault state
+  const [credentials, setCredentials] = useState<Array<{ id: string; site_domain: string; username: string; created_at: string }>>([]);
+  const [loadingCredentials, setLoadingCredentials] = useState(false);
+  const [newCredential, setNewCredential] = useState({ site_domain: "", username: "", password: "" });
+  const [addingCredential, setAddingCredential] = useState(false);
   const [integrationsLoading, setIntegrationsLoading] = useState(true);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
 
@@ -169,16 +177,32 @@ export default function SettingsPage() {
     async function loadIntegrations() {
       setIntegrationsLoading(true);
       try {
-        const [gmailRes, msRes] = await Promise.all([
+        const [gmailRes, msRes, nylasRes] = await Promise.all([
           fetch("/api/integrations/gmail"),
           fetch("/api/integrations/microsoft"),
+          fetch("/api/integrations/nylas"),
         ]);
         if (gmailRes.ok) setGmailStatus(await gmailRes.json());
         if (msRes.ok) setMicrosoftStatus(await msRes.json());
+        if (nylasRes.ok) setNylasStatus(await nylasRes.json());
       } catch (error) {
         console.error("Failed to load integrations:", error);
       }
       setIntegrationsLoading(false);
+    }
+
+    async function loadCredentials() {
+      setLoadingCredentials(true);
+      try {
+        const res = await fetch("/api/credentials");
+        if (res.ok) {
+          const data = await res.json();
+          setCredentials(data.credentials || []);
+        }
+      } catch (error) {
+        console.error("Failed to load credentials:", error);
+      }
+      setLoadingCredentials(false);
     }
 
     loadProfile();
@@ -186,6 +210,7 @@ export default function SettingsPage() {
     loadAgentCard();
     loadPhone();
     loadIntegrations();
+    loadCredentials();
   }, []);
 
   const handleSave = async () => {
@@ -467,13 +492,28 @@ export default function SettingsPage() {
     }
   };
 
-  const handleConnect = async (provider: "gmail" | "microsoft") => {
+  const handleConnect = async (provider: "gmail" | "microsoft" | "nylas", providerHint?: string) => {
     setConnectingProvider(provider);
     setMessage(null);
 
     try {
-      const endpoint = provider === "gmail" ? "/api/integrations/gmail" : "/api/integrations/microsoft";
-      const res = await fetch(endpoint, { method: "POST" });
+      let endpoint: string;
+      let body: Record<string, string> = {};
+      
+      if (provider === "gmail") {
+        endpoint = "/api/integrations/gmail";
+      } else if (provider === "microsoft") {
+        endpoint = "/api/integrations/microsoft";
+      } else {
+        endpoint = "/api/integrations/nylas";
+        if (providerHint) body.provider = providerHint;
+      }
+      
+      const res = await fetch(endpoint, { 
+        method: "POST",
+        headers: body.provider ? { "Content-Type": "application/json" } : undefined,
+        body: body.provider ? JSON.stringify(body) : undefined,
+      });
 
       if (!res.ok) {
         const data = await res.json();
@@ -488,8 +528,9 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDisconnect = async (provider: "gmail" | "microsoft") => {
-    if (!confirm(`Disconnect ${provider === "gmail" ? "Google" : "Microsoft"}? Your AI will no longer be able to access this account's email, calendar, and files.`)) {
+  const handleDisconnect = async (provider: "gmail" | "microsoft" | "nylas") => {
+    const displayName = provider === "gmail" ? "Google" : provider === "microsoft" ? "Microsoft" : "Email";
+    if (!confirm(`Disconnect ${displayName}? Your AI will no longer be able to access this account's email, calendar, and files.`)) {
       return;
     }
 
@@ -497,17 +538,26 @@ export default function SettingsPage() {
     setMessage(null);
 
     try {
-      const endpoint = provider === "gmail" ? "/api/integrations/gmail" : "/api/integrations/microsoft";
+      let endpoint: string;
+      if (provider === "gmail") {
+        endpoint = "/api/integrations/gmail";
+      } else if (provider === "microsoft") {
+        endpoint = "/api/integrations/microsoft";
+      } else {
+        endpoint = "/api/integrations/nylas";
+      }
       const res = await fetch(endpoint, { method: "DELETE" });
 
       if (!res.ok) throw new Error("Failed to disconnect");
 
       if (provider === "gmail") {
         setGmailStatus({ connected: false, email: null, connectedAt: null });
-      } else {
+      } else if (provider === "microsoft") {
         setMicrosoftStatus({ connected: false, email: null, connectedAt: null });
+      } else {
+        setNylasStatus({ connected: false, email: null, connectedAt: null });
       }
-      setMessage({ type: "success", text: `${provider === "gmail" ? "Google" : "Microsoft"} disconnected` });
+      setMessage({ type: "success", text: `${displayName} disconnected` });
     } catch {
       setMessage({ type: "error", text: `Failed to disconnect ${provider}` });
     }
@@ -526,6 +576,11 @@ export default function SettingsPage() {
     if (params.get("microsoft") === "connected") {
       setMessage({ type: "success", text: "Microsoft connected successfully!" });
       setMicrosoftStatus(prev => prev ? { ...prev, connected: true } : { connected: true, email: null, connectedAt: new Date().toISOString() });
+      window.history.replaceState({}, "", "/dashboard/settings");
+    }
+    if (params.get("nylas") === "connected") {
+      setMessage({ type: "success", text: "Email connected successfully!" });
+      setNylasStatus(prev => prev ? { ...prev, connected: true } : { connected: true, email: null, connectedAt: new Date().toISOString() });
       window.history.replaceState({}, "", "/dashboard/settings");
     }
     if (params.get("error")) {
@@ -1209,11 +1264,203 @@ export default function SettingsPage() {
                 )}
               </div>
 
+              {/* Nylas - One-click email (Recommended) */}
+              <div className="flex items-center justify-between p-4 border rounded-lg bg-green-50/30 dark:bg-green-950/10 border-green-200 dark:border-green-900">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium">One-Click Email</p>
+                      <span className="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded-full">Recommended</span>
+                    </div>
+                    {nylasStatus?.connected ? (
+                      <>
+                        <p className="text-sm text-green-600 dark:text-green-400">
+                          Connected{nylasStatus.email ? ` - ${nylasStatus.email}` : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Gmail, Outlook, Yahoo, Calendar
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm text-muted-foreground">
+                          Connect any email with one click
+                        </p>
+                        <p className="text-xs text-green-600 dark:text-green-600">
+                          No app passwords needed • Works with all providers
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {nylasStatus?.connected ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDisconnect("nylas")}
+                    disabled={connectingProvider === "nylas"}
+                  >
+                    {connectingProvider === "nylas" ? "..." : "Disconnect"}
+                  </Button>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => handleConnect("nylas", "google")}
+                      disabled={connectingProvider === "nylas"}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      {connectingProvider === "nylas" ? "Connecting..." : "Connect"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+
               <p className="text-xs text-muted-foreground">
                 Your tokens are encrypted with AES-256-GCM and automatically refreshed. Disconnect anytime.
+                One-Click Email uses Nylas (free for up to 5 users during beta).
               </p>
             </>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Inbox Management */}
+      <InboxManagementSettings />
+
+      {/* Credential Vault - Saved Passwords */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+            <CardTitle>Saved Passwords</CardTitle>
+          </div>
+          <CardDescription>
+            Store credentials for websites your AI needs to access. Encrypted with AES-256-GCM.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Add New Credential */}
+          <div className="bg-slate-50 dark:bg-slate-900 border rounded-lg p-4 space-y-4">
+            <h4 className="font-semibold text-sm">Add New Credential</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <Label htmlFor="siteDomain" className="text-xs">Website (e.g., netflix.com)</Label>
+                <Input
+                  id="siteDomain"
+                  value={newCredential.site_domain}
+                  onChange={(e) => setNewCredential({ ...newCredential, site_domain: e.target.value })}
+                  placeholder="netflix.com"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="siteUsername" className="text-xs">Username / Email</Label>
+                <Input
+                  id="siteUsername"
+                  value={newCredential.username}
+                  onChange={(e) => setNewCredential({ ...newCredential, username: e.target.value })}
+                  placeholder="your@email.com"
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="sitePassword" className="text-xs">Password</Label>
+                <Input
+                  id="sitePassword"
+                  type="password"
+                  value={newCredential.password}
+                  onChange={(e) => setNewCredential({ ...newCredential, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="mt-1"
+                />
+              </div>
+            </div>
+            <Button
+              onClick={async () => {
+                if (!newCredential.site_domain || !newCredential.username || !newCredential.password) {
+                  setMessage({ type: "error", text: "Please fill in all fields" });
+                  return;
+                }
+                setAddingCredential(true);
+                try {
+                  const res = await fetch("/api/credentials", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(newCredential),
+                  });
+                  if (res.ok) {
+                    setMessage({ type: "success", text: "Credential saved successfully" });
+                    setNewCredential({ site_domain: "", username: "", password: "" });
+                    // Refresh list
+                    const credsRes = await fetch("/api/credentials");
+                    const credsData = await credsRes.json();
+                    setCredentials(credsData.credentials || []);
+                  } else {
+                    setMessage({ type: "error", text: "Failed to save credential" });
+                  }
+                } catch {
+                  setMessage({ type: "error", text: "Failed to save credential" });
+                } finally {
+                  setAddingCredential(false);
+                }
+              }}
+              disabled={addingCredential}
+              className="w-full md:w-auto"
+            >
+              {addingCredential ? "Saving..." : "Save Credential"}
+            </Button>
+          </div>
+
+          {/* Saved Credentials List */}
+          <div>
+            <h4 className="font-semibold text-sm mb-3">Your Saved Credentials</h4>
+            {loadingCredentials ? (
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : credentials.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No saved credentials yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {credentials.map((cred) => (
+                  <div key={cred.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-900 rounded-lg">
+                    <div>
+                      <p className="font-medium">{cred.site_domain}</p>
+                      <p className="text-xs text-muted-foreground">{cred.username}</p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`/api/credentials/${cred.id}`, { method: "DELETE" });
+                          if (res.ok) {
+                            setCredentials(credentials.filter((c) => c.id !== cred.id));
+                            setMessage({ type: "success", text: "Credential deleted" });
+                          }
+                        } catch {
+                          setMessage({ type: "error", text: "Failed to delete credential" });
+                        }
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            Your AI will use these credentials to log into websites on your behalf. 
+            Credentials are encrypted and never shared. For 2FA, the AI will ask you for the code.
+          </p>
         </CardContent>
       </Card>
 
