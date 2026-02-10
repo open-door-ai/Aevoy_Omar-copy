@@ -15,7 +15,7 @@ import { getSupabaseClient } from "../utils/supabase.js";
 const NYLAS_API_KEY = process.env.NYLAS_API_KEY;
 const NYLAS_API_URL = "https://api.us.nylas.com/v3";
 
-interface EmailMessage {
+interface NylasNylasEmailMessage {
   id: string;
   threadId: string;
   from: string;
@@ -62,7 +62,7 @@ export async function isNylasConnected(userId: string): Promise<boolean> {
 export async function getUnreadMessages(
   userId: string,
   maxResults: number = 10
-): Promise<EmailMessage[]> {
+): Promise<NylasEmailMessage[]> {
   const grantId = await getNylasGrantId(userId);
   if (!grantId || !NYLAS_API_KEY) return [];
 
@@ -268,7 +268,7 @@ export async function markAsRead(userId: string, messageId: string): Promise<boo
 export async function getMessage(
   userId: string,
   messageId: string
-): Promise<EmailMessage | null> {
+): Promise<NylasEmailMessage | null> {
   const grantId = await getNylasGrantId(userId);
   if (!grantId || !NYLAS_API_KEY) return null;
 

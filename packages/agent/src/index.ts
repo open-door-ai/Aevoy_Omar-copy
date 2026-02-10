@@ -457,7 +457,7 @@ app.post("/task/confirm", taskLimiter, async (req, res) => {
     res.json({ status: "processing", message: "Confirmation received" });
     
     activeTasks++;
-    processorV2.handleConfirmation(userId, username, from, planId, action, replyText)
+    processorV2.handleConfirmation(planId, userId, action as "yes" | "no" | "modify", replyText)
       .then((result) => console.log(`[V2] Confirmation processed: ${planId}`, { success: result.success }))
       .catch((error) => console.error("[V2] Confirmation processing failed:", error))
       .finally(() => { activeTasks--; });

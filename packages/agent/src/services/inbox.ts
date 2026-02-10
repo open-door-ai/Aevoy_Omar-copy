@@ -474,7 +474,7 @@ export async function getUnreadMessages(
   if (creds.type === "nylas") {
     // Use Nylas service (dynamically import to avoid circular deps)
     const { getUnreadMessages: getNylasUnread } = await import("./nylas-email.js");
-    return getNylasUnread(userId, maxResults);
+    return getNylasUnread(userId, maxResults) as unknown as EmailMessage[];
   }
 
   if (creds.type === "imap") {

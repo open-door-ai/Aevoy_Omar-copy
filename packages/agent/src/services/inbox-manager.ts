@@ -157,9 +157,9 @@ async function processUserInbox(userId: string, config: Omit<UserInboxConfig, "u
     id: string;
     threadId: string;
     from: string;
-    to: string[];
+    to: string | string[];
     subject: string;
-    body: string;
+    body?: string;
     snippet: string;
     date: string;
     isUnread: boolean;
@@ -167,9 +167,9 @@ async function processUserInbox(userId: string, config: Omit<UserInboxConfig, "u
 
   if (config.emailProvider === "nylas") {
     const { getUnreadMessages: getNylasMessages } = await import("./nylas-email.js");
-    messages = await getNylasMessages(userId, 20);
+    messages = await getNylasMessages(userId, 20) as typeof messages;
   } else if (config.emailProvider === "imap") {
-    messages = await getUnreadMessages(userId, 20);
+    messages = await getUnreadMessages(userId, 20) as typeof messages;
   } else {
     console.log(`[INBOX-MANAGER] User ${userId} has no email provider connected`);
     return;
