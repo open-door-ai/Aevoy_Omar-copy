@@ -49,15 +49,20 @@ export class MultiUserBrowserService {
    * Initialize shared browser (singleton) or connect to existing
    */
   async init(): Promise<Page> {
-    // Initialize shared browser if not exists
-    if (!sharedBrowser) {
-      await this.initializeSharedBrowser();
-    }
+    try {
+      // Initialize shared browser if not exists
+      if (!sharedBrowser) {
+        await this.initializeSharedBrowser();
+      }
 
-    // Get or create user context
-    this.userContext = await this.getOrCreateUserContext();
-    
-    return this.userContext.page;
+      // Get or create user context
+      this.userContext = await this.getOrCreateUserContext();
+      
+      return this.userContext.page;
+    } catch (error) {
+      console.error("[MULTI-BROWSER] Init failed:", error);
+      throw error;
+    }
   }
 
   /**
@@ -65,8 +70,9 @@ export class MultiUserBrowserService {
    */
   private async initializeSharedBrowser(): Promise<void> {
     console.log("[MULTI-BROWSER] Initializing shared Chrome instance...");
-
-    const browser = await chromium.launch({
+    
+    try {
+      const browser = await chromium.launch({
       headless: process.env.NODE_ENV === "production",
       args: [
         "--disable-dev-shm-usage",
@@ -131,6 +137,10 @@ export class MultiUserBrowserService {
 
     // Start cleanup interval
     this.startCleanupInterval();
+    } catch (error) {
+      console.error("[MULTI-BROWSER] Failed to launch Chrome:", error);
+      throw error;
+    }
   }
 
   /**
