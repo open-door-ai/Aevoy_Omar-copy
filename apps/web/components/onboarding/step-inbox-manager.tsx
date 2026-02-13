@@ -272,10 +272,9 @@ export default function StepInboxManager({
               <GlassCard className="p-4">
                 <div className="flex items-center justify-between mb-3">
                   <Label className="font-medium">AI Signature</Label>
-                  <Switch 
-                    checked={aiSignatureEnabled} 
+                  <Switch
+                    checked={aiSignatureEnabled}
                     onCheckedChange={setAiSignatureEnabled}
-                    size="sm"
                   />
                 </div>
                 {aiSignatureEnabled && (
