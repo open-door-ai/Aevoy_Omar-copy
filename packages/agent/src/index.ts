@@ -75,6 +75,7 @@ import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest, TaskResult } from "./types/index.js";
 import skillRoutes from "./routes/skills.js";
+import { trackBackgroundJob } from "./utils/job-tracker.js";
 
 import crypto from "crypto";
 
@@ -430,15 +431,37 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
-  // Use V2 processor with full quality verification
+  // Use V2 processor with full quality verification + job tracking
   activeTasks++;
-  processorV2.processTask({
+  const taskPromise = processorV2.processTask({
     userId: task.userId,
     username: task.username,
     email: task.from,
     task: `${task.subject || ''}\n\n${task.body || ''}`.trim(),
     channel: (task.inputChannel as "email" | "sms" | "web") || "email",
-  })
+  });
+
+  // Track with 20-minute timeout
+  trackBackgroundJob(
+    crypto.randomUUID(), // Generate taskId for tracking
+    task.userId,
+    taskPromise,
+    () => {
+      // Timeout handler - notify user
+      if (task.from) {
+        import("./services/email.js").then(({ sendErrorEmail }) => {
+          sendErrorEmail(
+            task.from,
+            process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
+            task.subject || 'Your Task',
+            'Task exceeded 20-minute maximum execution time. Please try breaking it into smaller tasks.'
+          ).catch((err) => console.error("Failed to send timeout email:", err));
+        });
+      }
+    }
+  );
+
+  taskPromise
     .then((result) => {
       console.log(`Incoming task processed (V2): ${result.planId || 'unknown'}`, { success: result.success });
 
