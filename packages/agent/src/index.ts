@@ -423,7 +423,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
 
-  console.log(`[TASK] Incoming (V2)`, {
+  console.log(`[TASK] Incoming (FULL PROCESSOR with 30x iterations)`, {
     userId: task.userId?.slice(0, 8),
     channel: task.inputChannel || "email",
     timestamp: new Date().toISOString(),
@@ -431,14 +431,19 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
-  // Use V2 processor with full quality verification + job tracking
+  // CRITICAL FIX: Use ORIGINAL processor (not V2) to get:
+  // - MAX_ITERATIONS = 30 (not just 1 attempt)
+  // - Strategy tracking (prevents dumb retries)
+  // - Outcome verification (REAL goal checking)
+  // - Memory loading (unified memory)
   activeTasks++;
-  const taskPromise = processorV2.processTask({
+  const taskPromise = processTask({
     userId: task.userId,
     username: task.username,
-    email: task.from,
-    task: `${task.subject || ''}\n\n${task.body || ''}`.trim(),
-    channel: (task.inputChannel as "email" | "sms" | "web") || "email",
+    from: task.from,
+    subject: task.subject || '',
+    body: task.body || '',
+    inputChannel: (task.inputChannel as "email" | "sms" | "voice" | "web") || "email",
   });
 
   // Track with 20-minute timeout
