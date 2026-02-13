@@ -16,6 +16,7 @@ import { qualityChecker } from "./quality-checker.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { sendResponse } from "./email.js";
 import { classifyTask, generateResponse } from "./ai.js";
+import { loadMemory } from "./memory.js";
 
 interface TaskRequest {
   userId: string;
@@ -105,16 +106,12 @@ export class ProcessorV2 {
    */
   private async executeAIOnlyTask(request: TaskRequest, goal: string): Promise<TaskResult> {
     try {
-      // Call AI directly for simple tasks (empty memory for fast response)
-      const emptyMemory = {
-        facts: "",
-        recentLogs: "",
-        workingMemories: [],
-        episodicMemories: []
-      };
+      // UNIFIED MEMORY: Load user's memory for ALL channels (email/SMS/voice/web)
+      const memory = await loadMemory(request.userId);
+      console.log(`[PROCESSOR-V2] Loaded memory for ${request.username}`);
 
       const aiResponse = await generateResponse(
-        emptyMemory,
+        memory,
         goal, // subject
         request.task, // body
         request.username,

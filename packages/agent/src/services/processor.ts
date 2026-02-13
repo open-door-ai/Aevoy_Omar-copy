@@ -1163,6 +1163,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let totalTokens = aiResponse.tokensUsed || 0;
     let globalActionIndex = 0;
 
+    // AGI-LEVEL STRATEGY TRACKING: Prevent wasting money on repeated failed attempts
+    // Track what strategies have been tried and force AI to use DIFFERENT approaches
+    const strategiesAttempted = new Map<string, number>(); // strategyHash -> attemptCount
+    const MAX_SAME_STRATEGY_RETRIES = 3;
+
     while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
       currentIteration++;
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
@@ -1260,6 +1265,19 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
         iterationResults.push(result);
         globalActionIndex++;
+
+        // STRATEGY TRACKING: Detect if same approach is being retried (waste of money)
+        if (!result.success) {
+          // Hash the action to detect same strategy
+          const strategyKey = `${action.type}:${action.params?.url || action.params?.selector || action.params?.text || ''}`;
+          const currentAttempts = strategiesAttempted.get(strategyKey) || 0;
+          strategiesAttempted.set(strategyKey, currentAttempts + 1);
+
+          // If we've tried this exact strategy 3 times, FORCE different approach on next iteration
+          if (currentAttempts >= MAX_SAME_STRATEGY_RETRIES - 1) {
+            console.warn(`[STRATEGY] Strategy '${strategyKey}' failed ${currentAttempts + 1} times — will force different approach next round`);
+          }
+        }
 
         // Checkpoint: save progress after each successful action
         if (result.success && taskId) {
@@ -1387,11 +1405,36 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
       }
 
+      // Check for repeated strategies and build enforcement message
+      let strategyEnforcement = '';
+      const repeatedStrategies: string[] = [];
+      for (const [strategy, attempts] of strategiesAttempted.entries()) {
+        if (attempts >= MAX_SAME_STRATEGY_RETRIES) {
+          repeatedStrategies.push(strategy);
+        }
+      }
+
+      if (repeatedStrategies.length > 0) {
+        strategyEnforcement = `\n\nCRITICAL - STRATEGY ENFORCEMENT:
+You have tried these approaches ${MAX_SAME_STRATEGY_RETRIES}+ times and they KEEP FAILING:
+${repeatedStrategies.map(s => `  - ${s}`).join('\n')}
+
+You are FORBIDDEN from trying these again. Use COMPLETELY DIFFERENT methods:
+- Different URL/website/domain
+- Different selector strategy (CSS vs XPath vs text vs aria-label)
+- Different action type (click vs submit vs press Enter)
+- Different data source (API instead of scraping, or vice versa)
+- Different login method (OAuth vs credentials vs magic link)
+
+Be creative. Think outside the box. What would a human do differently?`;
+      }
+
       const iterativePrompt = `Original request: ${subject} ${body}
 
 ROUND ${currentIteration} RESULTS:
 ${resultsSummary}
 ${pageStateSection}
+${strategyEnforcement}
 
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 OBSERVE the current page state above, then decide what to do next:
@@ -1493,6 +1536,59 @@ OBSERVE the current page state above, then decide what to do next:
         }
       } catch {
         // Non-critical — we still have the original AI content
+      }
+    }
+
+    // 7d. AGI-LEVEL OUTCOME VERIFICATION: Verify REAL-WORLD outcome (not just "no errors")
+    // Example: "Make me money" → Check bank balance increased, not just "tried to buy stock"
+    let outcomeVerification = null;
+    if (isTaskComplete && aiResponse.content) {
+      try {
+        const { outcomeVerifier } = await import("./outcome-verifier.js");
+        outcomeVerification = await outcomeVerifier.verifyOutcome(
+          `${subject} ${body}`,
+          {
+            content: aiResponse.content,
+            actions: actionResults,
+            success: actionResults.some(r => r.success)
+          },
+          executionEngine?.getPage() || null,
+          userId
+        );
+
+        console.log(`[OUTCOME] Goal achieved: ${outcomeVerification.goalAchieved} (${outcomeVerification.confidence}% confidence)`);
+        console.log(`[OUTCOME] Evidence: ${outcomeVerification.evidence.join(', ')}`);
+
+        // If goal NOT achieved and we have iterations left, FORCE another round with different strategy
+        if (!outcomeVerification.goalAchieved && currentIteration < MAX_ITERATIONS && outcomeVerification.confidence < 70) {
+          console.log(`[OUTCOME] Goal not achieved (${outcomeVerification.confidence}% confidence), attempting recovery...`);
+
+          const failurePrompt = `VERIFICATION FAILED:
+Expected: ${outcomeVerification.expectedOutcome}
+Actual: ${outcomeVerification.actualOutcome}
+Evidence: ${outcomeVerification.evidence.join('; ')}
+
+The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achieve the real goal.`;
+
+          try {
+            const recoveryResponse = await generateResponse(
+              memory, subject, failurePrompt, username, 'reason', userId, taskId
+            );
+
+            if (recoveryResponse.actions.length > 0) {
+              console.log(`[OUTCOME] Re-entering iteration loop with ${recoveryResponse.actions.length} recovery actions`);
+              isTaskComplete = false;
+              aiResponse = recoveryResponse;
+              // Loop will continue from line 1166
+            }
+          } catch {
+            // If recovery fails, continue with original result
+            console.warn('[OUTCOME] Recovery attempt failed, continuing with original result');
+          }
+        }
+      } catch (outcomeErr) {
+        console.error('[OUTCOME] Outcome verification error:', outcomeErr);
+        // Non-critical — continue without outcome verification
       }
     }
 
