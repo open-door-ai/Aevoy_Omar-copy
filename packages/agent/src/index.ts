@@ -1712,6 +1712,7 @@ process.on("SIGINT", () => {
 app.listen(PORT, async () => {
   console.log(`Agent server v2.0 running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`[DEPLOY-VERIFY] Wiring test deployment - commit d90c4af+`);
 
   // START HEALTH SYSTEM (The Final Boss - Never Fails)
   try {
