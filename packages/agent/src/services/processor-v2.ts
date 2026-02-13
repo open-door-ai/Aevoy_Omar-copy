@@ -43,6 +43,16 @@ export class ProcessorV2 {
     const startTime = Date.now();
 
     try {
+      // Validate input
+      if (!request.task || request.task.trim() === '') {
+        console.warn(`[PROCESSOR-V2] Empty task from ${request.username}`);
+        return {
+          success: false,
+          response: "Please provide a task description. What would you like me to help you with?",
+          error: "empty_input"
+        };
+      }
+
       // STEP 0: CLASSIFY TASK (check if browser needed)
       const classification = await classifyTask(request.task);
       console.log(`[PROCESSOR-V2] Classification: ${classification.taskType}, needsBrowser=${classification.needsBrowser}`);
