@@ -138,7 +138,7 @@ export class OutcomeVerifier {
     if (page) {
       try {
         const url = page.url();
-        const pageText = await page.textContent('body').catch(() => '');
+        const pageText = await page.textContent('body').catch(() => null) || '';
 
         // Check for confirmation keywords
         const confirmationKeywords = [
@@ -233,7 +233,7 @@ export class OutcomeVerifier {
     // For web data, verify against page if available
     if (page && hasData) {
       try {
-        const pageText = await page.textContent('body').catch(() => '');
+        const pageText = await page.textContent('body').catch(() => null) || '';
 
         // Extract key terms from result
         const resultWords = resultStr.split(/\s+/).filter(w => w.length > 5);
@@ -290,7 +290,7 @@ export class OutcomeVerifier {
 
     try {
       const url = page.url();
-      const pageText = await page.textContent('body').catch(() => '');
+      const pageText = await page.textContent('body').catch(() => null) || '';
 
       // Check for success indicators
       const successIndicators = [
