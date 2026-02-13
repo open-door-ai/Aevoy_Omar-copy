@@ -1713,6 +1713,15 @@ app.listen(PORT, async () => {
   console.log(`Agent server v2.0 running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 
+  // START HEALTH SYSTEM (The Final Boss - Never Fails)
+  try {
+    const { healthSystem } = await import("./services/health-system.js");
+    healthSystem.startMonitoring();
+    console.log(`[HEALTH] ✅ Never-fail health system started (30s monitoring)`);
+  } catch (e) {
+    console.error(`[HEALTH] Failed to start health system:`, e);
+  }
+
   startScheduler();
   startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)
   // startInboxPoller(); // Disabled: Using Cloudflare Email Routing instead
