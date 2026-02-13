@@ -1,0 +1,39 @@
+{
+  "name": "omars-ai-assistant",
+  "version": "1.0.0",
+  "description": "Omar's Personal AI Assistant - Cutting-edge autonomous agent with vision, proactive intelligence, and multi-channel communication",
+  "private": true,
+  "workspaces": [
+    "gateway",
+    "core",
+    "heartbeat",
+    "mission-control",
+    "vision"
+  ],
+  "scripts": {
+    "build": "./build-all.sh",
+    "test": "./test-local.sh",
+    "deploy": "./deploy.sh",
+    "dev:gateway": "cd gateway && pnpm dev",
+    "dev:core": "cd core && pnpm dev",
+    "dev:heartbeat": "cd heartbeat && pnpm dev",
+    "dev:mission-control": "cd mission-control && pnpm dev",
+    "dev:vision": "cd vision && python3 detector.py",
+    "dev:camera": "cd vision && pnpm dev"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "autonomous",
+    "agent",
+    "vision",
+    "proactive",
+    "browser-automation"
+  ],
+  "author": "Omar",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "framer-motion": "^12.33.0",
+    "lucide-react": "^0.563.0"
+  }
+}

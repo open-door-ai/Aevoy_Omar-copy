@@ -1,0 +1,258 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Apple-Inspired Design System
+ * Using oklch color space for better perceptual uniformity
+ * 8pt grid system (8, 16, 24, 32, 40, 48px)
+ */
+
+:root {
+  /* Background & Foreground */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+
+  /* Brand Colors (Purple accent - Apple-inspired) */
+  --brand: oklch(0.55 0.15 270);
+  --brand-light: oklch(0.72 0.12 270);
+  --brand-subtle: oklch(0.92 0.04 270);
+
+  /* Semantic Colors */
+  --success: oklch(0.6 0.15 145);
+  --error: oklch(0.55 0.22 25);
+  --warning: oklch(0.7 0.15 85);
+  --info: oklch(0.6 0.15 240);
+
+  /* Glass Morphism */
+  --glass-bg: oklch(1 0 0 / 60%);
+  --glass-border: oklch(1 0 0 / 20%);
+  --glass-blur: 20px;
+
+  /* Surfaces & Cards */
+  --card: oklch(1 0 0);
+  --card-border: oklch(0.922 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+
+  /* Text Hierarchy */
+  --primary-text: oklch(0.145 0 0);
+  --secondary-text: oklch(0.556 0 0);
+  --tertiary-text: oklch(0.722 0 0);
+
+  /* Interactive Elements */
+  --hover: oklch(0.97 0 0);
+  --active: oklch(0.922 0 0);
+  --focus-ring: oklch(0.55 0.15 270 / 40%);
+}
+
+.dark {
+  /* Background & Foreground */
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+
+  /* Glass Morphism (Dark) */
+  --glass-bg: oklch(0.2 0 0 / 60%);
+  --glass-border: oklch(1 0 0 / 10%);
+
+  /* Surfaces & Cards */
+  --card: oklch(0.205 0 0);
+  --card-border: oklch(1 0 0 / 10%);
+  --muted: oklch(0.25 0 0);
+  --muted-foreground: oklch(0.722 0 0);
+
+  /* Text Hierarchy */
+  --primary-text: oklch(0.985 0 0);
+  --secondary-text: oklch(0.722 0 0);
+  --tertiary-text: oklch(0.556 0 0);
+
+  /* Interactive Elements */
+  --hover: oklch(1 0 0 / 5%);
+  --active: oklch(1 0 0 / 10%);
+}
+
+/**
+ * Base Styles
+ */
+
+body {
+  @apply bg-background text-foreground;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern' 1, 'liga' 1;
+}
+
+/**
+ * Typography
+ */
+h1, h2, h3, h4, h5, h6 {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+code, pre {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+/**
+ * Custom Scrollbar (macOS-style)
+ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: oklch(0.556 0 0 / 30%);
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: oklch(1 0 0 / 15%);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.556 0 0 / 50%);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(1 0 0 / 25%);
+}
+
+/**
+ * Touch-Friendly Hit Targets
+ * Apple HIG: minimum 44×44pt tap target
+ */
+button, a {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/**
+ * Focus Styles (Accessibility)
+ */
+*:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/**
+ * Glass Morphism Utilities
+ */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+.glass-subtle {
+  background: oklch(1 0 0 / 40%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid oklch(1 0 0 / 10%);
+}
+
+.dark .glass-subtle {
+  background: oklch(0.2 0 0 / 40%);
+  border-color: oklch(1 0 0 / 5%);
+}
+
+/**
+ * Animations (Apple spring-inspired)
+ */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.scale-in {
+  animation: scaleIn 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.skeleton {
+  @apply bg-muted rounded-lg;
+  background: linear-gradient(
+    90deg,
+    oklch(0.97 0 0) 0%,
+    oklch(0.95 0 0) 50%,
+    oklch(0.97 0 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.dark .skeleton {
+  background: linear-gradient(
+    90deg,
+    oklch(0.25 0 0) 0%,
+    oklch(0.22 0 0) 50%,
+    oklch(0.25 0 0) 100%
+  );
+}
+
+/**
+ * Utility Classes
+ */
+.text-balance {
+  text-wrap: balance;
+}
+
+.text-pretty {
+  text-wrap: pretty;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/**
+ * Print Styles
+ */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

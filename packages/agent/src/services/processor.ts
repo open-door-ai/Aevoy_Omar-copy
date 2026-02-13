@@ -1154,7 +1154,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Execute actions → observe results → re-prompt AI → repeat
     // until task is done, budget exceeded, or timeout hit.
     // ============================================================
-    const MAX_ITERATIONS = 5;
+    // AGI-LEVEL: Increased from 5 to 30 iterations for complex problem-solving
+    // "Make me money" and "Cure cancer" level tasks need persistence, not 5 attempts
+    const MAX_ITERATIONS = 30;
     let currentIteration = 0;
     let isTaskComplete = false;
     let totalAiCost = aiResponse.cost || 0;
