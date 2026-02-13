@@ -40,6 +40,8 @@ export class ProcessorV2 {
   async processTask(request: TaskRequest): Promise<TaskResult> {
     console.log(`[PROCESSOR-V2] Task from ${request.username}: ${request.task.substring(0, 50)}...`);
 
+    const startTime = Date.now();
+
     try {
       // STEP 0: CLASSIFY TASK (check if browser needed)
       const classification = await classifyTask(request.task);
@@ -48,11 +50,22 @@ export class ProcessorV2 {
       // Fast path for AI-only tasks (no browser needed)
       if (!classification.needsBrowser) {
         console.log("[PROCESSOR-V2] AI-only task detected, skipping browser");
-        return this.executeAIOnlyTask(request, classification.goal);
+        const taskId = await this.createTaskRecord(request, "simple", "processing");
+        const result = await this.executeAIOnlyTask(request, classification.goal);
+        await this.finalizeTaskRecord(taskId, result, Date.now() - startTime);
+        return { ...result, planId: taskId };
       }
 
       // STEP 1: PLANNING PHASE (for browser tasks)
       const plan = await planningService.createPlan(request.userId, request.task);
+
+      // Create task record linked to execution plan
+      const taskId = await this.createTaskRecord(
+        request,
+        plan.estimatedSteps > 10 ? "complex" : plan.estimatedSteps > 5 ? "research" : "simple",
+        plan.requireConfirmation ? "awaiting_confirmation" : "processing",
+        plan.taskId
+      );
 
       // Check if confirmation required
       if (plan.requireConfirmation) {
@@ -66,7 +79,9 @@ export class ProcessorV2 {
       }
 
       // Auto-approved (simple task or settings allow)
-      return this.executePlan(request, plan);
+      const result = await this.executePlan(request, plan);
+      await this.finalizeTaskRecord(taskId, result, Date.now() - startTime);
+      return result;
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -405,6 +420,61 @@ If I don't hear back in ${plan.userResponseTimeout} minutes, I'll proceed with t
         execution_time_ms: result.durationMs,
       })
       .eq("id", planId);
+  }
+
+  /**
+   * Create initial task record
+   */
+  private async createTaskRecord(
+    request: TaskRequest,
+    type: "simple" | "research" | "complex",
+    status: "processing" | "awaiting_confirmation",
+    executionPlanId?: string
+  ): Promise<string> {
+    const { data: taskRecord, error } = await getSupabaseClient()
+      .from("tasks")
+      .insert({
+        user_id: request.userId,
+        status,
+        type,
+        email_subject: request.task.substring(0, 100),
+        input_text: request.task,
+        input_channel: request.channel,
+        started_at: new Date().toISOString(),
+        execution_plan_id: executionPlanId,
+      })
+      .select("id")
+      .single();
+
+    if (error || !taskRecord) {
+      console.error("[PROCESSOR-V2] Failed to create task record:", error);
+      throw new Error("Failed to create task record");
+    }
+
+    console.log(`[PROCESSOR-V2] Created task record: ${taskRecord.id}`);
+    return taskRecord.id;
+  }
+
+  /**
+   * Finalize task record with results
+   */
+  private async finalizeTaskRecord(
+    taskId: string,
+    result: TaskResult,
+    durationMs: number
+  ): Promise<void> {
+    await getSupabaseClient()
+      .from("tasks")
+      .update({
+        status: result.success ? "completed" : "failed",
+        completed_at: new Date().toISOString(),
+        result_data: { response: result.response, error: result.error },
+        execution_time_ms: durationMs,
+        cost_usd: 0.001, // Default cost estimate
+      })
+      .eq("id", taskId);
+
+    console.log(`[PROCESSOR-V2] Finalized task record: ${taskId} (${result.success ? "success" : "failed"})`);
   }
 }
 
