@@ -408,17 +408,31 @@ If I don't hear back in ${plan.userResponseTimeout} minutes, I'll proceed with t
     result: any,
     quality: any
   ): Promise<void> {
-    await getSupabaseClient()
-      .from("tasks")
-      .update({
-        status: result.success ? "completed" : "failed",
-        completed_at: new Date().toISOString(),
-        result_data: result.result,
+    const updateData: any = {
+      status: result.success ? "completed" : "failed",
+      completed_at: new Date().toISOString(),
+      execution_time_ms: result.durationMs,
+    };
+
+    // Store result and quality data in verification_data
+    if (result.result || quality) {
+      updateData.verification_data = {
+        result: result.result,
         quality_score: quality?.score,
         quality_percentile: quality?.percentile,
         steps_executed: result.stepsExecuted,
-        execution_time_ms: result.durationMs,
-      })
+      };
+      updateData.verification_status = quality?.percentile >= 95 ? "verified" : "completed";
+    }
+
+    // Store error message if failed
+    if (!result.success && result.error) {
+      updateData.error_message = result.error;
+    }
+
+    await getSupabaseClient()
+      .from("tasks")
+      .update(updateData)
       .eq("id", planId);
   }
 
@@ -431,18 +445,24 @@ If I don't hear back in ${plan.userResponseTimeout} minutes, I'll proceed with t
     status: "processing" | "awaiting_confirmation",
     executionPlanId?: string
   ): Promise<string> {
+    const insertData: any = {
+      user_id: request.userId,
+      status,
+      type,
+      email_subject: request.task.substring(0, 100),
+      input_text: request.task,
+      input_channel: request.channel,
+      started_at: new Date().toISOString(),
+    };
+
+    // Store execution plan ID in checkpoint_data if provided
+    if (executionPlanId) {
+      insertData.checkpoint_data = { execution_plan_id: executionPlanId };
+    }
+
     const { data: taskRecord, error } = await getSupabaseClient()
       .from("tasks")
-      .insert({
-        user_id: request.userId,
-        status,
-        type,
-        email_subject: request.task.substring(0, 100),
-        input_text: request.task,
-        input_channel: request.channel,
-        started_at: new Date().toISOString(),
-        execution_plan_id: executionPlanId,
-      })
+      .insert(insertData)
       .select("id")
       .single();
 
@@ -463,15 +483,26 @@ If I don't hear back in ${plan.userResponseTimeout} minutes, I'll proceed with t
     result: TaskResult,
     durationMs: number
   ): Promise<void> {
+    const updateData: any = {
+      status: result.success ? "completed" : "failed",
+      completed_at: new Date().toISOString(),
+      execution_time_ms: durationMs,
+      cost_usd: 0.001, // Default cost estimate
+    };
+
+    // Store error message if failed
+    if (!result.success && result.error) {
+      updateData.error_message = result.error;
+    }
+
+    // Store response in checkpoint_data (used for task result storage)
+    if (result.response) {
+      updateData.checkpoint_data = { response: result.response };
+    }
+
     await getSupabaseClient()
       .from("tasks")
-      .update({
-        status: result.success ? "completed" : "failed",
-        completed_at: new Date().toISOString(),
-        result_data: { response: result.response, error: result.error },
-        execution_time_ms: durationMs,
-        cost_usd: 0.001, // Default cost estimate
-      })
+      .update(updateData)
       .eq("id", taskId);
 
     console.log(`[PROCESSOR-V2] Finalized task record: ${taskId} (${result.success ? "success" : "failed"})`);
