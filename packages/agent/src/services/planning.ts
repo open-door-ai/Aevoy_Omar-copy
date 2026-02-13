@@ -68,12 +68,14 @@ export interface ExecutionPlan {
 
 interface ExecutionStep {
   order: number;
-  type: "navigate" | "login" | "fill" | "click" | "select" | "captcha" | "2fa" | "verify" | "api" | "wait";
+  type: "navigate" | "login" | "fill" | "click" | "select" | "captcha" | "2fa" | "verify" | "api" | "wait" | "extract" | "read";
   description: string;
   target?: string; // URL, selector, etc.
   expectedOutcome: string;
   canSkip: boolean;
   alternativeAction?: string;
+  duration?: number; // for wait steps
+  value?: string; // for fill/select steps
 }
 
 interface UserSettings {
@@ -351,10 +353,14 @@ Respond with JSON:
 
     // Main flow steps from analysis
     for (const flowStep of analysis.likelyFlow || []) {
+      const stepType = this.inferStepType(flowStep);
+      const target = this.extractTarget(flowStep, stepType);
+
       steps.push({
         order: order++,
-        type: this.inferStepType(flowStep),
+        type: stepType,
         description: flowStep,
+        target,
         expectedOutcome: "completed",
         canSkip: false,
       });
@@ -374,7 +380,12 @@ Respond with JSON:
 
   private inferStepType(description: string): ExecutionStep["type"] {
     const lower = description.toLowerCase();
-    if (lower.includes("navigate") || lower.includes("go to")) return "navigate";
+    // Check for URLs first - if it contains a URL, it's probably navigation
+    if (/https?:\/\/|www\./i.test(description) || /\.[a-z]{2,}\//.test(description)) {
+      return "navigate";
+    }
+    if (lower.includes("navigate") || lower.includes("go to") || lower.includes("browse") || lower.includes("visit") || lower.includes("open")) return "navigate";
+    if (lower.includes("extract") || lower.includes("get the") || lower.includes("find the") || lower.includes("read the") || lower.includes("retrieve")) return "extract";
     if (lower.includes("login") || lower.includes("sign in")) return "login";
     if (lower.includes("fill") || lower.includes("enter")) return "fill";
     if (lower.includes("click") || lower.includes("press")) return "click";
@@ -383,6 +394,45 @@ Respond with JSON:
     if (lower.includes("2fa") || lower.includes("code")) return "2fa";
     if (lower.includes("wait")) return "wait";
     return "click";
+  }
+
+  private extractTarget(description: string, type: ExecutionStep["type"]): string | undefined {
+    // For navigate steps, extract URLs or domain names
+    if (type === "navigate") {
+      // Match URLs: https://example.com or www.example.com
+      const urlMatch = description.match(/https?:\/\/[^\s]+|www\.[^\s]+/i);
+      if (urlMatch) {
+        let url = urlMatch[0];
+        // Add https:// if missing
+        if (!url.startsWith("http")) {
+          url = "https://" + url;
+        }
+        return url;
+      }
+
+      // Match domain names: example.com, google.com, etc.
+      const domainMatch = description.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|co|gov|edu))\b/i);
+      if (domainMatch) {
+        return "https://" + domainMatch[1];
+      }
+
+      // Match "to <domain>" pattern
+      const toMatch = description.match(/to\s+([a-z0-9-]+(?:\.[a-z]{2,})+)/i);
+      if (toMatch) {
+        return "https://" + toMatch[1];
+      }
+    }
+
+    // For login steps, use domain if available
+    if (type === "login") {
+      const domainMatch = description.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|co|gov|edu))\b/i);
+      if (domainMatch) {
+        return domainMatch[1];
+      }
+    }
+
+    // For other steps, return undefined (executor will handle)
+    return undefined;
   }
 
   /**

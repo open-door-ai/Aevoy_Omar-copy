@@ -158,7 +158,20 @@ export class AutonomousExecutor {
     try {
       switch (step.type) {
         case "navigate":
-          await page.goto(step.target, { waitUntil: "domcontentloaded", timeout: 30000 });
+          // Get URL from target, or extract from description
+          let url = step.target;
+          if (!url) {
+            url = this.extractUrlFromDescription(step.description);
+          }
+          if (!url) {
+            throw new Error(`Navigate step missing URL. Description: ${step.description}`);
+          }
+          // Add https:// if missing
+          if (!url.startsWith("http")) {
+            url = "https://" + url;
+          }
+          console.log(`[EXECUTOR] Navigating to: ${url}`);
+          await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
           await page.waitForLoadState("networkidle").catch(() => {});
           break;
 
@@ -169,14 +182,26 @@ export class AutonomousExecutor {
           break;
 
         case "fill":
+          if (!step.target) {
+            throw new Error(`Fill step missing selector. Description: ${step.description}`);
+          }
+          console.log(`[EXECUTOR] Filling ${step.target} with: ${step.value}`);
           await page.fill(step.target, step.value);
           break;
 
         case "click":
+          if (!step.target) {
+            throw new Error(`Click step missing selector. Description: ${step.description}`);
+          }
+          console.log(`[EXECUTOR] Clicking: ${step.target}`);
           await page.click(step.target);
           break;
 
         case "select":
+          if (!step.target) {
+            throw new Error(`Select step missing selector. Description: ${step.description}`);
+          }
+          console.log(`[EXECUTOR] Selecting ${step.value} in: ${step.target}`);
           await page.selectOption(step.target, step.value);
           break;
 
@@ -187,6 +212,28 @@ export class AutonomousExecutor {
 
         case "wait":
           await page.waitForTimeout(step.duration || 2000);
+          break;
+
+        case "extract":
+        case "read":
+          // Extract text content from page
+          console.log(`[EXECUTOR] Extracting content from page`);
+          const content = await page.evaluate(() => {
+            // Get main heading
+            const h1 = document.querySelector('h1');
+            if (h1) return { heading: h1.textContent?.trim(), fullText: document.body.innerText.slice(0, 500) };
+
+            // Fallback: get first paragraph or body text
+            const p = document.querySelector('p');
+            return {
+              heading: document.title,
+              firstParagraph: p?.textContent?.trim(),
+              fullText: document.body.innerText.slice(0, 500)
+            };
+          });
+          console.log(`[EXECUTOR] Extracted:`, content);
+          // Store in result for later use
+          this.state!.result = { ...this.state!.result, extracted: content };
           break;
 
         case "verify":
@@ -417,6 +464,32 @@ Or reply with instructions. Continuing in ${this.state!.plan.userResponseTimeout
 
     await page.click('button[type="submit"]').catch(() => page.keyboard.press("Enter"));
     await page.waitForLoadState("networkidle").catch(() => {});
+  }
+
+  private extractUrlFromDescription(description: string): string | undefined {
+    // Match URLs: https://example.com or www.example.com
+    const urlMatch = description.match(/https?:\/\/[^\s]+|www\.[^\s]+/i);
+    if (urlMatch) {
+      let url = urlMatch[0];
+      if (!url.startsWith("http")) {
+        url = "https://" + url;
+      }
+      return url;
+    }
+
+    // Match domain names: example.com, google.com, etc.
+    const domainMatch = description.match(/\b([a-z0-9-]+\.(?:com|org|net|io|ai|co|gov|edu))\b/i);
+    if (domainMatch) {
+      return "https://" + domainMatch[1];
+    }
+
+    // Match "to <domain>" pattern
+    const toMatch = description.match(/to\s+([a-z0-9-]+(?:\.[a-z]{2,})+)/i);
+    if (toMatch) {
+      return "https://" + toMatch[1];
+    }
+
+    return undefined;
   }
 
   private returnResult(success: boolean, error?: string, result?: any): ExecutionResult {

@@ -422,7 +422,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
 
-  console.log(`[TASK] Incoming`, {
+  console.log(`[TASK] Incoming (V2)`, {
     userId: task.userId?.slice(0, 8),
     channel: task.inputChannel || "email",
     timestamp: new Date().toISOString(),
@@ -430,12 +430,45 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
+  // Use V2 processor with full quality verification
   activeTasks++;
-  processIncomingTask(task)
+  processorV2.processTask({
+    userId: task.userId,
+    username: task.username,
+    email: task.from,
+    task: `${task.subject || ''}\n\n${task.body || ''}`.trim(),
+    channel: (task.inputChannel as "email" | "sms" | "web") || "email",
+  })
     .then((result) => {
-      console.log(`Incoming task processed: ${result.taskId}`, { success: result.success });
+      console.log(`Incoming task processed (V2): ${result.planId || 'unknown'}`, { success: result.success });
+
+      // Send response via email
+      if (!result.awaitingConfirmation && task.from) {
+        import("./services/email.js").then(({ sendResponse }) => {
+          sendResponse({
+            to: task.from,
+            from: process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
+            subject: `Re: ${task.subject || 'Your Task'}`,
+            body: result.response,
+          }).catch((err) => console.error("Failed to send email response:", err));
+        });
+      }
     })
-    .catch((error) => console.error("Incoming task processing failed:", error))
+    .catch((error) => {
+      console.error("Incoming task processing failed (V2):", error);
+
+      // Send error email
+      if (task.from) {
+        import("./services/email.js").then(({ sendErrorEmail }) => {
+          sendErrorEmail(
+            task.from,
+            process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
+            task.subject || 'Your Task',
+            error.message || 'An unexpected error occurred'
+          ).catch((err) => console.error("Failed to send error email:", err));
+        });
+      }
+    })
     .finally(() => { activeTasks--; });
 });
 

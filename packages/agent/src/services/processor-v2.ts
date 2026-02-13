@@ -15,6 +15,7 @@ import { createMultiUserBrowser, MultiUserBrowserService } from "./multi-user-br
 import { qualityChecker } from "./quality-checker.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { sendResponse } from "./email.js";
+import { classifyTask, generateResponse } from "./ai.js";
 
 interface TaskRequest {
   userId: string;
@@ -40,7 +41,17 @@ export class ProcessorV2 {
     console.log(`[PROCESSOR-V2] Task from ${request.username}: ${request.task.substring(0, 50)}...`);
 
     try {
-      // STEP 1: PLANNING PHASE
+      // STEP 0: CLASSIFY TASK (check if browser needed)
+      const classification = await classifyTask(request.task);
+      console.log(`[PROCESSOR-V2] Classification: ${classification.taskType}, needsBrowser=${classification.needsBrowser}`);
+
+      // Fast path for AI-only tasks (no browser needed)
+      if (!classification.needsBrowser) {
+        console.log("[PROCESSOR-V2] AI-only task detected, skipping browser");
+        return this.executeAIOnlyTask(request, classification.goal);
+      }
+
+      // STEP 1: PLANNING PHASE (for browser tasks)
       const plan = await planningService.createPlan(request.userId, request.task);
 
       // Check if confirmation required
@@ -65,6 +76,43 @@ export class ProcessorV2 {
   }
 
   /**
+   * Execute AI-only task (no browser needed)
+   */
+  private async executeAIOnlyTask(request: TaskRequest, goal: string): Promise<TaskResult> {
+    try {
+      // Call AI directly for simple tasks (empty memory for fast response)
+      const emptyMemory = {
+        facts: "",
+        recentLogs: "",
+        workingMemories: [],
+        episodicMemories: []
+      };
+
+      const aiResponse = await generateResponse(
+        emptyMemory,
+        goal, // subject
+        request.task, // body
+        request.username,
+        "respond", // task type
+        request.userId
+      );
+
+      const response = aiResponse.content || "I completed the task.";
+
+      console.log(`[PROCESSOR-V2] AI-only response: ${response.substring(0, 100)}...`);
+
+      return {
+        success: true,
+        response,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      console.error("[PROCESSOR-V2] AI-only task error:", errorMsg);
+      return { success: false, response: "", error: errorMsg };
+    }
+  }
+
+  /**
    * Execute confirmed plan
    */
   async executePlan(request: TaskRequest, plan: ExecutionPlan): Promise<TaskResult> {
@@ -83,36 +131,60 @@ export class ProcessorV2 {
       // Execute with never-stop logic
       const result = await executor.execute(plan);
 
-      // Quality verification
-      let quality;
-      if (result.success && result.result) {
-        const taskType = this.determineTaskType(plan);
+      // Quality verification - ALWAYS RUN (even on partial/failed results)
+      let quality = null;
+      let improvedResult = result;
+
+      const taskType = this.determineTaskType(plan);
+
+      // Run quality check on any result (success, partial, or failure)
+      const resultToCheck = result.result || {
+        error: result.error,
+        partialData: result
+      };
+
+      console.log(`[PROCESSOR-V2] Running quality verification (result.success=${result.success})`);
+
+      try {
         const qualityCheck = await qualityChecker.verifyWithImprovement(
           taskType,
           plan.goal,
-          result.result,
+          resultToCheck,
           page,
           5
         );
         quality = qualityCheck.quality;
 
-        if (!qualityCheck.success) {
-          // Quality not met - this shouldn't happen with executor retry
-          console.warn("[PROCESSOR-V2] Quality check failed after execution");
+        // If quality checker improved the result, use it
+        if (qualityCheck.success && qualityCheck.finalResult) {
+          console.log(`[PROCESSOR-V2] Quality checker improved result (${quality?.percentile || 0}th percentile)`);
+          improvedResult = {
+            ...result,
+            success: true,
+            result: qualityCheck.finalResult,
+          };
+        } else if (!result.success) {
+          console.warn(`[PROCESSOR-V2] Execution failed and quality check couldn't recover (${quality?.percentile || 0}th percentile)`);
         }
+      } catch (qualityError) {
+        console.error(`[PROCESSOR-V2] Quality check threw error:`, qualityError);
+        // Continue with original result if quality check fails
       }
 
+      // Use improved result if available
+      const finalResult = improvedResult;
+
       // Build response
-      const response = this.buildResponse(result, quality);
+      const response = this.buildResponse(finalResult, quality);
 
       // Save sessions
       await browser.saveAllSessions();
 
       // Update task record
-      await this.updateTaskRecord(plan.taskId, result, quality);
+      await this.updateTaskRecord(plan.taskId, finalResult, quality);
 
       return {
-        success: result.success,
+        success: finalResult.success,
         response,
       };
 

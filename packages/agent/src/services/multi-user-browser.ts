@@ -35,7 +35,7 @@ interface BrowserSession {
 
 // Single shared browser instance
 let sharedBrowser: BrowserSession | null = null;
-const USER_CONTEXT_TIMEOUT = 30 * 60 * 1000; // 30 min idle before pausing
+const USER_CONTEXT_TIMEOUT = parseInt(process.env.BROWSER_CONTEXT_TIMEOUT_MS || '7200000'); // 2 hours default (configurable)
 
 export class MultiUserBrowserService {
   private userId: string;

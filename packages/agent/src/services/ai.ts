@@ -1017,10 +1017,52 @@ export async function classifyTask(userMessage: string): Promise<{
   let needsBrowser = false;
   const domains: string[] = [];
 
-  // Fast path: keyword matching
+  // SMART HEURISTICS: Check for AI-only tasks FIRST (before keyword matching)
+
+  // 1. Pure math/calculation patterns
+  const mathPatterns = [
+    /\b\d+\s*[\+\-\*\/×÷]\s*\d+/,
+    /what\s+(is|are)\s+\d+/i,
+    /calculate\s+/i,
+    /\bdivided\s+by\b/i,
+    /\bmultiplied\s+by\b/i,
+    /\bplus\b/i,
+    /\bminus\b/i,
+    /\btimes\b/i,
+  ];
+  if (mathPatterns.some(p => p.test(text))) {
+    console.log("[AI] Math task detected, skipping browser");
+    return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
+  }
+
+  // 2. Knowledge/definition questions (no URLs)
+  const knowledgePatterns = [
+    /^(what|who|when|where|why|how)\s+(is|are|was|were|does|do|did)\s+/i,
+    /^explain\s+/i,
+    /^define\s+/i,
+    /^tell\s+me\s+about\s+/i,
+    /^describe\s+/i,
+  ];
+  const hasUrl = /https?:\/\//i.test(text) || /www\./i.test(text);
+  const hasExplicitWebIntent = /\b(website|site|online|web|url|link|browse|visit|go to)\b/i.test(text);
+
+  if (knowledgePatterns.some(p => p.test(text)) && !hasUrl && !hasExplicitWebIntent) {
+    console.log("[AI] Knowledge question detected, skipping browser");
+    return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
+  }
+
+  // Fast path: keyword matching (only after ruling out AI-only tasks)
   if (text.includes("research") || text.includes("find") || text.includes("search") || text.includes("look up")) {
-    taskType = "research";
-    needsBrowser = true;
+    // Additional check: is there web intent?
+    if (hasUrl || hasExplicitWebIntent) {
+      taskType = "research";
+      needsBrowser = true;
+    } else {
+      // "research" without web intent = AI knowledge retrieval
+      taskType = "general";
+      needsBrowser = false;
+      console.log("[AI] Research task with no web intent, using AI-only");
+    }
   } else if (text.includes("book") || text.includes("reservation") || text.includes("schedule appointment")) {
     taskType = "booking";
     needsBrowser = true;
