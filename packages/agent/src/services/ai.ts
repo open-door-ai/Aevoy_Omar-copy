@@ -1109,6 +1109,16 @@ Task: "${userMessage.substring(0, 500)}"`;
     }
   }
 
+  // CRITICAL FIX: Force browser execution when explicit web intent detected
+  // Catches tasks like "go to wikipedia.org" that don't match specific keywords
+  if (hasExplicitWebIntent && !needsBrowser) {
+    console.log("[AI] Explicit web intent detected, forcing browser execution");
+    needsBrowser = true;
+    if (taskType === "general") {
+      taskType = "research"; // Default web tasks to research type
+    }
+  }
+
   // Extract URLs/domains
   const urlRegex = /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})+)/g;
   let urlMatch;
