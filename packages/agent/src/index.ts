@@ -249,26 +249,18 @@ function processQueuedTasks(): void {
 // ---- Health Check (Enhanced) ----
 
 app.get("/health", async (_req, res) => {
-  const checks: Record<string, string> = {};
+  // SECURITY: Only check critical subsystems, don't leak API key configuration
+  let supabaseStatus = "ok";
 
-  // Supabase check
   try {
     const sb = getSupabaseClient();
     const { error } = await sb.from("profiles").select("id").limit(1);
-    checks.supabase = error ? "error" : "ok";
+    supabaseStatus = error ? "error" : "ok";
   } catch {
-    checks.supabase = "unavailable";
+    supabaseStatus = "unavailable";
   }
 
-  // API key availability
-  checks.deepseek = process.env.DEEPSEEK_API_KEY ? "configured" : "missing";
-  checks.anthropic = process.env.ANTHROPIC_API_KEY ? "configured" : "missing";
-  checks.google = process.env.GOOGLE_API_KEY ? "configured" : "missing";
-  checks.resend = process.env.RESEND_API_KEY ? "configured" : "missing";
-  checks.twilio = process.env.TWILIO_ACCOUNT_SID ? "configured" : "missing";
-  checks.browserbase = process.env.BROWSERBASE_API_KEY ? "configured" : "missing";
-
-  const allOk = checks.supabase === "ok";
+  const allOk = supabaseStatus === "ok";
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
@@ -279,7 +271,7 @@ app.get("/health", async (_req, res) => {
     queuedTasks: taskQueue.length,
     maxConcurrent: MAX_CONCURRENT_TASKS,
     maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
-    subsystems: checks,
+    database: supabaseStatus,
   });
 });
 
