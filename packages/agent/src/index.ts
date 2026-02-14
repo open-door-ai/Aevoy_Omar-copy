@@ -103,6 +103,7 @@ import type { TaskRequest, TaskResult } from "./types/index.js";
 import skillRoutes from "./routes/skills.js";
 import { trackBackgroundJob } from "./utils/job-tracker.js";
 import { maskPhone, maskEmail, maskUserId, maskPin } from "./utils/logging.js";
+import { hashPin, verifyPinHash, isBcryptHash } from "./utils/hashing.js";
 
 import crypto from "crypto";
 
@@ -739,7 +740,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         if (!tempResolved) return null;
         return supabase
           .from("profiles")
-          .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, timezone")
+          .select("id, username, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until, timezone")
           .eq("id", tempResolved.userId)
           .single();
       })()
@@ -1214,11 +1215,11 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     const userId = resolved.userId;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until")
+      .select("id, username, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until")
       .eq("id", userId)
       .single();
 
-    if (!profile || !profile.voice_pin) {
+    if (!profile || (!profile.voice_pin && !profile.voice_pin_hash)) {
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1229,30 +1230,41 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
 
     voice = await getUserVoice(profile.id);
 
-    // PIN verification with backward-compatible hashing
-    const storedPin = profile.voice_pin;
-    const isHashed = storedPin.length === 64 && /^[0-9a-f]{64}$/.test(storedPin);
+    // SECURITY: PIN verification with bcrypt (new) + backward compat (legacy SHA-256/plaintext)
+    let pinMatch = false;
 
-    let pinMatch: boolean;
-    if (isHashed) {
-      // Compare against SHA-256 hash
-      const enteredHash = crypto.createHash('sha256').update(`${profile.id}:${enteredPin}`).digest('hex');
-      const hashBuffer = Buffer.from(enteredHash);
-      const storedHashBuffer = Buffer.from(storedPin);
-      pinMatch = hashBuffer.length === storedHashBuffer.length &&
-        crypto.timingSafeEqual(hashBuffer, storedHashBuffer);
-    } else {
-      // Legacy plain text comparison — auto-upgrade after successful match
-      const pinBuffer = Buffer.from(enteredPin);
-      const storedPinBuffer = Buffer.from(storedPin);
-      pinMatch = pinBuffer.length === storedPinBuffer.length &&
-        crypto.timingSafeEqual(pinBuffer, storedPinBuffer);
+    // Priority 1: Check new bcrypt hash (most secure)
+    if (profile.voice_pin_hash && isBcryptHash(profile.voice_pin_hash)) {
+      pinMatch = await verifyPinHash(enteredPin, profile.voice_pin_hash);
+    }
+    // Priority 2: Check legacy SHA-256 hash + auto-migrate
+    else if (profile.voice_pin) {
+      const storedPin = profile.voice_pin;
+      const isHashed = storedPin.length === 64 && /^[0-9a-f]{64}$/.test(storedPin);
 
+      if (isHashed) {
+        // Legacy SHA-256 hash
+        const enteredHash = crypto.createHash('sha256').update(`${profile.id}:${enteredPin}`).digest('hex');
+        const hashBuffer = Buffer.from(enteredHash);
+        const storedHashBuffer = Buffer.from(storedPin);
+        pinMatch = hashBuffer.length === storedHashBuffer.length &&
+          crypto.timingSafeEqual(hashBuffer, storedHashBuffer);
+      } else {
+        // Legacy plaintext
+        const pinBuffer = Buffer.from(enteredPin);
+        const storedPinBuffer = Buffer.from(storedPin);
+        pinMatch = pinBuffer.length === storedPinBuffer.length &&
+          crypto.timingSafeEqual(pinBuffer, storedPinBuffer);
+      }
+
+      // Auto-migrate to bcrypt on successful login
       if (pinMatch) {
-        // Auto-upgrade to hashed PIN
-        const hashedPin = crypto.createHash('sha256').update(`${profile.id}:${enteredPin}`).digest('hex');
-        await supabase.from("profiles").update({ voice_pin: hashedPin }).eq("id", profile.id);
-        console.log(`[PIN] Auto-upgraded PIN to hashed for user ${profile.id.slice(0, 8)}`);
+        const bcryptHash = await hashPin(enteredPin);
+        await supabase.from("profiles").update({
+          voice_pin_hash: bcryptHash,
+          voice_pin: null // Clear legacy PIN
+        }).eq("id", profile.id);
+        console.log(`[PIN] Auto-migrated PIN to bcrypt for user ${maskUserId(profile.id)}`);
       }
     }
 

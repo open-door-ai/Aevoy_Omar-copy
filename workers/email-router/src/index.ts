@@ -42,6 +42,7 @@ interface Profile {
   messages_used: number;
   messages_limit: number;
   email_pin?: string | null;
+  email_pin_hash?: string | null;
   email_pin_attempts?: number;
   email_pin_locked_until?: string | null;
 }
@@ -401,8 +402,8 @@ export default {
 
         const supabase = getSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
 
-        // Check if user has email PIN configured
-        if (!user.email_pin) {
+        // Check if user has email PIN configured (check both new hash and legacy encrypted)
+        if (!user.email_pin && !user.email_pin_hash) {
           // No PIN - send setup instructions to registered email
           await sendEmailViaAgent({
             to: registeredEmail,
