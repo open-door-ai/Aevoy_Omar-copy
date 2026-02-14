@@ -829,24 +829,55 @@ app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
       pin_success: null
     });
 
-    // Generate dynamic personalized greeting
-    const greetings = [
-      `Hey ${profile.username}! What's up?`,
-      `Hi there, ${profile.username}! What can I do for you?`,
-      `${profile.username}! Good to hear from you. What do you need?`,
-      `Hey ${profile.username}! I'm here, what's on your mind?`,
-      `${profile.username}! Ready when you are. What can I help with?`,
-    ];
-    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+    // Get user's greeting style preference
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('greeting_style')
+      .eq('user_id', userId)
+      .single();
+
+    const greetingStyle = settings?.greeting_style || 'casual';
+
+    // Generate greeting based on style
+    let greeting = '';
+    const getTimeOfDay = () => {
+      const hour = new Date().getHours();
+      if (hour < 12) return 'morning';
+      if (hour < 18) return 'afternoon';
+      return 'evening';
+    };
+
+    switch (greetingStyle) {
+      case 'jarvis':
+        greeting = `Good ${getTimeOfDay()}, ${profile.username}. How may I assist you today?`;
+        break;
+      case 'ironman':
+        greeting = `${profile.username}! Your AI assistant here. What've you got for me?`;
+        break;
+      case 'australian':
+        greeting = `G'day ${profile.username}! What can I do for ya, mate?`;
+        break;
+      case 'professional':
+        greeting = `Hello ${profile.username}, this is Nova. How can I help you today?`;
+        break;
+      case 'casual':
+      default:
+        const casualGreetings = [
+          `Hey ${profile.username}! What's up?`,
+          `Hi ${profile.username}! What can I do for you?`,
+          `${profile.username}! Good to hear from you.`,
+          `Hey ${profile.username}! What's on your mind?`,
+          `${profile.username}! What can I help with?`,
+        ];
+        greeting = casualGreetings[Math.floor(Math.random() * casualGreetings.length)];
+    }
 
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">${greeting}</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="${voice}">I'm listening.</Say>
-  </Gather>
+    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
   <Say voice="${voice}">I didn't catch that. Call me back anytime!</Say>
 </Response>`);
   } catch (error) {

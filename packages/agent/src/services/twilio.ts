@@ -49,21 +49,24 @@ export function isTwilioConfigured(): boolean {
 
 // ---- Voice Configuration ----
 
-// Available voices (Twilio + Google Neural + AWS Polly)
+// Available voices (Twilio Generative + Neural + Standard)
+// GENERATIVE = most natural (Google Chirp3-HD, Polly Generative)
+// NEURAL = good quality (Google Neural2, Polly Neural)
 export const AVAILABLE_VOICES = {
-  'Google.en-US-Neural2-H': 'Google Neural (Female, warm — default)',
-  'Google.en-US-Neural2-D': 'Google Neural (Male, authoritative)',
+  // Generative (most natural, human-like)
+  'Google.en-US-Chirp3-HD': 'Google Chirp3 HD (Female, most natural)',
+  'Polly.Ruth-Generative': 'AWS Polly Generative (Female, conversational)',
+  'Polly.Matthew-Generative': 'AWS Polly Generative (Male, conversational)',
+
+  // Neural (high quality)
+  'Google.en-US-Neural2-H': 'Google Neural (Female, warm)',
   'Google.en-US-Neural2-F': 'Google Neural (Female, professional)',
-  'Google.en-US-Neural2-A': 'Google Neural (Male, casual)',
-  'Google.en-US-Neural2-C': 'Google Neural (Female, bright)',
   'Google.en-US-Neural2-J': 'Google Neural (Male, deep)',
-  'Polly.Matthew-Neural': 'AWS Polly (Male, natural)',
-  'Polly.Joanna-Neural': 'AWS Polly (Female, natural)',
-  'Polly.Stephen-Neural': 'AWS Polly (Male, British)',
-  'Polly.Amy-Neural': 'AWS Polly (Female, British)',
+  'Polly.Joanna-Neural': 'AWS Polly Neural (Female)',
+  'Polly.Matthew-Neural': 'AWS Polly Neural (Male)',
 } as const;
 
-export const DEFAULT_VOICE = 'Google.en-US-Neural2-F'; // Google Neural - professional, natural
+export const DEFAULT_VOICE = 'Google.en-US-Chirp3-HD'; // Generative voice - most natural
 
 // Cache voice preferences in memory (refreshed per call)
 const voiceCache = new Map<string, { voice: string; cachedAt: number }>();
@@ -221,25 +224,58 @@ export async function generateIncomingCallTwiml(userId: string, userName: string
     ? `${config.webhookBaseUrl}/webhook/voice/process/${userId}`
     : "/webhook/voice/process/" + userId;
 
-  // Generate dynamic greeting (varies each call)
-  const greetings = [
-    `Hey ${escapeXml(userName)}! What's up?`,
-    `Hi there, ${escapeXml(userName)}! What can I do for you?`,
-    `${escapeXml(userName)}! Good to hear from you. What do you need?`,
-    `Hey ${escapeXml(userName)}! I'm here, what's on your mind?`,
-    `${escapeXml(userName)}! Ready when you are. What can I help with?`,
-  ];
-  const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+  // Get user's greeting style preference (default: casual)
+  const { data: settings } = await getSupabaseClient()
+    .from('user_settings')
+    .select('greeting_style')
+    .eq('user_id', userId)
+    .single()
+    .catch(() => ({ data: null }));
+
+  const greetingStyle = settings?.greeting_style || 'casual';
+
+  // Generate greeting based on style
+  let greeting = '';
+  switch (greetingStyle) {
+    case 'jarvis':
+      greeting = `Good ${getTimeOfDay()}, ${escapeXml(userName)}. How may I assist you today?`;
+      break;
+    case 'ironman':
+      greeting = `${escapeXml(userName)}! Your AI assistant here. What've you got for me?`;
+      break;
+    case 'australian':
+      greeting = `G'day ${escapeXml(userName)}! What can I do for ya, mate?`;
+      break;
+    case 'professional':
+      greeting = `Hello ${escapeXml(userName)}, this is Nova. How can I help you today?`;
+      break;
+    case 'casual':
+    default:
+      const casualGreetings = [
+        `Hey ${escapeXml(userName)}! What's up?`,
+        `Hi ${escapeXml(userName)}! What can I do for you?`,
+        `${escapeXml(userName)}! Good to hear from you.`,
+        `Hey ${escapeXml(userName)}! What's on your mind?`,
+        `${escapeXml(userName)}! What can I help with?`,
+      ];
+      greeting = casualGreetings[Math.floor(Math.random() * casualGreetings.length)];
+  }
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">${greeting}</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-          action="${processUrl}" method="POST">
-    <Say voice="${voice}">I'm listening.</Say>
-  </Gather>
+          action="${processUrl}" method="POST" />
   <Say voice="${voice}">I didn't catch that. Call me back anytime!</Say>
 </Response>`;
+
+}
+
+function getTimeOfDay(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'morning';
+  if (hour < 18) return 'afternoon';
+  return 'evening';
 }
 
 /**
