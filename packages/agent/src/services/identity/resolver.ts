@@ -68,13 +68,16 @@ async function resolveByEmail(email: string): Promise<ResolvedUser | null> {
  */
 async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
   const normalized = normalizePhone(phone);
+  console.log(`[RESOLVER] Input phone: "${phone}" -> Normalized: "${normalized}"`);
 
   // Try twilio_number first (AI's provisioned number)
-  const { data: twilioMatch } = await getSupabaseClient()
+  const { data: twilioMatch, error: twilioError } = await getSupabaseClient()
     .from("profiles")
     .select("id, username, email, twilio_number, phone_number")
     .eq("twilio_number", normalized)
     .single();
+
+  console.log(`[RESOLVER] Twilio match: ${twilioMatch ? 'FOUND' : 'NOT FOUND'}, Error: ${twilioError?.message || 'none'}`);
 
   if (twilioMatch) {
     return {
@@ -86,13 +89,16 @@ async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
   }
 
   // Fallback: user's personal phone number
-  const { data: phoneMatch } = await getSupabaseClient()
+  const { data: phoneMatch, error: phoneError } = await getSupabaseClient()
     .from("profiles")
     .select("id, username, email, twilio_number, phone_number")
     .eq("phone_number", normalized)
     .single();
 
+  console.log(`[RESOLVER] Phone match: ${phoneMatch ? 'FOUND' : 'NOT FOUND'}, Error: ${phoneError?.message || 'none'}`);
+
   if (phoneMatch) {
+    console.log(`[RESOLVER] Resolved to user: ${phoneMatch.username} (${phoneMatch.id.slice(0, 8)})`);
     return {
       userId: phoneMatch.id,
       username: phoneMatch.username,
@@ -101,5 +107,6 @@ async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
     };
   }
 
+  console.log(`[RESOLVER] No match found for phone: ${normalized}`);
   return null;
 }
