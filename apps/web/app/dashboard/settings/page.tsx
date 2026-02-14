@@ -1552,6 +1552,31 @@ export default function SettingsPage() {
             </div>
           )}
 
+          {/* Voice Preference */}
+          <div>
+            <Label htmlFor="voicePreference">AI Voice</Label>
+            <select
+              id="voicePreference"
+              value={settings?.voice_preference || 'Google.en-US-Neural2-H'}
+              onChange={(e) => setSettings({ ...settings, voice_preference: e.target.value } as UserSettings)}
+              className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="Google.en-US-Neural2-H">Google Neural (Female, warm — default)</option>
+              <option value="Google.en-US-Neural2-F">Google Neural (Female, professional)</option>
+              <option value="Google.en-US-Neural2-C">Google Neural (Female, bright)</option>
+              <option value="Google.en-US-Neural2-D">Google Neural (Male, authoritative)</option>
+              <option value="Google.en-US-Neural2-A">Google Neural (Male, casual)</option>
+              <option value="Google.en-US-Neural2-J">Google Neural (Male, deep)</option>
+              <option value="Polly.Joanna-Neural">AWS Polly (Female, natural)</option>
+              <option value="Polly.Matthew-Neural">AWS Polly (Male, natural)</option>
+              <option value="Polly.Amy-Neural">AWS Polly (Female, British)</option>
+              <option value="Polly.Stephen-Neural">AWS Polly (Male, British)</option>
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              Choose the voice for phone calls and voice interactions
+            </p>
+          </div>
+
           {/* Email PIN Security */}
           <div className="border-t pt-6">
             <h4 className="font-semibold text-sm mb-2">Email PIN</h4>

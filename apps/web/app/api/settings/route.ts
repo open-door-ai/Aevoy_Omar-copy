@@ -124,6 +124,7 @@ export async function PUT(request: Request) {
     if (body.iterative_deepening !== undefined) updatePayload.iterative_deepening = body.iterative_deepening;
     if (body.monthly_budget !== undefined) updatePayload.monthly_budget = body.monthly_budget;
     if (body.dashboard_tour_seen !== undefined) updatePayload.dashboard_tour_seen = body.dashboard_tour_seen;
+    if (body.voice_preference !== undefined) updatePayload.voice_preference = body.voice_preference;
 
     // Upsert settings
     const { data, error } = await supabase
