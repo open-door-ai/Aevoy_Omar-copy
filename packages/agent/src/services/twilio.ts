@@ -63,7 +63,7 @@ export const AVAILABLE_VOICES = {
   'Polly.Amy-Neural': 'AWS Polly (Female, British)',
 } as const;
 
-export const DEFAULT_VOICE = 'Google.en-US-Neural2-H';
+export const DEFAULT_VOICE = 'Polly.Joanna-Neural'; // Natural-sounding neural voice
 
 // Cache voice preferences in memory (refreshed per call)
 const voiceCache = new Map<string, { voice: string; cachedAt: number }>();
