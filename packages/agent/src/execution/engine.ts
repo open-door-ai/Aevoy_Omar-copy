@@ -12,6 +12,8 @@ import { executeClick } from './actions/click.js';
 import { executeFill } from './actions/fill.js';
 import { executeLogin } from './actions/login.js';
 import { createExcelFile, createSimpleTable, type ExcelGenerationParams } from './actions/create-excel.js';
+import { createPowerPoint, createSimplePresentation, type PresentationParams } from './actions/create-powerpoint.js';
+import { createWordDocument, createSimpleDocument, type WordDocumentParams } from './actions/create-word.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
@@ -592,6 +594,12 @@ export class ExecutionEngine {
         case 'create_excel':
           return await this.handleCreateExcel(step.params);
 
+        case 'create_powerpoint':
+          return await this.handleCreatePowerPoint(step.params);
+
+        case 'create_word':
+          return await this.handleCreateWord(step.params);
+
         default:
           return {
             success: false,
@@ -812,6 +820,112 @@ export class ExecutionEngine {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[EXCEL] Error: ${message}`);
       return { success: false, action: 'create_excel', error: `Excel generation error: ${message}` };
+    }
+  }
+
+  private async handleCreatePowerPoint(params: Record<string, unknown>): Promise<StepResult> {
+    try {
+      console.log('[POWERPOINT] Creating PowerPoint presentation...');
+
+      // Extract parameters
+      const filename = params.filename as string;
+      const slides = params.slides as PresentationParams['slides'];
+      const title = params.title as string | undefined;
+      const author = params.author as string | undefined;
+      const subject = params.subject as string | undefined;
+      const theme = params.theme as PresentationParams['theme'] | undefined;
+
+      // Validate required params
+      if (!filename) {
+        return { success: false, action: 'create_powerpoint', error: 'Filename is required' };
+      }
+
+      if (!slides || !Array.isArray(slides) || slides.length === 0) {
+        return { success: false, action: 'create_powerpoint', error: 'At least one slide is required' };
+      }
+
+      // Call PowerPoint generation function
+      const result = await createPowerPoint({
+        filename,
+        slides,
+        title,
+        author,
+        subject,
+        theme
+      });
+
+      if (result.success) {
+        console.log(`[POWERPOINT] File created: ${result.filepath} (${result.fileSize} bytes, ${result.slideCount} slides)`);
+        return {
+          success: true,
+          action: 'create_powerpoint',
+          data: {
+            filepath: result.filepath,
+            url: result.url,
+            slideCount: result.slideCount,
+            fileSize: result.fileSize
+          }
+        };
+      } else {
+        console.error(`[POWERPOINT] Generation failed: ${result.error}`);
+        return { success: false, action: 'create_powerpoint', error: result.error || 'PowerPoint generation failed' };
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[POWERPOINT] Error: ${message}`);
+      return { success: false, action: 'create_powerpoint', error: `PowerPoint generation error: ${message}` };
+    }
+  }
+
+  private async handleCreateWord(params: Record<string, unknown>): Promise<StepResult> {
+    try {
+      console.log('[WORD] Creating Word document...');
+
+      // Extract parameters
+      const filename = params.filename as string;
+      const sections = params.sections as WordDocumentParams['sections'];
+      const title = params.title as string | undefined;
+      const author = params.author as string | undefined;
+
+      // Validate required params
+      if (!filename) {
+        return { success: false, action: 'create_word', error: 'Filename is required' };
+      }
+
+      if (!sections || !Array.isArray(sections) || sections.length === 0) {
+        return { success: false, action: 'create_word', error: 'At least one section is required' };
+      }
+
+      // Call Word generation function
+      const result = await createWordDocument({
+        filename,
+        sections,
+        title,
+        author
+      });
+
+      if (result.success) {
+        console.log(`[WORD] File created: ${result.filepath} (${result.fileSize} bytes, ${result.sectionCount} sections)`);
+        return {
+          success: true,
+          action: 'create_word',
+          data: {
+            filepath: result.filepath,
+            url: result.url,
+            sectionCount: result.sectionCount,
+            fileSize: result.fileSize
+          }
+        };
+      } else {
+        console.error(`[WORD] Generation failed: ${result.error}`);
+        return { success: false, action: 'create_word', error: result.error || 'Word generation failed' };
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[WORD] Error: ${message}`);
+      return { success: false, action: 'create_word', error: `Word generation error: ${message}` };
     }
   }
 

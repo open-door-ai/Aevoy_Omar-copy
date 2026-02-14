@@ -461,6 +461,8 @@ NON-BROWSER ACTIONS:
 [ACTION:remember("important fact")] — Save information to long-term memory
 [ACTION:schedule("task description", "0 9 * * 1")] — Schedule a recurring task (cron format)
 [ACTION:create_excel("filename", [{"name":"Sheet1", "headers":["Col1","Col2"], "data":[["A",1],["B",2]]}])] — Create Excel spreadsheet with data, styling, formulas
+[ACTION:create_powerpoint("filename", [{"title":"Slide 1", "bullets":["Point 1","Point 2"]}, {"title":"Slide 2", "content":"Text"}])] — Create PowerPoint presentation with slides, themes, layouts
+[ACTION:create_word("filename", [{"type":"heading", "text":"Title", "level":1}, {"type":"paragraph", "text":"Content"}])] — Create Word document with headings, paragraphs, tables, lists
 
 EXECUTION MODEL (Reason → Observe → Plan → Act):
 - FIRST: If the task has conditional logic ("if X then Y", "if this fails try that"), EXPLICITLY reason through the branches BEFORE acting.
@@ -1005,6 +1007,40 @@ function parseAction(type: string, paramsStr: string): Action | null {
         return { type: "create_excel", params: { filename, sheets } };
       } catch (error) {
         console.error('[EXCEL] Failed to parse sheets JSON:', error);
+        return null;
+      }
+    }
+
+    case "create_powerpoint": {
+      // Parse: create_powerpoint("filename", [slide_definitions])
+      const firstComma = paramsStr.indexOf(",");
+      if (firstComma === -1) return null;
+
+      const filename = paramsStr.substring(0, firstComma).trim().replace(/^["']|["']$/g, "");
+      const slidesStr = paramsStr.substring(firstComma + 1).trim();
+
+      try {
+        const slides = JSON.parse(slidesStr);
+        return { type: "create_powerpoint", params: { filename, slides } };
+      } catch (error) {
+        console.error('[POWERPOINT] Failed to parse slides JSON:', error);
+        return null;
+      }
+    }
+
+    case "create_word": {
+      // Parse: create_word("filename", [section_definitions])
+      const firstComma = paramsStr.indexOf(",");
+      if (firstComma === -1) return null;
+
+      const filename = paramsStr.substring(0, firstComma).trim().replace(/^["']|["']$/g, "");
+      const sectionsStr = paramsStr.substring(firstComma + 1).trim();
+
+      try {
+        const sections = JSON.parse(sectionsStr);
+        return { type: "create_word", params: { filename, sections } };
+      } catch (error) {
+        console.error('[WORD] Failed to parse sections JSON:', error);
         return null;
       }
     }
