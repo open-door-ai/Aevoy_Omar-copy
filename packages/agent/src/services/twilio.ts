@@ -63,7 +63,7 @@ export const AVAILABLE_VOICES = {
   'Polly.Amy-Neural': 'AWS Polly (Female, British)',
 } as const;
 
-export const DEFAULT_VOICE = 'Polly.Joanna-Neural'; // Natural-sounding neural voice
+export const DEFAULT_VOICE = 'Google.en-US-Neural2-F'; // Google Neural - professional, natural
 
 // Cache voice preferences in memory (refreshed per call)
 const voiceCache = new Map<string, { voice: string; cachedAt: number }>();
@@ -212,7 +212,7 @@ export async function callExternal(
 
 /**
  * Generate TwiML for incoming voice call.
- * Greets user and starts speech gathering.
+ * Greets user with dynamic, personalized message.
  */
 export async function generateIncomingCallTwiml(userId: string, userName: string): Promise<string> {
   const config = getTwilioConfig();
@@ -221,14 +221,24 @@ export async function generateIncomingCallTwiml(userId: string, userName: string
     ? `${config.webhookBaseUrl}/webhook/voice/process/${userId}`
     : "/webhook/voice/process/" + userId;
 
+  // Generate dynamic greeting (varies each call)
+  const greetings = [
+    `Hey ${escapeXml(userName)}! What's up?`,
+    `Hi there, ${escapeXml(userName)}! What can I do for you?`,
+    `${escapeXml(userName)}! Good to hear from you. What do you need?`,
+    `Hey ${escapeXml(userName)}! I'm here, what's on your mind?`,
+    `${escapeXml(userName)}! Ready when you are. What can I help with?`,
+  ];
+  const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">Hello ${escapeXml(userName)}! This is your Aevoy assistant. How can I help you today?</Say>
-  <Gather input="speech" timeout="10" speechTimeout="auto"
+  <Say voice="${voice}">${greeting}</Say>
+  <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
           action="${processUrl}" method="POST">
-    <Say voice="${voice}">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">I'm listening.</Say>
   </Gather>
-  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="${voice}">I didn't catch that. Call me back anytime!</Say>
 </Response>`;
 }
 
@@ -455,14 +465,14 @@ async function generateReceptionistTwiml(userId: string, userName: string, calle
 }
 
 /**
- * Process transcribed voice command — returns TwiML response.
+ * Process transcribed voice command — returns TwiML response with smooth ending.
  */
 export async function processVoiceCommand(
   userId: string,
   speechResult: string
 ): Promise<string> {
   if (!speechResult || speechResult.trim().length === 0) {
-    return generateResponseTwiml("I didn't catch that. Could you repeat your request?");
+    return generateResponseTwiml("I didn't catch that. Call me back anytime!");
   }
 
   try {
@@ -492,15 +502,24 @@ export async function processVoiceCommand(
 
     if (taskRecord) {
       console.log(`[TWILIO] Voice task created: ${taskRecord.id}`);
-      return generateResponseTwiml(
-        `Got it! I'll work on that for you: "${speechResult.substring(0, 100)}". I'll send you the results by email or text.`
-      );
+
+      // Generate dynamic confirmation + smooth ending
+      const confirmations = [
+        `Perfect! I'm on it. I'll shoot you the results as soon as I'm done. Talk soon!`,
+        `Got it! Working on this now. You'll get an update via email or text. Catch you later!`,
+        `Awesome! Consider it done. I'll ping you when it's ready. Take care!`,
+        `On it! I'll handle this and get back to you shortly. Have a good one!`,
+        `Understood! I'll take care of that right away and update you soon. Later!`,
+      ];
+      const confirmation = confirmations[Math.floor(Math.random() * confirmations.length)];
+
+      return generateResponseTwiml(confirmation);
     }
 
-    return generateResponseTwiml("Sorry, I had trouble creating your task. Please try again.");
+    return generateResponseTwiml("Sorry, I had trouble creating your task. Give me another call!");
   } catch (error) {
     console.error("[TWILIO] Voice processing error:", error);
-    return generateResponseTwiml("Sorry, something went wrong. Please try again later.");
+    return generateResponseTwiml("Sorry, something went wrong. Call me back and we'll try again!");
   }
 }
 

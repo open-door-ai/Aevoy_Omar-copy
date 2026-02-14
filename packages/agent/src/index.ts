@@ -829,16 +829,25 @@ app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
       pin_success: null
     });
 
-    // Generate TwiML for task request
+    // Generate dynamic personalized greeting
+    const greetings = [
+      `Hey ${profile.username}! What's up?`,
+      `Hi there, ${profile.username}! What can I do for you?`,
+      `${profile.username}! Good to hear from you. What do you need?`,
+      `Hey ${profile.username}! I'm here, what's on your mind?`,
+      `${profile.username}! Ready when you are. What can I help with?`,
+    ];
+    const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">Hey! What can I help you with?</Say>
+  <Say voice="${voice}">${greeting}</Say>
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="${voice}">Go ahead, I'm listening.</Say>
+    <Say voice="${voice}">I'm listening.</Say>
   </Gather>
-  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
+  <Say voice="${voice}">I didn't catch that. Call me back anytime!</Say>
 </Response>`);
   } catch (error) {
     console.error("[VOICE] Incoming call error:", error);
