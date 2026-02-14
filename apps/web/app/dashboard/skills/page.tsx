@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, Package, CheckCircle, AlertCircle, Star, TrendingUp, Zap, Shield } from 'lucide-react';
+import { Search, Package, CheckCircle, AlertCircle, Star, TrendingUp, Zap, Shield, Info } from 'lucide-react';
+import { SkillDetailModal, type SkillDetail } from '@/components/skill-detail-modal';
 
 interface Skill {
   id: string;
@@ -29,15 +30,19 @@ interface SkillSearchResult {
 }
 
 export default function SkillsMarketplacePage() {
+  const [activeTab, setActiveTab] = useState<'marketplace' | 'my-skills'>('marketplace');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSource, setSelectedSource] = useState<'all' | 'curated' | 'mcp' | 'n8n'>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [mySkills, setMySkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [sources, setSources] = useState({ curated: 0, mcp: 0, n8n: 0 });
   const [installing, setInstalling] = useState<Set<string>>(new Set());
+  const [selectedSkill, setSelectedSkill] = useState<SkillDetail | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const categories = [
     'all',
@@ -55,6 +60,43 @@ export default function SkillsMarketplacePage() {
   useEffect(() => {
     searchSkills();
   }, [selectedSource, selectedCategory]);
+
+  useEffect(() => {
+    if (activeTab === 'my-skills') {
+      fetchMySkills();
+    }
+  }, [activeTab]);
+
+  const fetchMySkills = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/skills/installed');
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch installed skills: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      setMySkills(data.skills || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch installed skills');
+      console.error('[SKILLS-UI] Fetch installed error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openSkillDetail = (skill: Skill) => {
+    setSelectedSkill(skill as SkillDetail);
+    setModalOpen(true);
+  };
+
+  const closeSkillDetail = () => {
+    setSelectedSkill(null);
+    setModalOpen(false);
+  };
 
   const searchSkills = async () => {
     setLoading(true);
@@ -185,14 +227,42 @@ export default function SkillsMarketplacePage() {
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-6">
           <h1 className="text-4xl font-bold text-foreground mb-2">Skills Marketplace</h1>
           <p className="text-muted-foreground">
             Discover and install {totalCount.toLocaleString()}+ skills from curated, MCP, and n8n registries
           </p>
         </div>
 
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => setActiveTab('marketplace')}
+            className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+              activeTab === 'marketplace'
+                ? 'bg-purple-600 text-white'
+                : 'bg-muted text-muted-foreground hover:bg-accent'
+            }`}
+          >
+            <Package className="w-4 h-4 inline-block mr-2" />
+            Marketplace
+          </button>
+          <button
+            onClick={() => setActiveTab('my-skills')}
+            className={`px-6 py-3 rounded-lg font-medium transition-colors ${
+              activeTab === 'my-skills'
+                ? 'bg-purple-600 text-white'
+                : 'bg-muted text-muted-foreground hover:bg-accent'
+            }`}
+          >
+            <CheckCircle className="w-4 h-4 inline-block mr-2" />
+            My Skills ({mySkills.length})
+          </button>
+        </div>
+
         {/* Stats */}
+        {activeTab === 'marketplace' && (
+          <>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-card backdrop-blur-sm border border-border rounded-lg p-4">
             <div className="flex items-center justify-between">
@@ -354,28 +424,37 @@ export default function SkillsMarketplacePage() {
                 </div>
 
                 {/* Actions */}
-                <button
-                  onClick={() => installSkill(skill.id)}
-                  disabled={installing.has(skill.id) || skill.installed}
-                  className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  {installing.has(skill.id) ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Installing...
-                    </>
-                  ) : skill.installed ? (
-                    <>
-                      <CheckCircle className="w-4 h-4" />
-                      Installed
-                    </>
-                  ) : (
-                    <>
-                      <Package className="w-4 h-4" />
-                      Install Skill
-                    </>
-                  )}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => openSkillDetail(skill)}
+                    className="px-4 py-2 bg-muted hover:bg-accent text-foreground font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Info className="w-4 h-4" />
+                    Details
+                  </button>
+                  <button
+                    onClick={() => installSkill(skill.id)}
+                    disabled={installing.has(skill.id) || skill.installed}
+                    className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                  >
+                    {installing.has(skill.id) ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Installing...
+                      </>
+                    ) : skill.installed ? (
+                      <>
+                        <CheckCircle className="w-4 h-4" />
+                        Installed
+                      </>
+                    ) : (
+                      <>
+                        <Package className="w-4 h-4" />
+                        Install
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -389,6 +468,85 @@ export default function SkillsMarketplacePage() {
           </p>
           <p className="mt-1">Skills run in V8 isolated contexts with restricted permissions</p>
         </div>
+        </>
+        )}
+
+        {/* My Skills View */}
+        {activeTab === 'my-skills' && (
+          <div>
+            {loading ? (
+              <div className="text-center py-12">
+                <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
+                <p className="text-muted-foreground mt-4">Loading your skills...</p>
+              </div>
+            ) : mySkills.length === 0 ? (
+              <div className="text-center py-12">
+                <Package className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                <p className="text-muted-foreground text-lg">No skills installed yet</p>
+                <p className="text-muted-foreground text-sm mt-2">Visit the Marketplace tab to install skills</p>
+                <button
+                  onClick={() => setActiveTab('marketplace')}
+                  className="mt-4 px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors"
+                >
+                  Browse Marketplace
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {mySkills.map((skill) => (
+                  <div
+                    key={skill.id}
+                    className="bg-card backdrop-blur-sm border border-border rounded-lg p-5 hover:border-purple-500/50 transition-all group"
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <h3 className="text-foreground font-semibold text-lg mb-1 group-hover:text-purple-500 transition-colors">
+                          {skill.name}
+                        </h3>
+                        <p className="text-muted-foreground text-xs">{skill.provider}</p>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        {getSourceBadge(skill.source)}
+                        {getTrustBadge(skill.trustLevel)}
+                      </div>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-muted-foreground text-sm mb-4 line-clamp-2">{skill.description}</p>
+
+                    {/* Metadata */}
+                    <div className="flex items-center gap-3 mb-4 text-xs text-muted-foreground">
+                      {skill.version && <span>v{skill.version}</span>}
+                      {skill.category && <span className="capitalize">{skill.category}</span>}
+                      <span className="text-green-600 dark:text-green-400">
+                        ✓ Installed
+                      </span>
+                    </div>
+
+                    {/* Actions */}
+                    <button
+                      onClick={() => openSkillDetail(skill)}
+                      className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Info className="w-4 h-4" />
+                      View Details & Test
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Skill Detail Modal */}
+        <SkillDetailModal
+          skill={selectedSkill}
+          isOpen={modalOpen}
+          onClose={closeSkillDetail}
+          onInstall={installSkill}
+          installing={installing.has(selectedSkill?.id || '')}
+        />
       </div>
     </div>
   );

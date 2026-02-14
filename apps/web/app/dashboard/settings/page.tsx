@@ -34,6 +34,7 @@ interface UserSettings {
   agent_card_limit_transaction: number;
   agent_card_limit_monthly: number;
   virtual_phone: string | null;
+  voice_preference?: string;
   proactive_daily_limit?: number;
   auto_install_skills?: boolean;
   auto_acquire_oauth?: boolean;
