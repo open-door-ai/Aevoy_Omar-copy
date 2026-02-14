@@ -1940,31 +1940,47 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // Record successful browser steps to learnings (Hive Mind auto-learning)
+    // Privacy: PII is scrubbed before upload, user can opt-out in settings
     if (executionEngine && classification.needsBrowser && actionResults.filter(r => r.success).length > 0) {
       try {
-        const { computePageHash } = await import("../execution/page-hash.js");
-        const page = executionEngine.getPage();
-        if (page) {
-          const pageHash = await computePageHash(page);
-          const domain = classification.domains[0] || "unknown";
-          await getSupabaseClient().from("learnings").upsert({
-            service: domain,
-            task_type: classification.taskType,
-            title: `Auto-learned: ${classification.taskType} on ${domain}`,
-            recorded_steps: actionResults.filter(r => r.success).map(r => ({
+        // Check if user has consented to Hive learning uploads
+        const { hasHiveLearningConsent, scrubActionParams } = await import("../utils/pii-scrubber.js");
+        const hasConsent = await hasHiveLearningConsent(userId);
+
+        if (!hasConsent) {
+          console.log(`[HIVE] User ${userId.slice(0, 8)} opted out of learning uploads`);
+        } else {
+          const { computePageHash } = await import("../execution/page-hash.js");
+          const page = executionEngine.getPage();
+          if (page) {
+            const pageHash = await computePageHash(page);
+            const domain = classification.domains[0] || "unknown";
+
+            // Scrub PII from action params before uploading to shared hub
+            const scrubbedSteps = actionResults.filter(r => r.success).map(r => ({
               type: r.action.type,
-              params: r.action.params,
-            })),
-            page_hash: pageHash,
-            layout_verified_at: new Date().toISOString(),
-            success_rate: 100,
-            total_attempts: 1,
-            total_successes: 1,
-            last_verified: new Date().toISOString(),
-          }, { onConflict: "service,task_type" }).select();
+              params: scrubActionParams(r.action.params || {}),
+            }));
+
+            await getSupabaseClient().from("learnings").upsert({
+              service: domain,
+              task_type: classification.taskType,
+              title: `Auto-learned: ${classification.taskType} on ${domain}`,
+              recorded_steps: scrubbedSteps,
+              page_hash: pageHash,
+              layout_verified_at: new Date().toISOString(),
+              success_rate: 100,
+              total_attempts: 1,
+              total_successes: 1,
+              last_verified: new Date().toISOString(),
+            }, { onConflict: "service,task_type" }).select();
+
+            console.log(`[HIVE] Uploaded learning to shared hub: ${classification.taskType} on ${domain} (PII scrubbed)`);
+          }
         }
-      } catch {
+      } catch (error) {
         // Non-critical — learning is bonus
+        console.error('[HIVE] Learning upload failed:', error);
       }
     }
 

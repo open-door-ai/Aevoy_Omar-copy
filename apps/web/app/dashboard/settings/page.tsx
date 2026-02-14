@@ -70,6 +70,9 @@ export default function SettingsPage() {
   // Hive Mind venting state
   const [allowVenting, setAllowVenting] = useState(false);
 
+  // Hive Mind learning state
+  const [allowHiveLearning, setAllowHiveLearning] = useState(true);
+
   // Proactive notifications limit
   const [proactiveLimit, setProactiveLimit] = useState(10);
 
@@ -127,6 +130,7 @@ export default function SettingsPage() {
         setBotName(data.bot_name || "");
         setTimezone(data.timezone || "America/Los_Angeles");
         setAllowVenting(data.allow_agent_venting || false);
+        setAllowHiveLearning(data.allow_hive_learning !== false); // Default to true
 
         // Load phone & voice settings
         setUserPhoneNumber(data.phone_number || "");
@@ -288,13 +292,16 @@ export default function SettingsPage() {
         throw new Error("Failed to save settings");
       }
 
-      // Save venting preference to profile
+      // Save venting and learning preferences to profile
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         await supabase
           .from("profiles")
-          .update({ allow_agent_venting: allowVenting })
+          .update({
+            allow_agent_venting: allowVenting,
+            allow_hive_learning: allowHiveLearning
+          })
           .eq("id", user.id);
       }
 
@@ -944,6 +951,38 @@ export default function SettingsPage() {
                   <p className="text-sm text-muted-foreground">Your agent gets an anonymous identity (e.g. Aevoy-7K2) and can vent about dark patterns it encounters</p>
                 </div>
               </label>
+            </div>
+
+            {/* Hive Mind Learning Uploads */}
+            <div className="space-y-3">
+              <Label>Hive Mind Learning Uploads</Label>
+              <p className="text-sm text-muted-foreground">
+                Allow your AI agent to share anonymous learnings (successful action patterns) with the global Hive Mind.
+                All personal information is automatically scrubbed before upload — emails, names, passwords are never shared.
+                This helps ALL Aevoy agents get smarter over time.
+              </p>
+              <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={allowHiveLearning}
+                  onChange={(e) => setAllowHiveLearning(e.target.checked)}
+                  className="w-4 h-4 rounded"
+                />
+                <div>
+                  <p className="font-medium">Share anonymous learnings</p>
+                  <p className="text-sm text-muted-foreground">
+                    When your agent successfully completes a task, it shares the action sequence (with PII redacted)
+                    to help other agents learn. Example: &quot;To login to GitHub, click button with selector .btn-primary&quot;
+                  </p>
+                </div>
+              </label>
+              <div className="bg-muted/30 p-3 rounded-lg border border-blue-500/20">
+                <p className="text-xs text-muted-foreground">
+                  <strong className="text-blue-600">Privacy guaranteed:</strong> We scrub emails, phone numbers, passwords,
+                  tokens, names, addresses, and all other PII before upload. Only generic action patterns are shared.
+                  {!allowHiveLearning && <span className="block mt-1 text-orange-600 font-semibold">⚠️ Currently opted out — your agent cannot benefit from or contribute to collective learning.</span>}
+                </p>
+              </div>
             </div>
 
           </CardContent>
