@@ -15,6 +15,7 @@ import { createExcelFile, createSimpleTable, type ExcelGenerationParams } from '
 import { createPowerPoint, createSimplePresentation, type PresentationParams } from './actions/create-powerpoint.js';
 import { createWordDocument, createSimpleDocument, type WordDocumentParams } from './actions/create-word.js';
 import { createPDF, createSimplePDF, type PDFParams } from './actions/create-pdf.js';
+import { screenshotWithOCR, type ScreenshotOCRParams, type OCRResult } from './actions/screenshot-ocr.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
@@ -604,6 +605,9 @@ export class ExecutionEngine {
         case 'create_pdf':
           return await this.handleCreatePDF(step.params);
 
+        case 'screenshot_ocr':
+          return await this.handleScreenshotOCR(step.params);
+
         default:
           return {
             success: false,
@@ -987,6 +991,59 @@ export class ExecutionEngine {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[PDF] Error: ${message}`);
       return { success: false, action: 'create_pdf', error: `PDF generation error: ${message}` };
+    }
+  }
+
+  private async handleScreenshotOCR(params: Record<string, unknown>): Promise<StepResult> {
+    try {
+      console.log('[OCR] Starting screenshot + OCR...');
+
+      if (!this.page) {
+        return { success: false, action: 'screenshot_ocr', error: 'No active page' };
+      }
+
+      // Extract parameters
+      const fullPage = params.fullPage as boolean | undefined;
+      const region = params.region as ScreenshotOCRParams['region'] | undefined;
+      const engine = params.engine as ScreenshotOCRParams['engine'] | undefined;
+      const languages = params.languages as string[] | undefined;
+      const detectTables = params.detectTables as boolean | undefined;
+      const detectForms = params.detectForms as boolean | undefined;
+      const format = params.format as 'text' | 'structured' | undefined;
+
+      // Call OCR function
+      const result = await screenshotWithOCR(this.page, {
+        fullPage,
+        region,
+        engine,
+        languages,
+        detectTables,
+        detectForms,
+        format
+      });
+
+      if (result.success) {
+        console.log(`[OCR] Extracted ${result.text?.length || 0} characters with ${result.confidence}% confidence (${result.engine})`);
+        return {
+          success: true,
+          action: 'screenshot_ocr',
+          data: {
+            text: result.text,
+            confidence: result.confidence,
+            engine: result.engine,
+            screenshotPath: result.screenshotPath,
+            structuredData: result.structuredData
+          }
+        };
+      } else {
+        console.error(`[OCR] Extraction failed: ${result.error}`);
+        return { success: false, action: 'screenshot_ocr', error: result.error || 'OCR extraction failed' };
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[OCR] Error: ${message}`);
+      return { success: false, action: 'screenshot_ocr', error: `OCR error: ${message}` };
     }
   }
 

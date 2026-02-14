@@ -464,6 +464,7 @@ NON-BROWSER ACTIONS:
 [ACTION:create_powerpoint("filename", [{"title":"Slide 1", "bullets":["Point 1","Point 2"]}, {"title":"Slide 2", "content":"Text"}])] — Create PowerPoint presentation with slides, themes, layouts
 [ACTION:create_word("filename", [{"type":"heading", "text":"Title", "level":1}, {"type":"paragraph", "text":"Content"}])] — Create Word document with headings, paragraphs, tables, lists
 [ACTION:create_pdf("filename", [{"type":"title", "text":"Document Title"}, {"type":"paragraph", "text":"Content"}, {"type":"table", "tableData":{"headers":["H1","H2"], "rows":[["A","B"]]}}])] — Create PDF document with text, images, tables, professional formatting
+[ACTION:screenshot_ocr({"fullPage": true, "engine": "auto", "languages": ["eng"], "detectTables": true, "detectForms": true, "format": "structured"})] — Capture screenshot and extract text using OCR (Tesseract offline + AI vision fallback). Supports table/form detection, multi-language, region-specific extraction
 
 EXECUTION MODEL (Reason → Observe → Plan → Act):
 - FIRST: If the task has conditional logic ("if X then Y", "if this fails try that"), EXPLICITLY reason through the branches BEFORE acting.
@@ -1060,6 +1061,18 @@ function parseAction(type: string, paramsStr: string): Action | null {
       } catch (error) {
         console.error('[PDF] Failed to parse content JSON:', error);
         return null;
+      }
+    }
+
+    case "screenshot_ocr": {
+      // Parse: screenshot_ocr({...params})
+      try {
+        const params = JSON.parse(paramsStr);
+        return { type: "screenshot_ocr", params };
+      } catch (error) {
+        console.error('[OCR] Failed to parse params JSON:', error);
+        // Fallback: empty params = full page screenshot with default settings
+        return { type: "screenshot_ocr", params: {} };
       }
     }
 
