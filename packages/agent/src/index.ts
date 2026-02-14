@@ -933,17 +933,11 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 
   try {
     const supabase = getSupabaseClient();
-    const { normalizePhone } = await import("./utils/phone.js");
-    const normalized = normalizePhone(callerNumber);
 
-    // Lookup user by phone number
-    const { data: profile, error: lookupError } = await supabase
-      .from("profiles")
-      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, timezone")
-      .eq("phone_number", normalized)
-      .single();
+    // Use identity resolver to handle both twilio_number and phone_number
+    const resolved = await resolveUser(callerNumber);
 
-    if (lookupError || !profile) {
+    if (!resolved) {
       // Unknown caller - block
       console.log(`[VOICE] Unknown caller: ${callerNumber}`);
 
@@ -965,7 +959,24 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 </Response>`);
     }
 
-    const userId = profile.id;
+    const userId = resolved.userId;
+
+    // Fetch full profile for PIN checks
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, timezone")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      console.log(`[VOICE] Failed to load profile for user ${userId.slice(0, 8)}`);
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again.</Say>
+  <Hangup/>
+</Response>`);
+    }
 
     // Check daily call limit (50/day per user)
     if (!(await checkDailyCallLimit(userId))) {
@@ -1062,17 +1073,11 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
   try {
     const supabase = getSupabaseClient();
-    const { normalizePhone } = await import("./utils/phone.js");
-    const normalized = normalizePhone(senderNumber);
 
-    // Lookup user
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("id, username")
-      .eq("phone_number", normalized)
-      .single();
+    // Use identity resolver to handle both twilio_number and phone_number
+    const resolved = await resolveUser(senderNumber);
 
-    if (!profile) {
+    if (!resolved) {
       // Unknown sender
       console.log(`[SMS] Unknown sender: ${senderNumber}`);
       res.type("text/xml");
@@ -1082,14 +1087,15 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 </Response>`);
     }
 
-    const userId = profile.id;
-    console.log(`[SMS] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
+    const userId = resolved.userId;
+    const username = resolved.username;
+    console.log(`[SMS] Recognized user: ${username} (${userId.slice(0, 8)})`);
 
     // Process SMS as task
     const { processTask } = await import("./services/processor.js");
     await processTask({
       userId,
-      username: profile.username,
+      username,
       from: senderNumber,
       subject: "[SMS]",
       body: message,
@@ -1121,21 +1127,31 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
 
   try {
     const supabase = getSupabaseClient();
-    const { normalizePhone } = await import("./utils/phone.js");
-    const normalized = normalizePhone(callerNumber);
 
-    // Look up user by caller phone number (not all profiles)
+    // Resolve user identity (checks both twilio_number and phone_number)
+    const resolved = await resolveUser(callerNumber);
+
+    if (!resolved) {
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">No account found for this phone number. Please sign up at aevoy dot com.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    const userId = resolved.userId;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, phone_number")
-      .eq("phone_number", normalized)
+      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until")
+      .eq("id", userId)
       .single();
 
     if (!profile || !profile.voice_pin) {
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">No account found for this phone number. Please sign up at aevoy dot com.</Say>
+  <Say voice="${voice}">No PIN set. Please set your voice PIN at aevoy dot com slash dashboard slash settings.</Say>
   <Hangup/>
 </Response>`);
     }
@@ -1192,7 +1208,6 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
 </Response>`);
     }
 
-    const userId = profile.id;
     console.log(`[PIN] Successful verification for ${profile.username} (${userId.slice(0, 8)})`);
 
     // Reset PIN attempts
