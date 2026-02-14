@@ -1718,6 +1718,38 @@ app.listen(PORT, async () => {
     console.error(`[HEALTH] Failed to start health system:`, e);
   }
 
+  // START TASK WATCHDOG (Clean up stuck tasks every 5 minutes)
+  setInterval(async () => {
+    try {
+      const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+      const { data: stuckTasks } = await getSupabaseClient()
+        .from('tasks')
+        .select('id, email_subject')
+        .eq('status', 'processing')
+        .lt('started_at', twentyMinutesAgo);
+
+      if (stuckTasks && stuckTasks.length > 0) {
+        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck tasks (>20 min), cleaning up...`);
+
+        const { data: cleaned } = await getSupabaseClient()
+          .from('tasks')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error_message: 'Task exceeded 20-minute timeout (watchdog cleanup)'
+          })
+          .eq('status', 'processing')
+          .lt('started_at', twentyMinutesAgo)
+          .select('id');
+
+        console.log(`[WATCHDOG] Cleaned up ${cleaned?.length || 0} stuck tasks`);
+      }
+    } catch (e) {
+      console.error('[WATCHDOG] Error cleaning stuck tasks:', e);
+    }
+  }, 5 * 60 * 1000); // Every 5 minutes
+  console.log('[WATCHDOG] ✅ Task timeout watchdog started (5min interval, 20min timeout)');
+
   startScheduler();
   startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)
   // startInboxPoller(); // Disabled: Using Cloudflare Email Routing instead
