@@ -1072,7 +1072,7 @@ export class ExecutionEngine {
       await checkAndHandleAntiBot(this.page!);
 
       // Check for CAPTCHAs
-      await handleCaptchaIfPresent(this.page!);
+      await handleCaptchaIfPresent(this.page!, this.userId, this.taskId);
 
       console.log(`[ENGINE] Navigation successful: ${url}`);
       return { success: true, action: 'navigate', data: { url } };
@@ -1111,7 +1111,7 @@ export class ExecutionEngine {
           await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
           await waitForSPAReady(this.page);
           await checkAndHandleAntiBot(this.page);
-          await handleCaptchaIfPresent(this.page);
+          await handleCaptchaIfPresent(this.page, this.userId, this.taskId);
 
           console.log(`[ENGINE] Local navigation successful: ${url}`);
           return { success: true, action: 'navigate', data: { url }, method: 'local_fallback' };
@@ -1424,7 +1424,7 @@ export class ExecutionEngine {
     await page.waitForLoadState('networkidle').catch(() => {});
 
     // Check for CAPTCHAs after submit
-    await handleCaptchaIfPresent(page);
+    await handleCaptchaIfPresent(page, this.userId, this.taskId);
 
     if (expectedOutcome) {
       const verifyResult = await this.verifyActionSuccess('submit', expectedOutcome);

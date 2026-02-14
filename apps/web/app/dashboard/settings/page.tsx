@@ -1846,6 +1846,19 @@ export default function SettingsPage() {
           setMessage({ type: "success", text: `Number ${number} purchased successfully!` });
         }}
       />
+
+      {/* Inbox Setup Dialog */}
+      <Dialog open={showInboxSetupDialog} onOpenChange={setShowInboxSetupDialog}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Connect Your Inbox</DialogTitle>
+            <DialogDescription>
+              One-click setup with app passwords - no OAuth verification needed
+            </DialogDescription>
+          </DialogHeader>
+          <InboxSetupWizard onComplete={handleInboxSetupComplete} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

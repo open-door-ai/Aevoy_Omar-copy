@@ -23,6 +23,7 @@ import {
   handleConfirmationReply,
   handleVerificationCodeReply,
 } from "./processor.js";
+import { maskEmail } from "../utils/logging.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,7 +76,7 @@ export function startInboxPoller(): void {
   }
 
   console.log(
-    `[INBOX-POLLER] Starting — polling ${INBOX_EMAIL} every ${POLL_INTERVAL / 1000}s`
+    `[INBOX-POLLER] Starting — polling ${maskEmail(INBOX_EMAIL)} every ${POLL_INTERVAL / 1000}s`
   );
 
   // Run immediately, then on interval
@@ -414,7 +415,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   const senderEmail = email.from.toLowerCase().trim();
   if (user.email && senderEmail !== user.email.toLowerCase().trim()) {
     console.log(
-      `[INBOX-POLLER] Sender mismatch for ${username}: ${senderEmail} vs ${user.email}`
+      `[INBOX-POLLER] Sender mismatch for ${username}: ${maskEmail(senderEmail)} vs ${maskEmail(user.email)}`
     );
     return;
   }

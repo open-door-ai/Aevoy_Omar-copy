@@ -1,5 +1,23 @@
 import PostalMime from "postal-mime";
 
+// SECURITY: PII masking for logs
+function maskEmail(email: string | undefined | null): string {
+  if (!email) return '***';
+  const parts = email.split('@');
+  if (parts.length !== 2) return '***';
+  return `***@${parts[1]}`;
+}
+
+function maskPin(pin: string | undefined | null): string {
+  if (!pin) return '***';
+  return '*'.repeat(pin.length);
+}
+
+function maskUserId(userId: string | undefined | null): string {
+  if (!userId) return '***';
+  return userId.slice(0, 8);
+}
+
 interface Env {
   AGENT_URL: string;
   AGENT_WEBHOOK_SECRET: string;
@@ -379,7 +397,7 @@ export default {
 
       // EMAIL PIN VERIFICATION FLOW
       if (registeredEmail && senderEmail !== registeredEmail) {
-        console.log(`[EMAIL] Unregistered sender ${senderEmail} for user ${username}`);
+        console.log(`[EMAIL] Unregistered sender ${maskEmail(senderEmail)} for user ${username}`);
 
         const supabase = getSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
 
@@ -405,7 +423,7 @@ export default {
 
         // Check if PIN locked (3 failed attempts)
         if (user.email_pin_locked_until && new Date(user.email_pin_locked_until) > new Date()) {
-          console.log(`[EMAIL] User ${user.id} email PIN locked until ${user.email_pin_locked_until}`);
+          console.log(`[EMAIL] User ${maskUserId(user.id)} email PIN locked until ${user.email_pin_locked_until}`);
 
           await sendEmailViaAgent({
             to: registeredEmail,
@@ -432,7 +450,7 @@ export default {
 
         if (pinMatch && isReplyToPinRequest) {
           const enteredPin = pinMatch[0];
-          console.log(`[EMAIL] PIN verification attempt: ${enteredPin.slice(0, 2)}****`);
+          console.log(`[EMAIL] PIN verification attempt: ${maskPin(enteredPin)}`);
 
           // Find matching session
           const { data: session, error: sessionError } = await supabase
@@ -447,7 +465,7 @@ export default {
 
           if (!sessionError && session) {
             // PIN VERIFIED! Process original email
-            console.log(`[EMAIL] PIN verified for ${session.sender_email}`);
+            console.log(`[EMAIL] PIN verified for ${maskEmail(session.sender_email)}`);
 
             // Mark session as verified
             await supabase
@@ -496,7 +514,7 @@ export default {
             return;
           } else {
             // Invalid or expired PIN
-            console.log(`[EMAIL] Invalid PIN attempt from ${senderEmail}`);
+            console.log(`[EMAIL] Invalid PIN attempt from ${maskEmail(senderEmail)}`);
 
             // Increment attempts
             await supabase.rpc("increment_email_pin_attempts", { p_user_id: user.id }).execute();

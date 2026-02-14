@@ -309,6 +309,15 @@ export async function sendSms(request: SmsRequest): Promise<{
   messageSid?: string;
   error?: string;
 }> {
+  // Test mode: use fake SMS server
+  if (isTestMode()) {
+    const config = getTwilioConfig();
+    const from = config?.phoneNumber || '+17789008951';
+    const messageId = fakeEmailServer.sendSMS(from, request.to, request.body);
+    console.log(`[TWILIO-TEST] SMS sent: ${messageId}`);
+    return { success: true, messageSid: messageId };
+  }
+
   const config = getTwilioConfig();
   if (!config) return { success: false, error: "Twilio not configured" };
 

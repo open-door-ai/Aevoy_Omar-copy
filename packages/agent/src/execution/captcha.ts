@@ -580,47 +580,202 @@ async function solveImageWith2Captcha(page: Page, apiKey: string): Promise<Captc
 }
 
 /**
- * Solve image CAPTCHA using Claude Vision.
+ * Solve image CAPTCHA using Claude Vision (fallback when API services fail).
  */
-async function solveImageCaptcha(page: Page): Promise<CaptchaSolveResult> {
+async function solveWithClaudeVision(page: Page, detection: CaptchaDetection): Promise<CaptchaSolveResult> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    return { success: false, error: 'Image CAPTCHA requires Anthropic API key' };
+    return { success: false, error: 'Claude Vision requires Anthropic API key' };
   }
 
   try {
-    // Find and screenshot the CAPTCHA image
-    const captchaEl = await page.$('img[src*="captcha"], img[alt*="captcha" i], img[class*="captcha" i], #captcha-image');
-    if (!captchaEl) {
-      return { success: false, error: 'Could not find CAPTCHA image element' };
+    const screenshot = await captureImageCaptcha(page);
+    if (!screenshot) {
+      return { success: false, error: 'Could not capture CAPTCHA image' };
     }
-
-    const screenshot = await captchaEl.screenshot({ type: 'png' });
-    const base64 = screenshot.toString('base64');
 
     // Use Claude Vision to read the CAPTCHA
     const { generateVisionResponse } = await import('../services/ai.js');
-    const { content } = await generateVisionResponse(
+    const { content, cost } = await generateVisionResponse(
       'Read the text/characters in this CAPTCHA image. Return ONLY the characters, nothing else. No explanation.',
-      base64,
+      screenshot,
       'You are reading a CAPTCHA image. Return only the exact text shown.'
     );
 
     const solution = content.trim().replace(/[^a-zA-Z0-9]/g, '');
 
     if (solution.length < 2) {
-      return { success: false, error: 'Could not read CAPTCHA text' };
+      return { success: false, error: 'Could not read CAPTCHA text (too short)' };
     }
 
     // Find input field near the CAPTCHA and enter solution
     const inputEl = await page.$('input[name*="captcha" i], input[id*="captcha" i], input[placeholder*="captcha" i]');
     if (inputEl) {
       await inputEl.fill(solution);
+      console.log(`[CAPTCHA] Filled CAPTCHA input with solution: ${solution}`);
+    } else {
+      console.warn('[CAPTCHA] Could not find input field for CAPTCHA solution');
     }
 
-    return { success: true, solution };
+    return { success: true, solution, cost, service: 'claude_vision' };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    return { success: false, error: `Image CAPTCHA error: ${message}` };
+    return { success: false, error: `Claude Vision error: ${message}` };
+  }
+}
+
+/**
+ * Request user manual CAPTCHA solve (fallback when all automated methods fail).
+ * Sends email with screenshot and waits for response.
+ */
+async function requestUserManualSolve(
+  page: Page,
+  detection: CaptchaDetection,
+  userId?: string
+): Promise<CaptchaSolveResult> {
+  try {
+    if (!userId) {
+      return {
+        success: false,
+        error: 'All CAPTCHA services failed and no user ID for manual fallback',
+        service: 'user_manual',
+      };
+    }
+
+    // Capture full page screenshot with CAPTCHA
+    const screenshot = await page.screenshot({ type: 'png', fullPage: true });
+    const base64 = screenshot.toString('base64');
+
+    // Send email to user
+    const { sendEmail } = await import('../services/email.js');
+    const { getSupabaseClient } = await import('../utils/supabase.js');
+
+    const { data: profile } = await getSupabaseClient()
+      .from('profiles')
+      .select('email, username')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.email) {
+      return { success: false, error: 'Could not find user email for manual CAPTCHA', service: 'user_manual' };
+    }
+
+    await sendEmail({
+      to: profile.email,
+      subject: `🤖 Help Needed: CAPTCHA on ${new URL(detection.pageUrl).hostname}`,
+      text: `Hi ${profile.username || 'there'},
+
+I encountered a ${detection.type.toUpperCase()} CAPTCHA that I couldn't solve automatically.
+
+**Site:** ${detection.pageUrl}
+**CAPTCHA Type:** ${detection.type}
+
+Please view the attached screenshot and reply with the solution.
+
+I'll pause this task and wait for your response.
+
+— Your AI Assistant, Aevoy`,
+      html: `<p>Hi ${profile.username || 'there'},</p>
+<p>I encountered a <strong>${detection.type.toUpperCase()} CAPTCHA</strong> that I couldn't solve automatically.</p>
+<ul>
+<li><strong>Site:</strong> ${detection.pageUrl}</li>
+<li><strong>CAPTCHA Type:</strong> ${detection.type}</li>
+</ul>
+<p>Please view the attached screenshot and reply with the solution.</p>
+<p>I'll pause this task and wait for your response.</p>
+<p>— Your AI Assistant, Aevoy</p>`,
+      attachments: [
+        {
+          filename: 'captcha-screenshot.png',
+          content: base64,
+          contentType: 'image/png',
+        },
+      ],
+    });
+
+    console.log(`[CAPTCHA] Sent manual solve request to ${profile.email}`);
+
+    return {
+      success: false,
+      error: 'CAPTCHA requires manual solving — email sent to user',
+      screenshot: base64,
+      service: 'user_manual',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return {
+      success: false,
+      error: `Manual solve request failed: ${message}`,
+      service: 'user_manual',
+    };
+  }
+}
+
+/**
+ * Track CAPTCHA solving cost to database (ai_cost_log table).
+ */
+async function trackCaptchaCost(
+  userId: string,
+  taskId: string,
+  service: string,
+  captchaType: string,
+  cost: number
+): Promise<void> {
+  try {
+    const { getSupabaseClient } = await import('../utils/supabase.js');
+
+    await getSupabaseClient().from('ai_cost_log').insert({
+      user_id: userId,
+      task_id: taskId,
+      model: `captcha_${service}`,
+      tokens_used: 0,
+      cost_usd: cost,
+      task_type: `captcha_${captchaType}`,
+      created_at: new Date().toISOString(),
+    });
+
+    // Check daily CAPTCHA cost and alert if >$5
+    const today = new Date().toISOString().split('T')[0];
+    const { data: dailyCost } = await getSupabaseClient()
+      .from('ai_cost_log')
+      .select('cost_usd')
+      .eq('user_id', userId)
+      .gte('created_at', `${today}T00:00:00Z`)
+      .ilike('model', 'captcha_%');
+
+    const totalToday = dailyCost?.reduce((sum, row) => sum + (row.cost_usd || 0), 0) || 0;
+
+    if (totalToday > 5.0) {
+      console.warn(`[CAPTCHA] ⚠️ User ${userId} has exceeded $5 in CAPTCHA costs today ($${totalToday.toFixed(2)})`);
+
+      // Send alert email
+      const { sendEmail } = await import('../services/email.js');
+      const { data: profile } = await getSupabaseClient()
+        .from('profiles')
+        .select('email, username')
+        .eq('id', userId)
+        .single();
+
+      if (profile?.email) {
+        await sendEmail({
+          to: profile.email,
+          subject: '⚠️ High CAPTCHA Costs Alert',
+          text: `Hi ${profile.username || 'there'},
+
+Your CAPTCHA solving costs today have exceeded $5.00 (current: $${totalToday.toFixed(2)}).
+
+This might indicate:
+- A site with excessive CAPTCHAs
+- A task stuck in a CAPTCHA loop
+- Potential bot detection issue
+
+Please review your recent tasks and contact support if needed.
+
+— Aevoy`,
+        });
+      }
+    }
+  } catch (error) {
+    console.error('[CAPTCHA] Failed to track cost:', error);
   }
 }
 
@@ -662,20 +817,24 @@ async function injectCaptchaToken(page: Page, type: CaptchaType, token: string):
  * Check for CAPTCHA after a page action and solve if found.
  * Returns true if a CAPTCHA was found and solved (or none found).
  */
-export async function handleCaptchaIfPresent(page: Page): Promise<boolean> {
+export async function handleCaptchaIfPresent(
+  page: Page,
+  userId?: string,
+  taskId?: string
+): Promise<boolean> {
   const detection = await detectCaptcha(page);
   if (detection.type === 'none') {
     return true;
   }
 
   console.log(`[CAPTCHA] Detected ${detection.type} on ${detection.pageUrl}`);
-  const result = await solveCaptcha(page, detection);
+  const result = await solveCaptcha(page, detection, userId, taskId);
 
   if (result.success) {
-    console.log(`[CAPTCHA] Solved ${detection.type}`);
+    console.log(`[CAPTCHA] ✓ Solved ${detection.type} via ${result.service} (cost: $${result.cost || 0})`);
     return true;
   }
 
-  console.warn(`[CAPTCHA] Failed to solve ${detection.type}: ${result.error}`);
+  console.warn(`[CAPTCHA] ✗ Failed to solve ${detection.type}: ${result.error}`);
   return false;
 }

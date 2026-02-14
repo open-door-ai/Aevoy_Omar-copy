@@ -5,7 +5,7 @@ import { AnimatePresence, motion, springs } from "@/components/ui/motion";
 import StepWelcome from "./step-welcome";
 import StepEmail from "./step-email";
 import { StepEmailVerification } from "./step-email-verification";
-import StepPhone from "./step-phone";
+import StepPhoneNew from "./step-phone-new";
 import StepInterview, { type InterviewData } from "./step-interview";
 import StepTour from "./step-tour";
 
@@ -168,7 +168,7 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
               transition={springs.default}
               className="w-full"
             >
-              <StepPhone
+              <StepPhoneNew
                 onNext={(phone) => {
                   setData((d) => ({ ...d, phone }));
                   goTo(5);

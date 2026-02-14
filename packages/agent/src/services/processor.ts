@@ -16,6 +16,8 @@ import { getFailureMemory, recordFailure, learnSolution } from "../memory/failur
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
 import { verifyTask, quickVerify, getQualityTier, QUALITY_TIERS } from "./task-verifier.js";
 import { detectWorkflow, createWorkflow } from "./workflow.js";
+import { requiresAutonomousPlanning, handleAutonomousWorkflow } from "./autonomous-integration.js";
+import { clearFailurePatterns, persistFailurePatterns, buildRetryEnforcementMessage, recordFailedAttempt, getRetryGuidance } from "./retry-intelligence.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, StrikeContext, StrikeRecord, VerificationResult } from "../types/index.js";
 import { readFileSync } from 'fs';
@@ -163,6 +165,20 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const cardCommand = parseCardCommand(body);
     if (cardCommand) {
       return handleCardCommand(cardCommand, userId, from, username);
+    }
+
+    // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
+    if (requiresAutonomousPlanning(subject, body)) {
+      console.log(`[AUTONOMOUS] Task requires autonomous workflow planning`);
+      return handleAutonomousWorkflow({
+        userId,
+        username,
+        from,
+        subject,
+        body,
+        taskId: undefined,
+        inputChannel: task.inputChannel,
+      });
     }
 
     // Detect if this is a multi-step workflow (complex project)
@@ -660,6 +676,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
       taskId = taskRecord.id;
     }
+
+    // Clear retry failure patterns for this new task
+    clearFailurePatterns();
 
     // 3. Classify task and create locked intent (SECURITY)
     const classification = await classifyTask(`${subject} ${body}`);
