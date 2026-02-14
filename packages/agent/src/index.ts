@@ -739,7 +739,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
         call_type: "unknown",
         pin_required: true,
         pin_success: false
-      }).then(() => {}).catch(e => console.error("[VOICE] Call history insert failed:", e));
+      }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -781,7 +781,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
         call_type: "rate_limited",
         pin_required: false,
         pin_success: null
-      }).then(() => {}).catch(e => console.error("[VOICE] Call history insert failed:", e));
+      }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -804,7 +804,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
         call_type: "blocked",
         pin_required: true,
         pin_success: false
-      }).then(() => {}).catch(e => console.error("[VOICE] Call history insert failed:", e));
+      }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
