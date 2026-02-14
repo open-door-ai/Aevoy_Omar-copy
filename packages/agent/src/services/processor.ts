@@ -1389,17 +1389,23 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }).join('\n');
 
       // OBSERVE: Capture current page state for AI context
+      console.log(`[DEBUG-ITER] Starting page observation for iteration ${currentIteration}`);
       let pageStateSection = '';
       if (executionEngine?.getPage()) {
         try {
+          console.log(`[DEBUG-ITER] Getting page object...`);
           const page = executionEngine.getPage()!;
+          console.log(`[DEBUG-ITER] Getting current URL...`);
           // Get current URL
           const currentUrl = page.url();
+          console.log(`[DEBUG-ITER] URL: ${currentUrl}, getting page text...`);
           // Get visible page text (truncated for token efficiency)
           const rawPageText = await page.textContent('body').catch(() => '');
+          console.log(`[DEBUG-ITER] Got ${rawPageText?.length || 0} chars, getting title...`);
           const pageText = (rawPageText || '').replace(/\s+/g, ' ').trim().substring(0, 1500);
           // Get page title
           const pageTitle = await page.title().catch(() => '');
+          console.log(`[DEBUG-ITER] Page title: ${pageTitle}`);
 
           pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
@@ -1407,25 +1413,36 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}`;
 
           // SELF-CRITIQUE: Quick AI check on whether actions worked (cheap/free model)
+          console.log(`[DEBUG-ITER] Checking if self-critique needed (failed=${failedActions.length}, success=${successfulActions.length})`);
           if (failedActions.length > 0 || successfulActions.length === 0) {
             try {
+              console.log(`[DEBUG-ITER] Running self-critique via quickValidate...`);
               const critiqueResult = await quickValidate(
                 `Actions attempted: ${resultsSummary.substring(0, 500)}\nPage now shows: ${pageText.substring(0, 500)}\nDid the actions succeed? What should be done differently? Be brief (2 sentences max).`,
                 'You are a task execution critic. Briefly evaluate if the actions succeeded based on the page state. 2 sentences max.'
               );
+              console.log(`[DEBUG-ITER] Self-critique complete: ${critiqueResult?.result ? 'got result' : 'no result'}`);
               if (critiqueResult?.result) {
                 pageStateSection += `\n  Self-critique: ${critiqueResult.result.substring(0, 300)}`;
               }
-            } catch {
+            } catch (critErr) {
+              console.log(`[DEBUG-ITER] Self-critique error: ${critErr}`);
               // Self-critique is optional, don't block on failure
             }
+          } else {
+            console.log(`[DEBUG-ITER] Skipping self-critique (all actions succeeded)`);
           }
         } catch (e) {
           console.log(`[OBSERVE] Failed to capture page state: ${e}`);
         }
+      } else {
+        console.log(`[DEBUG-ITER] No page object, skipping observation`);
       }
+      console.log(`[DEBUG-ITER] Page observation complete`);
+
 
       // Check for repeated strategies and build enforcement message
+      console.log(`[DEBUG-ITER] Building strategy enforcement (${strategiesAttempted.size} strategies tracked)`);
       let strategyEnforcement = '';
       const repeatedStrategies: string[] = [];
       for (const [strategy, attempts] of strategiesAttempted.entries()) {
@@ -1435,6 +1452,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
 
       if (repeatedStrategies.length > 0) {
+        console.log(`[DEBUG-ITER] Found ${repeatedStrategies.length} repeated strategies, adding enforcement`);
         strategyEnforcement = `\n\nCRITICAL - STRATEGY ENFORCEMENT:
 You have tried these approaches ${MAX_SAME_STRATEGY_RETRIES}+ times and they KEEP FAILING:
 ${repeatedStrategies.map(s => `  - ${s}`).join('\n')}
@@ -1450,7 +1468,10 @@ Be creative. Think outside the box. What would a human do differently?`;
       }
 
       // AGI-LEVEL: Build method type diversity enforcement
+      console.log(`[DEBUG-ITER] Building diversity enforcement (${methodTypesAttempted.size} method types tracked)`);
       const diversityEnforcement = buildDiversityMessage(methodTypesAttempted, MAX_SAME_METHOD_TYPE_RETRIES);
+      console.log(`[DEBUG-ITER] Enforcement messages built`);
+
 
       const iterativePrompt = `Original request: ${subject} ${body}
 
@@ -1468,12 +1489,19 @@ OBSERVE the current page state above, then decide what to do next:
 - NEVER give up. Always find a way.`;
 
       console.log(`[ITERATE] Re-prompting AI with page observation for round ${currentIteration + 1}...`);
+      console.log(`[DEBUG-ITER] About to call generateResponse (THIS IS THE SUSPECTED HANG POINT)`);
+      console.log(`[DEBUG-ITER] Prompt length: ${iterativePrompt.length} chars`);
+      const responseStart = Date.now();
       const nextResponse = await generateResponse(
         memory, subject, iterativePrompt, username, aiTaskType, userId, taskId
       );
+      const responseDuration = Date.now() - responseStart;
+      console.log(`[DEBUG-ITER] generateResponse completed in ${responseDuration}ms, cost: $${nextResponse.cost || 0}`);
+      console.log(`[DEBUG-ITER] Response has ${nextResponse.actions?.length || 0} actions, content length: ${nextResponse.content?.length || 0}`);
       totalAiCost += nextResponse.cost || 0;
       totalTokens += nextResponse.tokensUsed || 0;
       aiResponse = nextResponse;
+      console.log(`[DEBUG-ITER] === END OF ITERATION ${currentIteration} === Looping back to top...`);
     }
 
     if (currentIteration >= MAX_ITERATIONS) {
