@@ -5,6 +5,7 @@
  * Integrates with the existing processor.ts without breaking changes.
  */
 
+import crypto from "crypto";
 import {
   planAutonomousWorkflow,
   executeWorkflowStep,
@@ -103,7 +104,7 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
         .select()
         .single();
 
-      taskId = taskRecord?.id || "";
+      taskId = taskRecord?.id || crypto.randomUUID();
     }
 
     // 4. If clarification needed, send questions and pause
@@ -199,7 +200,7 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
           });
 
           return {
-            taskId,
+            taskId: taskId || crypto.randomUUID(),
             success: false,
             response: `Workflow failed at step: ${step.description}`,
             actions: [],
@@ -322,7 +323,7 @@ export async function handleAutonomousClarification(
     // 1. Retrieve stored plan from task record
     const { data: taskRecord } = await getSupabaseClient()
       .from("tasks")
-      .select("structured_intent")
+      .select("structured_intent, input_text")
       .eq("id", taskId)
       .single();
 
@@ -331,6 +332,7 @@ export async function handleAutonomousClarification(
     }
 
     const storedPlan = taskRecord.structured_intent.workflow_plan as WorkflowPlan;
+    const originalInput = (taskRecord as { input_text?: string }).input_text || '';
 
     // 2. Parse user's answers
     const answers = parseClarificationResponse(clarificationText);
@@ -348,14 +350,14 @@ export async function handleAutonomousClarification(
           workflow_plan: updatedPlan,
           awaiting_clarification: false,
         },
-        input_text: `${taskRecord.input_text || ''}\n\nClarifications:\n${clarificationText}`,
+        input_text: `${originalInput}\n\nClarifications:\n${clarificationText}`,
       })
       .eq("id", taskId);
 
     // 5. Continue with workflow execution
     return handleAutonomousWorkflow({
       ...task,
-      body: taskRecord.input_text || '',
+      body: originalInput,
       taskId,
     });
   } catch (error) {

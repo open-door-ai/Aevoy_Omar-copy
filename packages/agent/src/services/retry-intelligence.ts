@@ -130,10 +130,12 @@ function getAlternativeSuggestions(action: Action, forbiddenMethods: Set<string>
       suggestions.push('Try clearing existing value before filling');
       break;
 
-    case 'navigate':
-      suggestions.push('Try different URL format (with/without www, http vs https)');
-      suggestions.push('Try search engine to find the page instead of direct navigation');
-      suggestions.push('Try clicking through from homepage instead of direct URL');
+    default:
+      if (action.type === 'navigate') {
+        suggestions.push('Try different URL format (with/without www, http vs https)');
+        suggestions.push('Try search engine to find the page instead of direct navigation');
+        suggestions.push('Try clicking through from homepage instead of direct URL');
+      }
       break;
 
     case 'search':

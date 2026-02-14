@@ -314,7 +314,7 @@ Be thorough and complete the step fully.`;
         error: "Step produced no meaningful output or actions",
         startTime,
         endTime: Date.now(),
-        cost: response.cost,
+        cost: response.cost || 0,
       };
     }
 
@@ -337,7 +337,7 @@ Be thorough and complete the step fully.`;
       output,
       startTime,
       endTime: Date.now(),
-      cost: response.cost,
+      cost: response.cost || 0,
     };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
