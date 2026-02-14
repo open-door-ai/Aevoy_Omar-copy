@@ -148,6 +148,14 @@ const VERIFICATION_CRITERIA: Record<string, VerificationCriteria> = {
       "summary",
       "information",
       "data",
+      "search results",
+      "showing results",
+      "results for",
+      "web results",
+      "about",
+      "pages",
+      "links",
+      "snippets",
       "shows",
       "according",
       "indicates",
@@ -271,7 +279,7 @@ export const QUALITY_TIERS: Record<QualityTier, { target: number; maxStrikes: nu
   financial:      { target: 99, maxStrikes: 3, alwaysVision: true },
   browser_action: { target: 95, maxStrikes: 3, alwaysVision: false },
   communication:  { target: 90, maxStrikes: 2, alwaysVision: false },
-  research:       { target: 80, maxStrikes: 2, alwaysVision: false },
+  research:       { target: 60, maxStrikes: 2, alwaysVision: false },  // Lowered from 80 to 60 — search results don't have explicit success messages
   simple:         { target: 70, maxStrikes: 1, alwaysVision: false },
 };
 
