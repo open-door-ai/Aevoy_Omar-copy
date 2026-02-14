@@ -46,6 +46,32 @@ function validateEnv(): void {
     process.exit(1);
   }
 
+  // SECURITY: Validate encryption key has sufficient entropy (not weak/predictable)
+  const weakPatterns = [
+    /^0+$/, // all zeros
+    /^f+$/i, // all Fs
+    /^(00)+$/, // repeating 00
+    /^(ff)+$/i, // repeating FF
+    /^(.)\1+$/, // single character repeated
+    /^(..)\1+$/, // two characters repeated
+    /^0123456789abcdef0123456789abcdef/i, // sequential hex
+  ];
+
+  if (weakPatterns.some(pattern => pattern.test(encKey))) {
+    console.error("[STARTUP] ENCRYPTION_KEY is too weak (contains repeating or sequential pattern).");
+    console.error("  Generate a strong key with: openssl rand -hex 32");
+    process.exit(1);
+  }
+
+  // Check for minimum unique characters (should have at least 10 different hex chars)
+  const uniqueChars = new Set(encKey.toLowerCase().split('')).size;
+  if (uniqueChars < 10) {
+    console.error(`[STARTUP] ENCRYPTION_KEY has insufficient entropy (only ${uniqueChars} unique characters).`);
+    console.error("  A strong key should use most hex characters (0-9, a-f).");
+    console.error("  Generate a strong key with: openssl rand -hex 32");
+    process.exit(1);
+  }
+
   // Warn for optional but important env vars
   const optional = [
     "RESEND_API_KEY",

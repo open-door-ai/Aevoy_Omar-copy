@@ -37,6 +37,34 @@ import { recommendSkills, formatSkillRecommendations } from "./autonomous-skill-
 import { findTemplate, recordTemplate, substituteVariables, recordTemplateFailure } from "./template-recorder.js";
 
 /**
+ * Resolve correct recipient based on channel and user profile.
+ * Email channel: send to 'from' (user's email)
+ * SMS channel: send SMS to 'from' (phone), email to profile.email
+ * Voice channel: send SMS to 'from' (phone), email to profile.email
+ */
+async function resolveRecipient(
+  channel: InputChannel | undefined,
+  from: string,
+  userId: string
+): Promise<{ email: string; phone: string | null }> {
+  if (channel === 'email') {
+    return { email: from, phone: null };
+  }
+
+  // For SMS/voice, fetch user's registered email and phone
+  const { data: profile } = await getSupabaseClient()
+    .from('profiles')
+    .select('email, phone')
+    .eq('id', userId)
+    .single();
+
+  return {
+    email: profile?.email || from,
+    phone: from, // from = phone for SMS/voice
+  };
+}
+
+/**
  * Send a message back to the user via the same channel they used.
  * SMS/voice channels get SMS replies; email/web/other get email replies.
  * Falls back to email if SMS delivery fails or no phone number on file.
@@ -44,30 +72,31 @@ import { findTemplate, recordTemplate, substituteVariables, recordTemplateFailur
 async function sendViaChannel(
   channel: InputChannel | undefined,
   userId: string,
-  to: string,
+  from: string,
   aevoyFrom: string,
   subject: string,
   body: string
 ): Promise<void> {
+  const { email, phone } = await resolveRecipient(channel, from, userId);
+
   if (channel === "sms" || channel === "voice") {
-    try {
-      const { data: profile } = await getSupabaseClient()
-        .from("profiles")
-        .select("twilio_number")
-        .eq("id", userId)
-        .single();
-      if (profile?.twilio_number) {
-        const smsBody = body.length > 1500
-          ? body.substring(0, 1500) + "... (full results emailed)"
-          : body;
-        await sendSms({ userId, to, body: smsBody });
-        return;
+    // Try SMS first
+    if (phone) {
+      const smsBody = body.length > 1500
+        ? body.substring(0, 1500) + "... (full results emailed)"
+        : body;
+      await sendSms({ userId, to: phone, body: smsBody });
+
+      // For long messages or voice tasks, also send email
+      if (body.length > 1500 || channel === "voice") {
+        await sendResponse({ to: email, from: aevoyFrom, subject, body });
       }
-    } catch {
-      // Fall through to email
+      return;
     }
   }
-  await sendResponse({ to, from: aevoyFrom, subject, body });
+
+  // Default to email
+  await sendResponse({ to: email, from: aevoyFrom, subject, body });
 }
 
 /**
@@ -1494,6 +1523,8 @@ Be creative. Think outside the box. What would a human do differently?`;
       const diversityEnforcement = buildDiversityMessage(methodTypesAttempted, MAX_SAME_METHOD_TYPE_RETRIES);
       console.log(`[DEBUG-ITER] Enforcement messages built`);
 
+      // RETRY INTELLIGENCE: Get global retry enforcement
+      const retryEnforcement = buildRetryEnforcementMessage();
 
       const iterativePrompt = `Original request: ${subject} ${body}
 
@@ -1502,6 +1533,7 @@ ${resultsSummary}
 ${pageStateSection}
 ${strategyEnforcement}
 ${diversityEnforcement}
+${retryEnforcement}
 
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 OBSERVE the current page state above, then decide what to do next:
@@ -1870,52 +1902,42 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       emailBody += `\n\nNote: I'd recommend double-checking these results as I wasn't fully able to verify them.`;
     }
 
+    // Resolve correct recipient based on channel
     const channel = task.inputChannel || "email";
+    const { email, phone } = await resolveRecipient(channel, from, userId);
+
     if (channel === "sms") {
       // SMS: short summary, truncated to 1600 chars
       const smsBody = cleanResponse.length > 1500
         ? cleanResponse.substring(0, 1500) + "... (full results emailed)"
         : cleanResponse;
-      try {
-        const { data: profile } = await getSupabaseClient()
-          .from("profiles")
-          .select("twilio_number")
-          .eq("id", userId)
-          .single();
-        if (profile?.twilio_number) {
-          await sendSms({ userId, to: from, body: smsBody });
-        } else {
-          // No phone on file, fall back to email
-          await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
-        }
-      } catch {
-        await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+
+      // Always try to send SMS if we have a phone number
+      if (phone) {
+        await sendSms({ userId, to: phone, body: smsBody });
+      } else {
+        // No phone on file, send email
+        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
       }
-      // Always send full results by email too if response is long
+
+      // Send full email if response is long
       if (cleanResponse.length > 1500) {
-        await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
       }
     } else if (channel === "voice") {
-      // Voice: send SMS summary + email full results
-      try {
-        const { data: profile } = await getSupabaseClient()
-          .from("profiles")
-          .select("twilio_number")
-          .eq("id", userId)
-          .single();
+      // Voice: send SMS summary to phone + email full results to email
+      if (phone) {
         const smsSummary = cleanResponse.length > 300
           ? cleanResponse.substring(0, 300) + "... (check email for full results)"
           : cleanResponse;
-        if (profile?.twilio_number) {
-          await sendSms({ userId, to: from, body: `[Aevoy] ${smsSummary}` });
-        }
-      } catch {
-        // Non-critical
+        await sendSms({ userId, to: phone, body: `[Aevoy] ${smsSummary}` });
       }
-      await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+
+      // Always send full results to email
+      await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
     } else {
       // Default: email
-      await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: emailBody });
+      await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
     }
 
     // 12. Update task as completed with cost tracking + verification

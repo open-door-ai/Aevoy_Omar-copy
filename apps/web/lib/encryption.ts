@@ -13,6 +13,28 @@ function getEncryptionKey(): string {
   if (!key) {
     throw new Error("ENCRYPTION_KEY environment variable is not set");
   }
+
+  // SECURITY: Validate key format and strength
+  if (!/^[0-9a-f]{64}$/i.test(key)) {
+    throw new Error("ENCRYPTION_KEY must be a 64-character hex string (32 bytes)");
+  }
+
+  // Check for weak patterns
+  const weakPatterns = [
+    /^0+$/, /^f+$/i, /^(00)+$/, /^(ff)+$/i,
+    /^(.)\1+$/, /^(..)\1+$/,
+    /^0123456789abcdef0123456789abcdef/i,
+  ];
+
+  if (weakPatterns.some(pattern => pattern.test(key))) {
+    throw new Error("ENCRYPTION_KEY is too weak (contains repeating or sequential pattern)");
+  }
+
+  const uniqueChars = new Set(key.toLowerCase().split('')).size;
+  if (uniqueChars < 10) {
+    throw new Error(`ENCRYPTION_KEY has insufficient entropy (only ${uniqueChars} unique characters)`);
+  }
+
   return key;
 }
 

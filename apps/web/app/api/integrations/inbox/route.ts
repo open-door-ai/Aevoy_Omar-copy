@@ -147,16 +147,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Encrypt the credentials
-    const encryptionKey = process.env.ENCRYPTION_KEY;
-    if (!encryptionKey) {
-      console.error("ENCRYPTION_KEY not configured");
-      return NextResponse.json(
-        { error: "Server configuration error" },
-        { status: 500 }
-      );
-    }
-
+    // Prepare credential data
     const credentialData = {
       email,
       password: cleanPassword,
@@ -168,8 +159,9 @@ export async function POST(request: Request) {
       provider: provider.name,
     };
 
-    const encryptedPassword = encrypt(cleanPassword, encryptionKey);
-    const encryptedData = encrypt(JSON.stringify(credentialData), encryptionKey);
+    // Encrypt the credentials
+    const encryptedPassword = await encrypt(cleanPassword);
+    const encryptedData = await encrypt(JSON.stringify(credentialData));
 
     // Store in oauth_connections (new standard location)
     // First, revoke any existing inbox connections

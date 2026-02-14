@@ -10,11 +10,42 @@ import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
 
-function getServerSecret(): string {
+// Cache validation state to avoid re-checking on every call
+interface GetServerSecretFunction {
+  (): string;
+  validated?: boolean;
+}
+
+const getServerSecret: GetServerSecretFunction = function(): string {
   const secret = process.env.ENCRYPTION_KEY;
   if (!secret) {
     throw new Error("FATAL: ENCRYPTION_KEY environment variable is not set.");
   }
+
+  // SECURITY: Validate key format and strength (only on first access)
+  if (!getServerSecret.validated) {
+    if (!/^[0-9a-f]{64}$/i.test(secret)) {
+      throw new Error("FATAL: ENCRYPTION_KEY must be a 64-character hex string (32 bytes)");
+    }
+
+    const weakPatterns = [
+      /^0+$/, /^f+$/i, /^(00)+$/, /^(ff)+$/i,
+      /^(.)\1+$/, /^(..)\1+$/,
+      /^0123456789abcdef0123456789abcdef/i,
+    ];
+
+    if (weakPatterns.some(pattern => pattern.test(secret))) {
+      throw new Error("FATAL: ENCRYPTION_KEY is too weak (contains repeating or sequential pattern)");
+    }
+
+    const uniqueChars = new Set(secret.toLowerCase().split('')).size;
+    if (uniqueChars < 10) {
+      throw new Error(`FATAL: ENCRYPTION_KEY has insufficient entropy (only ${uniqueChars} unique characters)`);
+    }
+
+    getServerSecret.validated = true;
+  }
+
   return secret;
 }
 
