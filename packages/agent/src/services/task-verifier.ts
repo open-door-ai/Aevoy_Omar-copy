@@ -140,9 +140,36 @@ const VERIFICATION_CRITERIA: Record<string, VerificationCriteria> = {
     requiresScreenshot: false,
   },
   research: {
-    successIndicators: ["results", "found", "here are", "summary"],
-    errorIndicators: ["no results", "not found", "error"],
-    evidencePatterns: [],
+    successIndicators: [
+      "results",
+      "found",
+      "here are",
+      "here is",
+      "summary",
+      "information",
+      "data",
+      "shows",
+      "according",
+      "indicates",
+      "reports",
+      "says",
+      "titled",
+      "headline",
+      "description",
+      "content",
+      "page",
+      "website",
+      "url",
+      "link"
+    ],
+    errorIndicators: ["no results", "not found", "error", "failed", "couldn't", "unable", "couldn't find"],
+    evidencePatterns: [
+      /title[:\s]+(.+)/i,
+      /headline[:\s]+(.+)/i,
+      /url[:\s]+(https?:\/\/.+)/i,
+      /found[:\s]+(.+)/i,
+      /shows?[:\s]+(.+)/i
+    ],
     requiresScreenshot: false,
   },
   shopping: {
@@ -413,7 +440,9 @@ export async function verifyTask(
     ? generateCorrectionHints(step1, step2, pageText, actionSuccessRate ?? 100)
     : [];
 
-  const passed = compositeScore >= 70;
+  // Lower threshold for research tasks (they're info-gathering, not transactional)
+  const threshold = taskType === 'research' ? 60 : 70;
+  const passed = compositeScore >= threshold;
   return {
     passed,
     confidence: compositeScore,

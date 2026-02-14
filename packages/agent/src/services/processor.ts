@@ -1613,16 +1613,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // 8. Strike-based verification loop
-    // OPTIMIZATION: Skip heavy verification for research/simple tasks — use quickVerify only
+    // OPTIMIZATION: Skip heavy verification for simple non-browser tasks only
     let verificationResult = null;
     const tier = getQualityTier(classification.taskType || 'simple');
     const tierConfig = QUALITY_TIERS[tier];
 
-    if ((tier === 'research' || tier === 'simple') && aiResponse.content) {
-      // Fast path: text-only verification for info-retrieval and simple tasks
-      console.log(`[VERIFY] Fast path for ${tier} tier — quickVerify only, skipping strikes`);
+    // Fast path: text-only verification for SIMPLE tasks that didn't use browser
+    if (tier === 'simple' && !executionEngine && aiResponse.content) {
+      console.log(`[VERIFY] Fast path for ${tier} tier (no browser) — quickVerify only`);
       try {
-        verificationResult = await quickVerify(classification.taskType || 'research', aiResponse.content);
+        verificationResult = await quickVerify(classification.taskType || 'simple', aiResponse.content);
         console.log(`[VERIFY] Quick result: ${verificationResult.passed ? 'PASSED' : 'NEEDS_REVIEW'} (${verificationResult.confidence}%)`);
       } catch (qvErr) {
         console.error('[VERIFY] Quick verify error:', qvErr);
