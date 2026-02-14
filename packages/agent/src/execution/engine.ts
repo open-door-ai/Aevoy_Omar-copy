@@ -585,6 +585,9 @@ export class ExecutionEngine {
         case 'login':
           return await this.handleLogin(step.params);
 
+        case 'search':
+          return await this.handleSearch(step.params);
+
         default:
           return {
             success: false,
@@ -663,6 +666,95 @@ export class ExecutionEngine {
       method: result.method,
       error: result.error,
     };
+  }
+
+  private async handleSearch(params: Record<string, unknown>): Promise<StepResult> {
+    const query = params.query as string;
+    const engine = (params.engine as string) || 'duckduckgo';
+
+    if (!query) {
+      return { success: false, action: 'search', error: 'Search query is required' };
+    }
+
+    const searchEngines: Record<string, string> = {
+      duckduckgo: 'https://duckduckgo.com',
+      google: 'https://www.google.com',
+      bing: 'https://www.bing.com',
+    };
+
+    const searchUrl = searchEngines[engine] || searchEngines.duckduckgo;
+
+    try {
+      console.log(`[SEARCH] Searching for "${query}" on ${engine}`);
+
+      // Step 1: Navigate to search engine
+      await this.page!.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await this.page!.waitForTimeout(1000);
+
+      // Step 2: Find and fill search box (try multiple selectors)
+      const searchSelectors = [
+        'input[name="q"]',
+        'input[type="search"]',
+        'input[aria-label="Search"]',
+        '#search_form_input',
+        '#searchbox_input',
+      ];
+
+      let filled = false;
+      for (const selector of searchSelectors) {
+        try {
+          const input = await this.page!.$(selector);
+          if (input) {
+            await input.fill(query);
+            console.log(`[SEARCH] Filled search box using selector: ${selector}`);
+            filled = true;
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      if (!filled) {
+        return { success: false, action: 'search', error: 'Could not find search box on page' };
+      }
+
+      // Step 3: Submit search (press Enter)
+      await this.page!.keyboard.press('Enter');
+      await this.page!.waitForLoadState('domcontentloaded', { timeout: 10000 });
+      await this.page!.waitForTimeout(2000);
+
+      // Step 4: Verify we're on results page
+      const currentUrl = this.page!.url();
+      if (!currentUrl.includes(query.toLowerCase().replace(/\s+/g, '+')) &&
+          !currentUrl.includes('search')) {
+        console.warn(`[SEARCH] URL doesn't look like results page: ${currentUrl}`);
+      }
+
+      // Step 5: Extract results (just verify they exist)
+      const resultsText = await this.page!.textContent('body') || '';
+      const hasResults = resultsText.length > 100; // Basic check
+
+      if (hasResults) {
+        console.log(`[SEARCH] Search completed successfully, ${resultsText.length} chars of results`);
+        return {
+          success: true,
+          action: 'search',
+          data: {
+            query,
+            engine,
+            url: currentUrl,
+            resultsLength: resultsText.length,
+          },
+        };
+      } else {
+        return { success: false, action: 'search', error: 'No search results found' };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[SEARCH] Search failed: ${message}`);
+      return { success: false, action: 'search', error: `Search failed: ${message}` };
+    }
   }
 
   private async handleNavigate(params: Record<string, unknown>): Promise<StepResult> {
