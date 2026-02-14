@@ -1158,9 +1158,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Execute actions → observe results → re-prompt AI → repeat
     // until task is done, budget exceeded, or timeout hit.
     // ============================================================
-    // AGI-LEVEL: Increased from 5 to 30 iterations for complex problem-solving
-    // "Make me money" and "Cure cancer" level tasks need persistence, not 5 attempts
-    const MAX_ITERATIONS = 30;
+    // CRITICAL: Reduced from 30 to 5 to prevent resource hogging
+    // With 10 concurrent tasks, 30 iterations = 300 total, causing deadlock
+    // 5 iterations = 50 total, more manageable for concurrency
+    const MAX_ITERATIONS = 5;
     let currentIteration = 0;
     let isTaskComplete = false;
     let totalAiCost = aiResponse.cost || 0;
@@ -1181,6 +1182,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
       currentIteration++;
+      const iterationStart = Date.now();
+      const ITERATION_TIMEOUT_MS = 60000; // 60 seconds per iteration max
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
 
       // Stream progress to dashboard via DB (fire-and-forget)
@@ -1501,7 +1504,16 @@ OBSERVE the current page state above, then decide what to do next:
       totalAiCost += nextResponse.cost || 0;
       totalTokens += nextResponse.tokensUsed || 0;
       aiResponse = nextResponse;
-      console.log(`[DEBUG-ITER] === END OF ITERATION ${currentIteration} === Looping back to top...`);
+
+      // Check iteration timeout
+      const iterationDuration = Date.now() - iterationStart;
+      if (iterationDuration > ITERATION_TIMEOUT_MS) {
+        console.log(`[ITERATE] Iteration ${currentIteration} exceeded ${ITERATION_TIMEOUT_MS}ms timeout (took ${iterationDuration}ms), stopping`);
+        isTaskComplete = true;
+        break;
+      }
+
+      console.log(`[DEBUG-ITER] === END OF ITERATION ${currentIteration} (${iterationDuration}ms) === Looping back to top...`);
     }
 
     if (currentIteration >= MAX_ITERATIONS) {
