@@ -10,9 +10,11 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
 import { Switch } from "@/components/ui/switch";
-import { Phone, Mail, Cloud, Zap, RotateCcw } from "lucide-react";
+import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox } from "lucide-react";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 import InboxManagementSettings from "@/components/settings/inbox-management";
+import { InboxSetupWizard } from "@/components/inbox-setup-wizard";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface Profile {
   id: string;
@@ -102,6 +104,8 @@ export default function SettingsPage() {
   const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
   const [microsoftStatus, setMicrosoftStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
   const [nylasStatus, setNylasStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null } | null>(null);
+  const [inboxStatus, setInboxStatus] = useState<{ connected: boolean; email: string | null; connectedAt: string | null; method?: string } | null>(null);
+  const [showInboxSetupDialog, setShowInboxSetupDialog] = useState(false);
 
   // Credential Vault state
   const [credentials, setCredentials] = useState<Array<{ id: string; site_domain: string; username: string; created_at: string }>>([]);
@@ -182,14 +186,16 @@ export default function SettingsPage() {
     async function loadIntegrations() {
       setIntegrationsLoading(true);
       try {
-        const [gmailRes, msRes, nylasRes] = await Promise.all([
+        const [gmailRes, msRes, nylasRes, inboxRes] = await Promise.all([
           fetch("/api/integrations/gmail"),
           fetch("/api/integrations/microsoft"),
           fetch("/api/integrations/nylas"),
+          fetch("/api/integrations/inbox"),
         ]);
         if (gmailRes.ok) setGmailStatus(await gmailRes.json());
         if (msRes.ok) setMicrosoftStatus(await msRes.json());
         if (nylasRes.ok) setNylasStatus(await nylasRes.json());
+        if (inboxRes.ok) setInboxStatus(await inboxRes.json());
       } catch (error) {
         console.error("Failed to load integrations:", error);
       }
@@ -533,6 +539,16 @@ export default function SettingsPage() {
     } catch (error) {
       setMessage({ type: "error", text: error instanceof Error ? error.message : `Failed to connect ${provider}` });
       setConnectingProvider(null);
+    }
+  };
+
+  const handleInboxSetupComplete = async () => {
+    setShowInboxSetupDialog(false);
+    setMessage({ type: "success", text: "Inbox connected successfully!" });
+    // Reload integrations to update status
+    const inboxRes = await fetch("/api/integrations/inbox");
+    if (inboxRes.ok) {
+      setInboxStatus(await inboxRes.json());
     }
   };
 
@@ -1195,6 +1211,81 @@ export default function SettingsPage() {
               <p className="text-xs text-muted-foreground">
                 Tip: Email &quot;add $50 to my card&quot; to quickly add funds, or &quot;freeze my card&quot; to temporarily disable it.
               </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Quick Inbox Setup */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Inbox className="w-5 h-5" />
+            <CardTitle>Quick Inbox Setup</CardTitle>
+          </div>
+          <CardDescription>
+            Connect your email inbox in one click - no OAuth verification needed
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {integrationsLoading ? (
+            <p className="text-sm text-muted-foreground">Loading inbox status...</p>
+          ) : inboxStatus?.connected ? (
+            <div className="flex items-center justify-between p-4 border rounded-lg bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-900">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                  <Mail className="w-5 h-5 text-green-600 dark:text-green-400" />
+                </div>
+                <div>
+                  <p className="font-medium">Inbox Connected</p>
+                  <p className="text-sm text-green-600 dark:text-green-400">
+                    {inboxStatus.email}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Method: {inboxStatus.method === "imap" ? "App Password (IMAP)" : "OAuth"}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (confirm("Disconnect inbox? Your AI will no longer be able to read and send emails.")) {
+                    try {
+                      const res = await fetch("/api/integrations/inbox", { method: "DELETE" });
+                      if (res.ok) {
+                        setInboxStatus({ connected: false, email: null, connectedAt: null });
+                        setMessage({ type: "success", text: "Inbox disconnected" });
+                      }
+                    } catch {
+                      setMessage({ type: "error", text: "Failed to disconnect inbox" });
+                    }
+                  }
+                }}
+              >
+                Disconnect
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-blue-50 dark:bg-blue-950/30 p-4 rounded-lg space-y-2">
+                <p className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                  Apple-like simplicity - no technical setup
+                </p>
+                <ul className="text-xs text-blue-800 dark:text-blue-200 space-y-1 list-disc list-inside">
+                  <li>One button to connect Gmail or Outlook</li>
+                  <li>We auto-configure all IMAP settings</li>
+                  <li>Just paste your app password - we handle the rest</li>
+                  <li>No OAuth verification needed (we&apos;re not verified by Google yet)</li>
+                </ul>
+              </div>
+              <Button
+                onClick={() => setShowInboxSetupDialog(true)}
+                className="w-full"
+              >
+                <Mail className="w-4 h-4 mr-2" />
+                Connect Your Inbox (1-Click)
+              </Button>
             </div>
           )}
         </CardContent>

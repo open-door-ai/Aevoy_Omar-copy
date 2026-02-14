@@ -12,6 +12,7 @@
 
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData } from "../types/index.js";
+import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
 
 // ---- Configuration ----
 

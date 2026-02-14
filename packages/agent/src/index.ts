@@ -76,6 +76,7 @@ import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest, TaskResult } from "./types/index.js";
 import skillRoutes from "./routes/skills.js";
 import { trackBackgroundJob } from "./utils/job-tracker.js";
+import { maskPhone, maskEmail, maskUserId, maskPin } from "./utils/logging.js";
 
 import crypto from "crypto";
 
@@ -331,7 +332,7 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
   }
 
   console.log(`[TASK-V2] Received`, {
-    userId: userId?.slice(0, 8),
+    userId: maskUserId(userId),
     channel: inputChannel || "email",
     timestamp: new Date().toISOString(),
   });
@@ -390,7 +391,7 @@ app.post("/task", taskLimiter, async (req, res) => {
   }
 
   console.log(`[TASK] Received`, {
-    userId: task.userId?.slice(0, 8),
+    userId: task.maskUserId(userId),
     timestamp: new Date().toISOString(),
   });
 
@@ -417,7 +418,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
   }
 
   console.log(`[TASK] Incoming (FULL PROCESSOR with 30x iterations)`, {
-    userId: task.userId?.slice(0, 8),
+    userId: task.maskUserId(userId),
     channel: task.inputChannel || "email",
     timestamp: new Date().toISOString(),
   });
@@ -699,7 +700,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   let voice = DEFAULT_VOICE;
   const startTime = Date.now();
 
-  console.log(`[VOICE] Incoming call from ${callerNumber} to ${twilioNumber}`);
+  console.log(`[VOICE] Incoming call from ${maskPhone(callerNumber)} to ${maskPhone(twilioNumber)}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -719,7 +720,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     ]);
 
     if (!resolved) {
-      console.log(`[VOICE] Unknown caller: ${callerNumber} (${Date.now() - startTime}ms)`);
+      console.log(`[VOICE] Unknown caller: ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 
       // Fire-and-forget (don't await) - saves ~200ms
       supabase.from("call_history").insert({
@@ -888,7 +889,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
 
-  console.log(`[TWILIO] Incoming voice call for user ${userId?.slice(0, 8)}`);
+  console.log(`[TWILIO] Incoming voice call for user ${maskUserId(userId)}`);
 
   try {
     const twiml = await handleIncomingVoice({ from, to, callSid });
@@ -909,7 +910,7 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
   const voice = await getUserVoice(userId);
   const speechResult = req.body.SpeechResult || "";
 
-  console.log(`[TWILIO] Voice command received for user ${userId?.slice(0, 8)}`);
+  console.log(`[TWILIO] Voice command received for user ${maskUserId(userId)}`);
 
   try {
     const twiml = await processVoiceCommand(userId, speechResult);
@@ -956,7 +957,7 @@ app.post("/webhook/voice/email-decision/:userId/:queueId", twilioLimiter, valida
   const queueId = req.params.queueId;
   const speechResult = req.body.SpeechResult || "";
 
-  console.log(`[TWILIO] Email decision received for user ${userId?.slice(0, 8)}, queue ${queueId?.slice(0, 8)}`);
+  console.log(`[TWILIO] Email decision received for user ${maskUserId(userId)}, queue ${queueId?.slice(0, 8)}`);
 
   try {
     const { processEmailVoiceDecision } = await import("./services/twilio.js");
@@ -982,7 +983,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
   const speechResult = req.body.SpeechResult || "";
   const callerNumber = req.query.caller as string || req.body.From || "unknown";
 
-  console.log(`[TWILIO] Message received for user ${userId?.slice(0, 8)} from ${callerNumber}`);
+  console.log(`[TWILIO] Message received for user ${maskUserId(userId)} from ${maskPhone(callerNumber)}`);
 
   try {
     // Respond to the caller
@@ -1020,7 +1021,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
           });
         }
 
-        console.log(`[TWILIO] Message delivered to ${profile.username} from ${callerNumber}`);
+        console.log(`[TWILIO] Message delivered to ${profile.username} from ${maskPhone(callerNumber)}`);
       }
     }
   } catch (error) {
@@ -1113,7 +1114,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
   const twilioNumber = req.body.To || "";
   const messageSid = req.body.MessageSid || "";
 
-  console.log(`[SMS] Incoming from ${senderNumber}: "${message.slice(0, 50)}..."`);
+  console.log(`[SMS] Incoming from ${maskPhone(senderNumber)}: "${message.slice(0, 50)}..."`);
 
   try {
     const supabase = getSupabaseClient();
@@ -1167,7 +1168,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
   let voice = DEFAULT_VOICE;
   const callSid = req.body.CallSid || "";
 
-  console.log(`[PIN] Verification attempt from ${callerNumber}, entered: ${enteredPin.slice(0, 2)}**`);
+  console.log(`[PIN] Verification attempt from ${maskPhone(callerNumber)}, entered: ${maskPin(enteredPin)}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -1239,7 +1240,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
       await supabase.from("profiles").update(updateData).eq("id", profile.id);
 
       const remaining = Math.max(0, 3 - attempts);
-      console.log(`[PIN] Invalid PIN from ${callerNumber}, ${remaining} attempts remaining`);
+      console.log(`[PIN] Invalid PIN from ${maskPhone(callerNumber)}, ${remaining} attempts remaining`);
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1526,7 +1527,7 @@ app.post("/webhook/interview-call/:userId", twilioLimiter, validateTwilioSignatu
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
 
-  console.log(`[ONBOARDING] Interview call initiated for user ${userId?.slice(0, 8)}`);
+  console.log(`[ONBOARDING] Interview call initiated for user ${maskUserId(userId)}`);
 
   try {
     const { handleInterviewCall } = await import("./services/onboarding-interview.js");
@@ -1546,7 +1547,7 @@ app.post("/webhook/interview-call/response/:userId", twilioLimiter, validateTwil
   const transcription = req.body.SpeechResult || req.body.TranscriptionText || "";
   const questionIndex = parseInt(req.query.question as string || "0");
 
-  console.log(`[ONBOARDING] Interview response from ${userId?.slice(0, 8)}, Q${questionIndex}: "${transcription.slice(0, 50)}..."`);
+  console.log(`[ONBOARDING] Interview response from ${maskUserId(userId)}, Q${questionIndex}: "${transcription.slice(0, 50)}..."`);
 
   try {
     const { processInterviewResponse } = await import("./services/onboarding-interview.js");
@@ -1580,7 +1581,7 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
     return res.status(400).json({ error: "userId and phone are required" });
   }
 
-  console.log(`[PHONE-VERIFY] Initiating verification call to ${phone} for user ${userId?.slice(0, 8)}`);
+  console.log(`[PHONE-VERIFY] Initiating verification call to ${maskPhone(phone)} for user ${maskUserId(userId)}`);
 
   try {
     const config = getTwilioConfig();
@@ -1622,7 +1623,7 @@ app.post("/webhook/voice/onboarding-gather/:userId", twilioLimiter, validateTwil
   const userId = req.params.userId;
   const voice = await getUserVoice(userId);
 
-  console.log(`[PHONE-VERIFY] Playing gather prompt for user ${userId?.slice(0, 8)}`);
+  console.log(`[PHONE-VERIFY] Playing gather prompt for user ${maskUserId(userId)}`);
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1649,7 +1650,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
   const digit = req.body.Digits || "";
   const from = req.body.From || "";
 
-  console.log(`[PHONE-VERIFY] User ${userId?.slice(0, 8)} pressed: ${digit}`);
+  console.log(`[PHONE-VERIFY] User ${maskUserId(userId)} pressed: ${digit}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -1676,7 +1677,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
         .eq("phone_number", profile?.phone_number || from)
         .eq("status", "initiated");
 
-      console.log(`[PHONE-VERIFY] Phone verified for user ${userId?.slice(0, 8)}`);
+      console.log(`[PHONE-VERIFY] Phone verified for user ${maskUserId(userId)}`);
 
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1692,7 +1693,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
         .eq("user_id", userId)
         .eq("status", "initiated");
 
-      console.log(`[PHONE-VERIFY] Verification cancelled by user ${userId?.slice(0, 8)}`);
+      console.log(`[PHONE-VERIFY] Verification cancelled by user ${maskUserId(userId)}`);
 
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1708,7 +1709,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
         .eq("user_id", userId)
         .eq("status", "initiated");
 
-      console.log(`[PHONE-VERIFY] Verification timeout for user ${userId?.slice(0, 8)}`);
+      console.log(`[PHONE-VERIFY] Verification timeout for user ${maskUserId(userId)}`);
 
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>

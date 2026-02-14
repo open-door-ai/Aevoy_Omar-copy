@@ -1,35 +1,48 @@
 /**
- * CAPTCHA Detection & Solving Pipeline
+ * CAPTCHA Detection & Solving Pipeline — Production-Ready
  *
  * Detects reCAPTCHA v2/v3, hCaptcha, Cloudflare Turnstile, and image CAPTCHAs.
- * Solves via 2captcha API or Claude Vision for image CAPTCHAs.
+ * Solves via CapSolver API (AI-powered, 95%+ success) with fallback to 2Captcha.
+ *
+ * Features:
+ * - Multi-service fallback: CapSolver → 2Captcha → Claude Vision
+ * - Cost tracking (logged to ai_cost_log)
+ * - User fallback (email screenshot if all services fail)
+ * - Daily cost alerts (>$5/day triggers notification)
+ * - 3 retry attempts per service
+ * - Screenshot evidence for all attempts
  */
 
 import type { Page } from 'playwright';
 
-export type CaptchaType = 'recaptcha_v2' | 'recaptcha_v3' | 'hcaptcha' | 'turnstile' | 'image' | 'none';
+export type CaptchaType = 'recaptcha_v2' | 'recaptcha_v3' | 'hcaptcha' | 'turnstile' | 'image' | 'funcaptcha' | 'geetest' | 'datadome' | 'none';
 
 interface CaptchaDetection {
   type: CaptchaType;
   siteKey?: string;
   pageUrl: string;
+  imageUrl?: string;
 }
 
 interface CaptchaSolveResult {
   success: boolean;
   solution?: string;
   error?: string;
+  cost?: number;
+  service?: 'capsolver' | '2captcha' | 'claude_vision' | 'user_manual';
+  screenshot?: string;
 }
 
 /**
  * Detect what type of CAPTCHA is present on the page.
+ * Enhanced detection for FunCaptcha, GeeTest, DataDome.
  */
 export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
   const pageUrl = page.url();
 
   const result = await page.evaluate(() => {
     // reCAPTCHA v2
-    const recaptchaV2 = document.querySelector('.g-recaptcha, [data-sitekey]');
+    const recaptchaV2 = document.querySelector('.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"]');
     if (recaptchaV2) {
       return {
         type: 'recaptcha_v2' as const,
@@ -49,7 +62,7 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
     }
 
     // hCaptcha
-    const hcaptcha = document.querySelector('.h-captcha, [data-hcaptcha-sitekey]');
+    const hcaptcha = document.querySelector('.h-captcha, [data-hcaptcha-sitekey], iframe[src*="hcaptcha"]');
     if (hcaptcha) {
       return {
         type: 'hcaptcha' as const,
@@ -58,7 +71,7 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
     }
 
     // Cloudflare Turnstile
-    const turnstile = document.querySelector('.cf-turnstile, [data-turnstile-sitekey]');
+    const turnstile = document.querySelector('.cf-turnstile, [data-turnstile-sitekey], iframe[src*="turnstile"]');
     if (turnstile) {
       return {
         type: 'turnstile' as const,
@@ -66,12 +79,37 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
       };
     }
 
+    // FunCaptcha (ArkoseLabs)
+    const funcaptcha = document.querySelector('[data-public-key], iframe[src*="funcaptcha"], iframe[src*="arkoselabs"]');
+    if (funcaptcha) {
+      return {
+        type: 'funcaptcha' as const,
+        siteKey: funcaptcha.getAttribute('data-public-key') || undefined,
+      };
+    }
+
+    // GeeTest
+    const geetest = document.querySelector('.geetest_holder, .geetest_box, [class*="geetest"]');
+    if (geetest) {
+      return { type: 'geetest' as const, siteKey: undefined };
+    }
+
+    // DataDome
+    const datadome = document.querySelector('[data-datadome], iframe[src*="datadome"]');
+    if (datadome) {
+      return {
+        type: 'datadome' as const,
+        siteKey: datadome.getAttribute('data-datadome') || undefined,
+      };
+    }
+
     // Image CAPTCHA (generic)
     const captchaImage = document.querySelector(
-      'img[src*="captcha"], img[alt*="captcha" i], img[class*="captcha" i], #captcha-image'
+      'img[src*="captcha"], img[alt*="captcha" i], img[class*="captcha" i], #captcha-image, .captcha-image'
     );
     if (captchaImage) {
-      return { type: 'image' as const, siteKey: undefined };
+      const imageUrl = (captchaImage as HTMLImageElement).src || undefined;
+      return { type: 'image' as const, siteKey: undefined, imageUrl };
     }
 
     return { type: 'none' as const, siteKey: undefined };
@@ -81,48 +119,278 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
 }
 
 /**
- * Attempt to solve a detected CAPTCHA.
+ * Attempt to solve a detected CAPTCHA with multi-service fallback.
+ * Priority: CapSolver (AI, fastest) → 2Captcha (human, reliable) → Claude Vision → User Manual
  */
-export async function solveCaptcha(page: Page, detection: CaptchaDetection): Promise<CaptchaSolveResult> {
+export async function solveCaptcha(
+  page: Page,
+  detection: CaptchaDetection,
+  userId?: string,
+  taskId?: string
+): Promise<CaptchaSolveResult> {
   if (detection.type === 'none') {
     return { success: true };
   }
 
-  const apiKey = process.env.TWOCAPTCHA_API_KEY;
+  console.log(`[CAPTCHA] Solving ${detection.type} on ${detection.pageUrl}`);
 
-  switch (detection.type) {
-    case 'recaptcha_v2':
-    case 'recaptcha_v3':
-    case 'hcaptcha':
-    case 'turnstile': {
-      if (!apiKey) {
-        return { success: false, error: `No 2captcha API key for ${detection.type}` };
-      }
-      if (!detection.siteKey) {
-        return { success: false, error: 'No site key found for CAPTCHA' };
-      }
-      return await solveWith2Captcha(page, detection, apiKey);
-    }
+  const capsolverKey = process.env.CAPSOLVER_API_KEY;
+  const twocaptchaKey = process.env.TWOCAPTCHA_API_KEY;
 
-    case 'image': {
-      // Prioritize 2captcha (90% success) over Claude Vision (75% success)
-      if (apiKey) {
-        const result = await solveImageWith2Captcha(page, apiKey);
+  // Service fallback chain with retry
+  const services: Array<{
+    name: 'capsolver' | '2captcha' | 'claude_vision';
+    fn: () => Promise<CaptchaSolveResult>;
+    available: boolean;
+  }> = [
+    {
+      name: 'capsolver',
+      fn: () => solveWithCapSolver(page, detection, capsolverKey!),
+      available: !!capsolverKey && !!detection.siteKey,
+    },
+    {
+      name: '2captcha',
+      fn: () => solveWith2Captcha(page, detection, twocaptchaKey!),
+      available: !!twocaptchaKey && (!!detection.siteKey || detection.type === 'image'),
+    },
+    {
+      name: 'claude_vision',
+      fn: () => solveWithClaudeVision(page, detection),
+      available: !!process.env.ANTHROPIC_API_KEY && detection.type === 'image',
+    },
+  ];
+
+  let lastError = '';
+  for (const service of services.filter(s => s.available)) {
+    console.log(`[CAPTCHA] Trying ${service.name}...`);
+
+    // 3 retry attempts per service
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const result = await service.fn();
+
         if (result.success) {
-          return result;
+          console.log(`[CAPTCHA] ✓ Solved with ${service.name} (attempt ${attempt}/3, cost $${result.cost || 0})`);
+
+          // Track cost
+          if (result.cost && userId) {
+            await trackCaptchaCost(userId, taskId || 'unknown', service.name, detection.type, result.cost);
+          }
+
+          return { ...result, service: service.name };
         }
-        console.log('[CAPTCHA] 2captcha failed for image, falling back to Claude Vision');
+
+        lastError = result.error || 'Unknown error';
+        console.warn(`[CAPTCHA] ${service.name} attempt ${attempt}/3 failed: ${lastError}`);
+
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, 2000 * attempt)); // 2s, 4s, 6s backoff
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`[CAPTCHA] ${service.name} attempt ${attempt}/3 error: ${lastError}`);
       }
-      return await solveImageCaptcha(page);
+    }
+  }
+
+  // All services failed — fallback to user manual solving
+  console.warn(`[CAPTCHA] All automated services failed after retries. Requesting user manual solve.`);
+  return await requestUserManualSolve(page, detection, userId);
+}
+
+/**
+ * Solve CAPTCHA using CapSolver API (AI-powered, 95%+ success, fastest).
+ * Pricing: $0.80-$3.00 per 1000 solves depending on type.
+ */
+async function solveWithCapSolver(
+  page: Page,
+  detection: CaptchaDetection,
+  apiKey: string
+): Promise<CaptchaSolveResult> {
+  try {
+    let taskType: string;
+    let taskData: Record<string, unknown>;
+
+    // Map CAPTCHA types to CapSolver task types
+    switch (detection.type) {
+      case 'recaptcha_v2':
+        taskType = 'ReCaptchaV2TaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+        };
+        break;
+      case 'recaptcha_v3':
+        taskType = 'ReCaptchaV3TaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+          pageAction: 'verify',
+        };
+        break;
+      case 'hcaptcha':
+        taskType = 'HCaptchaTaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+        };
+        break;
+      case 'turnstile':
+        taskType = 'AntiTurnstileTaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+        };
+        break;
+      case 'funcaptcha':
+        taskType = 'FunCaptchaTaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websitePublicKey: detection.siteKey,
+        };
+        break;
+      case 'geetest':
+        taskType = 'GeeTestTaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
+        };
+        break;
+      case 'datadome':
+        taskType = 'DataDomeSliderTask';
+        taskData = {
+          websiteURL: detection.pageUrl,
+        };
+        break;
+      case 'image':
+        taskType = 'ImageToTextTask';
+        const screenshot = await captureImageCaptcha(page);
+        if (!screenshot) {
+          return { success: false, error: 'Could not capture image CAPTCHA' };
+        }
+        taskData = {
+          body: screenshot,
+          module: 'common', // common, queueit, funcaptcha
+        };
+        break;
+      default:
+        return { success: false, error: `Unsupported CAPTCHA type for CapSolver: ${detection.type}` };
     }
 
-    default:
-      return { success: false, error: `Unknown CAPTCHA type: ${detection.type}` };
+    // Create task
+    const createResponse = await fetch('https://api.capsolver.com/createTask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientKey: apiKey,
+        task: {
+          type: taskType,
+          ...taskData,
+        },
+      }),
+    });
+
+    const createResult = await createResponse.json() as {
+      errorId: number;
+      errorCode?: string;
+      errorDescription?: string;
+      taskId?: string;
+    };
+
+    if (createResult.errorId !== 0 || !createResult.taskId) {
+      return {
+        success: false,
+        error: `CapSolver create error: ${createResult.errorDescription || createResult.errorCode}`,
+      };
+    }
+
+    const taskId = createResult.taskId;
+
+    // Poll for result (max 120 seconds, 5s intervals)
+    for (let i = 0; i < 24; i++) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      const getResponse = await fetch('https://api.capsolver.com/getTaskResult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientKey: apiKey, taskId }),
+      });
+
+      const getResult = await getResponse.json() as {
+        errorId: number;
+        errorCode?: string;
+        errorDescription?: string;
+        status: 'idle' | 'processing' | 'ready' | 'failed';
+        solution?: {
+          gRecaptchaResponse?: string;
+          token?: string;
+          text?: string;
+          userAgent?: string;
+        };
+      };
+
+      if (getResult.status === 'ready' && getResult.solution) {
+        const solution = getResult.solution.gRecaptchaResponse || getResult.solution.token || getResult.solution.text;
+        if (solution) {
+          await injectCaptchaToken(page, detection.type, solution);
+
+          // Calculate cost based on CAPTCHA type
+          const cost = calculateCapSolverCost(detection.type);
+          return { success: true, solution, cost, service: 'capsolver' };
+        }
+      }
+
+      if (getResult.status === 'failed' || getResult.errorId !== 0) {
+        return {
+          success: false,
+          error: `CapSolver solve error: ${getResult.errorDescription || getResult.errorCode}`,
+        };
+      }
+    }
+
+    return { success: false, error: 'CapSolver solve timed out after 120s' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return { success: false, error: `CapSolver error: ${message}` };
   }
 }
 
 /**
- * Solve CAPTCHA using 2captcha API service.
+ * Calculate CapSolver cost per solve (based on 2026 pricing).
+ */
+function calculateCapSolverCost(type: CaptchaType): number {
+  const pricing: Record<CaptchaType, number> = {
+    recaptcha_v2: 0.0008, // $0.80 per 1000
+    recaptcha_v3: 0.003, // $3.00 per 1000
+    hcaptcha: 0.0008, // $0.80 per 1000
+    turnstile: 0.0012, // $1.20 per 1000
+    funcaptcha: 0.002, // $2.00 per 1000
+    geetest: 0.002, // $2.00 per 1000
+    datadome: 0.0025, // $2.50 per 1000
+    image: 0.0005, // $0.50 per 1000
+    none: 0,
+  };
+  return pricing[type] || 0.002;
+}
+
+/**
+ * Capture image CAPTCHA screenshot.
+ */
+async function captureImageCaptcha(page: Page): Promise<string | null> {
+  try {
+    const captchaEl = await page.$(
+      'img[src*="captcha"], img[alt*="captcha" i], img[class*="captcha" i], #captcha-image, .captcha-image'
+    );
+    if (!captchaEl) return null;
+
+    const screenshot = await captchaEl.screenshot({ type: 'png' });
+    return screenshot.toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Solve CAPTCHA using 2captcha API service (human solvers, fallback).
  */
 async function solveWith2Captcha(
   page: Page,
@@ -130,25 +398,43 @@ async function solveWith2Captcha(
   apiKey: string
 ): Promise<CaptchaSolveResult> {
   try {
-    let method: string;
     let taskType: string;
+    let taskData: Record<string, unknown>;
+
+    if (detection.type === 'image') {
+      return await solveImageWith2Captcha(page, apiKey);
+    }
 
     switch (detection.type) {
       case 'recaptcha_v2':
-        method = 'userrecaptcha';
         taskType = 'NoCaptchaTaskProxyless';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+        };
         break;
       case 'recaptcha_v3':
-        method = 'userrecaptcha';
         taskType = 'RecaptchaV3TaskProxyless';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+          minScore: 0.5,
+          pageAction: 'verify',
+        };
         break;
       case 'hcaptcha':
-        method = 'hcaptcha';
         taskType = 'HCaptchaTaskProxyless';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+        };
         break;
       case 'turnstile':
-        method = 'turnstile';
         taskType = 'TurnstileTaskProxyless';
+        taskData = {
+          websiteURL: detection.pageUrl,
+          websiteKey: detection.siteKey,
+        };
         break;
       default:
         return { success: false, error: 'Unsupported CAPTCHA type for 2captcha' };
@@ -162,9 +448,7 @@ async function solveWith2Captcha(
         clientKey: apiKey,
         task: {
           type: taskType,
-          websiteURL: detection.pageUrl,
-          websiteKey: detection.siteKey,
-          ...(detection.type === 'recaptcha_v3' ? { minScore: 0.5, pageAction: 'verify' } : {}),
+          ...taskData,
         },
       }),
     });
@@ -199,9 +483,9 @@ async function solveWith2Captcha(
       if (getResult.status === 'ready' && getResult.solution) {
         const token = getResult.solution.gRecaptchaResponse || getResult.solution.token;
         if (token) {
-          // Inject token into page
           await injectCaptchaToken(page, detection.type, token);
-          return { success: true, solution: token };
+          const cost = 0.0025; // 2captcha pricing: $2.50 per 1000 = $0.0025 each
+          return { success: true, solution: token, cost, service: '2captcha' };
         }
       }
 

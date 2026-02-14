@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
 
 let resend: Resend | null = null;
 
@@ -25,6 +26,12 @@ interface EmailAttachment {
 
 export async function sendResponse(options: EmailOptions): Promise<boolean> {
   const { to, from, subject, body, attachments } = options;
+
+  // Test mode: use fake email server
+  if (isTestMode()) {
+    fakeEmailServer.sendEmail(from, to, `Re: ${subject}`, body, formatResponseEmail(body));
+    return true;
+  }
 
   const maxRetries = 2;
 

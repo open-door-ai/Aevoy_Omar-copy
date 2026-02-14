@@ -8,6 +8,7 @@
 import { getSupabaseClient } from "../../utils/supabase.js";
 import { normalizeEmail, normalizePhone } from "./normalizer.js";
 import type { ResolvedUser } from "../../types/index.js";
+import { maskPhone, maskUserId } from "../../utils/logging.js";
 
 /**
  * Resolve a user from any identifier (email or phone).
@@ -68,7 +69,7 @@ async function resolveByEmail(email: string): Promise<ResolvedUser | null> {
  */
 async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
   const normalized = normalizePhone(phone);
-  console.log(`[RESOLVER] Input phone: "${phone}" -> Normalized: "${normalized}"`);
+  console.log(`[RESOLVER] Input phone: ${maskPhone(phone)} -> Normalized: ${maskPhone(normalized)}`);
 
   // Try twilio_number first (AI's provisioned number)
   const { data: twilioMatch, error: twilioError } = await getSupabaseClient()
@@ -98,7 +99,7 @@ async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
   console.log(`[RESOLVER] Phone match: ${phoneMatch ? 'FOUND' : 'NOT FOUND'}, Error: ${phoneError?.message || 'none'}`);
 
   if (phoneMatch) {
-    console.log(`[RESOLVER] Resolved to user: ${phoneMatch.username} (${phoneMatch.id.slice(0, 8)})`);
+    console.log(`[RESOLVER] Resolved to user: ${phoneMatch.username} (${maskUserId(phoneMatch.id)})`);
     return {
       userId: phoneMatch.id,
       username: phoneMatch.username,
@@ -107,6 +108,6 @@ async function resolveByPhone(phone: string): Promise<ResolvedUser | null> {
     };
   }
 
-  console.log(`[RESOLVER] No match found for phone: ${normalized}`);
+  console.log(`[RESOLVER] No match found for phone: ${maskPhone(normalized)}`);
   return null;
 }
