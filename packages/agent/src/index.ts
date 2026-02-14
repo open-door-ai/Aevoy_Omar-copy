@@ -468,22 +468,11 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   taskPromise
     .then((result) => {
-      console.log(`Incoming task processed (V2): ${result.planId || 'unknown'}`, { success: result.success });
-
-      // Send response via email
-      if (!result.awaitingConfirmation && task.from) {
-        import("./services/email.js").then(({ sendResponse }) => {
-          sendResponse({
-            to: task.from,
-            from: process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
-            subject: `Re: ${task.subject || 'Your Task'}`,
-            body: result.response,
-          }).catch((err) => console.error("Failed to send email response:", err));
-        });
-      }
+      console.log(`Incoming task processed: ${result.taskId || 'unknown'}`, { success: result.success, actions: result.actions?.length || 0 });
+      // Original processor handles responses internally via processTask
     })
     .catch((error) => {
-      console.error("Incoming task processing failed (V2):", error);
+      console.error("Incoming task processing failed:", error);
 
       // Send error email
       if (task.from) {
