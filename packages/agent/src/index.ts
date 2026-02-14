@@ -700,8 +700,7 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 
 // ---- Incoming Voice Calls (Caller Identification) ----
 
-// TEMPORARILY DISABLED validateTwilioSignature - fix signature validation issue
-app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
+app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const callerNumber = req.body.From || "";
   const twilioNumber = req.body.To || "";
   const callSid = req.body.CallSid || "";
