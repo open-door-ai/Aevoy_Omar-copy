@@ -221,7 +221,7 @@ import { getActiveBrowserTasks, canAcceptBrowserTask } from "./utils/concurrency
 
 let activeTasks = 0;
 const MAX_CONCURRENT_TASKS = 10;
-const MAX_CONCURRENT_BROWSER_TASKS = 3; // Browserbase session limit
+const MAX_CONCURRENT_BROWSER_TASKS = 10; // Increased from 3 - using local Playwright now, not Browserbase
 const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
 
 function canProcessTask(needsBrowser: boolean): boolean {

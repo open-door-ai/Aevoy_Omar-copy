@@ -4,7 +4,7 @@
  */
 
 let activeBrowserTasks = 0;
-const MAX_CONCURRENT_BROWSER_TASKS = 3;
+const MAX_CONCURRENT_BROWSER_TASKS = 10; // Increased from 3 to prevent deadlocks on complex task batches
 
 export function incrementBrowserTasks(): void {
   activeBrowserTasks++;
