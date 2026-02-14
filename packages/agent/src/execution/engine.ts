@@ -14,6 +14,7 @@ import { executeLogin } from './actions/login.js';
 import { createExcelFile, createSimpleTable, type ExcelGenerationParams } from './actions/create-excel.js';
 import { createPowerPoint, createSimplePresentation, type PresentationParams } from './actions/create-powerpoint.js';
 import { createWordDocument, createSimpleDocument, type WordDocumentParams } from './actions/create-word.js';
+import { createPDF, createSimplePDF, type PDFParams } from './actions/create-pdf.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
@@ -600,6 +601,9 @@ export class ExecutionEngine {
         case 'create_word':
           return await this.handleCreateWord(step.params);
 
+        case 'create_pdf':
+          return await this.handleCreatePDF(step.params);
+
         default:
           return {
             success: false,
@@ -926,6 +930,63 @@ export class ExecutionEngine {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[WORD] Error: ${message}`);
       return { success: false, action: 'create_word', error: `Word generation error: ${message}` };
+    }
+  }
+
+  private async handleCreatePDF(params: Record<string, unknown>): Promise<StepResult> {
+    try {
+      console.log('[PDF] Creating PDF document...');
+
+      // Extract parameters
+      const filename = params.filename as string;
+      const content = params.content as PDFParams['content'];
+      const title = params.title as string | undefined;
+      const author = params.author as string | undefined;
+      const subject = params.subject as string | undefined;
+      const pageSize = params.pageSize as PDFParams['pageSize'] | undefined;
+      const margins = params.margins as PDFParams['margins'] | undefined;
+
+      // Validate required params
+      if (!filename) {
+        return { success: false, action: 'create_pdf', error: 'Filename is required' };
+      }
+
+      if (!content || !Array.isArray(content) || content.length === 0) {
+        return { success: false, action: 'create_pdf', error: 'At least one content item is required' };
+      }
+
+      // Call PDF generation function
+      const result = await createPDF({
+        filename,
+        content,
+        title,
+        author,
+        subject,
+        pageSize,
+        margins
+      });
+
+      if (result.success) {
+        console.log(`[PDF] File created: ${result.filepath} (${result.fileSize} bytes, ${result.pageCount} pages)`);
+        return {
+          success: true,
+          action: 'create_pdf',
+          data: {
+            filepath: result.filepath,
+            url: result.url,
+            pageCount: result.pageCount,
+            fileSize: result.fileSize
+          }
+        };
+      } else {
+        console.error(`[PDF] Generation failed: ${result.error}`);
+        return { success: false, action: 'create_pdf', error: result.error || 'PDF generation failed' };
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[PDF] Error: ${message}`);
+      return { success: false, action: 'create_pdf', error: `PDF generation error: ${message}` };
     }
   }
 

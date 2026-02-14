@@ -463,6 +463,7 @@ NON-BROWSER ACTIONS:
 [ACTION:create_excel("filename", [{"name":"Sheet1", "headers":["Col1","Col2"], "data":[["A",1],["B",2]]}])] — Create Excel spreadsheet with data, styling, formulas
 [ACTION:create_powerpoint("filename", [{"title":"Slide 1", "bullets":["Point 1","Point 2"]}, {"title":"Slide 2", "content":"Text"}])] — Create PowerPoint presentation with slides, themes, layouts
 [ACTION:create_word("filename", [{"type":"heading", "text":"Title", "level":1}, {"type":"paragraph", "text":"Content"}])] — Create Word document with headings, paragraphs, tables, lists
+[ACTION:create_pdf("filename", [{"type":"title", "text":"Document Title"}, {"type":"paragraph", "text":"Content"}, {"type":"table", "tableData":{"headers":["H1","H2"], "rows":[["A","B"]]}}])] — Create PDF document with text, images, tables, professional formatting
 
 EXECUTION MODEL (Reason → Observe → Plan → Act):
 - FIRST: If the task has conditional logic ("if X then Y", "if this fails try that"), EXPLICITLY reason through the branches BEFORE acting.
@@ -1041,6 +1042,23 @@ function parseAction(type: string, paramsStr: string): Action | null {
         return { type: "create_word", params: { filename, sections } };
       } catch (error) {
         console.error('[WORD] Failed to parse sections JSON:', error);
+        return null;
+      }
+    }
+
+    case "create_pdf": {
+      // Parse: create_pdf("filename", [content_definitions])
+      const firstComma = paramsStr.indexOf(",");
+      if (firstComma === -1) return null;
+
+      const filename = paramsStr.substring(0, firstComma).trim().replace(/^["']|["']$/g, "");
+      const contentStr = paramsStr.substring(firstComma + 1).trim();
+
+      try {
+        const content = JSON.parse(contentStr);
+        return { type: "create_pdf", params: { filename, content } };
+      } catch (error) {
+        console.error('[PDF] Failed to parse content JSON:', error);
         return null;
       }
     }
