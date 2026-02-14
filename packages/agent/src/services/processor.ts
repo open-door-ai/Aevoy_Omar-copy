@@ -1106,6 +1106,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Local Playwright fallback still uses domain allowlist for manual cookie persistence
       executionEngine = new ExecutionEngine(lockedIntent);
 
+      // Track browser task concurrency
+      const { incrementBrowserTasks } = await import("../index.js");
+      incrementBrowserTasks();
+
       let domain = classification.domains?.[0] || null;
 
       // Domain allowlist only matters for local Playwright session persistence
@@ -1776,6 +1780,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     if (executionEngine) {
       await executionEngine.cleanup();
       console.log(`[BROWSER] Execution engine cleaned up`);
+
+      // Decrement browser task counter
+      const { decrementBrowserTasks } = await import("../index.js");
+      decrementBrowserTasks();
     }
 
     // 9. Log the interaction

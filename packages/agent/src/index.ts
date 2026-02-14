@@ -223,6 +223,19 @@ const MAX_CONCURRENT_TASKS = 10;
 const MAX_CONCURRENT_BROWSER_TASKS = 3; // Browserbase session limit
 const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
 
+/**
+ * Export browser task tracking functions for use by processor.ts
+ */
+export function incrementBrowserTasks(): void {
+  activeBrowserTasks++;
+  console.log(`[CONCURRENCY] Browser tasks: ${activeBrowserTasks}/${MAX_CONCURRENT_BROWSER_TASKS}`);
+}
+
+export function decrementBrowserTasks(): void {
+  activeBrowserTasks = Math.max(0, activeBrowserTasks - 1);
+  console.log(`[CONCURRENCY] Browser tasks: ${activeBrowserTasks}/${MAX_CONCURRENT_BROWSER_TASKS}`);
+}
+
 function canProcessTask(needsBrowser: boolean): boolean {
   if (activeTasks >= MAX_CONCURRENT_TASKS) return false;
   if (needsBrowser && activeBrowserTasks >= MAX_CONCURRENT_BROWSER_TASKS) return false;
