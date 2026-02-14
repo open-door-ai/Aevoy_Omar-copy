@@ -1168,6 +1168,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const strategiesAttempted = new Map<string, number>(); // strategyHash -> attemptCount
     const MAX_SAME_STRATEGY_RETRIES = 3;
 
+    // AGI-LEVEL METHOD TYPE DIVERSITY: Prevent trying 30x same method TYPE
+    // Track METHOD TYPES (not just specific methods) to force intelligent diversity
+    const { classifyMethodType, buildDiversityMessage } = await import("./method-classifier.js");
+    type MethodType = import("./method-classifier.js").MethodType;
+    const methodTypesAttempted = new Map<MethodType, number>(); // methodType -> attemptCount
+    const MAX_SAME_METHOD_TYPE_RETRIES = 5;
+
     while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
       currentIteration++;
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
@@ -1276,6 +1283,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           // If we've tried this exact strategy 3 times, FORCE different approach on next iteration
           if (currentAttempts >= MAX_SAME_STRATEGY_RETRIES - 1) {
             console.warn(`[STRATEGY] Strategy '${strategyKey}' failed ${currentAttempts + 1} times — will force different approach next round`);
+          }
+
+          // AGI-LEVEL: Track METHOD TYPE (not just specific strategy)
+          const methodType = classifyMethodType(action);
+          const typeAttempts = methodTypesAttempted.get(methodType) || 0;
+          methodTypesAttempted.set(methodType, typeAttempts + 1);
+
+          if (typeAttempts >= MAX_SAME_METHOD_TYPE_RETRIES - 1) {
+            console.warn(`[METHOD-TYPE] Exhausted ${methodType} (${typeAttempts + 1} failures) — need DIFFERENT method type`);
           }
         }
 
@@ -1429,12 +1445,16 @@ You are FORBIDDEN from trying these again. Use COMPLETELY DIFFERENT methods:
 Be creative. Think outside the box. What would a human do differently?`;
       }
 
+      // AGI-LEVEL: Build method type diversity enforcement
+      const diversityEnforcement = buildDiversityMessage(methodTypesAttempted, MAX_SAME_METHOD_TYPE_RETRIES);
+
       const iterativePrompt = `Original request: ${subject} ${body}
 
 ROUND ${currentIteration} RESULTS:
 ${resultsSummary}
 ${pageStateSection}
 ${strategyEnforcement}
+${diversityEnforcement}
 
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 OBSERVE the current page state above, then decide what to do next:
