@@ -11,6 +11,7 @@ import { ActionValidator } from '../security/validator.js';
 import { executeClick } from './actions/click.js';
 import { executeFill } from './actions/fill.js';
 import { executeLogin } from './actions/login.js';
+import { createExcelFile, createSimpleTable, type ExcelGenerationParams } from './actions/create-excel.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
@@ -588,6 +589,9 @@ export class ExecutionEngine {
         case 'search':
           return await this.handleSearch(step.params);
 
+        case 'create_excel':
+          return await this.handleCreateExcel(step.params);
+
         default:
           return {
             success: false,
@@ -754,6 +758,60 @@ export class ExecutionEngine {
       const message = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[SEARCH] Search failed: ${message}`);
       return { success: false, action: 'search', error: `Search failed: ${message}` };
+    }
+  }
+
+  private async handleCreateExcel(params: Record<string, unknown>): Promise<StepResult> {
+    try {
+      console.log('[EXCEL] Creating Excel file...');
+
+      // Extract parameters
+      const filename = params.filename as string;
+      const sheets = params.sheets as ExcelGenerationParams['sheets'];
+      const title = params.title as string | undefined;
+      const description = params.description as string | undefined;
+      const author = params.author as string | undefined;
+
+      // Validate required params
+      if (!filename) {
+        return { success: false, action: 'create_excel', error: 'Filename is required' };
+      }
+
+      if (!sheets || !Array.isArray(sheets) || sheets.length === 0) {
+        return { success: false, action: 'create_excel', error: 'At least one sheet is required' };
+      }
+
+      // Call Excel generation function
+      const result = await createExcelFile({
+        filename,
+        sheets,
+        title,
+        description,
+        author
+      });
+
+      if (result.success) {
+        console.log(`[EXCEL] File created: ${result.filepath} (${result.fileSize} bytes, ${result.sheetCount} sheets, ${result.rowCount} rows)`);
+        return {
+          success: true,
+          action: 'create_excel',
+          data: {
+            filepath: result.filepath,
+            url: result.url,
+            rowCount: result.rowCount,
+            sheetCount: result.sheetCount,
+            fileSize: result.fileSize
+          }
+        };
+      } else {
+        console.error(`[EXCEL] Generation failed: ${result.error}`);
+        return { success: false, action: 'create_excel', error: result.error || 'Excel generation failed' };
+      }
+
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[EXCEL] Error: ${message}`);
+      return { success: false, action: 'create_excel', error: `Excel generation error: ${message}` };
     }
   }
 

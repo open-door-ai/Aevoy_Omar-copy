@@ -460,6 +460,7 @@ NON-BROWSER ACTIONS:
 [ACTION:send_email("to@email.com", "Subject", "Body text")] — Send an email
 [ACTION:remember("important fact")] — Save information to long-term memory
 [ACTION:schedule("task description", "0 9 * * 1")] — Schedule a recurring task (cron format)
+[ACTION:create_excel("filename", [{"name":"Sheet1", "headers":["Col1","Col2"], "data":[["A",1],["B",2]]}])] — Create Excel spreadsheet with data, styling, formulas
 
 EXECUTION MODEL (Reason → Observe → Plan → Act):
 - FIRST: If the task has conditional logic ("if X then Y", "if this fails try that"), EXPLICITLY reason through the branches BEFORE acting.
@@ -989,6 +990,23 @@ function parseAction(type: string, paramsStr: string): Action | null {
     case "extract": {
       const extractSel = paramsStr.replace(/^["']|["']$/g, "") || "body";
       return { type: "extract", params: { selector: extractSel } };
+    }
+
+    case "create_excel": {
+      // Parse: create_excel("filename", [sheet_definitions])
+      const firstComma = paramsStr.indexOf(",");
+      if (firstComma === -1) return null;
+
+      const filename = paramsStr.substring(0, firstComma).trim().replace(/^["']|["']$/g, "");
+      const sheetsStr = paramsStr.substring(firstComma + 1).trim();
+
+      try {
+        const sheets = JSON.parse(sheetsStr);
+        return { type: "create_excel", params: { filename, sheets } };
+      } catch (error) {
+        console.error('[EXCEL] Failed to parse sheets JSON:', error);
+        return null;
+      }
     }
 
     default:
