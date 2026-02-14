@@ -698,6 +698,146 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 
 // ---- Twilio Voice Webhooks ----
 
+// ---- Incoming Voice Calls (Caller Identification) ----
+
+// TEMPORARILY DISABLED validateTwilioSignature - fix signature validation issue
+app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
+  const callerNumber = req.body.From || "";
+  const twilioNumber = req.body.To || "";
+  const callSid = req.body.CallSid || "";
+  let voice = DEFAULT_VOICE; // Will be replaced with user's preference once identified
+
+  console.log(`[VOICE] Incoming call from ${callerNumber} to ${twilioNumber}`);
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Use identity resolver to handle both twilio_number and phone_number
+    const resolved = await resolveUser(callerNumber);
+
+    if (!resolved) {
+      // Unknown caller - block
+      console.log(`[VOICE] Unknown caller: ${callerNumber}`);
+
+      await supabase.from("call_history").insert({
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "unknown",
+        pin_required: true,
+        pin_success: false
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Sorry, I don't recognize this phone number. Please sign up at aevoy dot com first, or call from your registered number.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    const userId = resolved.userId;
+
+    // Fetch full profile for PIN checks
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, timezone")
+      .eq("id", userId)
+      .single();
+
+    if (!profile) {
+      console.log(`[VOICE] Failed to load profile for user ${userId.slice(0, 8)}`);
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Check daily call limit (50/day per user)
+    if (!(await checkDailyCallLimit(userId))) {
+      console.log(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit`);
+
+      await supabase.from("call_history").insert({
+        user_id: userId,
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "rate_limited",
+        pin_required: false,
+        pin_success: null
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">You've reached your daily call limit of 50 calls. Please try again tomorrow or contact us at aevoy dot com.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Check if PIN-locked (3 failed attempts = 15min lockout)
+    if (profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date()) {
+      console.log(`[VOICE] User ${userId.slice(0, 8)} is PIN-locked until ${profile.voice_pin_locked_until}`);
+
+      await supabase.from("call_history").insert({
+        user_id: userId,
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "blocked",
+        pin_required: true,
+        pin_success: false
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Your account is temporarily locked due to too many failed PIN attempts. Please try again in 15 minutes, or contact support.</Say>
+  <Hangup/>
+</Response>`);
+    }
+
+    // Verified caller - route to task handler
+    voice = await getUserVoice(userId);
+    console.log(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
+
+    await supabase.from("call_history").insert({
+      user_id: userId,
+      call_sid: callSid,
+      direction: "inbound",
+      from_number: callerNumber,
+      to_number: twilioNumber,
+      call_type: "task",
+      pin_required: false,
+      pin_success: null
+    });
+
+    // Generate TwiML for task request
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Hey! What can I help you with?</Say>
+  <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
+    <Say voice="${voice}">Go ahead, I'm listening.</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
+</Response>`);
+  } catch (error) {
+    console.error("[VOICE] Incoming call error:", error);
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Sorry, something went wrong. Please try again or contact support at aevoy dot com.</Say>
+  <Hangup/>
+</Response>`);
+  }
+});
 app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
   const voice = await getUserVoice(userId);
@@ -921,146 +1061,6 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
 
 // ==== INCOMING PHONE SYSTEM WEBHOOKS ====
 
-// ---- Incoming Voice Calls (Caller Identification) ----
-
-// TEMPORARILY DISABLED validateTwilioSignature - fix signature validation issue
-app.post("/webhook/voice/incoming", twilioLimiter, async (req, res) => {
-  const callerNumber = req.body.From || "";
-  const twilioNumber = req.body.To || "";
-  const callSid = req.body.CallSid || "";
-  let voice = DEFAULT_VOICE; // Will be replaced with user's preference once identified
-
-  console.log(`[VOICE] Incoming call from ${callerNumber} to ${twilioNumber}`);
-
-  try {
-    const supabase = getSupabaseClient();
-
-    // Use identity resolver to handle both twilio_number and phone_number
-    const resolved = await resolveUser(callerNumber);
-
-    if (!resolved) {
-      // Unknown caller - block
-      console.log(`[VOICE] Unknown caller: ${callerNumber}`);
-
-      await supabase.from("call_history").insert({
-        call_sid: callSid,
-        direction: "inbound",
-        from_number: callerNumber,
-        to_number: twilioNumber,
-        call_type: "unknown",
-        pin_required: true,
-        pin_success: false
-      });
-
-      res.type("text/xml");
-      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${voice}">Sorry, I don't recognize this phone number. Please sign up at aevoy dot com first, or call from your registered number.</Say>
-  <Hangup/>
-</Response>`);
-    }
-
-    const userId = resolved.userId;
-
-    // Fetch full profile for PIN checks
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("id, username, voice_pin, voice_pin_attempts, voice_pin_locked_until, timezone")
-      .eq("id", userId)
-      .single();
-
-    if (!profile) {
-      console.log(`[VOICE] Failed to load profile for user ${userId.slice(0, 8)}`);
-      res.type("text/xml");
-      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${voice}">Sorry, something went wrong. Please try again.</Say>
-  <Hangup/>
-</Response>`);
-    }
-
-    // Check daily call limit (50/day per user)
-    if (!(await checkDailyCallLimit(userId))) {
-      console.log(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit`);
-
-      await supabase.from("call_history").insert({
-        user_id: userId,
-        call_sid: callSid,
-        direction: "inbound",
-        from_number: callerNumber,
-        to_number: twilioNumber,
-        call_type: "rate_limited",
-        pin_required: false,
-        pin_success: null
-      });
-
-      res.type("text/xml");
-      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${voice}">You've reached your daily call limit of 50 calls. Please try again tomorrow or contact us at aevoy dot com.</Say>
-  <Hangup/>
-</Response>`);
-    }
-
-    // Check if PIN-locked (3 failed attempts = 15min lockout)
-    if (profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date()) {
-      console.log(`[VOICE] User ${userId.slice(0, 8)} is PIN-locked until ${profile.voice_pin_locked_until}`);
-
-      await supabase.from("call_history").insert({
-        user_id: userId,
-        call_sid: callSid,
-        direction: "inbound",
-        from_number: callerNumber,
-        to_number: twilioNumber,
-        call_type: "blocked",
-        pin_required: true,
-        pin_success: false
-      });
-
-      res.type("text/xml");
-      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${voice}">Your account is temporarily locked due to too many failed PIN attempts. Please try again in 15 minutes, or contact support.</Say>
-  <Hangup/>
-</Response>`);
-    }
-
-    // Verified caller - route to task handler
-    voice = await getUserVoice(userId);
-    console.log(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
-
-    await supabase.from("call_history").insert({
-      user_id: userId,
-      call_sid: callSid,
-      direction: "inbound",
-      from_number: callerNumber,
-      to_number: twilioNumber,
-      call_type: "task",
-      pin_required: false,
-      pin_success: null
-    });
-
-    // Generate TwiML for task request
-    res.type("text/xml");
-    res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${voice}">Hey! What can I help you with?</Say>
-  <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="${voice}">Go ahead, I'm listening.</Say>
-  </Gather>
-  <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
-</Response>`);
-  } catch (error) {
-    console.error("[VOICE] Incoming call error:", error);
-    res.type("text/xml");
-    res.send(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${voice}">Sorry, something went wrong. Please try again or contact support at aevoy dot com.</Say>
-  <Hangup/>
-</Response>`);
-  }
-});
 
 // ---- Incoming SMS (Caller Identification) ----
 
