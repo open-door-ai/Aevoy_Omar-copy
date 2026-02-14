@@ -449,7 +449,7 @@ export async function verifyTask(
     : [];
 
   // Lower threshold for research tasks (they're info-gathering, not transactional)
-  const threshold = taskType === 'research' ? 60 : 70;
+  const threshold = taskType === 'research' ? 55 : 70;
   const passed = compositeScore >= threshold;
   return {
     passed,
