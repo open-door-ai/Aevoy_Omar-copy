@@ -104,7 +104,14 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
         .select()
         .single();
 
-      taskId = taskRecord?.id || crypto.randomUUID();
+      taskId = taskRecord?.id;
+      if (!taskId) {
+        throw new Error("Failed to create task record");
+      }
+    }
+
+    if (!taskId) {
+      throw new Error("taskId is required");
     }
 
     // 4. If clarification needed, send questions and pause
@@ -132,7 +139,7 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
         .eq("id", taskId);
 
       return {
-        taskId,
+        taskId: taskId || "",
         success: true,
         response: "Awaiting clarification for autonomous workflow",
         actions: [],
@@ -279,7 +286,7 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
     });
 
     return {
-      taskId,
+      taskId: taskId || "",
       success: allSuccess,
       response: finalMessage,
       actions: [],
@@ -297,7 +304,7 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
     });
 
     return {
-      taskId,
+      taskId: taskId || "",
       success: false,
       response: "",
       actions: [],
@@ -358,7 +365,7 @@ export async function handleAutonomousClarification(
     return handleAutonomousWorkflow({
       ...task,
       body: originalInput,
-      taskId,
+      taskId: taskId || "",
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
@@ -372,7 +379,7 @@ export async function handleAutonomousClarification(
     });
 
     return {
-      taskId,
+      taskId: taskId || "",
       success: false,
       response: "",
       actions: [],
