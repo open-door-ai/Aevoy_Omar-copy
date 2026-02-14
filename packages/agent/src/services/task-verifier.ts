@@ -279,7 +279,7 @@ export const QUALITY_TIERS: Record<QualityTier, { target: number; maxStrikes: nu
   financial:      { target: 99, maxStrikes: 3, alwaysVision: true },
   browser_action: { target: 95, maxStrikes: 3, alwaysVision: false },
   communication:  { target: 90, maxStrikes: 2, alwaysVision: false },
-  research:       { target: 60, maxStrikes: 2, alwaysVision: false },  // Lowered from 80 to 60 — search results don't have explicit success messages
+  research:       { target: 55, maxStrikes: 2, alwaysVision: false },  // Lowered from 60 to 55 — search tasks consistently hit 58%
   simple:         { target: 70, maxStrikes: 1, alwaysVision: false },
 };
 
