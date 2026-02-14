@@ -1107,7 +1107,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       executionEngine = new ExecutionEngine(lockedIntent);
 
       // Track browser task concurrency
-      const { incrementBrowserTasks } = await import("../index.js");
+      const { incrementBrowserTasks } = await import("../utils/concurrency.js");
       incrementBrowserTasks();
 
       let domain = classification.domains?.[0] || null;
@@ -1782,7 +1782,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       console.log(`[BROWSER] Execution engine cleaned up`);
 
       // Decrement browser task counter
-      const { decrementBrowserTasks } = await import("../index.js");
+      const { decrementBrowserTasks } = await import("../utils/concurrency.js");
       decrementBrowserTasks();
     }
 
