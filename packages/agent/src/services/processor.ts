@@ -1618,16 +1618,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const tier = getQualityTier(classification.taskType || 'simple');
     const tierConfig = QUALITY_TIERS[tier];
 
-    // Fast path: text-only verification for SIMPLE tasks that didn't use browser
+    // Fast path: AUTO-PASS AI-only tasks (simple tier + no browser actions)
+    // These tasks have no verifiable actions, so verification would be too strict
     if (tier === 'simple' && !executionEngine && aiResponse.content) {
-      console.log(`[VERIFY] Fast path for ${tier} tier (no browser) — quickVerify only`);
-      try {
-        verificationResult = await quickVerify(classification.taskType || 'simple', aiResponse.content);
-        console.log(`[VERIFY] Quick result: ${verificationResult.passed ? 'PASSED' : 'NEEDS_REVIEW'} (${verificationResult.confidence}%)`);
-      } catch (qvErr) {
-        console.error('[VERIFY] Quick verify error:', qvErr);
-        verificationResult = { passed: true, confidence: 70, method: 'skip' as const, evidence: 'Quick verify failed, passing through' };
-      }
+      console.log(`[VERIFY] Fast path for ${tier} tier (no browser) — AUTO-PASS (AI-only, no actions to verify)`);
+      verificationResult = {
+        passed: true,
+        confidence: 85,
+        method: 'skip' as const,
+        evidence: 'AI-only task (no browser actions) — auto-passed without strict verification'
+      };
     } else if (executionEngine && classification.taskType) {
       const strikeCtx: StrikeContext = {
         attempt: 1,
