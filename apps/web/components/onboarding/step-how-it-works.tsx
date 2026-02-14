@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "@/components/ui/motion";
-import { Mail, Bot, CheckCircle, ChevronLeft, ChevronRight, Moon, ArrowRight, Globe, Mouse, Keyboard, Check, Inbox, Smile } from "lucide-react";
+import { Mail, Bot, CheckCircle, ChevronLeft, ChevronRight, Moon, ArrowRight, Globe, Mouse, Keyboard, Check, Inbox, Smile, Network, Users, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface StepHowItWorksProps {
@@ -28,6 +28,12 @@ const panels = [
     description: "Completed tasks delivered back to you with full details",
     icon: CheckCircle,
     visualIcons: [Check, Inbox, Smile],
+  },
+  {
+    title: "Hive Mind Learning",
+    description: "Your AI learns from every task across all users, becoming smarter and faster over time. Shared knowledge means faster execution and higher success rates.",
+    icon: Network,
+    visualIcons: [Users, Network, TrendingUp],
   },
 ];
 
