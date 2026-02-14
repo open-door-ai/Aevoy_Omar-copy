@@ -646,7 +646,7 @@ async function requestUserManualSolve(
     const base64 = screenshot.toString('base64');
 
     // Send email to user
-    const { sendEmail } = await import('../services/email.js');
+    const { sendResponse } = await import('../services/email.js');
     const { getSupabaseClient } = await import('../utils/supabase.js');
 
     const { data: profile } = await getSupabaseClient()
@@ -659,10 +659,11 @@ async function requestUserManualSolve(
       return { success: false, error: 'Could not find user email for manual CAPTCHA', service: 'user_manual' };
     }
 
-    await sendEmail({
+    await sendResponse({
       to: profile.email,
+      from: process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
       subject: `🤖 Help Needed: CAPTCHA on ${new URL(detection.pageUrl).hostname}`,
-      text: `Hi ${profile.username || 'there'},
+      body: `Hi ${profile.username || 'there'},
 
 I encountered a ${detection.type.toUpperCase()} CAPTCHA that I couldn't solve automatically.
 
@@ -674,20 +675,10 @@ Please view the attached screenshot and reply with the solution.
 I'll pause this task and wait for your response.
 
 — Your AI Assistant, Aevoy`,
-      html: `<p>Hi ${profile.username || 'there'},</p>
-<p>I encountered a <strong>${detection.type.toUpperCase()} CAPTCHA</strong> that I couldn't solve automatically.</p>
-<ul>
-<li><strong>Site:</strong> ${detection.pageUrl}</li>
-<li><strong>CAPTCHA Type:</strong> ${detection.type}</li>
-</ul>
-<p>Please view the attached screenshot and reply with the solution.</p>
-<p>I'll pause this task and wait for your response.</p>
-<p>— Your AI Assistant, Aevoy</p>`,
       attachments: [
         {
           filename: 'captcha-screenshot.png',
           content: base64,
-          contentType: 'image/png',
         },
       ],
     });
@@ -748,7 +739,7 @@ async function trackCaptchaCost(
       console.warn(`[CAPTCHA] ⚠️ User ${userId} has exceeded $5 in CAPTCHA costs today ($${totalToday.toFixed(2)})`);
 
       // Send alert email
-      const { sendEmail } = await import('../services/email.js');
+      const { sendResponse } = await import('../services/email.js');
       const { data: profile } = await getSupabaseClient()
         .from('profiles')
         .select('email, username')
@@ -756,10 +747,11 @@ async function trackCaptchaCost(
         .single();
 
       if (profile?.email) {
-        await sendEmail({
+        await sendResponse({
           to: profile.email,
+          from: process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
           subject: '⚠️ High CAPTCHA Costs Alert',
-          text: `Hi ${profile.username || 'there'},
+          body: `Hi ${profile.username || 'there'},
 
 Your CAPTCHA solving costs today have exceeded $5.00 (current: $${totalToday.toFixed(2)}).
 

@@ -231,7 +231,7 @@ export async function generateIncomingCallTwiml(userId: string, userName: string
     .select('greeting_style')
     .eq('user_id', userId)
     .single()
-    .catch(() => ({ data: null }));
+    .then(result => result, () => ({ data: null }));
 
   const greetingStyle = settings?.greeting_style || 'casual';
 

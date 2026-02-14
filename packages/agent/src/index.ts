@@ -418,7 +418,7 @@ app.post("/task", taskLimiter, async (req, res) => {
   }
 
   console.log(`[TASK] Received`, {
-    userId: task.maskUserId(userId),
+    userId: task.userId.substring(0, 8),
     timestamp: new Date().toISOString(),
   });
 
@@ -445,7 +445,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
   }
 
   console.log(`[TASK] Incoming (FULL PROCESSOR with 30x iterations)`, {
-    userId: task.maskUserId(userId),
+    userId: task.userId.substring(0, 8),
     channel: task.inputChannel || "email",
     timestamp: new Date().toISOString(),
   });
