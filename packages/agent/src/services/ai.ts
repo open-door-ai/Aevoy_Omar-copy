@@ -1053,8 +1053,11 @@ export async function classifyTask(userMessage: string): Promise<{
 
   // Fast path: keyword matching (only after ruling out AI-only tasks)
   if (text.includes("research") || text.includes("find") || text.includes("search") || text.includes("look up")) {
+    // "search" and "find" ALWAYS require browser (web search)
+    const requiresBrowser = text.includes("search") || text.includes("find");
+
     // Additional check: is there web intent?
-    if (hasUrl || hasExplicitWebIntent) {
+    if (hasUrl || hasExplicitWebIntent || requiresBrowser) {
       taskType = "research";
       needsBrowser = true;
     } else {
@@ -1129,8 +1132,9 @@ Task: "${userMessage.substring(0, 500)}"`;
   // Guard: don't route to browser for knowledge questions with no specific URLs.
   // Research tasks only need the browser when there's a website to visit or
   // the user explicitly asks to browse/visit/go to a site.
+  // CRITICAL: "search" and "find" ALWAYS need browser (web search)
   if (needsBrowser && taskType === "research" && domains.length === 0) {
-    const explicitBrowsePattern = /\b(go to|visit|open|navigate|browse|website|site|page|url|link)\b/i;
+    const explicitBrowsePattern = /\b(go to|visit|open|navigate|browse|website|site|page|url|link|search|find)\b/i;
     if (!explicitBrowsePattern.test(userMessage)) {
       needsBrowser = false;
       console.log(`[AI] Research task with no URLs/browse intent, skipping browser`);
