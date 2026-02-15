@@ -91,7 +91,6 @@ validateEnv();
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
 import { processorV2 } from "./services/processor-v2.js";
 import { startScheduler } from "./services/scheduler.js";
@@ -105,6 +104,7 @@ import skillRoutes from "./routes/skills.js";
 import { trackBackgroundJob } from "./utils/job-tracker.js";
 import { maskPhone, maskEmail, maskUserId, maskPin } from "./utils/logging.js";
 import { hashPin, verifyPinHash, isBcryptHash } from "./utils/hashing.js";
+import { globalLimiter, taskLimiter, twilioLimiter } from "./middleware/rate-limit.js";
 
 import crypto from "crypto";
 
@@ -112,43 +112,11 @@ const app = express();
 const PORT = process.env.AGENT_PORT || 3001;
 const WEBHOOK_SECRET = process.env.AGENT_WEBHOOK_SECRET;
 
-// ---- Rate Limiting ----
-
-const globalLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "rate_limited", message: "Too many requests, slow down" },
-});
-
-const taskLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10,
-  keyGenerator: (req) => {
-    const forwarded = req.headers["x-forwarded-for"];
-    const clientIp = typeof forwarded === "string" ? forwarded.split(",")[0]?.trim() : req.ip;
-    return req.body?.userId || clientIp || "unknown";
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "rate_limited", message: "Too many tasks, please wait" },
-  validate: false,
-});
-
-const twilioLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  keyGenerator: (req) => {
-    const forwarded = req.headers["x-forwarded-for"];
-    const clientIp = typeof forwarded === "string" ? forwarded.split(",")[0]?.trim() : req.ip;
-    return req.body?.From || clientIp || "unknown";
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: "Rate limited",
-  validate: false,
-});
+// ---- Rate Limiting (imported from centralized middleware) ----
+// All rate limiters are now imported from ./middleware/rate-limit.ts
+// - globalLimiter: 100 requests/min per IP
+// - taskLimiter: 10 requests/min per user
+// - twilioLimiter: 30 requests/min per phone number
 
 // ---- Daily Call Limit Tracker (50 calls/day per user) ----
 

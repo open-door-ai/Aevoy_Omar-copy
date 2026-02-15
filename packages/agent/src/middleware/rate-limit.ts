@@ -16,10 +16,17 @@ import type { Request } from 'express';
 
 /**
  * Extract client IP from request (handles proxies correctly)
+ * IPv6-compatible: normalizes ::ffff:127.0.0.1 to 127.0.0.1
  */
 export function getClientIp(req: Request): string {
   const forwarded = req.headers['x-forwarded-for'];
-  const clientIp = typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : req.ip;
+  let clientIp = typeof forwarded === 'string' ? forwarded.split(',')[0]?.trim() : req.ip;
+
+  // Normalize IPv6-mapped IPv4 addresses
+  if (clientIp?.startsWith('::ffff:')) {
+    clientIp = clientIp.substring(7);
+  }
+
   return clientIp || 'unknown';
 }
 
@@ -64,7 +71,7 @@ export const authLimiter = rateLimit({
     error: 'rate_limited',
     message: 'Too many login attempts, please try again in 15 minutes',
   },
-  validate: { trustProxy: false },
+  validate: false, // Disable validation since we handle IPv6 in getClientIp
 });
 
 /**
@@ -80,7 +87,7 @@ export const passwordResetLimiter = rateLimit({
     error: 'rate_limited',
     message: 'Too many password reset requests, please try again in 1 hour',
   },
-  validate: { trustProxy: false },
+  validate: false, // Disable validation since we handle IPv6 in getClientIp
 });
 
 /**
@@ -130,13 +137,16 @@ export const twilioLimiter = rateLimit({
 // ============================================================================
 
 export const REQUEST_SIZE_LIMITS = {
-  json: '10mb',      // JSON payload limit
+  default: '1mb',     // Default limit
+  upload: '10mb',     // Upload endpoints
+  strict: '100kb',    // Webhooks and strict endpoints
+  json: '10mb',       // JSON payload limit
   urlencoded: '10mb', // URL-encoded form limit
-  raw: '50mb',       // Raw body limit
-  text: '10mb',      // Text limit
+  raw: '50mb',        // Raw body limit
+  text: '10mb',       // Text limit
 } as const;
 
-export const FILE_UPLOAD_LIMIT = 50 * 1024 * 1024; // 50MB
+export const FILE_UPLOAD_LIMIT = 25 * 1024 * 1024; // 25MB
 
 // ============================================================================
 // AUTH FAILURE TRACKING (for exponential backoff + CAPTCHA)
@@ -152,8 +162,9 @@ const failureStore = new Map<string, FailureRecord>();
 
 /**
  * Record authentication failure for a user/IP
+ * Returns backoff time in seconds if applicable, null otherwise
  */
-export function recordAuthFailure(identifier: string): void {
+export function recordAuthFailure(identifier: string): number | null {
   const existing = failureStore.get(identifier);
   const now = Date.now();
 
@@ -174,6 +185,15 @@ export function recordAuthFailure(identifier: string): void {
       failureStore.delete(key);
     }
   }
+
+  // Calculate backoff if count >= 2
+  const record = failureStore.get(identifier);
+  if (record && record.count >= 2) {
+    const backoffSeconds = Math.min(Math.pow(2, record.count - 1), 3600);
+    return backoffSeconds;
+  }
+
+  return null;
 }
 
 /**
@@ -192,20 +212,27 @@ export function requiresCaptcha(identifier: string): boolean {
 }
 
 /**
- * Calculate exponential backoff time in milliseconds
+ * Calculate exponential backoff time
+ * Returns { blocked: boolean, retryAfter: number (seconds) }
  */
-export function checkBackoff(identifier: string): number {
+export function checkBackoff(identifier: string): { blocked: boolean; retryAfter: number } {
   const record = failureStore.get(identifier);
-  if (!record || record.count === 0) return 0;
+  if (!record || record.count < 2) {
+    return { blocked: false, retryAfter: 0 };
+  }
 
-  // Exponential backoff: 2^n seconds (max 1 hour)
-  const backoffSeconds = Math.min(Math.pow(2, record.count), 3600);
+  // Exponential backoff: 2^(n-1) seconds (max 1 hour)
+  const backoffSeconds = Math.min(Math.pow(2, record.count - 1), 3600);
   const backoffMs = backoffSeconds * 1000;
 
   const timeSinceLastFailure = Date.now() - record.lastFailure;
   const remainingBackoff = backoffMs - timeSinceLastFailure;
 
-  return Math.max(0, remainingBackoff);
+  if (remainingBackoff > 0) {
+    return { blocked: true, retryAfter: Math.ceil(remainingBackoff / 1000) };
+  }
+
+  return { blocked: false, retryAfter: 0 };
 }
 
 // ============================================================================
@@ -217,9 +244,13 @@ const WEBHOOK_TIMESTAMP_TOLERANCE = 5 * 60 * 1000; // 5 minutes
 /**
  * Validate webhook timestamp to prevent replay attacks
  */
-export function validateWebhookTimestamp(timestamp: number): boolean {
+export function validateWebhookTimestamp(timestamp: string | number): boolean {
   const now = Date.now();
-  const diff = Math.abs(now - timestamp);
+  const ts = typeof timestamp === 'string' ? new Date(timestamp).getTime() : timestamp;
+
+  if (isNaN(ts)) return false;
+
+  const diff = Math.abs(now - ts);
   return diff < WEBHOOK_TIMESTAMP_TOLERANCE;
 }
 
@@ -232,7 +263,7 @@ interface AiCallRecord {
   windowStart: number;
 }
 
-const AI_CALL_LIMIT_PER_MINUTE = 30;
+const AI_CALL_LIMIT_PER_MINUTE = 100;
 const AI_CALL_WINDOW = 60 * 1000; // 1 minute
 
 const aiCallStore = new Map<string, AiCallRecord>();
