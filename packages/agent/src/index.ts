@@ -90,6 +90,7 @@ validateEnv();
 
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
 import { processorV2 } from "./services/processor-v2.js";
@@ -177,17 +178,91 @@ async function checkDailyCallLimit(userId: string): Promise<boolean> {
 
 // ---- Middleware ----
 
-// Restrict CORS to known origins
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "https://aevoy.com,https://www.aevoy.com,http://localhost:3000").split(",");
+// SECURITY FIX: Helmet security headers (CSP, XSS, HSTS, etc.)
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Needed for TwiML responses
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: [
+        "'self'",
+        "*.supabase.co",
+        "*.railway.app",
+        "*.browserbase.com",
+        "api.groq.com",
+        "api.deepseek.com",
+        "api.anthropic.com",
+        "generativelanguage.googleapis.com",
+      ],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      upgradeInsecureRequests: process.env.NODE_ENV === "production" ? [] : null,
+    },
+  },
+  strictTransportSecurity: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true,
+  },
+  xFrameOptions: { action: "deny" },
+  xContentTypeOptions: true,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  xPermittedCrossDomainPolicies: { permittedPolicies: "none" },
+  crossOriginEmbedderPolicy: false, // Allow external resources
+  crossOriginOpenerPolicy: { policy: "same-origin" },
+  crossOriginResourcePolicy: { policy: "same-origin" },
+  originAgentCluster: true,
+  dnsPrefetchControl: { allow: false },
+  ieNoOpen: true as any,  // Type mismatch in helmet types
+  xDownloadOptions: true as any,
+  xPoweredBy: false, // Hide X-Powered-By header
+}));
+
+// Additional security headers not covered by helmet
+app.use((_req, res, next) => {
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  next();
+});
+
+// SECURITY FIX: Strict CORS - Production-only origins (no wildcards)
+const ALLOWED_ORIGINS = process.env.NODE_ENV === "production"
+  ? (process.env.ALLOWED_ORIGINS || "https://aevoy.com,https://www.aevoy.com").split(",")
+  : ["http://localhost:3000", "http://127.0.0.1:3000"]; // Development: localhost only
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    // SECURITY: Require origin header (reject missing origin in production)
+    if (!origin && process.env.NODE_ENV === "production") {
+      callback(new Error("Not allowed by CORS - missing origin header"));
+      return;
+    }
+
+    // Allow requests without origin (server-to-server, Postman) in dev only
+    if (!origin && process.env.NODE_ENV !== "production") {
+      callback(null, true);
+      return;
+    }
+
+    // Strict whitelist check
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
+      console.warn(`[SECURITY] CORS rejected: ${origin || 'unknown'}`);
       callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true,
+  maxAge: 600, // 10 minutes cache
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-webhook-secret", "x-webhook-timestamp"],
 }));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));

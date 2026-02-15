@@ -8,6 +8,7 @@ import { SkeletonCard } from "@/components/ui/skeleton";
 import { Suspense } from "react";
 import { SendTaskInput } from "@/components/send-task-input";
 import { TakeoverBanner } from "@/components/takeover-banner";
+import { BudgetWidget } from "@/components/budget-widget";
 
 export const dynamic = "force-dynamic";
 
@@ -151,8 +152,8 @@ export default async function DashboardPage() {
         </StaggerItem>
       </StaggerContainer>
 
-      {/* Task Stats */}
-      <StaggerContainer className="grid grid-cols-2 md:grid-cols-2 gap-4" staggerDelay={0.08}>
+      {/* Task Stats + Budget */}
+      <StaggerContainer className="grid grid-cols-1 md:grid-cols-3 gap-4" staggerDelay={0.08}>
         <StaggerItem>
           <Card>
             <CardContent className="pt-4 pb-4">
@@ -168,6 +169,9 @@ export default async function DashboardPage() {
               <p className="text-2xl font-bold">{weekCount || 0}</p>
             </CardContent>
           </Card>
+        </StaggerItem>
+        <StaggerItem>
+          <BudgetWidget />
         </StaggerItem>
       </StaggerContainer>
 

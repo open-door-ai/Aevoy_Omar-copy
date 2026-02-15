@@ -10,6 +10,14 @@
     "test": "vitest run",
     "test:flow": "tsx src/test.ts",
     "test:integration": "tsx src/test-utils/run-integration-tests.ts",
+    "test:phone": "vitest run tests/phone-e2e.test.ts --reporter=verbose",
+    "test:phone:real": "PHONE_TEST_REAL=true vitest run tests/phone-e2e.test.ts --reporter=verbose",
+    "test:captcha-quick": "playwright test tests/captcha-quick-test.ts --reporter=list",
+    "test:captcha-e2e": "playwright test tests/captcha-e2e.test.ts --reporter=list",
+    "test:captcha-e2e:headed": "playwright test tests/captcha-e2e.test.ts --headed --reporter=list",
+    "test:captcha-validation": "playwright test tests/captcha-validation.test.ts --reporter=list --workers=4",
+    "test:captcha-stress": "playwright test tests/captcha-stress.test.ts --reporter=list --timeout=300000",
+    "test:captcha-all": "playwright test tests/captcha-*.test.ts --reporter=html",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -29,7 +37,9 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
     "imapflow": "^1.2.8",
+    "libphonenumber-js": "^1.12.36",
     "nodemailer": "^8.0.0",
     "openai": "^4.70.0",
     "pdfkit": "^0.17.2",
@@ -37,6 +47,7 @@
     "postal-mime": "^2.7.3",
     "pptxgenjs": "^4.0.1",
     "resend": "^4.0.0",
+    "stripe": "^20.3.1",
     "tar-stream": "^3.1.7",
     "tesseract.js": "^7.0.0",
     "twilio": "^5.0.0",
@@ -44,6 +55,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/express-rate-limit": "^6.0.2",
