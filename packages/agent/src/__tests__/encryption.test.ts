@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll } from "vitest";
 
 // Set ENCRYPTION_KEY before importing the module
 beforeAll(() => {
-  process.env.ENCRYPTION_KEY = "a".repeat(64); // 32 bytes in hex
+  // Generate a strong random key (64 hex chars = 32 bytes)
+  process.env.ENCRYPTION_KEY = "7f3d9a8e2b1c4f6a5e8d9c2a1b3e4f5a6d7c8b9a0e1f2d3c4b5a6e7f8d9c0a1b";
 });
 
 describe("memory encryption (encrypt/decrypt)", () => {

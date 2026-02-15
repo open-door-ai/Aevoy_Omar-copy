@@ -1,9 +1,10 @@
 /**
  * Security Sprint - Rate Limiting & DoS Protection Tests
  *
- * Simple node test runner (no vitest/jest required)
+ * Converted to vitest format
  */
 
+import { describe, it, expect } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import {
   globalLimiter,
@@ -35,218 +36,255 @@ import {
   getUserTaskQueueSize,
 } from '../src/utils/concurrency.js';
 
-// Simple test framework
-let passed = 0;
-let failed = 0;
+describe('Security Sprint - Rate Limiting & DoS Protection', () => {
+  describe('Password Reset Rate Limiting', () => {
+    it('should enforce password reset rate limiting (3/hour per IP)', () => {
+      expect(typeof passwordResetLimiter).toBe('function');
+    });
+  });
 
-function assert(condition: boolean, message: string): void {
-  if (condition) {
-    passed++;
-    console.log(`✓ ${message}`);
-  } else {
-    failed++;
-    console.error(`✗ ${message}`);
-  }
-}
+  describe('Login Rate Limiting', () => {
+    it('should enforce login rate limiting (5/15min per IP)', () => {
+      expect(typeof authLimiter).toBe('function');
+    });
 
-function assertEqual<T>(actual: T, expected: T, message: string): void {
-  if (actual === expected) {
-    passed++;
-    console.log(`✓ ${message}`);
-  } else {
-    failed++;
-    console.error(`✗ ${message}`);
-    console.error(`  Expected: ${expected}`);
-    console.error(`  Actual: ${actual}`);
-  }
-}
+    it('should not require CAPTCHA initially', () => {
+      const userId = 'test-user-' + Date.now();
+      expect(requiresCaptcha(userId)).toBe(false);
+    });
 
-function assertGreaterThan(actual: number, threshold: number, message: string): void {
-  if (actual > threshold) {
-    passed++;
-    console.log(`✓ ${message}`);
-  } else {
-    failed++;
-    console.error(`✗ ${message}`);
-    console.error(`  Expected > ${threshold}, got ${actual}`);
-  }
-}
+    it('should require CAPTCHA after 3 failed login attempts', () => {
+      const userId = 'test-user-' + Date.now();
+      recordAuthFailure(userId);
+      recordAuthFailure(userId);
+      recordAuthFailure(userId);
+      expect(requiresCaptcha(userId)).toBe(true);
+    });
 
-console.log('\n=== Security Sprint - Rate Limiting & DoS Protection ===\n');
+    it('should reset CAPTCHA requirement', () => {
+      const userId = 'test-user-' + Date.now();
+      recordAuthFailure(userId);
+      recordAuthFailure(userId);
+      recordAuthFailure(userId);
+      resetAuthFailures(userId);
+      expect(requiresCaptcha(userId)).toBe(false);
+    });
+  });
 
-// ---- Test 1: Password Reset Rate Limiting ----
-console.log('Test Group: Password Reset Rate Limiting');
-assert(typeof passwordResetLimiter === 'function', 'should enforce password reset rate limiting (3/hour per IP)');
+  describe('Exponential Backoff', () => {
+    it('should return null on first failure', () => {
+      const backoffUser = 'test-backoff-user-' + Date.now();
+      const backoffSeconds = recordAuthFailure(backoffUser);
+      expect(backoffSeconds).toBe(null);
+    });
 
-// ---- Test 2: Login Rate Limiting ----
-console.log('\nTest Group: Login Rate Limiting');
-assert(typeof authLimiter === 'function', 'should enforce login rate limiting (5/15min per IP)');
+    it('should return backoff time on second failure', () => {
+      const backoffUser = 'test-backoff-user-' + Date.now();
+      recordAuthFailure(backoffUser);
+      const backoffSeconds = recordAuthFailure(backoffUser);
+      expect(backoffSeconds).not.toBe(null);
+      expect(backoffSeconds).toBeGreaterThan(0);
+    });
 
-const userId1 = 'test-user-' + Date.now();
-assertEqual(requiresCaptcha(userId1), false, 'should not require CAPTCHA initially');
+    it('should be blocked after repeated failures', () => {
+      const backoffUser = 'test-backoff-user-' + Date.now();
+      recordAuthFailure(backoffUser);
+      recordAuthFailure(backoffUser);
+      const backoff = checkBackoff(backoffUser);
+      expect(backoff.blocked).toBe(true);
+      expect(backoff.retryAfter).toBeGreaterThan(0);
+    });
 
-recordAuthFailure(userId1);
-recordAuthFailure(userId1);
-recordAuthFailure(userId1);
+    it('should clear backoff after reset', () => {
+      const backoffUser = 'test-backoff-user-' + Date.now();
+      recordAuthFailure(backoffUser);
+      recordAuthFailure(backoffUser);
+      resetAuthFailures(backoffUser);
+      const clearedBackoff = checkBackoff(backoffUser);
+      expect(clearedBackoff.blocked).toBe(false);
+    });
+  });
 
-assertEqual(requiresCaptcha(userId1), true, 'should require CAPTCHA after 3 failed login attempts');
+  describe('Email PIN Verification', () => {
+    it('should enforce email PIN verification rate limiting (10/5min per user)', () => {
+      expect(typeof emailPinLimiter).toBe('function');
+    });
+  });
 
-resetAuthFailures(userId1);
-assertEqual(requiresCaptcha(userId1), false, 'should reset CAPTCHA requirement');
+  describe('File Upload Limits', () => {
+    it('should enforce 25MB file upload limit', () => {
+      expect(FILE_UPLOAD_LIMIT).toBe(25 * 1024 * 1024);
+    });
 
-// ---- Test 3: Exponential Backoff ----
-console.log('\nTest Group: Exponential Backoff');
-const backoffUser = 'test-backoff-user-' + Date.now();
+    it('should reject files larger than 25MB', () => {
+      const fileSize = 26 * 1024 * 1024;
+      expect(fileSize).toBeGreaterThan(FILE_UPLOAD_LIMIT);
+    });
+  });
 
-let backoffSeconds = recordAuthFailure(backoffUser);
-assertEqual(backoffSeconds, null, 'should return null on first failure');
+  describe('Request Body Limits', () => {
+    it('should enforce 1MB default request body limit', () => {
+      expect(REQUEST_SIZE_LIMITS.default).toBe('1mb');
+    });
 
-backoffSeconds = recordAuthFailure(backoffUser);
-assert(backoffSeconds !== null && backoffSeconds > 0, 'should return backoff time on second failure');
+    it('should allow 10MB for upload endpoints', () => {
+      expect(REQUEST_SIZE_LIMITS.upload).toBe('10mb');
+    });
 
-const backoff = checkBackoff(backoffUser);
-assertEqual(backoff.blocked, true, 'should be blocked after repeated failures');
-assertGreaterThan(backoff.retryAfter, 0, 'should have retry-after time');
+    it('should enforce 100KB strict limit for webhooks', () => {
+      expect(REQUEST_SIZE_LIMITS.strict).toBe('100kb');
+    });
+  });
 
-resetAuthFailures(backoffUser);
-const clearedBackoff = checkBackoff(backoffUser);
-assertEqual(clearedBackoff.blocked, false, 'should clear backoff after reset');
+  describe('Request Timeout', () => {
+    it('should enforce 30-second timeout on all requests', () => {
+      const timeoutMs = 30000;
+      expect(timeoutMs).toBe(30 * 1000);
+    });
+  });
 
-// ---- Test 4: Email Verification Rate Limiting ----
-console.log('\nTest Group: Email PIN Verification');
-assert(typeof emailPinLimiter === 'function', 'should enforce email PIN verification rate limiting (10/5min per user)');
+  describe('Concurrent Connection Limiting', () => {
+    it('should limit browser tasks to 10 globally', () => {
+      expect(canAcceptBrowserTask()).toBe(true);
+    });
 
-// ---- Test 5: File Upload Size Limits ----
-console.log('\nTest Group: File Upload Limits');
-assertEqual(FILE_UPLOAD_LIMIT, 25 * 1024 * 1024, 'should enforce 25MB file upload limit');
+    it('should enforce per-user browser context limits', () => {
+      const browserUser = 'test-browser-user-' + Date.now();
+      expect(incrementUserBrowserContext(browserUser)).toBe(true); // 1st
+      expect(incrementUserBrowserContext(browserUser)).toBe(true); // 2nd
+      expect(incrementUserBrowserContext(browserUser)).toBe(true); // 3rd
+      expect(incrementUserBrowserContext(browserUser)).toBe(false); // 4th blocked
+      expect(canUserCreateBrowserContext(browserUser)).toBe(false);
 
-const fileSize = 26 * 1024 * 1024;
-assert(fileSize > FILE_UPLOAD_LIMIT, 'should reject files larger than 25MB');
+      decrementUserBrowserContext(browserUser);
+      decrementUserBrowserContext(browserUser);
+      decrementUserBrowserContext(browserUser);
+    });
+  });
 
-// ---- Test 6: Request Body Size Limits ----
-console.log('\nTest Group: Request Body Limits');
-assertEqual(REQUEST_SIZE_LIMITS.default, '1mb', 'should enforce 1MB default request body limit');
-assertEqual(REQUEST_SIZE_LIMITS.upload, '10mb', 'should allow 10MB for upload endpoints');
-assertEqual(REQUEST_SIZE_LIMITS.strict, '100kb', 'should enforce 100KB strict limit for webhooks');
+  describe('Task Queue Limiting', () => {
+    it('should allow 100 tasks per user', () => {
+      const queueUser = 'test-queue-user-' + Date.now();
 
-// ---- Test 7: Request Timeout Enforcement ----
-console.log('\nTest Group: Request Timeout');
-const timeoutMs = 30000;
-assertEqual(timeoutMs, 30 * 1000, 'should enforce 30-second timeout on all requests');
+      for (let i = 0; i < 100; i++) {
+        expect(incrementUserTaskQueue(queueUser)).toBe(true);
+      }
 
-// ---- Test 8: Concurrent Connection Limiting ----
-console.log('\nTest Group: Concurrent Connection Limiting');
-assert(canAcceptBrowserTask(), 'should limit browser tasks to 10 globally');
+      expect(incrementUserTaskQueue(queueUser)).toBe(false); // 101st blocked
+      expect(getUserTaskQueueSize(queueUser)).toBe(100);
 
-const browserUser = 'test-browser-user-' + Date.now();
-assertEqual(incrementUserBrowserContext(browserUser), true, 'should allow 1st browser context');
-assertEqual(incrementUserBrowserContext(browserUser), true, 'should allow 2nd browser context');
-assertEqual(incrementUserBrowserContext(browserUser), true, 'should allow 3rd browser context');
-assertEqual(incrementUserBrowserContext(browserUser), false, 'should block 4th browser context');
-assertEqual(canUserCreateBrowserContext(browserUser), false, 'should report user at max contexts');
+      for (let i = 0; i < 100; i++) {
+        decrementUserTaskQueue(queueUser);
+      }
+    });
+  });
 
-decrementUserBrowserContext(browserUser);
-decrementUserBrowserContext(browserUser);
-decrementUserBrowserContext(browserUser);
+  describe('CAPTCHA Rate Limiting', () => {
+    it('should not require CAPTCHA initially (IP)', () => {
+      const ip = '192.168.1.100-' + Date.now();
+      expect(requiresCaptcha(ip)).toBe(false);
+    });
 
-// ---- Test 9: Task Queue Limiting ----
-console.log('\nTest Group: Task Queue Limiting');
-const queueUser = 'test-queue-user-' + Date.now();
+    it('should require CAPTCHA after 3 attempts (IP)', () => {
+      const ip = '192.168.1.100-' + Date.now();
+      recordAuthFailure(ip);
+      recordAuthFailure(ip);
+      recordAuthFailure(ip);
+      expect(requiresCaptcha(ip)).toBe(true);
+      resetAuthFailures(ip);
+    });
+  });
 
-for (let i = 0; i < 100; i++) {
-  assert(incrementUserTaskQueue(queueUser), `should allow task ${i + 1}/100`);
-}
+  describe('Email/SMS Rate Limiting', () => {
+    it('should enforce email sending rate limiting (30/min per user)', () => {
+      expect(typeof apiLimiter).toBe('function');
+    });
 
-assertEqual(incrementUserTaskQueue(queueUser), false, 'should block 101st task');
-assertEqual(getUserTaskQueueSize(queueUser), 100, 'should report queue size of 100');
+    it('should enforce SMS sending rate limiting (30/min per phone)', () => {
+      expect(typeof twilioLimiter).toBe('function');
+    });
+  });
 
-for (let i = 0; i < 100; i++) {
-  decrementUserTaskQueue(queueUser);
-}
+  describe('AI Call Rate Limiting', () => {
+    it('should start with 100 AI calls available', () => {
+      const aiUser = 'test-ai-user-' + Date.now();
+      expect(getRemainingAiCalls(aiUser)).toBe(100);
+    });
 
-// ---- Test 10: CAPTCHA Solve Rate Limiting ----
-console.log('\nTest Group: CAPTCHA Rate Limiting');
-const ip = '192.168.1.100-' + Date.now();
+    it('should allow 100 AI calls then block', () => {
+      const aiUser = 'test-ai-user-' + Date.now();
 
-assertEqual(requiresCaptcha(ip), false, 'should not require CAPTCHA initially (IP)');
+      for (let i = 0; i < 100; i++) {
+        expect(canMakeAiCall(aiUser)).toBe(true);
+      }
 
-recordAuthFailure(ip);
-recordAuthFailure(ip);
-recordAuthFailure(ip);
+      expect(canMakeAiCall(aiUser)).toBe(false);
+      expect(getRemainingAiCalls(aiUser)).toBe(0);
+    });
 
-assertEqual(requiresCaptcha(ip), true, 'should require CAPTCHA after 3 attempts (IP)');
+    it('should reset to 100 calls after reset', () => {
+      const aiUser = 'test-ai-user-' + Date.now();
+      for (let i = 0; i < 100; i++) {
+        canMakeAiCall(aiUser);
+      }
+      resetAiCallCounter(aiUser);
+      expect(getRemainingAiCalls(aiUser)).toBe(100);
+    });
+  });
 
-resetAuthFailures(ip);
+  describe('Webhook Timestamp Validation', () => {
+    it('should validate current timestamp', () => {
+      const now = new Date().toISOString();
+      expect(validateWebhookTimestamp(now)).toBe(true);
+    });
 
-// ---- Test 11: Email/SMS Sending Rate Limiting ----
-console.log('\nTest Group: Email/SMS Rate Limiting');
-assert(typeof apiLimiter === 'function', 'should enforce email sending rate limiting (30/min per user)');
-assert(typeof twilioLimiter === 'function', 'should enforce SMS sending rate limiting (30/min per phone)');
+    it('should validate 4-minute-old timestamp', () => {
+      const fiveMinutesAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+      expect(validateWebhookTimestamp(fiveMinutesAgo)).toBe(true);
+    });
 
-// ---- Test 12: AI Cost Per User Limits ----
-console.log('\nTest Group: AI Call Rate Limiting');
-const aiUser = 'test-ai-user-' + Date.now();
+    it('should reject 10-minute-old timestamp', () => {
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      expect(validateWebhookTimestamp(tenMinutesAgo)).toBe(false);
+    });
 
-assertEqual(getRemainingAiCalls(aiUser), 100, 'should start with 100 AI calls available');
+    it('should reject future timestamp', () => {
+      const future = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      expect(validateWebhookTimestamp(future)).toBe(false);
+    });
+  });
 
-for (let i = 0; i < 100; i++) {
-  assert(canMakeAiCall(aiUser), `should allow AI call ${i + 1}/100`);
-}
+  describe('IP Extraction', () => {
+    it('should extract IP from x-forwarded-for header', () => {
+      const req = {
+        headers: {
+          'x-forwarded-for': '1.2.3.4, 5.6.7.8',
+        },
+        ip: '127.0.0.1',
+      } as unknown as Request;
 
-assertEqual(canMakeAiCall(aiUser), false, 'should block 101st AI call');
-assertEqual(getRemainingAiCalls(aiUser), 0, 'should report 0 remaining calls');
+      expect(getClientIp(req)).toBe('1.2.3.4');
+    });
 
-resetAiCallCounter(aiUser);
-assertEqual(getRemainingAiCalls(aiUser), 100, 'should reset to 100 calls after reset');
+    it('should fallback to req.ip if no x-forwarded-for', () => {
+      const req = {
+        headers: {},
+        ip: '127.0.0.1',
+      } as unknown as Request;
 
-// ---- Test 13: Webhook Timestamp Validation ----
-console.log('\nTest Group: Webhook Timestamp Validation');
-const now = new Date().toISOString();
-assertEqual(validateWebhookTimestamp(now), true, 'should validate current timestamp');
+      expect(getClientIp(req)).toBe('127.0.0.1');
+    });
+  });
 
-const fiveMinutesAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
-assertEqual(validateWebhookTimestamp(fiveMinutesAgo), true, 'should validate 4-minute-old timestamp');
+  describe('Global Rate Limiting', () => {
+    it('should enforce global rate limiting (100/min per IP)', () => {
+      expect(typeof globalLimiter).toBe('function');
+    });
+  });
 
-const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-assertEqual(validateWebhookTimestamp(tenMinutesAgo), false, 'should reject 10-minute-old timestamp');
-
-const future = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-assertEqual(validateWebhookTimestamp(future), false, 'should reject future timestamp');
-
-// ---- Test 14: IP Extraction ----
-console.log('\nTest Group: IP Extraction');
-const req1 = {
-  headers: {
-    'x-forwarded-for': '1.2.3.4, 5.6.7.8',
-  },
-  ip: '127.0.0.1',
-} as unknown as Request;
-
-assertEqual(getClientIp(req1), '1.2.3.4', 'should extract IP from x-forwarded-for header');
-
-const req2 = {
-  headers: {},
-  ip: '127.0.0.1',
-} as unknown as Request;
-
-assertEqual(getClientIp(req2), '127.0.0.1', 'should fallback to req.ip if no x-forwarded-for');
-
-// ---- Test 15: Global Rate Limiting ----
-console.log('\nTest Group: Global Rate Limiting');
-assert(typeof globalLimiter === 'function', 'should enforce global rate limiting (100/min per IP)');
-
-// ---- Test 16: Task Rate Limiting ----
-console.log('\nTest Group: Task Rate Limiting');
-assert(typeof taskLimiter === 'function', 'should enforce task rate limiting (10/min per user)');
-
-// ---- Summary ----
-console.log(`\n=== Test Summary ===`);
-console.log(`✓ Passed: ${passed}`);
-console.log(`✗ Failed: ${failed}`);
-
-if (failed > 0) {
-  process.exit(1);
-} else {
-  console.log('\n✓ All tests passed!\n');
-  process.exit(0);
-}
+  describe('Task Rate Limiting', () => {
+    it('should enforce task rate limiting (10/min per user)', () => {
+      expect(typeof taskLimiter).toBe('function');
+    });
+  });
+});

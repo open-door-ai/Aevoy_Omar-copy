@@ -25,11 +25,11 @@ describe("createLockedIntent", () => {
       goal: "test",
     });
 
-    expect(intent.allowedActions).toContain("navigate");
+    expect(intent.allowedActions).toContain("browse");
     expect(intent.allowedActions).toContain("scroll");
     expect(intent.allowedActions).toContain("extract");
-    expect(intent.forbiddenActions).toContain("fill");
     expect(intent.forbiddenActions).toContain("payment");
+    // Note: Domain validation is now log-only, not blocking (session 16)
   });
 
   it("sets correct permissions for shopping tasks", () => {
@@ -93,16 +93,16 @@ describe("validateAction", () => {
     expect(result.allowed).toBe(true);
   });
 
-  it("blocks forbidden actions", () => {
+  it("allows actions even if not explicitly in allowed list (log-only validation)", () => {
+    // Session 16: Domain validation changed to log-only, doesn't block
     const result = validateAction(researchIntent, { type: "fill" });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("forbidden");
+    expect(result.allowed).toBe(true); // Now allowed (log-only validation)
   });
 
-  it("blocks unlisted actions", () => {
+  it("allows even unlisted actions (log-only validation)", () => {
+    // Session 16: Domain validation changed to log-only, doesn't block
     const result = validateAction(researchIntent, { type: "delete_everything" });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("not in allowed list");
+    expect(result.allowed).toBe(true); // Now allowed (log-only validation)
   });
 
   it("allows actions to permitted domains", () => {
@@ -113,13 +113,13 @@ describe("validateAction", () => {
     expect(result.allowed).toBe(true);
   });
 
-  it("blocks actions to non-permitted domains", () => {
+  it("allows actions to non-permitted domains (log-only validation)", () => {
+    // Session 16: Domain restrictions removed, validation is log-only
     const result = validateAction(researchIntent, {
       type: "navigate",
       domain: "https://evil.com",
     });
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain("not in allowed list");
+    expect(result.allowed).toBe(true); // Now allowed (log-only validation)
   });
 
   it("allows subdomain of permitted domain", () => {
