@@ -8,7 +8,7 @@
  */
 
 import rateLimit from 'express-rate-limit';
-import type { Request } from 'express';
+import type { Request, RequestHandler } from 'express';
 
 // ============================================================================
 // CLIENT IP EXTRACTION
@@ -37,7 +37,7 @@ export function getClientIp(req: Request): string {
 /**
  * Global rate limiter: 100 requests per minute per IP
  */
-export const globalLimiter = rateLimit({
+export const globalLimiter: RequestHandler = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 100,
   standardHeaders: true,
@@ -48,7 +48,7 @@ export const globalLimiter = rateLimit({
 /**
  * Task rate limiter: 10 tasks per minute per user
  */
-export const taskLimiter = rateLimit({
+export const taskLimiter: RequestHandler = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
   keyGenerator: (req) => req.body?.userId || getClientIp(req),
@@ -61,7 +61,7 @@ export const taskLimiter = rateLimit({
 /**
  * Auth rate limiter: 5 attempts per 15 minutes per IP
  */
-export const authLimiter = rateLimit({
+export const authLimiter: RequestHandler = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5,
   keyGenerator: getClientIp,
@@ -77,7 +77,7 @@ export const authLimiter = rateLimit({
 /**
  * Password reset limiter: 3 attempts per hour per IP
  */
-export const passwordResetLimiter = rateLimit({
+export const passwordResetLimiter: RequestHandler = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 3,
   keyGenerator: getClientIp,
@@ -93,7 +93,7 @@ export const passwordResetLimiter = rateLimit({
 /**
  * Email PIN verification limiter: 10 attempts per 5 minutes per user
  */
-export const emailPinLimiter = rateLimit({
+export const emailPinLimiter: RequestHandler = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
   max: 10,
   keyGenerator: (req) => req.body?.userId || getClientIp(req),
@@ -109,7 +109,7 @@ export const emailPinLimiter = rateLimit({
 /**
  * API rate limiter: 60 requests per minute per user
  */
-export const apiLimiter = rateLimit({
+export const apiLimiter: RequestHandler = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   keyGenerator: (req) => req.body?.userId || getClientIp(req),
@@ -122,7 +122,7 @@ export const apiLimiter = rateLimit({
 /**
  * Twilio webhook limiter: 30 requests per minute per phone number
  */
-export const twilioLimiter = rateLimit({
+export const twilioLimiter: RequestHandler = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
   keyGenerator: (req) => req.body?.From || getClientIp(req),
