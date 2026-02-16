@@ -1,6 +1,7 @@
 name = "aevoy-email-router"
 main = "src/index.ts"
 compatibility_date = "2024-09-25"
+account_id = "5b63e25e3235482bc883cacd3cf189f7"
 
 # Email routing configuration
 # After deploying:

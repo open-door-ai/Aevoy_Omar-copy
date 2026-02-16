@@ -77,8 +77,7 @@ function validateEnv(): void {
     "RESEND_API_KEY",
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
-    "BROWSERBASE_API_KEY",
-    "BROWSERBASE_PROJECT_ID",
+    "VPS_BROWSER_HOST", // Optional VPS browser for better performance
   ];
   const missingOptional = optional.filter((key) => !process.env[key]);
   if (missingOptional.length > 0) {
@@ -292,7 +291,7 @@ import { getActiveBrowserTasks, canAcceptBrowserTask } from "./utils/concurrency
 
 let activeTasks = 0;
 const MAX_CONCURRENT_TASKS = 10;
-const MAX_CONCURRENT_BROWSER_TASKS = 10; // Increased from 3 - using local Playwright now, not Browserbase
+const MAX_CONCURRENT_BROWSER_TASKS = 10; // Using VPS Browser or local Playwright
 const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
 
 function canProcessTask(needsBrowser: boolean): boolean {

@@ -19,7 +19,6 @@ import { screenshotWithOCR, type ScreenshotOCRParams, type OCRResult } from './a
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
 import { quickValidate, generateVisionResponse } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
-import { StagehandService } from '../services/stagehand.js';
 import { MultiUserBrowserService, createMultiUserBrowser } from '../services/multi-user-browser.js';
 import { withTimeout, delay } from '../utils/timeout.js';
 import { applyStealthPatches, getRealisticUserAgent, humanizeInteraction } from './stealth.js';
@@ -59,13 +58,11 @@ export class ExecutionEngine {
   private validator: ActionValidator;
   private totalCost = 0;
   private results: StepResult[] = [];
-  private stagehand: StagehandService | null = null;
   private multiUserBrowser: MultiUserBrowserService | null = null;
-  private useStagehand: boolean;
   private useMultiUser: boolean;
   private userId?: string;
   private domain?: string;
-  private isCloud = false;  // Whether currently using Browserbase (vs local Playwright)
+  // isCloud removed - we only use VPS or local Playwright now
   private isMultiUser = false; // Whether using multi-user VPS browser
   private taskId?: string;
 
@@ -73,22 +70,17 @@ export class ExecutionEngine {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
     
-    // Priority: Multi-User Browser (VPS) > Browserbase > Local Playwright
+    // Priority: VPS Browser > Local Playwright
     // Set FORCE_LOCAL_BROWSER=true env var to force local Playwright only.
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
-    
+
     // Check for VPS Multi-User Browser (preferred for autonomy)
     this.useMultiUser = !forceLocal && !!(process.env.VPS_BROWSER_HOST);
-    
-    // Fallback to Browserbase if VPS not configured
-    this.useStagehand = !forceLocal && !this.useMultiUser && !!(process.env.BROWSERBASE_API_KEY && process.env.BROWSERBASE_PROJECT_ID);
-    
+
     if (this.useMultiUser) {
-      console.log('[ENGINE] Will use Multi-User Browser (VPS) as primary');
-    } else if (this.useStagehand) {
-      console.log('[ENGINE] Will use Browserbase (cloud) as primary');
+      console.log('[ENGINE] Will use VPS Browser as primary');
     } else {
-      console.log('[ENGINE] Will use local Playwright only');
+      console.log('[ENGINE] Will use local Playwright');
     }
   }
 
@@ -104,8 +96,7 @@ export class ExecutionEngine {
         this.multiUserBrowser = createMultiUserBrowser(userId);
         this.page = await this.multiUserBrowser.init();
         this.isMultiUser = true;
-        this.isCloud = false;
-        
+
         // Verify page is responsive
         try {
           await this.page.evaluate(() => document.readyState);
@@ -125,57 +116,7 @@ export class ExecutionEngine {
       }
     }
 
-    // PRIORITY 2: Browserbase (cloud) - Fallback if VPS fails
-    if (this.useStagehand) {
-      // Retry Browserbase with backoff when hitting concurrent session limits
-      const maxRetries = 3;
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          // Pass userId so Browserbase can use persistent contexts (always signed in)
-          this.stagehand = new StagehandService({ userId });
-          this.page = await this.stagehand.init();
-          this.context = this.stagehand.session?.context || null;
-
-          // Browserbase Contexts handle session persistence natively — no manual cookie restore needed
-          const liveUrl = this.stagehand.getLiveViewUrl();
-          if (liveUrl) {
-            console.log(`[ENGINE] Live View available for user interaction`);
-          }
-
-          // Wait for CDP connection to stabilize before first operation
-          await delay(2000);
-          // Verify page is responsive
-          try {
-            await this.page.evaluate(() => document.readyState);
-            this.isCloud = true;
-            console.log("[ENGINE] Initialized with Stagehand (cloud, persistent context) — page responsive");
-          } catch (pageErr) {
-            console.warn("[ENGINE] Stagehand page not responsive after init:", pageErr);
-            this.stagehand = null;
-            this.page = null;
-            break; // Fall through to local Playwright
-          }
-          return;
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          const isRateLimit = errorMsg.includes('429') || errorMsg.includes('concurrent') || errorMsg.includes('Too Many');
-
-          if (isRateLimit && attempt < maxRetries) {
-            const waitMs = attempt * 15000; // 15s, 30s, 45s backoff
-            console.warn(`[ENGINE] Browserbase at capacity (attempt ${attempt}/${maxRetries}), waiting ${waitMs / 1000}s...`);
-            await delay(waitMs);
-            this.stagehand = null;
-            continue;
-          }
-
-          console.warn(`[ENGINE] Stagehand init failed (attempt ${attempt}/${maxRetries}), falling back to local Playwright:`, errorMsg);
-          this.stagehand = null;
-          break;
-        }
-      }
-    }
-
-    // Local Playwright fallback with stealth + manual session restore
+    // PRIORITY 2: Local Playwright fallback with stealth + manual session restore
     let savedSession = null;
     if (userId && domain) {
       savedSession = await sessionManager.loadSession(userId, domain);
@@ -214,7 +155,7 @@ export class ExecutionEngine {
     // Apply humanized interaction delays to reduce bot detection
     await humanizeInteraction(this.page);
 
-    // Manual session restore only for local Playwright (Browserbase handles this natively)
+    // Manual session restore for local Playwright
     if (savedSession && this.context && this.page) {
       await sessionManager.restoreSession(this.context, this.page, savedSession);
       console.log("[ENGINE] Restored session into local Playwright browser");
@@ -225,19 +166,18 @@ export class ExecutionEngine {
 
   async cleanup(): Promise<void> {
     // Save session before cleanup
-    // Multi-User Browser: saves via its own method
+    // VPS Browser: saves via its own method
     // Local Playwright: manual save
-    // Browserbase: auto-saves on close
     if (this.multiUserBrowser) {
       try {
         await this.multiUserBrowser.saveAllSessions();
-        console.log('[ENGINE] Saved Multi-User Browser sessions');
+        console.log('[ENGINE] Saved VPS Browser sessions');
       } catch (error) {
-        console.warn('[ENGINE] Failed to save Multi-User sessions:', error);
+        console.warn('[ENGINE] Failed to save VPS sessions:', error);
       }
       await this.multiUserBrowser.close();
       this.multiUserBrowser = null;
-    } else if (!this.stagehand && this.userId && this.domain && this.page && this.context) {
+    } else if (this.userId && this.domain && this.page && this.context) {
       try {
         await sessionManager.saveSession(this.userId, this.domain, this.context, this.page, true);
         console.log(`[ENGINE] Saved session for ${this.domain} before cleanup`);
@@ -246,15 +186,12 @@ export class ExecutionEngine {
       }
     }
 
-    if (this.stagehand) {
-      // Browserbase sessions with persist:true auto-save context on close
-      await this.stagehand.close();
-      this.stagehand = null;
-    } else if (!this.multiUserBrowser) {
-      // Only close local browser if not using multi-user
+    // Close local Playwright browser if not using VPS
+    if (!this.multiUserBrowser) {
       if (this.context) await this.context.close().catch(() => {});
       if (this.browser) await this.browser.close().catch(() => {});
     }
+
     this.page = null;
     this.context = null;
     this.browser = null;
@@ -279,10 +216,16 @@ export class ExecutionEngine {
   /**
    * Get the Live View URL for the current browser session.
    * Users can open this on their phone to see/interact with the browser in real time.
-   * Only available when using Browserbase (cloud).
+   * Only available when using VPS Browser.
    */
-  getLiveViewUrl(): string | null {
-    return this.stagehand?.getLiveViewUrl() || null;
+  async getLiveViewUrl(): Promise<string | null> {
+    if (!this.multiUserBrowser) return null;
+    try {
+      const { url } = await this.multiUserBrowser.createTakeover();
+      return url;
+    } catch {
+      return null;
+    }
   }
 
   getActionSuccessRate(): number {
@@ -350,7 +293,7 @@ export class ExecutionEngine {
       throw new Error('Engine not initialized. Call initialize() first.');
     }
 
-    console.log(`[ENGINE] executeSteps: ${steps.length} steps, taskId=${this.taskId?.slice(0, 8)}, cloud=${this.isCloud}`);
+    console.log(`[ENGINE] executeSteps: ${steps.length} steps, taskId=${this.taskId?.slice(0, 8)}, vps=${this.isMultiUser}`);
 
     // Wrap entire execution in a task-level timeout
     try {
@@ -1059,7 +1002,7 @@ export class ExecutionEngine {
     }
 
     try {
-      console.log(`[ENGINE] Navigating to: ${url} (${this.isCloud ? 'cloud' : 'local'})`);
+      console.log(`[ENGINE] Navigating to: ${url} (${this.isMultiUser ? 'vps' : 'local'})`);
       await this.page!.goto(url, {
         waitUntil: 'domcontentloaded',
         timeout: 30000
@@ -1079,49 +1022,6 @@ export class ExecutionEngine {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown navigation error';
       console.error(`[ENGINE] Navigation failed for ${url}: ${message}`);
-
-      // If cloud browser failed, fall back to local Playwright and retry
-      if (this.isCloud) {
-        console.log(`[ENGINE] Cloud navigation failed, falling back to local Playwright...`);
-        try {
-          // Clean up cloud session
-          if (this.stagehand) {
-            await this.stagehand.close().catch(() => {});
-            this.stagehand = null;
-          }
-          this.isCloud = false;
-
-          // Launch local Playwright
-          const launchArgs = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-blink-features=AutomationControlled',
-          ];
-          this.browser = await chromium.launch({ headless: true, args: launchArgs });
-          this.context = await this.browser.newContext({
-            viewport: { width: 1280, height: 800 },
-            userAgent: getRealisticUserAgent(),
-          });
-          this.page = await this.context.newPage();
-          await applyStealthPatches(this.context);
-
-          // Retry navigation with local browser
-          console.log(`[ENGINE] Retrying navigation with local Playwright: ${url}`);
-          await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await waitForSPAReady(this.page);
-          await checkAndHandleAntiBot(this.page);
-          await handleCaptchaIfPresent(this.page, this.userId, this.taskId);
-
-          console.log(`[ENGINE] Local navigation successful: ${url}`);
-          return { success: true, action: 'navigate', data: { url }, method: 'local_fallback' };
-        } catch (localError) {
-          const localMsg = localError instanceof Error ? localError.message : 'Unknown error';
-          console.error(`[ENGINE] Local fallback also failed for ${url}: ${localMsg}`);
-          return { success: false, action: 'navigate', error: `Navigation failed (cloud + local): ${localMsg}` };
-        }
-      }
-
       return { success: false, action: 'navigate', error: `Navigation to ${url} failed: ${message}` };
     }
   }
@@ -1286,19 +1186,6 @@ export class ExecutionEngine {
             return true;
           }, { sel: selector, val: value });
           return success;
-        },
-      },
-      // Method 5: Try Stagehand act() as last resort
-      {
-        name: 'stagehand_act',
-        fn: async () => {
-          if (!this.stagehand) return false;
-          try {
-            await this.stagehand.act(`Select "${label || value}" from the dropdown${selector ? ` at ${selector}` : ''}`);
-            return true;
-          } catch {
-            return false;
-          }
         },
       },
     ];
