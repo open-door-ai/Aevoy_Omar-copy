@@ -1157,8 +1157,10 @@ export async function classifyTask(userMessage: string): Promise<{
   ];
   const hasUrl = /https?:\/\//i.test(text) || /www\./i.test(text);
   const hasExplicitWebIntent = /\b(website|site|online|web|url|link|browse|visit|go to)\b/i.test(text);
+  // Price/shopping/live data queries always need browser (current info, not static knowledge)
+  const hasLiveDataIntent = /\b(price|cost|buy|purchase|order|amazon|walmart|ebay|store|shop|deal|sale|stock|available|shipping|delivery|rating|review|weather|news|today|current|latest|now)\b/i.test(text);
 
-  if (knowledgePatterns.some(p => p.test(text)) && !hasUrl && !hasExplicitWebIntent) {
+  if (knowledgePatterns.some(p => p.test(text)) && !hasUrl && !hasExplicitWebIntent && !hasLiveDataIntent) {
     console.log("[AI] Knowledge question detected, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
