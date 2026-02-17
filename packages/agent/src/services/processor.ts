@@ -1227,6 +1227,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const MAX_SAME_STRATEGY_RETRIES = 3;
     let lastPageTitle = ''; // Track page titles to detect bot-blocked repetition
 
+    // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
+    // the agent auto-switches to search() for that domain (no hardcoded lists)
+    const domainFailures = new Map<string, number>(); // domain -> failure count
+
     // AGI-LEVEL METHOD TYPE DIVERSITY: Prevent trying 30x same method TYPE
     // Track METHOD TYPES (not just specific methods) to force intelligent diversity
     const { classifyMethodType, buildDiversityMessage } = await import("./method-classifier.js");
@@ -1430,6 +1434,18 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const successfulActions = iterationResults.filter(r => r.success);
       const failedActions = iterationResults.filter(r => !r.success);
 
+      // Track domain failures dynamically — if browse/navigate fails on a domain,
+      // increment counter so we can warn the AI to switch strategies
+      for (const fail of failedActions) {
+        if (['browse', 'navigate', 'fill_form', 'login'].includes(fail.action.type)) {
+          const failUrl = (fail.action.params.url as string) || '';
+          try {
+            const failDomain = new URL(failUrl.startsWith('http') ? failUrl : `https://${failUrl}`).hostname;
+            domainFailures.set(failDomain, (domainFailures.get(failDomain) || 0) + 1);
+          } catch { /* not a valid URL */ }
+        }
+      }
+
       // If everything succeeded perfectly and task seems done, stop
       if (failedActions.length === 0 && !needsBrowser) {
         console.log('[ITERATE] All actions succeeded (non-browser), task complete');
@@ -1557,10 +1573,17 @@ Be creative. Think outside the box. What would a human do differently?`;
       // Check if a search succeeded this round — if so, strongly hint to complete from results
       const searchSucceeded = iterationResults.some(r => r.action.type === 'search' && r.success);
       const searchCompletionHint = searchSucceeded
-        ? `\n⚡ SEARCH SUCCEEDED: You have Bing search results above. READ THEM and extract the answer NOW.
-- If the results contain a price, rating, or relevant info → immediately answer the user and signal [TASK_COMPLETE].
-- DO NOT attempt to browse/navigate to any website shown in the results. The search results are your answer.
-- DO NOT try amazon.com, walmart.com, or any other bot-protected site.\n`
+        ? `\n⚡ SEARCH SUCCEEDED: You have search results above. READ THEM and extract the answer NOW.
+- If the results contain a price, rating, or relevant info → answer the user and signal [TASK_COMPLETE].
+- DO NOT browse/navigate to sites shown in search results — use the data you already have.\n`
+        : '';
+
+      // Dynamic domain failure warning — no hardcoded lists, learned from actual failures
+      const blockedDomains = [...domainFailures.entries()]
+        .filter(([, count]) => count >= 2)
+        .map(([domain]) => domain);
+      const domainWarning = blockedDomains.length > 0
+        ? `\n⛔ BLOCKED DOMAINS (failed ${blockedDomains.length > 1 ? '2+' : '2'} times — DO NOT retry these):\n${blockedDomains.map(d => `  - ${d} → use [ACTION:search("your query site:${d}")] instead`).join('\n')}\n`
         : '';
 
       const iterativePrompt = `Original request: ${subject} ${body}
@@ -1572,6 +1595,7 @@ ${strategyEnforcement}
 ${diversityEnforcement}
 ${retryEnforcement}
 ${searchCompletionHint}
+${domainWarning}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 OBSERVE the current page state above, then decide what to do next:
 - If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
@@ -1677,11 +1701,14 @@ OBSERVE the current page state above, then decide what to do next:
 
     // 7c. LAST RESORT: If ALL actions failed, generate AI-only response from knowledge
     if (actionResults.length > 0 && actionResults.every(r => !r.success)) {
-      console.log('[FALLBACK] All actions failed, generating AI-only response');
+      console.log('[FALLBACK] All actions failed, generating honest AI-only response');
+      // Build a summary of what we tried so the AI can be honest about it
+      const failedDomains = [...domainFailures.entries()].map(([d, c]) => `${d} (${c}x)`).join(', ');
+      const attemptSummary = failedDomains ? `Attempted to browse: ${failedDomains}. All blocked or failed.` : 'All browser actions failed.';
       try {
         const fallbackResponse = await generateResponse(
           memory, subject,
-          `${body}\n\nIMPORTANT: Answer this from your own knowledge. Do NOT use any actions. Just give your best answer.`,
+          `${body}\n\nCONTEXT: I tried to complete this task using a web browser but couldn't access the websites needed. ${attemptSummary}\n\nBe HONEST with the user. If you know the answer from your knowledge, share it but note that you couldn't verify it live. If you DON'T know (e.g., a current price that changes), tell the user what happened and suggest they check the site directly. NEVER make up specific numbers like prices or stock levels.`,
           username, undefined, userId, taskId
         );
         if (fallbackResponse.content) {
