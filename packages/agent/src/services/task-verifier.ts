@@ -288,18 +288,23 @@ export function getQualityTier(taskType: string): QualityTier {
     case 'purchase':
     case 'payment':
       return 'financial';
-    case 'booking':
     case 'form':
     case 'login':
-    case 'shopping':
     case 'account_creation':
     case '2fa_completion':
       return 'browser_action';
+    // booking + shopping are often just lookups — use research tier (55%)
+    // unless they actually involve completing a transaction (which gets purchase tier)
+    case 'booking':
+    case 'shopping':
+      return 'research';
     case 'email':
     case 'calendar':
       return 'communication';
     case 'research':
     case 'download':
+    case 'browse':
+    case 'general':
       return 'research';
     default:
       return 'simple';

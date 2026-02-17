@@ -478,6 +478,7 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
 - Use [ACTION:search("query")] only when you need to DISCOVER which site has the information, not when the site is already known.
 - If a browse/navigate action FAILS with "Bot-blocked" or "Sorry! Something went wrong", the site is blocking headless browsers. IMMEDIATELY switch to [ACTION:search("product name site:amazon.com")] via Bing to find the same information — Bing scrapes these sites for you. Do NOT retry the same URL.
 - If a search result page looks like a bot-block/captcha page (url has "418" or content is minimal), use [ACTION:browse("url")] to go directly to a known authoritative source instead.
+- CRITICAL: When you have search results from Bing/Brave and can see the answer in them (price, link, info), DO NOT click through to the source site. Extract the data DIRECTLY from the search results page and signal [TASK_COMPLETE]. Bing shows prices, ratings, and links right in search results. Use them.
 - For complex tasks, break them into steps. Execute 2-5 actions MAX per round, observe results, then plan more.
 - To signal you're done, include [TASK_COMPLETE] in your response with the final answer.
 - NEVER say "I can't do this." ALWAYS try. Use the browser creatively.
