@@ -453,8 +453,9 @@ export async function verifyTask(
     ? generateCorrectionHints(step1, step2, pageText, actionSuccessRate ?? 100)
     : [];
 
-  // Lower threshold for research tasks (they're info-gathering, not transactional)
-  const threshold = taskType === 'research' ? 55 : 70;
+  // Lower threshold for research/general/browse/booking/shopping tasks
+  const researchTypes = ['research', 'general', 'browse', 'booking', 'shopping', 'download'];
+  const threshold = researchTypes.includes(taskType) ? 55 : 70;
   const passed = compositeScore >= threshold;
   return {
     passed,

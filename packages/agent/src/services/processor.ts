@@ -2087,7 +2087,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // 14. SELF-LEARNING: Record outcomes for future intelligence (fire-and-forget)
     try {
-      const taskSuccess = verificationResult?.passed !== false;
+      // Use confidence >= tier target as the success criteria, not just verificationResult.passed
+      // (verificationResult.passed uses a fixed threshold that may not match the tier target)
+      const { getQualityTier, QUALITY_TIERS } = await import("./task-verifier.js");
+      const taskTier = getQualityTier(classification.taskType || 'simple');
+      const taskTierTarget = QUALITY_TIERS[taskTier]?.target ?? 70;
+      const taskSuccess = verificationResult
+        ? (verificationResult.confidence ?? 0) >= taskTierTarget
+        : false;
       const strikeCount = verificationResult
         ? ((verificationResult as VerificationResult & { _strikeData?: { totalAttempts?: number } })._strikeData?.totalAttempts || 1)
         : 1;
