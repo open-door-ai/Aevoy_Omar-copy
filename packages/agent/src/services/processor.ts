@@ -1317,7 +1317,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         );
 
         // Action-level retry: on failure, retry once after 3s delay
-        if (!result.success && result.error && !result.error.startsWith('Security:') && !result.error.startsWith('Action not')) {
+        // Skip retry for bot-blocked actions — retrying won't help
+        const isBotBlockedAction = result.error?.includes('Bot-blocked') || result.error?.includes('bot-block');
+        if (!result.success && result.error && !isBotBlockedAction && !result.error.startsWith('Security:') && !result.error.startsWith('Action not')) {
           console.log(`[RETRY] Action '${action.type}' failed (${result.error}), retrying in 3s...`);
           await new Promise(resolve => setTimeout(resolve, 3000));
           const retryResult = await executeActionWithLearning(
