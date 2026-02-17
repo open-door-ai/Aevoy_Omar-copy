@@ -1106,10 +1106,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     if (primaryDomain && classification.needsBrowser) {
       try {
         templateMatch = await findTemplate(userId, primaryDomain, `${subject} ${body}`);
-        if (templateMatch && templateMatch.rank > 0.1) {
+        // Require at least 2 successful uses before trusting a template (avoids replaying
+        // templates recorded before a bug fix that made them seem successful when they weren't)
+        if (templateMatch && templateMatch.rank > 0.1 && templateMatch.successCount >= 2) {
           console.log(`[TEMPLATE] Matched template "${templateMatch.taskPattern.substring(0, 50)}..." (rank=${templateMatch.rank.toFixed(3)}, used ${templateMatch.successCount} times)`);
           usedTemplateId = templateMatch.id;
         } else {
+          if (templateMatch) {
+            console.log(`[TEMPLATE] Found matching template but insufficient success count (${templateMatch.successCount} < 2), ignoring`);
+          }
           templateMatch = null;
         }
       } catch {

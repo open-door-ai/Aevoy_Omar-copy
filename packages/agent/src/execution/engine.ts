@@ -381,7 +381,9 @@ export class ExecutionEngine {
 
       if (!result.success) {
         // Step-level retry: exponential backoff (1s, 2s, 4s) for transient failures
-        if (step.action !== 'verify' && step.action !== 'wait') {
+        // Skip retry for bot-blocked navigations — retrying won't help and wastes time
+        const isBotBlockedError = result.error?.includes('Bot-blocked') || result.error?.includes('bot-block');
+        if (step.action !== 'verify' && step.action !== 'wait' && !isBotBlockedError) {
           console.log(`[ENGINE] Step '${step.action}' failed, retrying with exponential backoff...`);
 
           const retryPolicy = new RetryPolicy({
