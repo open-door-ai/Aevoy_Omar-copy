@@ -2345,8 +2345,9 @@ async function executeAction(
       }
       
       const query = action.params.query as string;
-      const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&ia=web`;
-      
+      // Use Bing direct search URL — more reliable than DuckDuckGo in headless mode
+      const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+
       const result = await executionEngine.executeSteps([
         { action: 'navigate', params: { url: searchUrl } },
         { action: 'wait', params: { ms: 2000 } },

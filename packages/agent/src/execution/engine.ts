@@ -631,93 +631,76 @@ export class ExecutionEngine {
     };
   }
 
+  private isBotBlocked(url: string, text: string): boolean {
+    // Detect bot-block pages across search engines
+    if (url.includes('418.html') || url.includes('bno=')) return true;
+    if (text.includes('unusual traffic') || text.includes('not a robot')) return true;
+    if (url.includes('/challenge') || url.includes('captcha')) return true;
+    return false;
+  }
+
   private async handleSearch(params: Record<string, unknown>): Promise<StepResult> {
     const query = params.query as string;
-    const engine = (params.engine as string) || 'duckduckgo';
+    // Default to bing — more permissive than DuckDuckGo for headless browsers
+    const requestedEngine = (params.engine as string) || 'bing';
 
     if (!query) {
       return { success: false, action: 'search', error: 'Search query is required' };
     }
 
-    const searchEngines: Record<string, string> = {
-      duckduckgo: 'https://duckduckgo.com',
-      google: 'https://www.google.com',
-      bing: 'https://www.bing.com',
+    // Use direct search URL — no homepage navigation + typing (faster, less detectable)
+    const buildSearchUrl = (eng: string) => {
+      const q = encodeURIComponent(query);
+      switch (eng) {
+        case 'google': return `https://www.google.com/search?q=${q}`;
+        case 'bing': return `https://www.bing.com/search?q=${q}`;
+        case 'brave': return `https://search.brave.com/search?q=${q}`;
+        case 'html_ddg': return `https://html.duckduckgo.com/html/?q=${q}`;
+        default: return `https://www.bing.com/search?q=${q}`;
+      }
     };
 
-    const searchUrl = searchEngines[engine] || searchEngines.duckduckgo;
+    const engineOrder = [requestedEngine, 'bing', 'brave', 'html_ddg'].filter(
+      (e, i, arr) => arr.indexOf(e) === i
+    );
 
-    try {
-      console.log(`[SEARCH] Searching for "${query}" on ${engine}`);
+    for (const engine of engineOrder) {
+      const searchUrl = buildSearchUrl(engine);
+      try {
+        console.log(`[SEARCH] Searching for "${query}" on ${engine}`);
 
-      // Step 1: Navigate to search engine
-      await this.page!.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      await this.page!.waitForTimeout(1000);
+        await this.page!.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await this.page!.waitForTimeout(1500);
 
-      // Step 2: Find and fill search box (try multiple selectors)
-      const searchSelectors = [
-        'input[name="q"]',
-        'input[type="search"]',
-        'input[aria-label="Search"]',
-        '#search_form_input',
-        '#searchbox_input',
-      ];
+        const currentUrl = this.page!.url();
+        const resultsText = await this.page!.textContent('body') || '';
 
-      let filled = false;
-      for (const selector of searchSelectors) {
-        try {
-          const input = await this.page!.$(selector);
-          if (input) {
-            await input.fill(query);
-            console.log(`[SEARCH] Filled search box using selector: ${selector}`);
-            filled = true;
-            break;
-          }
-        } catch {
+        // Detect bot-blocking and try next engine
+        if (this.isBotBlocked(currentUrl, resultsText)) {
+          console.warn(`[SEARCH] ${engine} blocked (bot detection), trying next engine...`);
           continue;
         }
-      }
 
-      if (!filled) {
-        return { success: false, action: 'search', error: 'Could not find search box on page' };
-      }
+        // Need at least meaningful content
+        if (resultsText.length < 200) {
+          console.warn(`[SEARCH] ${engine} returned minimal content, trying next...`);
+          continue;
+        }
 
-      // Step 3: Submit search (press Enter)
-      await this.page!.keyboard.press('Enter');
-      await this.page!.waitForLoadState('domcontentloaded', { timeout: 10000 });
-      await this.page!.waitForTimeout(2000);
-
-      // Step 4: Verify we're on results page
-      const currentUrl = this.page!.url();
-      if (!currentUrl.includes(query.toLowerCase().replace(/\s+/g, '+')) &&
-          !currentUrl.includes('search')) {
-        console.warn(`[SEARCH] URL doesn't look like results page: ${currentUrl}`);
-      }
-
-      // Step 5: Extract results (just verify they exist)
-      const resultsText = await this.page!.textContent('body') || '';
-      const hasResults = resultsText.length > 100; // Basic check
-
-      if (hasResults) {
-        console.log(`[SEARCH] Search completed successfully, ${resultsText.length} chars of results`);
+        console.log(`[SEARCH] ${engine} search ok — ${resultsText.length} chars`);
         return {
           success: true,
           action: 'search',
-          data: {
-            query,
-            engine,
-            url: currentUrl,
-            resultsLength: resultsText.length,
-          },
+          data: { query, engine, url: currentUrl, resultsLength: resultsText.length },
         };
-      } else {
-        return { success: false, action: 'search', error: 'No search results found' };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        console.warn(`[SEARCH] ${engine} failed: ${message}, trying next...`);
+        continue;
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`[SEARCH] Search failed: ${message}`);
-      return { success: false, action: 'search', error: `Search failed: ${message}` };
     }
+
+    return { success: false, action: 'search', error: 'All search engines blocked or failed' };
   }
 
   private async handleCreateExcel(params: Record<string, unknown>): Promise<StepResult> {

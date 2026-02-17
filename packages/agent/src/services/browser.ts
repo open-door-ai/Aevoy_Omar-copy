@@ -174,34 +174,43 @@ export async function search(query: string): Promise<SearchResult> {
   try {
     const page = await context.newPage();
     
-    // Use DuckDuckGo HTML (doesn't require JavaScript)
-    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    
-    await page.goto(searchUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
+    // Use Bing search (most reliable for headless browsers), fallback to Brave/DDG
+    const searchEngines = [
+      { url: `https://www.bing.com/search?q=${encodeURIComponent(query)}`, selector: 'li.b_algo h2 a, .b_title a' },
+      { url: `https://search.brave.com/search?q=${encodeURIComponent(query)}`, selector: '.snippet-title a, [data-type="web"] a' },
+      { url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, selector: '.result__title a, .result__a' },
+    ];
 
-    // Extract search results
-    const results = await page.evaluate(() => {
-      const items: { title: string; url: string; snippet: string }[] = [];
-      const resultElements = document.querySelectorAll(".result");
+    let results: { title: string; url: string; snippet: string }[] = [];
 
-      resultElements.forEach((el: Element) => {
-        const titleEl = el.querySelector(".result__title a");
-        const snippetEl = el.querySelector(".result__snippet");
+    for (const engine of searchEngines) {
+      await page.goto(engine.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForTimeout(1500);
 
-        if (titleEl) {
-          items.push({
-            title: titleEl.textContent?.trim() || "",
-            url: titleEl.getAttribute("href") || "",
-            snippet: snippetEl?.textContent?.trim() || "",
-          });
-        }
-      });
+      const pageUrl = page.url();
+      const bodyText = await page.textContent('body') || '';
 
-      return items.slice(0, 10);
-    });
+      // Skip bot-blocked pages
+      if (pageUrl.includes('418.html') || bodyText.length < 200) {
+        console.warn(`[BROWSER-SEARCH] Engine blocked, trying next...`);
+        continue;
+      }
+
+      results = await page.evaluate((sel) => {
+        const items: { title: string; url: string; snippet: string }[] = [];
+        const resultElements = document.querySelectorAll(sel);
+        resultElements.forEach((el: Element) => {
+          const href = el.getAttribute('href') || '';
+          const title = el.textContent?.trim() || '';
+          if (title && href) {
+            items.push({ title, url: href, snippet: '' });
+          }
+        });
+        return items.slice(0, 10);
+      }, engine.selector);
+
+      if (results.length > 0) break;
+    }
 
     await context.close();
 

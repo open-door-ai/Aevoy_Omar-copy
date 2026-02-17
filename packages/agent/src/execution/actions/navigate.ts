@@ -114,25 +114,42 @@ async function searchEngineNavigation(page: Page, params: NavigateParams): Promi
     ? `site:${params.siteDomain} ${query}`
     : query;
 
-  const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(searchQuery)}&ia=web`;
+  // Try search engines in order: Bing → Brave → DDG HTML (avoid bot-blocked DuckDuckGo)
+  const engines = [
+    { name: 'bing', url: `https://www.bing.com/search?q=${encodeURIComponent(searchQuery)}`, firstResult: 'li.b_algo h2 a, .b_title h2 a' },
+    { name: 'brave', url: `https://search.brave.com/search?q=${encodeURIComponent(searchQuery)}`, firstResult: '.snippet-title a, [data-type="web"] a' },
+    { name: 'html_ddg', url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(searchQuery)}`, firstResult: '.result__title a, .result__a' },
+  ];
 
-  try {
-    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
-    await page.waitForTimeout(2000);
+  for (const eng of engines) {
+    try {
+      await page.goto(eng.url, { waitUntil: "domcontentloaded", timeout: 15000 });
+      await page.waitForTimeout(1500);
 
-    // Click first result
-    const firstResult = page.locator(".result__title a, .result__a").first();
-    if ((await firstResult.count()) > 0) {
-      await firstResult.click();
-      await page.waitForLoadState("domcontentloaded").catch(() => {});
+      const pageUrl = page.url();
+      const bodyText = await page.textContent('body') || '';
+
+      // Skip bot-blocked pages
+      if (pageUrl.includes('418.html') || bodyText.includes('unusual traffic') || bodyText.length < 200) {
+        console.warn(`[SEARCH-NAV] ${eng.name} blocked, trying next...`);
+        continue;
+      }
+
+      const firstResult = page.locator(eng.firstResult).first();
+      if ((await firstResult.count()) > 0) {
+        await firstResult.click();
+        await page.waitForLoadState("domcontentloaded").catch(() => {});
+        return { success: true, finalUrl: page.url() };
+      }
+
+      // If no clickable result, still a successful search (content extractable)
       return { success: true, finalUrl: page.url() };
+    } catch {
+      continue;
     }
-
-    return { success: false, error: "No search results found" };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : "Unknown error";
-    return { success: false, error: msg };
   }
+
+  return { success: false, error: "All search engines blocked or failed" };
 }
 
 // ---- Method 3: Menu/Nav Bar Navigation ----
