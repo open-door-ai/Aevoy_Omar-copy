@@ -1441,12 +1441,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const resultsSummary = iterationResults.map((r, i) => {
         const actionDesc = `${r.action.type}(${Object.values(r.action.params).map(v => typeof v === 'string' ? v.substring(0, 60) : v).join(', ')})`;
         if (r.success) {
-          const resultStr = typeof r.result === 'string' ? r.result.substring(0, 300) : JSON.stringify(r.result).substring(0, 300);
-          return `  ${i + 1}. ${actionDesc} → SUCCESS: ${resultStr}`;
+          // Give search results much more space so AI can see actual content
+          const limit = r.action.type === 'search' ? 2500 : 400;
+          const resultStr = typeof r.result === 'string' ? r.result.substring(0, limit) : JSON.stringify(r.result).substring(0, limit);
+          return `  ${i + 1}. ${actionDesc} → SUCCESS:\n${resultStr}`;
         } else {
           return `  ${i + 1}. ${actionDesc} → FAILED: ${r.error || 'unknown error'}`;
         }
-      }).join('\n');
+      }).join('\n\n');
 
       // OBSERVE: Capture current page state for AI context
       console.log(`[DEBUG-ITER] Starting page observation for iteration ${currentIteration}`);
@@ -1552,6 +1554,15 @@ Be creative. Think outside the box. What would a human do differently?`;
       // RETRY INTELLIGENCE: Get global retry enforcement
       const retryEnforcement = buildRetryEnforcementMessage();
 
+      // Check if a search succeeded this round — if so, strongly hint to complete from results
+      const searchSucceeded = iterationResults.some(r => r.action.type === 'search' && r.success);
+      const searchCompletionHint = searchSucceeded
+        ? `\n⚡ SEARCH SUCCEEDED: You have Bing search results above. READ THEM and extract the answer NOW.
+- If the results contain a price, rating, or relevant info → immediately answer the user and signal [TASK_COMPLETE].
+- DO NOT attempt to browse/navigate to any website shown in the results. The search results are your answer.
+- DO NOT try amazon.com, walmart.com, or any other bot-protected site.\n`
+        : '';
+
       const iterativePrompt = `Original request: ${subject} ${body}
 
 ROUND ${currentIteration} RESULTS:
@@ -1560,7 +1571,7 @@ ${pageStateSection}
 ${strategyEnforcement}
 ${diversityEnforcement}
 ${retryEnforcement}
-
+${searchCompletionHint}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 OBSERVE the current page state above, then decide what to do next:
 - If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
