@@ -8,7 +8,7 @@
 import type { Page } from 'playwright';
 import { delay } from '../utils/timeout.js';
 
-export type AntiBotType = 'cloudflare' | 'aws_waf' | 'rate_limit' | 'unknown' | 'none';
+export type AntiBotType = 'cloudflare' | 'aws_waf' | 'rate_limit' | 'generic_block' | 'unknown' | 'none';
 
 interface AntiBotDetection {
   type: AntiBotType;
@@ -55,6 +55,19 @@ export async function detectAntiBot(page: Page): Promise<AntiBotDetection> {
         return { type: 'rate_limit' as const };
       }
 
+      // Generic bot-block / error pages (Amazon, Walmart, etc.)
+      if (
+        title.includes('sorry! something went wrong') ||
+        title.includes('robot or human') ||
+        title.includes('access denied') ||
+        title.includes('automated access') ||
+        text.includes('automated access to our website') ||
+        text.includes('unusual activity') && text.includes('shopping') ||
+        (text.length < 500 && (title.includes('error') || title.includes('sorry')))
+      ) {
+        return { type: 'generic_block' as const };
+      }
+
       return { type: 'none' as const };
     });
 
@@ -78,6 +91,11 @@ export async function handleAntiBot(page: Page, detection: AntiBotDetection): Pr
 
     case 'rate_limit':
       return await handleRateLimit(page, detection.retryAfter);
+
+    case 'generic_block':
+      // Generic blocks (Amazon "Sorry!", etc.) cannot be resolved — caller should pivot to Bing
+      console.warn('[ANTIBOT] Generic bot-block detected — page content unavailable');
+      return false;
 
     case 'none':
       return true;

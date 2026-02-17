@@ -476,6 +476,7 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
 - If you need a tool you don't have API access to, USE THE BROWSER to go to that tool's website.
 - CRITICAL: When the user names a specific site (Amazon, Reddit, LinkedIn, etc.), use [ACTION:browse("https://site.com/...")] with a DIRECT URL — never search for it. Direct navigation is faster and more reliable.
 - Use [ACTION:search("query")] only when you need to DISCOVER which site has the information, not when the site is already known.
+- If a browse/navigate action FAILS with "Bot-blocked" or "Sorry! Something went wrong", the site is blocking headless browsers. IMMEDIATELY switch to [ACTION:search("product name site:amazon.com")] via Bing to find the same information — Bing scrapes these sites for you. Do NOT retry the same URL.
 - If a search result page looks like a bot-block/captcha page (url has "418" or content is minimal), use [ACTION:browse("url")] to go directly to a known authoritative source instead.
 - For complex tasks, break them into steps. Execute 2-5 actions MAX per round, observe results, then plan more.
 - To signal you're done, include [TASK_COMPLETE] in your response with the final answer.

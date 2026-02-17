@@ -995,7 +995,19 @@ export class ExecutionEngine {
       await waitForSPAReady(this.page!);
 
       // Check for anti-bot challenges after navigation
-      await checkAndHandleAntiBot(this.page!);
+      const antiBotResolved = await checkAndHandleAntiBot(this.page!);
+
+      if (!antiBotResolved) {
+        // Bot-blocked — extract domain for fallback suggestion
+        const domain = new URL(url).hostname;
+        const query = new URL(url).searchParams.get('k') || new URL(url).searchParams.get('q') || domain;
+        console.warn(`[ENGINE] Bot-block detected on ${domain}, caller should pivot to Bing search`);
+        return {
+          success: false,
+          action: 'navigate',
+          error: `Bot-blocked by ${domain}. Use [ACTION:search("${query}")] to find this via Bing instead.`
+        };
+      }
 
       // Check for CAPTCHAs
       await handleCaptchaIfPresent(this.page!, this.userId, this.taskId);

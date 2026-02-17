@@ -1220,6 +1220,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Track what strategies have been tried and force AI to use DIFFERENT approaches
     const strategiesAttempted = new Map<string, number>(); // strategyHash -> attemptCount
     const MAX_SAME_STRATEGY_RETRIES = 3;
+    let lastPageTitle = ''; // Track page titles to detect bot-blocked repetition
 
     // AGI-LEVEL METHOD TYPE DIVERSITY: Prevent trying 30x same method TYPE
     // Track METHOD TYPES (not just specific methods) to force intelligent diversity
@@ -1458,14 +1459,31 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           const pageTitle = await page.title().catch(() => '');
           console.log(`[DEBUG-ITER] Page title: ${pageTitle}`);
 
+          // Detect bot-blocked pages by checking page title/text
+          const isBotBlockPage = (
+            pageTitle.toLowerCase().includes('sorry! something went wrong') ||
+            pageTitle.toLowerCase().includes('access denied') ||
+            pageTitle.toLowerCase().includes('robot or human') ||
+            (rawPageText && rawPageText.length < 400 && pageTitle.toLowerCase().includes('error'))
+          );
+
+          let stuckWarning = '';
+          if (pageTitle && pageTitle === lastPageTitle && currentIteration > 1) {
+            stuckWarning = `\n  ⚠️ SAME PAGE as last round (title: "${pageTitle}") — your previous action had NO EFFECT. You MUST try a completely different approach.`;
+          }
+          if (isBotBlockPage) {
+            stuckWarning += `\n  🚫 BOT-BLOCKED: "${pageTitle}" — this site is blocking headless browsers. You CANNOT use browse() for this site. Use [ACTION:search("product name")] via Bing to find the information instead.`;
+          }
+          lastPageTitle = pageTitle;
+
           pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
   Title: ${pageTitle}
-  Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}`;
+  Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}${stuckWarning}`;
 
           // SELF-CRITIQUE: Quick AI check on whether actions worked (cheap/free model)
           console.log(`[DEBUG-ITER] Checking if self-critique needed (failed=${failedActions.length}, success=${successfulActions.length})`);
-          if (failedActions.length > 0 || successfulActions.length === 0) {
+          if (failedActions.length > 0 || successfulActions.length === 0 || isBotBlockPage) {
             try {
               console.log(`[DEBUG-ITER] Running self-critique via quickValidate...`);
               const critiqueResult = await quickValidate(
@@ -1546,8 +1564,10 @@ OBSERVE the current page state above, then decide what to do next:
       console.log(`[DEBUG-ITER] About to call generateResponse (THIS IS THE SUSPECTED HANG POINT)`);
       console.log(`[DEBUG-ITER] Prompt length: ${iterativePrompt.length} chars`);
       const responseStart = Date.now();
+      // Use "complex" task type for iterative calls — bypasses cache so the AI
+      // sees updated page observations rather than returning a stale cached plan.
       const nextResponse = await generateResponse(
-        memory, subject, iterativePrompt, username, aiTaskType, userId, taskId
+        memory, subject, iterativePrompt, username, "complex", userId, taskId
       );
       const responseDuration = Date.now() - responseStart;
       console.log(`[DEBUG-ITER] generateResponse completed in ${responseDuration}ms, cost: $${nextResponse.cost || 0}`);
