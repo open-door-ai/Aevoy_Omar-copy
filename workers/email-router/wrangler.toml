@@ -18,5 +18,5 @@ account_id = "5b63e25e3235482bc883cacd3cf189f7"
 
 [vars]
 # Production agent URL
-AGENT_URL = "https://agent-production-1339.up.railway.app"
+AGENT_URL = "http://77.42.31.185:3001"
 SUPABASE_URL = "https://eawoquqgfndmphogwjeu.supabase.co"

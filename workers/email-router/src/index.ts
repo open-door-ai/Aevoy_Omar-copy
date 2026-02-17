@@ -54,8 +54,9 @@ async function getUser(
   supabaseUrl: string,
   supabaseKey: string
 ): Promise<Profile | null> {
+  // Case-insensitive username lookup using ilike
   const response = await fetch(
-    `${supabaseUrl}/rest/v1/profiles?username=eq.${username}&select=*`,
+    `${supabaseUrl}/rest/v1/profiles?username=ilike.${encodeURIComponent(username)}&select=*`,
     {
       headers: {
         apikey: supabaseKey,
@@ -66,6 +67,30 @@ async function getUser(
 
   if (!response.ok) {
     console.error("Failed to fetch user:", response.status);
+    return null;
+  }
+
+  const users = (await response.json()) as Profile[];
+  return users.length > 0 ? users[0] : null;
+}
+
+async function getUserByEmail(
+  email: string,
+  supabaseUrl: string,
+  supabaseKey: string
+): Promise<Profile | null> {
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/profiles?email=ilike.${encodeURIComponent(email)}&select=*`,
+    {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    console.error("Failed to fetch user by email:", response.status);
     return null;
   }
 
@@ -383,13 +408,32 @@ export default {
         return;
       }
 
-      // Look up user in Supabase
-      const user = await getUser(username, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+      // Catch-all addresses (tasks@, hello@, ai@, inbox@) route by sender email
+      const CATCHALL_USERNAMES = ['tasks', 'hello', 'ai', 'inbox', 'mail', 'support', 'assistant'];
+      let user: Profile | null = null;
 
-      if (!user) {
-        console.log(`User not found: ${username}`);
-        message.setReject("User not found");
-        return;
+      if (CATCHALL_USERNAMES.includes(username.toLowerCase())) {
+        // Route to user by their registered email address (the sender)
+        user = await getUserByEmail(message.from, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+        if (!user) {
+          console.log(`[EMAIL] No account found for sender: ${maskEmail(message.from)}`);
+          message.setReject("No Aevoy account found for this email address. Sign up at aevoy.com");
+          return;
+        }
+      } else {
+        // Standard lookup by username (case-insensitive)
+        user = await getUser(username, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+
+        if (!user) {
+          // Fallback: try to find user by sender email (in case they know their email but not username)
+          user = await getUserByEmail(message.from, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+        }
+
+        if (!user) {
+          console.log(`User not found: ${username}`);
+          message.setReject("User not found. Email your-username@aevoy.com or tasks@aevoy.com");
+          return;
+        }
       }
 
       // Validate sender matches registered user email

@@ -31,8 +31,8 @@ import type { TaskRequest, TaskResult } from "../types/index.js";
  *
  * AGI-Level Detection: Catches vague, high-level goals that require creative problem-solving.
  */
-export function requiresAutonomousPlanning(subject: string, body: string): boolean {
-  const combined = `${subject} ${body}`.toLowerCase();
+export function requiresAutonomousPlanning(subject: string, body: string | undefined): boolean {
+  const combined = `${subject ?? ''} ${body ?? ''}`.toLowerCase();
 
   // AGI-LEVEL PATTERNS: Vague goals that require breaking down and trying multiple approaches
   const agiPatterns = [
@@ -94,7 +94,7 @@ export function requiresAutonomousPlanning(subject: string, body: string): boole
   const hasComplexity = complexityIndicators.filter(p => p.test(combined)).length >= 2;
 
   // Length-based heuristic: tasks >300 chars describing steps are likely complex
-  const isLongDescription = body.length > 300;
+  const isLongDescription = (body ?? '').length > 300;
 
   const isAutonomous = hasAGIPattern || (hasComplexity && isLongDescription);
 
