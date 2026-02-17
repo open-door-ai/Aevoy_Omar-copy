@@ -197,7 +197,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     }
 
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
-    if (requiresAutonomousPlanning(subject, body)) {
+    if (await requiresAutonomousPlanning(subject, body)) {
       console.log(`[AUTONOMOUS] Task requires autonomous workflow planning`);
       return handleAutonomousWorkflow({
         userId,
