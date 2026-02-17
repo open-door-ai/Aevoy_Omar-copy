@@ -215,7 +215,21 @@ export function getProxyConfig(): { server: string } | undefined {
 /**
  * Check for anti-bot after a page navigation and handle if detected.
  */
+// Known bot-protected domains — always return generic_block immediately (no retries)
+const KNOWN_BOT_PROTECTED = ['amazon.com', 'amazon.ca', 'amazon.co.uk', 'amazon.de',
+  'walmart.com', 'bestbuy.com', 'target.com', 'ebay.com'];
+
 export async function checkAndHandleAntiBot(page: Page): Promise<boolean> {
+  // Fast-path: known bot-protected domains always return false immediately
+  const currentUrl = page.url();
+  if (KNOWN_BOT_PROTECTED.some(d => currentUrl.includes(d))) {
+    const detection = await detectAntiBot(page);
+    if (detection.type !== 'none') {
+      console.warn(`[ANTIBOT] Known bot-protected domain: ${currentUrl} — returning false immediately`);
+      return false;
+    }
+  }
+
   const detection = await detectAntiBot(page);
   if (detection.type === 'none') return true;
 
