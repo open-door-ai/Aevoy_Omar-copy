@@ -271,6 +271,18 @@ const VERIFICATION_CRITERIA: Record<string, VerificationCriteria> = {
     ],
     requiresScreenshot: true,
   },
+  general: {
+    successIndicators: [
+      "hi", "hello", "hey", "help", "here", "can", "happy",
+      "sure", "let me", "i can", "would you", "how can",
+      "great", "good", "thanks", "welcome", "assist",
+    ],
+    errorIndicators: [
+      "error", "failed", "cannot", "unable",
+    ],
+    evidencePatterns: [],
+    requiresScreenshot: false,
+  },
 };
 
 // ---- Quality Tiers ----

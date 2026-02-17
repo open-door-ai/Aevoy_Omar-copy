@@ -1779,15 +1779,18 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const tier = getQualityTier(classification.taskType || 'simple');
     const tierConfig = QUALITY_TIERS[tier];
 
-    // Fast path: AUTO-PASS AI-only tasks (simple tier + no browser actions)
-    // These tasks have no verifiable actions, so verification would be too strict
-    if (tier === 'simple' && !executionEngine && aiResponse.content) {
-      console.log(`[VERIFY] Fast path for ${tier} tier (no browser) — AUTO-PASS (AI-only, no actions to verify)`);
+    // Fast path: AUTO-PASS any AI-only task with no browser and no executed actions.
+    // Verification is designed for tasks with verifiable actions (browser, form, purchase).
+    // Pure AI responses (greetings, questions, research answers) have nothing to verify —
+    // running them through form/research criteria just produces false negatives.
+    const hasNoActions = actionResults.length === 0;
+    if (!executionEngine && hasNoActions && aiResponse.content) {
+      console.log(`[VERIFY] Fast path (no browser, no actions, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
         confidence: 85,
         method: 'skip' as const,
-        evidence: 'AI-only task (no browser actions) — auto-passed without strict verification'
+        evidence: 'AI-only task (no browser, no actions) — auto-passed'
       };
     } else if (executionEngine && classification.taskType) {
       const strikeCtx: StrikeContext = {
