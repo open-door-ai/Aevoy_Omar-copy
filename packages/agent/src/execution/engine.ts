@@ -142,8 +142,12 @@ export class ExecutionEngine {
       ...(proxyConfig ? { proxy: proxyConfig } : {}),
     });
 
+    const { getDeviceProfile } = await import('./stealth.js');
+    const profile = getDeviceProfile();
     this.context = await this.browser.newContext({
-      viewport: { width: 1280, height: 800 },
+      viewport: profile.viewport,
+      screen: profile.screen,
+      deviceScaleFactor: profile.deviceScaleFactor,
       userAgent: getRealisticUserAgent(),
       locale: 'en-US',
       timezoneId: 'America/New_York',
