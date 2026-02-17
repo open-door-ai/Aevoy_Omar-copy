@@ -187,8 +187,7 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "same-origin" },
   originAgentCluster: true,
   dnsPrefetchControl: { allow: false },
-  ieNoOpen: true as any,  // Type mismatch in helmet types
-  xDownloadOptions: true as any,
+  xDownloadOptions: true as any,  // Prevents IE from downloading files in trusted zones
   xPoweredBy: false, // Hide X-Powered-By header
 }));
 
@@ -206,23 +205,18 @@ const ALLOWED_ORIGINS = process.env.NODE_ENV === "production"
 
 app.use(cors({
   origin: (origin, callback) => {
-    // SECURITY: Require origin header (reject missing origin in production)
-    if (!origin && process.env.NODE_ENV === "production") {
-      callback(new Error("Not allowed by CORS - missing origin header"));
-      return;
-    }
-
-    // Allow requests without origin (server-to-server, Postman) in dev only
-    if (!origin && process.env.NODE_ENV !== "production") {
+    // Allow requests without origin (server-to-server, webhooks)
+    // These are validated by webhook secret instead of CORS
+    if (!origin) {
       callback(null, true);
       return;
     }
 
-    // Strict whitelist check
-    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    // Strict whitelist check for browser requests
+    if (ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
-      console.warn(`[SECURITY] CORS rejected: ${origin || 'unknown'}`);
+      console.warn(`[SECURITY] CORS rejected: ${origin}`);
       callback(new Error("Not allowed by CORS"));
     }
   },

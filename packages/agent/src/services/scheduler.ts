@@ -198,6 +198,30 @@ async function runProactiveChecks(): Promise<void> {
     console.error('[SCHEDULER] Skill recommendation error:', error);
   }
 
+  // PROACTIVE ENGAGEMENT: Daily digests (hourly check, sent at user's local 6 PM)
+  try {
+    const { getProactiveEngagementEngine } = await import("./proactive-engagement.js");
+    const engagementEngine = getProactiveEngagementEngine();
+    const digestsSent = await engagementEngine.sendDailyDigests();
+    if (digestsSent > 0) {
+      console.log(`[SCHEDULER] Daily digests: sent ${digestsSent} digests`);
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Daily digest error:', error);
+  }
+
+  // PROACTIVE ENGAGEMENT: Weekly reports (hourly check, sent Sunday 8 PM local time)
+  try {
+    const { getProactiveEngagementEngine } = await import("./proactive-engagement.js");
+    const engagementEngine = getProactiveEngagementEngine();
+    const reportsSent = await engagementEngine.sendWeeklyReports();
+    if (reportsSent > 0) {
+      console.log(`[SCHEDULER] Weekly reports: sent ${reportsSent} reports`);
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Weekly report error:', error);
+  }
+
   // META-LEARNING: Analyze learning performance (weekly on Sundays at 5 AM UTC)
   try {
     const now = new Date();

@@ -17,6 +17,7 @@
     "test:flow": "pnpm --filter agent test:flow"
   },
   "devDependencies": {
+    "tsx": "^4.21.0",
     "typescript": "^5.3.0"
   },
   "dependencies": {

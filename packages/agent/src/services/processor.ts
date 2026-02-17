@@ -2116,6 +2116,19 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
     clearTimeout(masterTimer);
 
+    // 15. PROACTIVE ENGAGEMENT: Analyze task completion for habit learning and suggestions
+    try {
+      const { getProactiveEngagementEngine } = await import("./proactive-engagement.js");
+      const engagementEngine = getProactiveEngagementEngine();
+
+      // Analyze in background (don't block response)
+      engagementEngine.analyzeTaskCompletion(userId, taskId).catch(err => {
+        console.error("[PROACTIVE_ENGAGEMENT] Background analysis failed:", err);
+      });
+    } catch {
+      // Non-critical — engagement is bonus
+    }
+
     return {
       taskId,
       success: true,

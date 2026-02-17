@@ -134,6 +134,7 @@ export async function solveCaptcha(
 
   console.log(`[CAPTCHA] Solving ${detection.type} on ${detection.pageUrl}`);
 
+  const startTime = Date.now(); // Track for 1-hour timeout in autonomous workarounds
   const capsolverKey = process.env.CAPSOLVER_API_KEY;
   const twocaptchaKey = process.env.TWOCAPTCHA_API_KEY;
 
