@@ -2385,7 +2385,9 @@ async function executeAction(
       return {
         action,
         success: result.success,
-        result: result.success ? `Search results: ${String(result.data).substring(0, 1000)}` : undefined,
+        result: result.success
+          ? `Search results from ${(result.data as {engine?: string})?.engine || 'bing'}:\n${(result.data as {results?: string})?.results?.substring(0, 2000) || JSON.stringify(result.data).substring(0, 500)}`
+          : undefined,
         error: result.error,
       };
     }

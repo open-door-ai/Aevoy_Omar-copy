@@ -690,10 +690,12 @@ export class ExecutionEngine {
         }
 
         console.log(`[SEARCH] ${engine} search ok — ${resultsText.length} chars`);
+        // Include first 3000 chars of search results so AI can read pricing/links directly
+        const searchSnippet = resultsText.replace(/\s+/g, ' ').trim().substring(0, 3000);
         return {
           success: true,
           action: 'search',
-          data: { query, engine, url: currentUrl, resultsLength: resultsText.length },
+          data: { query, engine, url: currentUrl, resultsLength: resultsText.length, results: searchSnippet },
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
