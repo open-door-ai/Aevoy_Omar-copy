@@ -212,8 +212,9 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
           <StaggerContainer className="space-y-3" staggerDelay={0.05}>
             {filteredTasks.map((task) => (
               <StaggerItem key={task.id}>
+                <Link href={`/dashboard/tasks/${task.id}`} className="block">
                 <div
-                  className={`flex items-center justify-between p-4 border rounded-lg transition-all ${
+                  className={`flex items-center justify-between p-4 border rounded-lg transition-all hover:bg-muted/50 cursor-pointer ${
                     task.status === "processing" ? "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 animate-pulse" : ""
                   }`}
                 >
@@ -288,6 +289,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                     {task.status}
                   </span>
                 </div>
+                </Link>
               </StaggerItem>
             ))}
           </StaggerContainer>

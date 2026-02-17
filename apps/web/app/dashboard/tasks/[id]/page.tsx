@@ -26,6 +26,8 @@ import {
 interface TaskDetail {
   id: string;
   email_subject: string | null;
+  input_text: string | null;
+  response_text: string | null;
   status: string;
   type: string | null;
   input_channel: string | null;
@@ -329,6 +331,23 @@ export default function TaskDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* AI Response */}
+      {task.response_text && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-muted-foreground" />
+              <CardTitle>Response</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
+              {task.response_text}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Task Logs / Timeline */}
       <Card>

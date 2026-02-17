@@ -2034,6 +2034,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         type: taskType,
         execution_time_ms: elapsedMs,
         cascade_level: cascadeLevel,
+        response_text: cleanResponse,
         verification_status: dbVerificationPassed === true ? "verified" : (verificationResult ? "unverified" : null),
         verification_data: verificationResult ? {
           confidence: verificationResult.confidence,
