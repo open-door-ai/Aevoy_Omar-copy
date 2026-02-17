@@ -175,24 +175,23 @@ async function handleAWSWAF(page: Page): Promise<boolean> {
  * Handle rate limiting with exponential backoff.
  */
 async function handleRateLimit(page: Page, retryAfterSec?: number): Promise<boolean> {
-  const delays = [5000, 15000, 45000]; // Exponential backoff
+  // Single retry only — if the site is bot-blocking (not truly rate-limited),
+  // waiting longer won't help. The processor's dynamic failure tracker
+  // will switch to search() after 2 failures on the same domain.
+  const waitMs = retryAfterSec ? Math.min(retryAfterSec * 1000, 10000) : 5000;
+  console.log(`[ANTIBOT] Rate limited, waiting ${waitMs}ms (single retry)`);
+  await delay(waitMs);
 
-  for (let i = 0; i < delays.length; i++) {
-    const waitMs = retryAfterSec ? retryAfterSec * 1000 : delays[i];
-    console.log(`[ANTIBOT] Rate limited, waiting ${waitMs}ms (attempt ${i + 1}/${delays.length})`);
-    await delay(waitMs);
+  await page.reload().catch(() => {});
+  await delay(2000);
 
-    await page.reload().catch(() => {});
-    await delay(2000);
-
-    const detection = await detectAntiBot(page);
-    if (detection.type === 'none') {
-      console.log('[ANTIBOT] Rate limit resolved');
-      return true;
-    }
+  const detection = await detectAntiBot(page);
+  if (detection.type === 'none') {
+    console.log('[ANTIBOT] Rate limit resolved after single retry');
+    return true;
   }
 
-  console.warn('[ANTIBOT] Rate limit not resolved after all retries');
+  console.warn('[ANTIBOT] Rate limit not resolved — returning false (caller should pivot)');
   return false;
 }
 
