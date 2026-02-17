@@ -1261,7 +1261,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
         isTaskComplete = true;
-        // Still execute any final actions in this round
+        // Stop immediately — don't execute remaining actions, task is done
+        break;
       }
 
       // If no actions, we're done
