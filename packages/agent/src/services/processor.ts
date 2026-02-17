@@ -1974,17 +1974,26 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const browserCost = executionEngine?.getTotalCost() || 0;
     const totalCost = aiCost + browserCost;
 
+    // Use confidence >= tier target to determine pass, not just verificationResult.passed
+    // (verificationResult.passed uses a fixed threshold that may not match the tier target)
+    const { getQualityTier: getQT, QUALITY_TIERS: QT } = await import("./task-verifier.js");
+    const dbTier = getQT(classification.taskType || 'simple');
+    const dbTierTarget = QT[dbTier]?.target ?? 70;
+    const dbVerificationPassed = verificationResult
+      ? (verificationResult.confidence ?? 0) >= dbTierTarget
+      : null;
+
     await getSupabaseClient()
       .from("tasks")
       .update({
-        status: verificationResult?.passed === false ? "needs_review" : "completed",
+        status: dbVerificationPassed === false ? "needs_review" : "completed",
         completed_at: new Date().toISOString(),
         tokens_used: aiResponse.tokensUsed,
         cost_usd: totalCost,
         type: taskType,
         execution_time_ms: elapsedMs,
         cascade_level: cascadeLevel,
-        verification_status: verificationResult?.passed ? "verified" : (verificationResult ? "unverified" : null),
+        verification_status: dbVerificationPassed === true ? "verified" : (verificationResult ? "unverified" : null),
         verification_data: verificationResult ? {
           confidence: verificationResult.confidence,
           method: verificationResult.method,
@@ -2378,7 +2387,7 @@ async function executeAction(
       if (!executionEngine) {
         return { action, success: false, error: "Browser not available" };
       }
-      
+
       const query = action.params.query as string;
       // Use Bing direct search URL — more reliable than DuckDuckGo in headless mode
       const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
@@ -2388,12 +2397,14 @@ async function executeAction(
         { action: 'wait', params: { ms: 2000 } },
         { action: 'extract', params: { selector: 'body' } }
       ]);
-      
+
+      // result.data is the extracted page text (string from handleExtract)
+      const pageText = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
       return {
         action,
         success: result.success,
         result: result.success
-          ? `Search results from ${(result.data as {engine?: string})?.engine || 'bing'}:\n${(result.data as {results?: string})?.results?.substring(0, 2000) || JSON.stringify(result.data).substring(0, 500)}`
+          ? `Search results from bing for "${query}":\n${pageText.substring(0, 2500)}`
           : undefined,
         error: result.error,
       };
