@@ -304,15 +304,20 @@ export async function preventFailures(
   const predictions = await predictFailures(userId, taskType, domain, description);
   const prevention = await applyPreventiveMeasures(userId, predictions);
 
-  // Check for blocking issues
+  // Only block if the task CANNOT proceed at all (missing essential credentials for auth-only sites).
+  // Don't block for general risk predictions — let the agent try and self-recover.
   const blockingIssues: string[] = [];
   for (const prediction of predictions) {
-    if (prediction.likelihood > 80 && !prediction.preventiveMeasure.automated) {
+    if (
+      prediction.likelihood > 80 &&
+      !prediction.preventiveMeasure.automated &&
+      prediction.failureType === "missing_credentials"
+    ) {
       blockingIssues.push(prediction.reason);
     }
   }
 
-  const readyToExecute = blockingIssues.length === 0 && !prevention.prevented;
+  const readyToExecute = blockingIssues.length === 0;
 
   if (!readyToExecute) {
     console.log(`[PREVENTION] ⛔ Task NOT ready to execute: ${blockingIssues.join(", ")}`);
@@ -361,9 +366,11 @@ function categorizeDomain(domain: string): string {
 }
 
 async function checkIfRequiresAuth(domain: string): Promise<boolean> {
-  // Check if domain typically requires authentication
-  const authDomains = ["gmail", "facebook", "amazon", "chase", "netflix", "spotify"];
-  return authDomains.some((d) => domain.includes(d));
+  // Only block on domains where ALL meaningful actions require auth
+  // (e.g., banking — you can't do anything useful without logging in)
+  // Do NOT include amazon, netflix, spotify — their public pages are accessible
+  const alwaysAuthDomains = ["gmail", "chase", "bankofamerica", "wellsfargo", "schwab", "fidelity"];
+  return alwaysAuthDomains.some((d) => domain.includes(d));
 }
 
 function extractServiceFromAction(action: string): string {
