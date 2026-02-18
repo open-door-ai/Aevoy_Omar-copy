@@ -154,6 +154,8 @@ async function requestTakeover(
 
 // ---- Test Mode / Payment Skip ----
 function isTestMode(): boolean {
+  // Never use test mode in production — even if TEST_MODE is accidentally set
+  if (process.env.NODE_ENV === 'production') return false;
   return process.env.TEST_MODE === "true" || process.env.NODE_ENV === "development";
 }
 
