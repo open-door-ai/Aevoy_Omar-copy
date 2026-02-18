@@ -1219,6 +1219,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const MAX_ITERATIONS = 5;
     let currentIteration = 0;
     let isTaskComplete = false;
+    let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
     let totalAiCost = aiResponse.cost || 0;
     let totalTokens = aiResponse.tokensUsed || 0;
     let globalActionIndex = 0;
@@ -1267,6 +1268,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
         isTaskComplete = true;
+        aiSignaledComplete = true;
         // Stop immediately — don't execute remaining actions, task is done
         break;
       }
@@ -1275,6 +1277,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       if (aiResponse.actions.length === 0) {
         console.log('[ITERATE] No actions in this round, task complete');
         isTaskComplete = true;
+        aiSignaledComplete = currentIteration > 1; // AI explicitly chose not to act after reviewing results
         break;
       }
 
@@ -1784,12 +1787,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Fast path: AUTO-PASS when the task produced no verifiable browser evidence.
     // Verification is designed for tasks with verifiable browser actions (forms, purchases).
     // Pure AI responses (greetings, questions, research answers) have nothing to verify.
-    // Also auto-pass if all actions failed regardless of whether a browser was used —
-    // the AI still produced a useful response and there is nothing browser-specific to verify.
+    // Also auto-pass if:
+    //   - All actions failed (browser or not) — AI still produced a useful response
+    //   - AI explicitly signaled completion (TASK_COMPLETE or no actions in final round)
+    //     for low-stakes tiers (research/simple) where the AI's own judgement is sufficient
     const hasNoActions = actionResults.length === 0;
     const allActionsFailed = actionResults.length > 0 && actionResults.every(r => !r.success);
-    if ((hasNoActions || allActionsFailed) && aiResponse.content) {
-      const reason = hasNoActions ? 'no actions' : 'all actions failed, AI response used';
+    const isLowStakesTier = tier === 'research' || tier === 'simple';
+    const aiSelfCompleted = aiSignaledComplete && isLowStakesTier;
+    if ((hasNoActions || allActionsFailed || aiSelfCompleted) && aiResponse.content) {
+      const reason = hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed, AI response used' : 'AI signaled completion for low-stakes task';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
