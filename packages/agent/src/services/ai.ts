@@ -506,6 +506,7 @@ SELF-CRITIQUE (between rounds):
 
 IMPORTANT:
 - CONVERSATIONAL MESSAGES (greetings, thanks, casual chat): If the user says "hi", "hello", "how are you", "thanks", "ok", or any other conversational message — respond naturally and include [TASK_COMPLETE] immediately. Do NOT search, browse, or use any actions. Just reply.
+- DATE/TIME QUESTIONS: The current date and time is always provided at the top of each request as "CURRENT DATE & TIME". If the user asks what day it is, what the date is, what time it is, etc. — answer DIRECTLY from that provided date, include [TASK_COMPLETE], and do NOT search or browse. Never search for information you already have.
 - Be concise and action-oriented. Plan 2-5 actions per round MAX. More rounds is better than cramming 30+ actions into one.
 - If you learn something about the user (preferences, location, etc.), use [ACTION:remember("fact")]
 - Always complete the task, don't just explain how to do it
@@ -517,7 +518,12 @@ IMPORTANT:
 - MONEY-MAKING: If asked to make money, reason about value creation, market opportunities, automation, and execution paths.`;
 
 function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string): string {
-  return `MEMORY (what I know about you):
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+  return `CURRENT DATE & TIME: ${dateStr}, ${timeStr}
+
+MEMORY (what I know about you):
 ${memory.facts}
 
 RECENT ACTIVITY:
