@@ -1749,8 +1749,22 @@ OBSERVE the current page state above, then decide what to do next:
         (responseLC.includes('what i can do next') || responseLC.includes('what i can next'))
       );
 
-      if (isPlanLike || isNarration) {
-        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : 'narration'} — re-prompting for concrete answer`);
+      // Detect advice-style numbered lists: "Here are N ways...", "1. ... 2. ... 3. ..."
+      // An AGENT does things. A chatbot gives advice lists.
+      const numberedListCount = (aiResponse.content.match(/^\s*\d+[\.\)]\s+/gm) || []).length;
+      const isAdviceList = (
+        numberedListCount >= 3 && // 3+ numbered items = advice list
+        (
+          /here\s+are\s+(?:some|a few|\d+)\s+(?:ways|suggestions|tips|ideas|options|strategies|steps|things)/i.test(responseLC) ||
+          /you\s+(?:could|can|should|might|may)\s+(?:try|consider|look into|start|explore)/i.test(responseLC) ||
+          /consider\s+(?:the following|these)/i.test(responseLC)
+        ) &&
+        // NOT an actual list of results (search results, events, items found)
+        !/(?:found|here(?:'s| is| are) (?:the|what)|results|happening|events|listings|available)/i.test(responseLC)
+      );
+
+      if (isPlanLike || isNarration || isAdviceList) {
+        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : 'narration'} — re-prompting for concrete answer`);
         try {
           // Gather any useful data from successful actions
           const successData = actionResults
@@ -1761,15 +1775,17 @@ OBSERVE the current page state above, then decide what to do next:
           const refinementPrompt = `The user asked: "${subject} ${body}"
 
 ${successData ? `DATA FROM MY SEARCHES/BROWSING:\n${successData}\n` : ''}
-YOUR PREVIOUS RESPONSE WAS REJECTED because it was a plan or narration instead of an actual answer.
+YOUR PREVIOUS RESPONSE WAS REJECTED because it was ${isAdviceList ? 'a numbered list of suggestions/advice instead of taking action' : 'a plan or narration instead of an actual answer'}.
 
 RULES FOR YOUR NEW RESPONSE:
-- Give the user a CONCRETE, DIRECT answer to their question
+- You are an AGENT that DOES things. Report what you DID, not what the user COULD do.
+- NEVER give a numbered list of suggestions, tips, or ideas. That's what ChatGPT does.
+- If you completed an action, tell the user: "Done — I did X, here's the result."
+- If you couldn't complete it, tell the user exactly what you tried and what blocked you.
 - If you found useful data, summarize it clearly
-- If you couldn't find the specific information, say so honestly and give your best answer from general knowledge
 - NEVER say "I'll search for..." or "Let me try..." or "What I can do next..." — the task is DONE
-- NEVER describe what you tried or what failed — just give the answer
-- Be conversational and helpful, like a knowledgeable friend
+- NEVER say "You could try..." or "Here are some ways..." — the USER asked YOU to do it
+- Be conversational like a real assistant: "Done — here's what I found" or "I signed you up for X"
 - Include [TASK_COMPLETE] at the end`;
 
           const refinedResponse = await generateResponse(

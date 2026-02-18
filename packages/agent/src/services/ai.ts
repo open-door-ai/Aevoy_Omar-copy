@@ -1179,69 +1179,66 @@ export async function classifyTask(userMessage: string): Promise<{
   const text = userMessage.toLowerCase();
 
   let taskType: ClassifiedTaskType = "general";
-  let needsBrowser = false;
+  // AGI DEFAULT: Browser is ALWAYS available unless task is trivially simple.
+  // An agent without tools is just a chatbot. Default to having tools.
+  let needsBrowser = true;
   const domains: string[] = [];
 
-  // SMART HEURISTICS: Check for AI-only tasks FIRST (before keyword matching)
+  // ---- AI-ONLY fast paths: disable browser only for trivially simple tasks ----
 
-  // 1. Pure math/calculation patterns
+  // 1. Pure math/calculation
   const mathPatterns = [
     /\b\d+\s*[\+\-\*\/×÷]\s*\d+/,
     /what\s+(is|are)\s+\d+/i,
     /calculate\s+/i,
     /\bdivided\s+by\b/i,
     /\bmultiplied\s+by\b/i,
-    /\bplus\b/i,
-    /\bminus\b/i,
-    /\btimes\b/i,
   ];
-  if (mathPatterns.some(p => p.test(text))) {
+  if (mathPatterns.some(p => p.test(text)) && text.length < 100) {
     console.log("[AI] Math task detected, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
 
-  // 2. Knowledge/definition questions (no URLs)
+  // 2. Greetings / conversational
+  const greetingPatterns = [
+    /^(hi|hello|hey|thanks|thank you|ok|okay|bye|good morning|good night|how are you)\b/i,
+  ];
+  if (greetingPatterns.some(p => p.test(text)) && text.length < 80) {
+    console.log("[AI] Greeting detected, skipping browser");
+    return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
+  }
+
+  // 3. Memory commands
+  if (/^remember\b/i.test(text) && text.length < 200) {
+    console.log("[AI] Memory task detected, skipping browser");
+    return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
+  }
+
+  // 4. Simple factual questions that AI can answer from knowledge
+  // Only skip browser for short, definitional questions with NO live data need
   const knowledgePatterns = [
     /^(what|who|when|where|why|how)\s+(is|are|was|were|does|do|did)\s+/i,
     /^explain\s+/i,
     /^define\s+/i,
-    /^tell\s+me\s+about\s+/i,
-    /^describe\s+/i,
   ];
+  const hasLiveDataIntent = /\b(price|cost|buy|purchase|money|earn|make|order|amazon|walmart|ebay|store|shop|deal|sale|stock|available|shipping|delivery|rating|review|weather|news|today|current|latest|now|sign up|register|create|account|apply|job|gig|freelance|opportunity)\b/i.test(text);
   const hasUrl = /https?:\/\//i.test(text) || /www\./i.test(text);
-  const hasExplicitWebIntent = /\b(website|site|online|web|url|link|browse|visit|go to)\b/i.test(text);
-  // Price/shopping/live data queries always need browser (current info, not static knowledge)
-  const hasLiveDataIntent = /\b(price|cost|buy|purchase|order|amazon|walmart|ebay|store|shop|deal|sale|stock|available|shipping|delivery|rating|review|weather|news|today|current|latest|now)\b/i.test(text);
 
-  if (knowledgePatterns.some(p => p.test(text)) && !hasUrl && !hasExplicitWebIntent && !hasLiveDataIntent) {
-    console.log("[AI] Knowledge question detected, skipping browser");
+  if (knowledgePatterns.some(p => p.test(text)) && !hasUrl && !hasLiveDataIntent && text.length < 150) {
+    console.log("[AI] Simple knowledge question, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
 
-  // Fast path: keyword matching (only after ruling out AI-only tasks)
-  if (text.includes("research") || text.includes("find") || text.includes("search") || text.includes("look up")) {
-    // "search" and "find" ALWAYS require browser (web search)
-    const requiresBrowser = text.includes("search") || text.includes("find");
+  // ---- Task type classification (browser is already enabled by default) ----
 
-    // Additional check: is there web intent?
-    if (hasUrl || hasExplicitWebIntent || requiresBrowser) {
-      taskType = "research";
-      needsBrowser = true;
-    } else {
-      // "research" without web intent = AI knowledge retrieval
-      taskType = "general";
-      needsBrowser = false;
-      console.log("[AI] Research task with no web intent, using AI-only");
-    }
+  if (text.includes("research") || text.includes("find") || text.includes("search") || text.includes("look up")) {
+    taskType = "research";
   } else if (text.includes("book") || text.includes("reservation") || text.includes("schedule appointment")) {
     taskType = "booking";
-    needsBrowser = true;
   } else if (text.includes("form") || text.includes("fill") || text.includes("apply") || text.includes("submit")) {
     taskType = "form";
-    needsBrowser = true;
   } else if (text.includes("buy") || text.includes("purchase") || text.includes("order") || text.includes("shop")) {
     taskType = "shopping";
-    needsBrowser = true;
   } else if (text.includes("email") || text.includes("send") || text.includes("write to")) {
     taskType = "email";
   } else if (text.includes("remind") || text.includes("alert") || text.includes("notify")) {
@@ -1252,43 +1249,6 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "voice";
   }
 
-  // AI fallback: when keyword matching produces low-confidence "general" result
-  if (taskType === "general") {
-    try {
-      const classificationPrompt = `Classify this user task into exactly one category. Respond with ONLY the category name, nothing else.
-
-Categories: research, booking, form, shopping, email, reminder, writing, voice, general
-
-Task: "${userMessage.substring(0, 500)}"`;
-
-      const { result } = await quickValidate(
-        classificationPrompt,
-        "You are a task classifier. Respond with exactly one word: the task category."
-      );
-
-      const aiType = result.toLowerCase().trim().replace(/[^a-z]/g, "");
-      const validTypes: readonly string[] = VALID_TASK_TYPES;
-      if (validTypes.includes(aiType)) {
-        taskType = aiType as ClassifiedTaskType;
-        needsBrowser = BROWSER_TASK_TYPES.has(taskType);
-        console.log(`[AI] classifyTask AI fallback: "${taskType}"`);
-      }
-    } catch {
-      // AI classification failed — keep keyword-based "general" result
-      console.log("[AI] classifyTask AI fallback failed, using keyword result");
-    }
-  }
-
-  // CRITICAL FIX: Force browser execution when explicit web intent detected
-  // Catches tasks like "go to wikipedia.org" that don't match specific keywords
-  if (hasExplicitWebIntent && !needsBrowser) {
-    console.log("[AI] Explicit web intent detected, forcing browser execution");
-    needsBrowser = true;
-    if (taskType === "general") {
-      taskType = "research"; // Default web tasks to research type
-    }
-  }
-
   // Extract URLs/domains
   const urlRegex = /(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})+)/g;
   let urlMatch;
@@ -1296,17 +1256,6 @@ Task: "${userMessage.substring(0, 500)}"`;
     domains.push(urlMatch[1]);
   }
 
-  // Guard: don't route to browser for knowledge questions with no specific URLs.
-  // Research tasks only need the browser when there's a website to visit or
-  // the user explicitly asks to browse/visit/go to a site.
-  // CRITICAL: "search" and "find" ALWAYS need browser (web search)
-  if (needsBrowser && taskType === "research" && domains.length === 0) {
-    const explicitBrowsePattern = /\b(go to|visit|open|navigate|browse|website|site|page|url|link|search|find)\b/i;
-    if (!explicitBrowsePattern.test(userMessage)) {
-      needsBrowser = false;
-      console.log(`[AI] Research task with no URLs/browse intent, skipping browser`);
-    }
-  }
-
+  console.log(`[AI] classifyTask: type="${taskType}", needsBrowser=${needsBrowser}, domains=${domains.length}`);
   return { taskType, goal: userMessage, needsBrowser, domains };
 }
