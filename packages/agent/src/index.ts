@@ -328,7 +328,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-fcb9e06",
+    version: "2.0.0-f7db842",
     timestamp: new Date().toISOString(),
     activeTasks,
     activeBrowserTasks: getActiveBrowserTasks(),
@@ -337,6 +337,38 @@ app.get("/health", async (_req, res) => {
     maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
     database: supabaseStatus,
   });
+});
+
+// ---- Email diagnostic endpoint (protected by webhook secret) ----
+app.post("/debug/email-test", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  const { to, from: fromAddr } = req.body;
+  const diagnostics: Record<string, unknown> = {
+    resendKeyPresent: !!process.env.RESEND_API_KEY,
+    resendKeyPrefix: process.env.RESEND_API_KEY?.substring(0, 8) || "MISSING",
+    testModeEmail: process.env.TEST_MODE === 'true',
+    nodeEnv: process.env.NODE_ENV,
+  };
+
+  // Actually try to send a test email
+  try {
+    const { sendResponse: sr } = await import("./services/email.js");
+    const sent = await sr({
+      to: to || "ebrahimo@mulgrave.com",
+      from: fromAddr || "sage@aevoy.com",
+      subject: "Railway Email Diagnostic",
+      body: "This test email was sent directly from Railway to diagnose email delivery.",
+    });
+    diagnostics.emailSent = sent;
+  } catch (err) {
+    diagnostics.emailError = String(err);
+  }
+
+  res.json(diagnostics);
 });
 
 // ---- Dev-only smoke test ----
