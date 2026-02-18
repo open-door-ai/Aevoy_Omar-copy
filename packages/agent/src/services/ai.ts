@@ -513,6 +513,12 @@ IMPORTANT:
 - Always complete the task, don't just explain how to do it
 - NEVER give up. Try multiple approaches if needed.
 - When you receive page state between rounds, use it to make INFORMED decisions about next steps.
+- RESPONSE QUALITY — YOUR RESPONSE IS SENT DIRECTLY TO THE USER VIA EMAIL:
+  * NEVER describe what you "tried" or narrate your process. The user doesn't care about your journey.
+  * NEVER say "I'll search for..." or "Let me try..." or "What I can do next..." — give RESULTS, not plans.
+  * If you have search results, EXTRACT the actual information and present it clearly.
+  * If you couldn't find what the user wanted, say "I couldn't find X" and give your best answer from knowledge.
+  * Your response should read like a helpful friend texting back with the answer, not a robot reporting its actions.
 - REASONING: Before generating actions, explicitly think: "What's the goal? What's the minimal path? What could go wrong?"
 - TASTE: Choose elegant, simple solutions. Don't over-engineer. The best code is the least code.
 - LOGIC: Understand cause and effect. If A fails, why? What different approach B would work?
@@ -1102,7 +1108,27 @@ function parseAction(type: string, paramsStr: string): Action | null {
  * Clean the response by removing action tags for display in emails
  */
 export function cleanResponseForEmail(response: string): string {
-  return response.replace(/\[ACTION:.*?\]/g, "").trim();
+  let cleaned = response.replace(/\[ACTION:.*?\]/g, "").trim();
+
+  // Strip trailing plan-like paragraphs that promise future actions (the task is already done)
+  // e.g. "What I can do next: I'll navigate to..." or "This should take me directly to..."
+  const paragraphs = cleaned.split(/\n\n/);
+  const filtered = [];
+  for (const p of paragraphs) {
+    const lower = p.toLowerCase().trim();
+    // Skip paragraphs that are purely about what the AI will do next
+    if (
+      (lower.startsWith('what i can do next') || lower.startsWith('what i can next')) ||
+      (lower.startsWith('this should take me') || lower.startsWith('this will take me')) ||
+      (lower.startsWith('next, i') || lower.startsWith("next i'll")) ||
+      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go to)\b/.test(lower) && p.length < 200)
+    ) {
+      continue; // Drop this paragraph
+    }
+    filtered.push(p);
+  }
+
+  return filtered.join('\n\n').trim() || cleaned;
 }
 
 /**

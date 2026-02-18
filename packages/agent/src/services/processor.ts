@@ -1157,10 +1157,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'].includes(a.type)
     );
 
-    if (needsBrowser && classification.needsBrowser) {
-      // Initialize execution engine for browser tasks
-      // Browserbase handles session persistence natively via Contexts API (always signed in)
-      // Local Playwright fallback still uses domain allowlist for manual cookie persistence
+    if (needsBrowser) {
+      // Initialize browser when AI generates browser actions — trust the AI's judgment,
+      // don't gate on classifier.needsBrowser which can be wrong for ambiguous queries
       executionEngine = new ExecutionEngine(lockedIntent);
 
       // Track browser task concurrency
@@ -1727,7 +1726,68 @@ OBSERVE the current page state above, then decide what to do next:
       }
     }
 
-    // 7d. AGI-LEVEL OUTCOME VERIFICATION: Verify REAL-WORLD outcome (not just "no errors")
+    // 7d. RESPONSE QUALITY GATE: Detect plan-like/narration responses and re-prompt for concrete answer
+    // Examples of BAD final responses: "I'll search for...", "Let me try...", "What I can do next..."
+    // These are plans/narrations, not answers. The user expects an actual result.
+    if (aiResponse.content) {
+      const responseLC = aiResponse.content.toLowerCase();
+      const isPlanLike = (
+        // Future-tense promises at the end of the response (still planning to do something)
+        /(?:i'?ll|let me|i(?:'m going to| will| can))\s+(?:search|look|find|try|navigate|browse|check|get|fetch)\b/i.test(
+          aiResponse.content.slice(-500) // Only check last 500 chars — the ending matters most
+        ) &&
+        // AND the response doesn't contain concrete findings (prices, dates, lists, etc.)
+        !(/\d{1,2}:\d{2}\s*(?:am|pm)/i.test(aiResponse.content)) && // No times
+        !/\$\d/.test(aiResponse.content) && // No prices
+        !aiResponse.content.includes('[TASK_COMPLETE]')
+      );
+
+      const isNarration = (
+        // Response is mostly about what the AI tried rather than what it found
+        (responseLC.includes('search results') && responseLC.includes("didn't show")) ||
+        (responseLC.includes('returned technical') && responseLC.includes('search results')) ||
+        (responseLC.includes('what i can do next') || responseLC.includes('what i can next'))
+      );
+
+      if (isPlanLike || isNarration) {
+        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : 'narration'} — re-prompting for concrete answer`);
+        try {
+          // Gather any useful data from successful actions
+          const successData = actionResults
+            .filter(r => r.success && r.result)
+            .map(r => typeof r.result === 'string' ? r.result.substring(0, 500) : JSON.stringify(r.result).substring(0, 500))
+            .join('\n');
+
+          const refinementPrompt = `The user asked: "${subject} ${body}"
+
+${successData ? `DATA FROM MY SEARCHES/BROWSING:\n${successData}\n` : ''}
+YOUR PREVIOUS RESPONSE WAS REJECTED because it was a plan or narration instead of an actual answer.
+
+RULES FOR YOUR NEW RESPONSE:
+- Give the user a CONCRETE, DIRECT answer to their question
+- If you found useful data, summarize it clearly
+- If you couldn't find the specific information, say so honestly and give your best answer from general knowledge
+- NEVER say "I'll search for..." or "Let me try..." or "What I can do next..." — the task is DONE
+- NEVER describe what you tried or what failed — just give the answer
+- Be conversational and helpful, like a knowledgeable friend
+- Include [TASK_COMPLETE] at the end`;
+
+          const refinedResponse = await generateResponse(
+            memory, subject, refinementPrompt, username, 'complex', userId, taskId, senderName
+          );
+          if (refinedResponse.content && !refinedResponse.content.toLowerCase().includes("i'll search")) {
+            console.log(`[QUALITY] Refined response accepted (${refinedResponse.content.length} chars)`);
+            aiResponse.content = refinedResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+            aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0);
+            aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0);
+          }
+        } catch (refinementErr) {
+          console.error('[QUALITY] Refinement failed:', refinementErr);
+        }
+      }
+    }
+
+    // 7e. AGI-LEVEL OUTCOME VERIFICATION: Verify REAL-WORLD outcome (not just "no errors")
     // Example: "Make me money" → Check bank balance increased, not just "tried to buy stock"
     let outcomeVerification = null;
     if (isTaskComplete && aiResponse.content) {
