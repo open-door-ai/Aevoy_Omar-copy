@@ -1784,19 +1784,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const tier = getQualityTier(classification.taskType || 'simple');
     const tierConfig = QUALITY_TIERS[tier];
 
-    // Fast path: AUTO-PASS when the task produced no verifiable browser evidence.
-    // Verification is designed for tasks with verifiable browser actions (forms, purchases).
-    // Pure AI responses (greetings, questions, research answers) have nothing to verify.
-    // Also auto-pass if:
-    //   - All actions failed (browser or not) — AI still produced a useful response
-    //   - AI explicitly signaled completion (TASK_COMPLETE or no actions in final round)
-    //     for low-stakes tiers (research/simple) where the AI's own judgement is sufficient
+    // Fast path: AUTO-PASS when no browser was used.
+    // Verification is designed for tasks with verifiable browser evidence (forms, purchases, receipts).
+    // Pure AI responses (greetings, questions, math, memory, research) cannot be verified against
+    // a browser page — running verification on them produces false negatives on correct answers.
+    // Only run strike-based verification when a browser was actually used AND succeeded.
     const hasNoActions = actionResults.length === 0;
     const allActionsFailed = actionResults.length > 0 && actionResults.every(r => !r.success);
-    const isLowStakesTier = tier === 'research' || tier === 'simple';
-    const aiSelfCompleted = aiSignaledComplete && isLowStakesTier;
-    if ((hasNoActions || allActionsFailed || aiSelfCompleted) && aiResponse.content) {
-      const reason = hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed, AI response used' : 'AI signaled completion for low-stakes task';
+    const noBrowserUsed = !executionEngine;
+    if ((noBrowserUsed || hasNoActions || allActionsFailed) && aiResponse.content) {
+      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : 'all actions failed';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
@@ -1935,16 +1932,6 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           qualityTier: tier,
           targetScore: tierConfig.target,
         };
-      }
-    } else if (aiResponse.content) {
-      // Quick verify for non-browser tasks
-      try {
-        verificationResult = await quickVerify(
-          classification.taskType || "research",
-          aiResponse.content
-        );
-      } catch {
-        // Non-critical — continue
       }
     }
 
