@@ -27,11 +27,17 @@ interface EmailAttachment {
 export async function sendResponse(options: EmailOptions): Promise<boolean> {
   const { to, from, subject, body, attachments } = options;
 
+  console.log(`[EMAIL-SEND] sendResponse called: to=${to}, from=${from}, subject="${subject?.substring(0, 50)}", bodyLen=${body?.length || 0}`);
+
   // Test mode: use fake email server
   if (isTestMode()) {
+    console.log(`[EMAIL-SEND] TEST MODE — routing to fake email server`);
     fakeEmailServer.sendEmail(from, to, `Re: ${subject}`, body, formatResponseEmail(body));
     return true;
   }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  console.log(`[EMAIL-SEND] RESEND_API_KEY present=${!!apiKey}, prefix=${apiKey?.substring(0, 8) || 'MISSING'}`);
 
   const maxRetries = 2;
 
@@ -63,10 +69,12 @@ export async function sendResponse(options: EmailOptions): Promise<boolean> {
         }));
       }
 
-      const { error } = await getResendClient().emails.send(emailData);
+      console.log(`[EMAIL-SEND] Calling Resend API (attempt ${attempt + 1}/${maxRetries + 1})...`);
+      const result = await getResendClient().emails.send(emailData);
+      console.log(`[EMAIL-SEND] Resend API response:`, JSON.stringify(result));
 
-      if (error) {
-        console.error(`Failed to send email (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+      if (result.error) {
+        console.error(`[EMAIL-SEND] Resend error (attempt ${attempt + 1}/${maxRetries + 1}):`, result.error);
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 3000));
           continue;
@@ -74,9 +82,10 @@ export async function sendResponse(options: EmailOptions): Promise<boolean> {
         return false;
       }
 
+      console.log(`[EMAIL-SEND] SUCCESS — email sent to ${to}, id=${result.data?.id || 'unknown'}`);
       return true;
     } catch (error) {
-      console.error(`Email service error (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+      console.error(`[EMAIL-SEND] Exception (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
       if (attempt < maxRetries) {
         await new Promise(resolve => setTimeout(resolve, 3000));
         continue;

@@ -2005,7 +2005,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
     } else {
       // Default: email
-      await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+      console.log(`[TASK] Sending reply email: to=${email}, from=${username}@aevoy.com, subject="${subject}"`);
+      const emailSent = await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+      console.log(`[TASK] Reply email result: sent=${emailSent}`);
     }
 
     // 12. Update task as completed with cost tracking + verification
