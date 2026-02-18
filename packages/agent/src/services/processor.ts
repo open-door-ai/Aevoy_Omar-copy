@@ -2019,8 +2019,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const { getQualityTier: getQT, QUALITY_TIERS: QT } = await import("./task-verifier.js");
     const dbTier = getQT(classification.taskType || 'simple');
     const dbTierTarget = QT[dbTier]?.target ?? 70;
+    // Auto-passed tasks (method='skip') always count as passed regardless of tier target.
+    // Only apply the tier confidence threshold to actual browser verification results.
     const dbVerificationPassed = verificationResult
-      ? (verificationResult.confidence ?? 0) >= dbTierTarget
+      ? verificationResult.method === 'skip' || (verificationResult.confidence ?? 0) >= dbTierTarget
       : null;
 
     await getSupabaseClient()
