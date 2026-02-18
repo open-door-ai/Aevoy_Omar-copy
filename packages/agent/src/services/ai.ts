@@ -1110,17 +1110,18 @@ function parseAction(type: string, paramsStr: string): Action | null {
 export function cleanResponseForEmail(response: string): string {
   let cleaned = response.replace(/\[ACTION:.*?\]/g, "").trim();
 
-  // Strip trailing plan-like paragraphs that promise future actions (the task is already done)
-  // e.g. "What I can do next: I'll navigate to..." or "This should take me directly to..."
+  // Strip plan-like paragraphs — the user sees a finished email, not a live process
   const paragraphs = cleaned.split(/\n\n/);
   const filtered = [];
   for (const p of paragraphs) {
     const lower = p.toLowerCase().trim();
-    // Skip paragraphs that are purely about what the AI will do next
+    // Skip paragraphs that describe what the AI will/is going to do (plans, not results)
     if (
       (lower.startsWith('what i can do next') || lower.startsWith('what i can next')) ||
       (lower.startsWith('this should take me') || lower.startsWith('this will take me')) ||
       (lower.startsWith('next, i') || lower.startsWith("next i'll")) ||
+      (lower.startsWith('i need to find') || lower.startsWith('i need to search')) ||
+      (lower.startsWith('let me try') || lower.startsWith('let me search') || lower.startsWith('let me find')) ||
       (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go to)\b/.test(lower) && p.length < 200)
     ) {
       continue; // Drop this paragraph
