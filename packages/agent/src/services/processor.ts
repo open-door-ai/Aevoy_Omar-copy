@@ -2496,24 +2496,78 @@ async function executeAction(
       }
 
       const query = action.params.query as string;
-      // Use Bing direct search URL — more reliable than DuckDuckGo in headless mode
-      const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
 
-      const result = await executionEngine.executeSteps([
-        { action: 'navigate', params: { url: searchUrl } },
-        { action: 'wait', params: { ms: 2000 } },
+      // Helper: detect if extracted text is garbage (JS errors, framework noise, not real content)
+      const isGarbageText = (text: string): boolean => {
+        const lower = text.toLowerCase();
+        const jsSignals = ['noscript', 'javascript', 'enable javascript', 'error has occurred',
+          'webpack', 'react', 'vue', '__next', 'window.', 'document.', 'function('];
+        const jsHits = jsSignals.filter(s => lower.includes(s)).length;
+        // If 3+ JS signals found, or text is mostly single-char words, it's garbage
+        return jsHits >= 3 || (text.length > 200 && text.replace(/\s+/g, ' ').split(' ').filter(w => w.length > 3).length < 20);
+      };
+
+      // Strategy 1: DuckDuckGo HTML (no JavaScript, works perfectly in headless)
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const ddgResult = await executionEngine.executeSteps([
+        { action: 'navigate', params: { url: ddgUrl } },
+        { action: 'wait', params: { ms: 1500 } },
         { action: 'extract', params: { selector: 'body' } }
       ]);
 
-      // result.data is the extracted page text (string from handleExtract)
-      const pageText = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
+      let pageText = typeof ddgResult.data === 'string' ? ddgResult.data : JSON.stringify(ddgResult.data || '');
+      let usedEngine = 'duckduckgo';
+
+      // Strategy 2: If DDG failed or returned garbage, try Bing
+      if (!ddgResult.success || isGarbageText(pageText) || pageText.length < 200) {
+        console.log(`[SEARCH] DDG ${!ddgResult.success ? 'failed' : 'garbage'}, trying Bing...`);
+        const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+        const bingResult = await executionEngine.executeSteps([
+          { action: 'navigate', params: { url: bingUrl } },
+          { action: 'wait', params: { ms: 2000 } },
+          { action: 'extract', params: { selector: 'body' } }
+        ]);
+        const bingText = typeof bingResult.data === 'string' ? bingResult.data : JSON.stringify(bingResult.data || '');
+
+        if (bingResult.success && !isGarbageText(bingText) && bingText.length > pageText.length) {
+          pageText = bingText;
+          usedEngine = 'bing';
+        }
+      }
+
+      // Strategy 3: If text is still garbage, use screenshot + AI vision to read the page
+      if (isGarbageText(pageText)) {
+        console.log(`[SEARCH] Text extraction returned garbage, falling back to vision...`);
+        try {
+          const page = executionEngine.getPage();
+          if (page) {
+            const screenshotBuffer = await page.screenshot({ type: 'png', fullPage: false });
+            const screenshotBase64 = screenshotBuffer.toString('base64');
+            const { generateVisionResponse } = await import("./ai.js");
+            const visionResult = await generateVisionResponse(
+              `Read this search results page and extract ALL useful information visible on screen. Include any weather data, prices, facts, event listings, links, or other relevant content. Be thorough.`,
+              screenshotBase64,
+              'You are a search results reader. Extract all visible information from this search engine screenshot. Return plain text with the actual data found.'
+            );
+            if (visionResult?.content && visionResult.content.length > 50) {
+              pageText = visionResult.content;
+              usedEngine += '+vision';
+              console.log(`[SEARCH] Vision extracted ${pageText.length} chars (cost: $${visionResult.cost.toFixed(4)})`);
+            }
+          }
+        } catch (visionErr) {
+          console.warn(`[SEARCH] Vision fallback failed:`, visionErr);
+        }
+      }
+
+      const cleanText = pageText.replace(/\s+/g, ' ').trim().substring(0, 3000);
       return {
         action,
-        success: result.success,
-        result: result.success
-          ? `Search results from bing for "${query}":\n${pageText.substring(0, 2500)}`
+        success: cleanText.length > 100,
+        result: cleanText.length > 100
+          ? `Search results from ${usedEngine} for "${query}":\n${cleanText}`
           : undefined,
-        error: result.error,
+        error: cleanText.length <= 100 ? 'Search returned no useful content' : undefined,
       };
     }
 
