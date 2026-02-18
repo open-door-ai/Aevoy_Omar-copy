@@ -70,6 +70,7 @@ export interface TaskRequest {
   userId: string;
   username: string;
   from: string;
+  senderName?: string;
   subject: string;
   body: string;
   bodyHtml?: string;

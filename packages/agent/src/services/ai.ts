@@ -547,7 +547,8 @@ export async function generateResponse(
   username: string,
   taskType: TaskType = "understand",
   userId?: string,
-  taskId?: string
+  taskId?: string,
+  senderName?: string
 ): Promise<AIResponse> {
   if (process.env.AI_MOCK_MODE === "true") {
     return generateMockResponse(username, taskSubject, taskBody);
@@ -557,7 +558,8 @@ export async function generateResponse(
   const systemPromptWithUser = await getCompiledPrompt(
     userId || "anonymous",
     username,
-    memory
+    memory,
+    senderName
   );
   const userPrompt = buildUserPrompt(memory, taskSubject, taskBody);
 

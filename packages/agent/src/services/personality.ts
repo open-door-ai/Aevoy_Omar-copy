@@ -91,11 +91,15 @@ async function loadPersonalityFiles(): Promise<{
  */
 export function compileSystemPrompt(
   files: { soul: string | null; identity: string | null; userTemplate: string | null },
-  userContext: { username: string; timezone?: string; preferences?: string; recentActivity?: string }
+  userContext: { username: string; senderName?: string; timezone?: string; preferences?: string; recentActivity?: string }
 ): string {
+  // username = agent's Aevoy username (e.g. "sage"), senderName = human's name (e.g. "Omar")
+  const agentName = userContext.username.charAt(0).toUpperCase() + userContext.username.slice(1);
+  const humanName = userContext.senderName || "the user";
+
   // If no personality files found, use fallback
   if (!files.soul && !files.identity) {
-    return `${FALLBACK_PROMPT}\n\nYou are ${userContext.username}'s personal AI assistant. Address them by name when appropriate.`;
+    return `${FALLBACK_PROMPT}\n\nYour name is ${agentName}. You are currently helping ${humanName}. Address them as ${humanName}.`;
   }
 
   const parts: string[] = [];
@@ -123,12 +127,14 @@ Include actions in your response using this format:
   if (files.userTemplate) {
     let userSection = files.userTemplate
       .replace("{{username}}", userContext.username)
+      .replace("{{agentName}}", agentName)
+      .replace("{{senderName}}", humanName)
       .replace("{{timezone}}", userContext.timezone || "not set")
       .replace("{{preferences}}", userContext.preferences || "none recorded")
       .replace("{{recentActivity}}", userContext.recentActivity || "no recent activity");
     parts.push(userSection);
   } else {
-    parts.push(`You are ${userContext.username}'s personal AI employee. Address them by name when appropriate.`);
+    parts.push(`Your name is ${agentName}. You are an AI assistant helping ${humanName}. Address them as ${humanName}.`);
   }
 
   return parts.join("\n\n");
@@ -140,12 +146,14 @@ Include actions in your response using this format:
 export async function getCompiledPrompt(
   userId: string,
   username: string,
-  memory?: { facts?: string; recentLogs?: string }
+  memory?: { facts?: string; recentLogs?: string },
+  senderName?: string
 ): Promise<string> {
   const files = await loadPersonalityFiles();
 
   return compileSystemPrompt(files, {
     username,
+    senderName,
     preferences: memory?.facts?.substring(0, 200),
     recentActivity: memory?.recentLogs?.substring(0, 200),
   });

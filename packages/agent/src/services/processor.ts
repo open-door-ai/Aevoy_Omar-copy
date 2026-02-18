@@ -600,6 +600,8 @@ async function handleCardCommand(
 
 export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const { userId, username, from, subject, body } = task;
+  // Extract sender's display name: prefer explicit senderName, otherwise derive from email local part
+  const senderName = task.senderName || (from.includes('@') ? from.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : undefined);
   let taskId = task.taskId || "";
   const startTime = Date.now();
   const MASTER_TIMEOUT_MS = 1200000; // 20 minutes
@@ -1085,7 +1087,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           const fallbackResponse = await generateResponse(
             memory, subject,
             `${body}\n\nIMPORTANT: Answer this from your own knowledge. Do NOT use any actions. Just give your best answer.`,
-            username, undefined, userId, taskId
+            username, undefined, userId, taskId, senderName
           );
           responseText = fallbackResponse.content
             ? cleanResponseForEmail(fallbackResponse.content)
@@ -1125,7 +1127,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
-    let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId);
+    let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
 
     // If we have a matching template, inject the learned steps as actions
     if (templateMatch && templateMatch.steps.length > 0) {
@@ -1610,7 +1612,7 @@ OBSERVE the current page state above, then decide what to do next:
       // Use "complex" task type for iterative calls — bypasses cache so the AI
       // sees updated page observations rather than returning a stale cached plan.
       const nextResponse = await generateResponse(
-        memory, subject, iterativePrompt, username, "complex", userId, taskId
+        memory, subject, iterativePrompt, username, "complex", userId, taskId, senderName
       );
       const responseDuration = Date.now() - responseStart;
       console.log(`[DEBUG-ITER] generateResponse completed in ${responseDuration}ms, cost: $${nextResponse.cost || 0}`);
@@ -1709,7 +1711,7 @@ OBSERVE the current page state above, then decide what to do next:
         const fallbackResponse = await generateResponse(
           memory, subject,
           `${body}\n\nCONTEXT: I tried to complete this task using a web browser but couldn't access the websites needed. ${attemptSummary}\n\nBe HONEST with the user. If you know the answer from your knowledge, share it but note that you couldn't verify it live. If you DON'T know (e.g., a current price that changes), tell the user what happened and suggest they check the site directly. NEVER make up specific numbers like prices or stock levels.`,
-          username, undefined, userId, taskId
+          username, undefined, userId, taskId, senderName
         );
         if (fallbackResponse.content) {
           aiResponse.content = fallbackResponse.content;
@@ -1753,7 +1755,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
           try {
             const recoveryResponse = await generateResponse(
-              memory, subject, failurePrompt, username, 'reason', userId, taskId
+              memory, subject, failurePrompt, username, 'reason', userId, taskId, senderName
             );
 
             if (recoveryResponse.actions.length > 0) {
@@ -1876,7 +1878,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
               ? `\n\n[CORRECTION NEEDED] Previous attempt issues:\n${corrections.map(h => `- ${h}`).join('\n')}\nPlease fix these issues.`
               : '';
             aiResponse = await generateResponse(
-              memory, subject, bodyWithLearnings + correctionSuffix, username, aiTaskType, userId, taskId
+              memory, subject, bodyWithLearnings + correctionSuffix, username, aiTaskType, userId, taskId, senderName
             );
 
             // Re-run failed browser actions if engine is alive
@@ -1891,7 +1893,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             console.log(`[STRIKE] Strike 3: Escalating to Claude Sonnet with full corrections`);
             const correctionSuffix = `\n\n[CRITICAL CORRECTION - ATTEMPT 3] Previous attempts failed verification:\n${strikeCtx.attempts.map(a => `- Attempt ${a.attempt}: ${a.score}% (${a.correctionHints.join('; ') || 'no hints'})`).join('\n')}\nPlease carefully complete this task, addressing all issues above.`;
             aiResponse = await generateResponse(
-              memory, subject, bodyWithLearnings + correctionSuffix, username, 'reason' as const, userId, taskId
+              memory, subject, bodyWithLearnings + correctionSuffix, username, 'reason' as const, userId, taskId, senderName
             );
 
             // Re-run all browser actions from scratch if possible

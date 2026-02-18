@@ -118,7 +118,7 @@ async function getUserByEmail(
 
 async function parseEmail(
   raw: ReadableStream
-): Promise<{ subject: string; body: string; bodyHtml?: string; attachments?: { filename: string; mimeType: string; size: number }[] }> {
+): Promise<{ subject: string; body: string; bodyHtml?: string; senderName?: string; attachments?: { filename: string; mimeType: string; size: number }[] }> {
   const reader = raw.getReader();
   const chunks: Uint8Array[] = [];
 
@@ -149,7 +149,11 @@ async function parseEmail(
       size: att.content instanceof ArrayBuffer ? att.content.byteLength : (att.content?.length || 0),
     }));
 
-    return { subject, body, bodyHtml, attachments: attachments.length > 0 ? attachments : undefined };
+    // Extract sender display name (e.g. "Omar Ebrahim" from "Omar Ebrahim <omar@example.com>")
+    const fromAddr = Array.isArray(email.from) ? email.from[0] : email.from;
+    const senderName = (fromAddr as { name?: string } | undefined)?.name || undefined;
+
+    return { subject, body, bodyHtml, senderName, attachments: attachments.length > 0 ? attachments : undefined };
   } catch (parseError) {
     // Fallback to simple parsing if postal-mime fails
     console.error("postal-mime parse failed, using fallback:", parseError);
@@ -162,10 +166,15 @@ async function parseEmail(
     const subject = subjectMatch ? subjectMatch[1].trim() : "No subject";
     const plainBody = bodyRaw.replace(/<[^>]*>/g, "").trim();
 
+    // Try to extract name from From header in fallback
+    const fromMatch = headers.match(/^From:\s*(.+?)(?:\s*<[^>]+>)?\s*$/im);
+    const senderName = fromMatch ? fromMatch[1].trim().replace(/^["']|["']$/g, '') : undefined;
+
     return {
       subject,
       body: plainBody,
       bodyHtml: bodyRaw.includes("<") ? bodyRaw : undefined,
+      senderName: senderName || undefined,
     };
   }
 }
@@ -569,7 +578,7 @@ export default {
         }
 
         // Parse email early for PIN check
-        const { subject, body, bodyHtml, attachments } = await parseEmail(message.raw);
+        const { subject, body, bodyHtml, senderName, attachments } = await parseEmail(message.raw);
 
         // Check if this is a PIN verification reply
         const pinMatch = body?.match(/\b\d{6}\b/); // Extract 6-digit PIN
@@ -615,6 +624,7 @@ export default {
                 userId: user.id,
                 username: user.username,
                 from: session.sender_email,
+                senderName,
                 subject: session.email_subject,
                 body: session.email_body,
                 bodyHtml: session.email_body_html,
@@ -761,8 +771,8 @@ export default {
         // Don't reject - forward to agent to send over-quota email
       }
 
-      // Parse email content
-      const { subject, body, bodyHtml, attachments } = await parseEmail(message.raw);
+      // Parse email content (including sender display name)
+      const { subject, body, bodyHtml, senderName, attachments } = await parseEmail(message.raw);
 
       // Detect email type (confirmation reply, verification reply, or new task)
       const { type: emailType, taskId } = detectEmailType(subject, body);
@@ -780,6 +790,7 @@ export default {
               userId: user.id,
               username: user.username,
               from: message.from,
+              senderName,
               subject,
               body,
               bodyHtml,
@@ -794,6 +805,7 @@ export default {
             userId: user.id,
             username: user.username,
             from: message.from,
+            senderName,
             taskId,
             replyText,
           };
@@ -808,6 +820,7 @@ export default {
               userId: user.id,
               username: user.username,
               from: message.from,
+              senderName,
               subject,
               body,
               bodyHtml,
@@ -824,6 +837,7 @@ export default {
             userId: user.id,
             username: user.username,
             from: message.from,
+            senderName,
             taskId,
             code: codeMatch ? codeMatch[1] : replyText.trim(),
           };
@@ -838,6 +852,7 @@ export default {
             userId: user.id,
             username: user.username,
             from: message.from,
+            senderName,
             type: 'magic_link',
             magicLinkUrl: urlMatch ? urlMatch[0] : null,
             subject,
@@ -854,6 +869,7 @@ export default {
             userId: user.id,
             username: user.username,
             from: message.from,
+            senderName,
             subject,
             body,
             bodyHtml,
