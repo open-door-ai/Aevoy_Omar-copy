@@ -54,23 +54,31 @@ async function getUser(
   supabaseUrl: string,
   supabaseKey: string
 ): Promise<Profile | null> {
-  // Case-insensitive username lookup using ilike
-  const response = await fetch(
-    `${supabaseUrl}/rest/v1/profiles?username=ilike.${encodeURIComponent(username)}&select=*`,
-    {
+  const url = `${supabaseUrl}/rest/v1/profiles?username=ilike.${encodeURIComponent(username)}&select=*`;
+  console.log(`[LOOKUP] getUser username=${username} keyPrefix=${supabaseKey?.substring(0, 10) || 'MISSING'}`);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
       headers: {
         apikey: supabaseKey,
         Authorization: `Bearer ${supabaseKey}`,
       },
-    }
-  );
+    });
+  } catch (fetchErr) {
+    console.error(`[LOOKUP] Network error: ${fetchErr}`);
+    return null;
+  }
 
+  console.log(`[LOOKUP] getUser status=${response.status}`);
   if (!response.ok) {
-    console.error("Failed to fetch user:", response.status);
+    const body = await response.text().catch(() => '');
+    console.error(`[LOOKUP] Supabase error ${response.status}: ${body.substring(0, 200)}`);
     return null;
   }
 
   const users = (await response.json()) as Profile[];
+  console.log(`[LOOKUP] getUser found=${users.length} for username=${username}`);
   return users.length > 0 ? users[0] : null;
 }
 
@@ -79,22 +87,32 @@ async function getUserByEmail(
   supabaseUrl: string,
   supabaseKey: string
 ): Promise<Profile | null> {
-  const response = await fetch(
-    `${supabaseUrl}/rest/v1/profiles?email=ilike.${encodeURIComponent(email)}&select=*`,
-    {
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-      },
-    }
-  );
+  console.log(`[LOOKUP] getUserByEmail email=${maskEmail(email)} keyPrefix=${supabaseKey?.substring(0, 10) || 'MISSING'}`);
+  let response: Response;
+  try {
+    response = await fetch(
+      `${supabaseUrl}/rest/v1/profiles?email=ilike.${encodeURIComponent(email)}&select=*`,
+      {
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+      }
+    );
+  } catch (fetchErr) {
+    console.error(`[LOOKUP] Network error getUserByEmail: ${fetchErr}`);
+    return null;
+  }
 
+  console.log(`[LOOKUP] getUserByEmail status=${response.status}`);
   if (!response.ok) {
-    console.error("Failed to fetch user by email:", response.status);
+    const body = await response.text().catch(() => '');
+    console.error(`[LOOKUP] getUserByEmail Supabase error ${response.status}: ${body.substring(0, 200)}`);
     return null;
   }
 
   const users = (await response.json()) as Profile[];
+  console.log(`[LOOKUP] getUserByEmail found=${users.length}`);
   return users.length > 0 ? users[0] : null;
 }
 
@@ -395,6 +413,47 @@ function getSupabaseClient(url: string, key: string) {
 }
 
 export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/debug" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as Record<string, string>;
+      const testUsername = body.username || "sage";
+      const testEmail = body.email || "";
+      const diagnostics: Record<string, unknown> = {
+        keyPresent: !!env.SUPABASE_SERVICE_KEY,
+        keyPrefix: env.SUPABASE_SERVICE_KEY?.substring(0, 15) || "MISSING",
+        agentUrl: env.AGENT_URL,
+        supabaseUrl: env.SUPABASE_URL,
+      };
+
+      // Test username lookup
+      const userByUsername = await getUser(testUsername, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+      diagnostics.userByUsername = userByUsername ? { id: userByUsername.id.substring(0, 8), username: userByUsername.username } : null;
+
+      // Test email lookup if provided
+      if (testEmail) {
+        const userByEmail = await getUserByEmail(testEmail, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+        diagnostics.userByEmail = userByEmail ? { id: userByEmail.id.substring(0, 8), username: userByEmail.username } : null;
+      }
+
+      // Test agent reachability
+      try {
+        const agentRes = await fetch(`${env.AGENT_URL}/health`, { signal: AbortSignal.timeout(5000) });
+        diagnostics.agentReachable = agentRes.ok;
+        diagnostics.agentStatus = agentRes.status;
+      } catch (e) {
+        diagnostics.agentReachable = false;
+        diagnostics.agentError = String(e);
+      }
+
+      return new Response(JSON.stringify(diagnostics, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response("Aevoy Email Router", { status: 200 });
+  },
   async email(message: EmailMessage, env: Env): Promise<void> {
     try {
       console.log(`[EMAIL] Received, size: ${message.rawSize}`);
