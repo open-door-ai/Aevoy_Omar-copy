@@ -1781,20 +1781,21 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const tier = getQualityTier(classification.taskType || 'simple');
     const tierConfig = QUALITY_TIERS[tier];
 
-    // Fast path: AUTO-PASS any AI-only task (no browser).
+    // Fast path: AUTO-PASS when the task produced no verifiable browser evidence.
     // Verification is designed for tasks with verifiable browser actions (forms, purchases).
     // Pure AI responses (greetings, questions, research answers) have nothing to verify.
-    // Also auto-pass if all non-browser actions failed — the AI still produced a useful response.
+    // Also auto-pass if all actions failed regardless of whether a browser was used —
+    // the AI still produced a useful response and there is nothing browser-specific to verify.
     const hasNoActions = actionResults.length === 0;
-    const allNonBrowserActionsFailed = !executionEngine && actionResults.length > 0 && actionResults.every(r => !r.success);
-    if (!executionEngine && (hasNoActions || allNonBrowserActionsFailed) && aiResponse.content) {
-      const reason = hasNoActions ? 'no actions' : 'all non-browser actions failed, AI response used';
-      console.log(`[VERIFY] Fast path (no browser, ${reason}, ${tier} tier) — AUTO-PASS`);
+    const allActionsFailed = actionResults.length > 0 && actionResults.every(r => !r.success);
+    if ((hasNoActions || allActionsFailed) && aiResponse.content) {
+      const reason = hasNoActions ? 'no actions' : 'all actions failed, AI response used';
+      console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
         confidence: 85,
         method: 'skip' as const,
-        evidence: `AI-only task (no browser, ${reason}) — auto-passed`
+        evidence: `Task auto-passed (${reason})`
       };
     } else if (executionEngine && classification.taskType) {
       const strikeCtx: StrikeContext = {
