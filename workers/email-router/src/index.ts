@@ -437,7 +437,7 @@ export default {
         diagnostics.userByEmail = userByEmail ? { id: userByEmail.id.substring(0, 8), username: userByEmail.username } : null;
       }
 
-      // Test agent reachability
+      // Test agent reachability (health + task endpoint with auth)
       try {
         const agentRes = await fetch(`${env.AGENT_URL}/health`, { signal: AbortSignal.timeout(5000) });
         diagnostics.agentReachable = agentRes.ok;
@@ -445,6 +445,29 @@ export default {
       } catch (e) {
         diagnostics.agentReachable = false;
         diagnostics.agentError = String(e);
+      }
+
+      // Also test VPS directly with auth
+      const vpsUrl = "http://77.42.31.185:3001";
+      try {
+        const vpsHealth = await fetch(`${vpsUrl}/health`, { signal: AbortSignal.timeout(5000) });
+        diagnostics.vpsHealthStatus = vpsHealth.status;
+        diagnostics.vpsHealthOk = vpsHealth.ok;
+      } catch (e) {
+        diagnostics.vpsHealthStatus = String(e);
+      }
+      try {
+        const vpsTask = await fetch(`${vpsUrl}/task/incoming`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET },
+          body: JSON.stringify({ userId: "test", username: "test", from: "test@test.com", body: "ping", inputChannel: "email" }),
+          signal: AbortSignal.timeout(8000),
+        });
+        diagnostics.vpsTaskStatus = vpsTask.status;
+        diagnostics.vpsTaskOk = vpsTask.ok;
+        diagnostics.vpsTaskBody = await vpsTask.text().catch(() => '');
+      } catch (e) {
+        diagnostics.vpsTaskStatus = String(e);
       }
 
       return new Response(JSON.stringify(diagnostics, null, 2), {
@@ -673,7 +696,7 @@ export default {
         // Generate new PIN and create session
         const pinCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit PIN
 
-        const { data: newSession, error: sessionInsertError } = await supabase
+        const { error: sessionInsertError } = await supabase
           .from("email_pin_sessions")
           .insert({
             user_id: user.id,

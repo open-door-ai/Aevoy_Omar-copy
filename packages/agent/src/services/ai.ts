@@ -505,6 +505,7 @@ SELF-CRITIQUE (between rounds):
 - If you see a login wall, try [ACTION:login(...)]. If you see a CAPTCHA, try waiting or a different URL.
 
 IMPORTANT:
+- CONVERSATIONAL MESSAGES (greetings, thanks, casual chat): If the user says "hi", "hello", "how are you", "thanks", "ok", or any other conversational message — respond naturally and include [TASK_COMPLETE] immediately. Do NOT search, browse, or use any actions. Just reply.
 - Be concise and action-oriented. Plan 2-5 actions per round MAX. More rounds is better than cramming 30+ actions into one.
 - If you learn something about the user (preferences, location, etc.), use [ACTION:remember("fact")]
 - Always complete the task, don't just explain how to do it
