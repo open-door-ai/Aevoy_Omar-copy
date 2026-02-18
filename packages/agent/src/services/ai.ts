@@ -34,8 +34,9 @@ const responseCache = new Map<string, CacheEntry>();
 const CACHE_MAX_SIZE = 100;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-function getCacheKey(taskType: string, prompt: string): string {
-  const input = `${taskType}:${prompt.substring(0, 1000)}`;
+function getCacheKey(taskType: string, prompt: string, subject?: string): string {
+  // Hash the full prompt to avoid collisions when recent-activity pushes subject past 1000 chars
+  const input = `${taskType}:${subject || ''}:${prompt}`;
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
@@ -571,7 +572,7 @@ export async function generateResponse(
 
   // Check response cache (skip for vision/complex types)
   if (taskType !== "vision" && taskType !== "complex") {
-    const cacheKey = getCacheKey(taskType, userPrompt);
+    const cacheKey = getCacheKey(taskType, userPrompt, taskSubject);
     const cached = getCachedResponse(cacheKey);
     if (cached) {
       console.log(`[AI] Cache hit for ${taskType}`);
@@ -640,7 +641,7 @@ export async function generateResponse(
 
       // Cache the response (skip vision/complex)
       if (taskType !== "vision" && taskType !== "complex") {
-        const cacheKey = getCacheKey(taskType, userPrompt);
+        const cacheKey = getCacheKey(taskType, userPrompt, taskSubject);
         setCachedResponse(cacheKey, aiResponse);
       }
 
