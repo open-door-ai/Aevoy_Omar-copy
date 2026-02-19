@@ -1285,7 +1285,7 @@ export function cleanResponseForEmail(response: string): string {
       (lower.startsWith('next, i') || lower.startsWith("next i'll")) ||
       (lower.startsWith('i need to find') || lower.startsWith('i need to search')) ||
       (lower.startsWith('let me try') || lower.startsWith('let me search') || lower.startsWith('let me find')) ||
-      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go|find|head|visit|begin|open|access|sign|create|make|build|write|post|apply)\b/.test(lower) && p.length < 300) ||
+      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go|find|get|fetch|head|visit|begin|open|access|sign|create|make|build|write|post|apply|use|take)\b/.test(lower) && p.length < 300) ||
       // Drop narration about search/page failures
       (/(?:search results?|the page|bing|google|duckduckgo)\s+(?:didn't|did not|doesn't|isn't|wasn't|seems? to have)\s+/i.test(lower) && p.length < 300) ||
       (lower.includes('technical issues') && (lower.includes('search') || lower.includes('bing'))) ||

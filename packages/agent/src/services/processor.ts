@@ -1844,7 +1844,7 @@ OBSERVE the current page state above, then decide what to do next:
       if (aiResponse.content) {
         const finalLC = aiResponse.content.toLowerCase();
         const stillBad = (
-          /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|start|go|head|visit|begin|open|access|sign|create)/i.test(finalLC) ||
+          /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|start|go|head|visit|begin|open|access|sign|create|get|fetch|use|take)\b/i.test(finalLC) ||
           /(?:search|page|results?)\s+(?:didn't|did not|doesn't)\s+(?:load|work|show)/i.test(finalLC) ||
           (finalLC.includes('technical issues') || finalLC.includes('unable to process')) ||
           (aiResponse.content.length < 150 && /(?:let me|i'll|i will|i'm going|i can|i need to)/i.test(finalLC))
@@ -1932,12 +1932,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
               memory, subject, failurePrompt, username, 'reason', userId, taskId, senderName
             );
 
-            if (recoveryResponse.actions.length > 0) {
-              console.log(`[OUTCOME] Re-entering iteration loop with ${recoveryResponse.actions.length} recovery actions`);
-              isTaskComplete = false;
-              aiResponse = recoveryResponse;
-              // Loop will continue from line 1166
-            }
+            // NOTE: We intentionally do NOT overwrite aiResponse here.
+            // The while loop is already complete — recovery actions cannot execute.
+            // Overwriting aiResponse with a DeepSeek narration response here would undo
+            // the quality gate fix that already ran. Log only.
           } catch {
             // If recovery fails, continue with original result
             console.warn('[OUTCOME] Recovery attempt failed, continuing with original result');
@@ -2124,7 +2122,33 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       await getSupabaseClient().rpc("increment_usage", { p_user_id: userId });
     }
 
-    // 11. Send response via the same channel the task arrived on
+    // 11. Final narration guard — catches any narration set AFTER quality gate
+    // (e.g. by outcome verifier, cascade, or other post-quality-gate code paths).
+    // Normalizes apostrophes then checks for short plan-like openers.
+    if (aiResponse.content) {
+      const _fn = aiResponse.content
+        .replace(/[\u2018\u2019\u201B]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .trim();
+      const _fnIsNarration = (
+        /^(?:i'?ll|let me|i will|i'm going to)\s+(?:search|look|find|try|navigate|browse|check|get|fetch|go|visit|head|start|access|create|make|use|take)\b/i.test(_fn.substring(0, 120)) &&
+        !(/https?:\/\/\S+/.test(_fn)) &&
+        _fn.length < 300
+      );
+      if (_fnIsNarration) {
+        console.log('[FINAL-GUARD] Post-quality-gate narration detected — Haiku rescue');
+        try {
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const rescue = await generateForcedDirectAnswer(`${subject} ${body}`, 'No actions completed with results.', username);
+          if (rescue.content && rescue.content.length > 20) {
+            aiResponse.content = rescue.content;
+            console.log(`[FINAL-GUARD] Narration replaced (${rescue.content.length} chars)`);
+          }
+        } catch { /* continue */ }
+      }
+    }
+
+    // Send response via the same channel the task arrived on
     const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
     // Safety: if cleanResponseForEmail stripped everything (all plan-like), use a safe fallback
     const cleanResponse = rawCleanResponse || `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
