@@ -1266,6 +1266,37 @@ function parseAction(type: string, paramsStr: string): Action | null {
       }
     }
 
+    case "generate_image": {
+      // Parse: generate_image("prompt", "1024x1024")
+      const imgParts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!imgParts || imgParts.length < 1) return null;
+      const prompt = imgParts[0].replace(/^["']|["']$/g, "");
+      const size = imgParts[1]?.replace(/^["']|["']$/g, "") || "1024x1024";
+      return { type: "generate_image", params: { prompt, size } };
+    }
+
+    case "post_tweet": {
+      // Parse: post_tweet("tweet text")
+      const tweetText = paramsStr.replace(/^["']|["']$/g, "");
+      if (!tweetText) return null;
+      return { type: "post_tweet", params: { text: tweetText } };
+    }
+
+    case "create_campaign": {
+      // Parse: create_campaign("name", [{...steps}])
+      const firstComma = paramsStr.indexOf(",");
+      if (firstComma === -1) return null;
+      const name = paramsStr.substring(0, firstComma).trim().replace(/^["']|["']$/g, "");
+      const stepsStr = paramsStr.substring(firstComma + 1).trim();
+      try {
+        const steps = JSON.parse(stepsStr);
+        return { type: "create_campaign", params: { name, steps } };
+      } catch (error) {
+        console.error('[CAMPAIGN] Failed to parse steps JSON:', error);
+        return null;
+      }
+    }
+
     default:
       console.warn(`Unknown action type: ${type}`);
       return null;
