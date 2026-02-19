@@ -748,7 +748,7 @@ export async function generateForcedDirectAnswer(
 
   const userContent = context && context !== 'No actions completed with results.'
     ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results to the user concisely.`
-    : `The user asked: "${userRequest}"\n\nI was unable to retrieve live data. Give the user your best direct answer based on knowledge — one concrete recommendation with a specific URL.`;
+    : `The user asked: "${userRequest}"\n\nGive the single best concrete recommendation based on your knowledge. Start with the action (e.g. "Go to upwork.com and..."). Include a real URL. Be direct.`;
 
   const response = await client.messages.create({
     model: "claude-3-5-haiku-latest",
@@ -1211,10 +1211,9 @@ export function cleanResponseForEmail(response: string): string {
   }
 
   const result = filtered.join('\n\n').trim();
-  // If filtered produces content, use it. If nothing passed the filter AND we had paragraphs,
-  // the whole response was plan-like — return empty so caller can handle it.
-  // Only use 'cleaned' fallback if we genuinely had nothing to filter (empty input edge case).
-  return result || (paragraphs.every(p => !p.trim()) ? cleaned : '');
+  // If filtering would remove EVERYTHING, don't filter at all — something is better than nothing.
+  // The quality gate handles truly bad responses; cleanResponseForEmail is just cosmetic cleanup.
+  return result || cleaned;
 }
 
 /**
