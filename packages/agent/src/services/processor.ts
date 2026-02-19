@@ -36,6 +36,7 @@ import { getRecentContext, storeTaskContext, formatContextForPrompt } from "./co
 import { decomposeTask, getExecutionOrder } from "./task-decomposition.js";
 import { recommendSkills, formatSkillRecommendations } from "./autonomous-skill-recommender.js";
 import { findTemplate, recordTemplate, substituteVariables, recordTemplateFailure } from "./template-recorder.js";
+import { getValidToken } from "./oauth-manager.js";
 
 /**
  * Resolve correct recipient based on channel and user profile.
@@ -1426,6 +1427,40 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           continue;
         }
 
+        // Lazy browser initialization: if action needs browser but engine wasn't created at start
+        // This enables the AGI browser-first paradigm — agent can always escalate to browser mid-task
+        if (BROWSER_ACTION_TYPES.includes(action.type) && !executionEngine) {
+          try {
+            console.log(`[BROWSER] Lazy-init: action '${action.type}' needs browser, initializing on-demand`);
+            executionEngine = new ExecutionEngine(lockedIntent);
+            const { incrementBrowserTasks } = await import("../utils/concurrency.js");
+            incrementBrowserTasks();
+            await executionEngine.initialize(userId, undefined, taskId);
+            console.log(`[BROWSER] Execution engine lazy-initialized for mid-task browser escalation`);
+
+            // Save Live View URL
+            const liveViewUrl = executionEngine.getLiveViewUrl();
+            if (liveViewUrl && taskId) {
+              await getSupabaseClient()
+                .from('tasks')
+                .update({ live_view_url: liveViewUrl })
+                .eq('id', taskId);
+            }
+          } catch (browserInitErr) {
+            console.error(`[BROWSER] Lazy-init failed:`, browserInitErr);
+            // CRITICAL: Decrement counter to prevent concurrency leak
+            const { decrementBrowserTasks } = await import("../utils/concurrency.js");
+            decrementBrowserTasks();
+            executionEngine = null;
+            iterationResults.push({
+              action,
+              success: false,
+              error: `Browser unavailable. Save your credentials in the Credential Vault to enable browser-based actions.`
+            });
+            continue;
+          }
+        }
+
         // Execute action with failure memory integration
         console.log(`[ACTION] Executing action ${actionIndex + 1}/${aiResponse.actions.length}: ${action.type}(${JSON.stringify(action.params).substring(0, 100)})`);
         let result = await executeActionWithLearning(
@@ -2417,7 +2452,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // Record successful browser steps to learnings (Hive Mind auto-learning)
     // Privacy: PII is scrubbed before upload, user can opt-out in settings
-    if (executionEngine && classification.needsBrowser && actionResults.filter(r => r.success).length > 0) {
+    // NOTE: Uses executionEngine (not classification.needsBrowser) to support lazy-init browser escalation
+    if (executionEngine && actionResults.filter(r => r.success).length > 0) {
       try {
         // Check if user has consented to Hive learning uploads
         const { hasHiveLearningConsent, scrubActionParams } = await import("../utils/pii-scrubber.js");
@@ -2461,7 +2497,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // 12b. TEACH & REPEAT: Record successful browser execution as replayable template
-    if (classification.needsBrowser && actionResults.filter(r => r.success).length >= 2) {
+    // NOTE: Uses executionEngine (not classification.needsBrowser) to support lazy-init browser escalation
+    if (executionEngine && actionResults.filter(r => r.success).length >= 2) {
       try {
         const templateDomain = classification.domains?.[0] || "unknown";
         await recordTemplate(
@@ -2553,6 +2590,31 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       );
     } catch {
       // Non-critical — intelligence recording should never fail the task
+    }
+
+    // 14b. HIVE MIND: Record task outcome for ALL tasks (browser and non-browser)
+    // This ensures API-only tasks, schedule, remember, etc. also contribute to shared learnings
+    try {
+      const { recordLearning, recordFailurePattern } = await import("./learning-recorder.js");
+      const taskOutcome = {
+        taskId: taskId || "unknown",
+        userId,
+        taskType: classification.taskType || taskType,
+        domain: primaryDomain || undefined,
+        success: finalSuccessCount > 0,
+        actions: actionResults.map(r => ({ type: r.action.type, success: r.success })),
+        duration_ms: elapsedMs,
+        iterations: currentIteration,
+        cost_usd: totalCost,
+        error: actionResults.find(r => !r.success)?.error,
+      };
+      if (taskOutcome.success) {
+        await recordLearning(taskOutcome);
+      } else {
+        await recordFailurePattern(taskOutcome);
+      }
+    } catch {
+      // Non-critical
     }
 
     console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
@@ -2755,6 +2817,41 @@ async function executeAction(
     case "remember": {
       const fact = action.params.fact as string;
       await updateMemoryWithFact(userId, fact);
+
+      // Hive Mind: Share technique/API discoveries with all users (PII-scrubbed)
+      // Only shares learnings about tools/techniques, NOT personal data
+      const isShareableLearning = /\b(api|endpoint|url|method|workaround|technique|trick|approach|pattern|works|doesn'?t work|blocked|bypass|alternative)\b/i.test(fact);
+      if (isShareableLearning) {
+        try {
+          const { hasHiveLearningConsent } = await import("../utils/pii-scrubber.js");
+          const { scrubActionParams } = await import("../utils/pii-scrubber.js");
+          const hasConsent = await hasHiveLearningConsent(userId);
+          if (hasConsent) {
+            // Scrub PII from the fact before sharing
+            const scrubbedFact = scrubActionParams({ fact }).fact as string;
+            // Only share if the scrubbed version still has useful content
+            if (scrubbedFact && scrubbedFact.length > 20 && !scrubbedFact.includes('[REDACTED]')) {
+              await getSupabaseClient()
+                .from("learnings")
+                .insert({
+                  service: "api_discovery",
+                  task_type: "technique",
+                  title: scrubbedFact.substring(0, 200),
+                  steps: [scrubbedFact],
+                  gotchas: [],
+                  success_rate: 100,
+                  difficulty: "easy",
+                  tags: ["api_discovery", "hive_mind", "auto_shared"],
+                });
+              console.log(`[HIVE] Shared API/technique discovery to learnings: ${scrubbedFact.substring(0, 80)}...`);
+            }
+          }
+        } catch (hiveErr) {
+          // Non-critical — don't fail the remember action over Hive sharing
+          console.warn("[HIVE] Failed to share learning:", hiveErr);
+        }
+      }
+
       return {
         action,
         success: true,
@@ -3221,69 +3318,47 @@ async function executeAction(
     case "post_tweet": {
       const { text } = action.params as { text: string };
       try {
-        const consumerKey = process.env.TWITTER_CONSUMER_KEY;
-        const consumerSecret = process.env.TWITTER_CONSUMER_SECRET;
-        const accessToken = process.env.TWITTER_ACCESS_TOKEN;
-        const accessTokenSecret = process.env.TWITTER_ACCESS_TOKEN_SECRET;
+        // Per-user OAuth 2.0: get the user's own Twitter token
+        const token = await getValidToken(userId, "twitter");
 
-        if (!consumerKey || !consumerSecret || !accessToken || !accessTokenSecret) {
+        if (!token) {
+          // No OAuth — guide the AI to use browser fallback
+          console.log(`[POST_TWEET] No OAuth for user ${userId}, signaling browser fallback`);
           return {
             action,
             success: false,
-            error: "Twitter not connected. Add TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET to Railway env vars.",
+            error: "Twitter API not connected. USE THE BROWSER INSTEAD: browse to twitter.com or x.com, login with saved credentials from the vault, find the compose area, type the tweet text, and click post. If no saved credentials exist, tell the user to save their Twitter login in Connected Apps > Credential Vault.",
           };
         }
 
-        const tweetUrl = "https://api.twitter.com/2/tweets";
-        const method = "POST";
-        const timestamp = Math.floor(Date.now() / 1000).toString();
-        const nonce = crypto.randomBytes(16).toString("hex");
-
-        const oauthParams: Record<string, string> = {
-          oauth_consumer_key: consumerKey,
-          oauth_nonce: nonce,
-          oauth_signature_method: "HMAC-SHA1",
-          oauth_timestamp: timestamp,
-          oauth_token: accessToken,
-          oauth_version: "1.0",
-        };
-
-        // OAuth 1.0a signature
-        const paramString = Object.entries(oauthParams)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-          .join("&");
-        const baseString = `${method}&${encodeURIComponent(tweetUrl)}&${encodeURIComponent(paramString)}`;
-        const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(accessTokenSecret)}`;
-        const signature = crypto.createHmac("sha1", signingKey).update(baseString).digest("base64");
-        oauthParams.oauth_signature = signature;
-
-        const authHeader =
-          "OAuth " +
-          Object.entries(oauthParams)
-            .map(([k, v]) => `${encodeURIComponent(k)}="${encodeURIComponent(v)}"`)
-            .join(", ");
-
-        const res = await fetch(tweetUrl, {
+        // OAuth 2.0 Bearer token — no HMAC signature needed
+        const res = await fetch("https://api.twitter.com/2/tweets", {
           method: "POST",
-          headers: { Authorization: authHeader, "Content-Type": "application/json" },
+          headers: {
+            Authorization: `Bearer ${token.accessToken}`,
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({ text }),
         });
 
         if (!res.ok) {
           const errText = await res.text();
-          console.error("[POST_TWEET] Twitter API error:", errText);
+          console.error(`[POST_TWEET] Twitter API error (user ${userId}):`, errText);
+          if (res.status === 401 || res.status === 403) {
+            return { action, success: false, error: "Your Twitter connection has expired. Please reconnect in Connected Apps." };
+          }
           return { action, success: false, error: "Could not post tweet right now" };
         }
 
         const data = await res.json() as { data?: { id: string } };
         const id = data.data?.id;
-        const link = id ? `https://twitter.com/i/web/status/${id}` : undefined;
-        console.log(`[POST_TWEET] Posted tweet ${id}`);
+        // Validate tweet ID is numeric to prevent URL injection
+        const link = id && /^\d+$/.test(id) ? `https://twitter.com/i/web/status/${id}` : undefined;
+        console.log(`[POST_TWEET] Posted tweet ${id} for user ${userId} (${token.email})`);
         return {
           action,
           success: true,
-          result: `Tweet posted!${link ? ` View: ${link}` : ""}`,
+          result: `Tweet posted to ${token.email}!${link ? ` View: ${link}` : ""}`,
         };
       } catch (tweetErr) {
         console.error("[POST_TWEET] Failed:", tweetErr);

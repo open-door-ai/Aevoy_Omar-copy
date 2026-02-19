@@ -49,13 +49,16 @@ function ConnectedAppsContent() {
   const router = useRouter();
   const [googleStatus, setGoogleStatus] = useState<IntegrationStatus | null>(null);
   const [microsoftStatus, setMicrosoftStatus] = useState<IntegrationStatus | null>(null);
+  const [twitterStatus, setTwitterStatus] = useState<IntegrationStatus | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
   const [loadingCredentials, setLoadingCredentials] = useState(true);
   const [connectingGoogle, setConnectingGoogle] = useState(false);
   const [connectingMicrosoft, setConnectingMicrosoft] = useState(false);
+  const [connectingTwitter, setConnectingTwitter] = useState(false);
   const [disconnectingGoogle, setDisconnectingGoogle] = useState(false);
   const [disconnectingMicrosoft, setDisconnectingMicrosoft] = useState(false);
+  const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCred, setNewCred] = useState({ site_domain: '', username: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
@@ -65,12 +68,14 @@ function ConnectedAppsContent() {
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      const [googleRes, msRes] = await Promise.all([
+      const [googleRes, msRes, twitterRes] = await Promise.all([
         fetch('/api/integrations/gmail'),
         fetch('/api/integrations/microsoft'),
+        fetch('/api/integrations/twitter'),
       ]);
       if (googleRes.ok) setGoogleStatus(await googleRes.json());
       if (msRes.ok) setMicrosoftStatus(await msRes.json());
+      if (twitterRes.ok) setTwitterStatus(await twitterRes.json());
     } catch (err) {
       console.error('Error fetching integrations:', err);
     } finally {
@@ -101,6 +106,8 @@ function ConnectedAppsContent() {
     const gmail = searchParams.get('gmail');
     const microsoft = searchParams.get('microsoft');
 
+    const twitter = searchParams.get('twitter');
+
     if (gmail === 'connected') {
       toast.success('Google account connected successfully');
       fetchIntegrations();
@@ -115,7 +122,14 @@ function ConnectedAppsContent() {
       toast.error(`Microsoft connection failed: ${microsoft}`);
     }
 
-    if (gmail || microsoft) {
+    if (twitter === 'connected') {
+      toast.success('Twitter account connected successfully');
+      fetchIntegrations();
+    } else if (twitter && twitter !== 'connected') {
+      toast.error(`Twitter connection failed: ${twitter}`);
+    }
+
+    if (gmail || microsoft || twitter) {
       router.replace('/dashboard/apps', { scroll: false });
     }
   }, [searchParams]);
@@ -184,6 +198,38 @@ function ConnectedAppsContent() {
     }
   };
 
+  const handleConnectTwitter = async () => {
+    setConnectingTwitter(true);
+    try {
+      const response = await fetch('/api/integrations/twitter', { method: 'POST' });
+      const data = await response.json();
+      if (data.authUrl) {
+        window.location.href = data.authUrl;
+      } else {
+        toast.error(data.error || 'Failed to start Twitter connection');
+      }
+    } catch {
+      toast.error('Failed to connect Twitter');
+    } finally {
+      setConnectingTwitter(false);
+    }
+  };
+
+  const handleDisconnectTwitter = async () => {
+    setDisconnectingTwitter(true);
+    try {
+      const response = await fetch('/api/integrations/twitter', { method: 'DELETE' });
+      if (response.ok) {
+        setTwitterStatus({ connected: false, connectedAt: null, email: null });
+        toast.success('Twitter disconnected');
+      }
+    } catch {
+      toast.error('Failed to disconnect Twitter');
+    } finally {
+      setDisconnectingTwitter(false);
+    }
+  };
+
   const handleAddCredential = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCred.site_domain || !newCred.username || !newCred.password) {
@@ -241,7 +287,7 @@ function ConnectedAppsContent() {
       </div>
 
       {/* Integrations */}
-      <div className="grid md:grid-cols-2 gap-4">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Google */}
         <Card>
           <CardHeader>
@@ -364,6 +410,70 @@ function ConnectedAppsContent() {
                 )}
                 Connect Microsoft
               </Button>
+            )}
+          </CardContent>
+        </Card>
+        {/* Twitter */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center">
+                  <svg viewBox="0 0 24 24" className="w-6 h-6" aria-label="Twitter / X">
+                    <path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-base">Twitter / X</CardTitle>
+                  <CardDescription>Post tweets via API</CardDescription>
+                </div>
+              </div>
+              {loadingIntegrations ? null : twitterStatus?.connected ? (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              ) : (
+                <XCircle className="w-5 h-5 text-muted-foreground" />
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loadingIntegrations ? (
+              <SkeletonCard variant="stats" />
+            ) : twitterStatus?.connected ? (
+              <div className="space-y-3">
+                <div className="text-sm">
+                  <span className="text-muted-foreground">Connected as: </span>
+                  <span className="font-medium">{twitterStatus.email}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Since {new Date(twitterStatus.connectedAt!).toLocaleDateString()}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDisconnectTwitter}
+                  disabled={disconnectingTwitter}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  {disconnectingTwitter ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  ) : null}
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Button onClick={handleConnectTwitter} disabled={connectingTwitter}>
+                  {connectingTwitter ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  ) : (
+                    <ExternalLink className="w-4 h-4 mr-1" />
+                  )}
+                  Connect Twitter
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Or save your login in the Credential Vault below — the agent can use the browser instead.
+                </p>
+              </div>
             )}
           </CardContent>
         </Card>

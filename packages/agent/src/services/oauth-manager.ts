@@ -39,28 +39,59 @@ export async function getValidToken(
     const isExpired = expiresAt < Date.now() + 5 * 60 * 1000;
 
     if (isExpired && conn.refresh_token_encrypted) {
-      const refreshed = provider === "google"
-        ? await refreshGoogleTokens(conn.id, conn.refresh_token_encrypted)
-        : provider === "microsoft"
-          ? await refreshMicrosoftTokens(conn.id, conn.refresh_token_encrypted)
-          : false;
+      // Distributed lock prevents race conditions on single-use refresh tokens (e.g., Twitter)
+      // If another request is already refreshing, wait and use the new token instead of racing
+      const lockKey = `oauth_refresh_${conn.id}`;
+      const { data: lockAcquired } = await getSupabaseClient().rpc("acquire_lock", {
+        p_lock_key: lockKey,
+        p_ttl_seconds: 30,
+      });
 
-      if (!refreshed) {
-        await getSupabaseClient()
+      if (lockAcquired) {
+        // Re-check expiry after acquiring lock (another request may have refreshed already)
+        const { data: freshConn } = await getSupabaseClient()
           .from("oauth_connections")
-          .update({ status: "expired" })
-          .eq("id", conn.id);
-        return null;
+          .select("expires_at")
+          .eq("id", conn.id)
+          .single();
+        const freshExpiry = freshConn?.expires_at ? new Date(freshConn.expires_at).getTime() : 0;
+        const stillExpired = freshExpiry < Date.now() + 5 * 60 * 1000;
+
+        if (stillExpired) {
+          const refreshed = provider === "google"
+            ? await refreshGoogleTokens(conn.id, conn.refresh_token_encrypted)
+            : provider === "microsoft"
+              ? await refreshMicrosoftTokens(conn.id, conn.refresh_token_encrypted)
+              : provider === "twitter"
+                ? await refreshTwitterTokens(conn.id, conn.refresh_token_encrypted)
+                : false;
+
+          if (!refreshed) {
+            await getSupabaseClient()
+              .from("oauth_connections")
+              .update({ status: "expired" })
+              .eq("id", conn.id);
+            // Release lock
+            await getSupabaseClient().rpc("release_lock", { p_lock_key: lockKey }).then(() => {}, () => {});
+            return null;
+          }
+        }
+
+        // Release lock
+        await getSupabaseClient().rpc("release_lock", { p_lock_key: lockKey }).then(() => {}, () => {});
+      } else {
+        // Lock not acquired — another request is refreshing. Wait briefly then use the new token.
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
-      // Re-fetch the updated connection
+      // Re-fetch the updated connection (whether we refreshed or another request did)
       const { data: updated } = await getSupabaseClient()
         .from("oauth_connections")
         .select("*")
         .eq("id", conn.id)
         .single();
 
-      if (!updated) return null;
+      if (!updated || updated.status !== "active") return null;
 
       const accessToken = await decryptWithServerKey(updated.access_token_encrypted);
       return { accessToken, email: updated.account_email || "" };
@@ -170,6 +201,64 @@ async function refreshMicrosoftTokens(connectionId: string, refreshTokenEncrypte
 }
 
 /**
+ * Refresh Twitter OAuth 2.0 tokens.
+ * Twitter refresh tokens are single-use — each refresh returns a new refresh token.
+ */
+async function refreshTwitterTokens(connectionId: string, refreshTokenEncrypted: string): Promise<boolean> {
+  try {
+    const refreshToken = await decryptWithServerKey(refreshTokenEncrypted);
+
+    const clientId = process.env.TWITTER_CLIENT_ID || "";
+    const clientSecret = process.env.TWITTER_CLIENT_SECRET || "";
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+
+    const res = await fetch("https://api.twitter.com/2/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+      }),
+    });
+
+    if (!res.ok) {
+      console.error("[OAUTH] Twitter refresh failed:", await res.text());
+      return false;
+    }
+
+    const tokens = await res.json();
+    const newAccessEncrypted = await encryptWithServerKey(tokens.access_token);
+    const expiresAt = new Date(Date.now() + (tokens.expires_in || 7200) * 1000).toISOString();
+
+    // Twitter returns a new single-use refresh token on every refresh
+    const updates: Record<string, unknown> = {
+      access_token_encrypted: newAccessEncrypted,
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (tokens.refresh_token) {
+      updates.refresh_token_encrypted = await encryptWithServerKey(tokens.refresh_token);
+    }
+
+    await getSupabaseClient()
+      .from("oauth_connections")
+      .update(updates)
+      .eq("id", connectionId);
+
+    console.log("[OAUTH] Twitter tokens refreshed");
+    return true;
+  } catch (error) {
+    console.error("[OAUTH] Twitter refresh error:", error);
+    return false;
+  }
+}
+
+/**
  * Check and refresh all expiring tokens (called by scheduler hourly).
  */
 export async function checkAndRefreshExpiring(): Promise<void> {
@@ -192,6 +281,8 @@ export async function checkAndRefreshExpiring(): Promise<void> {
         await refreshGoogleTokens(conn.id, conn.refresh_token_encrypted);
       } else if (conn.provider === "microsoft") {
         await refreshMicrosoftTokens(conn.id, conn.refresh_token_encrypted);
+      } else if (conn.provider === "twitter") {
+        await refreshTwitterTokens(conn.id, conn.refresh_token_encrypted);
       }
     }
   } catch (error) {
