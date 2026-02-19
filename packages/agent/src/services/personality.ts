@@ -97,13 +97,27 @@ export function compileSystemPrompt(
   const agentName = userContext.username.charAt(0).toUpperCase() + userContext.username.slice(1);
   const humanName = userContext.senderName || "the user";
 
-  // If no personality files found, use fallback
-  if (!files.soul && !files.identity) {
-    return `${FALLBACK_PROMPT}\n\nYour name is ${agentName}. You are currently helping ${humanName}. Address them as ${humanName}.`;
+  // ALWAYS start with the AGI system prompt — this contains all instructions,
+  // action types, search strategies, response quality rules, and AGI behavior.
+  // Without this, the AI is just a generic chatbot.
+  let agiPrompt: string;
+  try {
+    // Dynamic import to avoid circular dependency
+    const { SYSTEM_PROMPT } = require("./ai.js");
+    agiPrompt = SYSTEM_PROMPT;
+  } catch {
+    agiPrompt = FALLBACK_PROMPT;
   }
 
-  const parts: string[] = [];
+  // Inject the actual username's email address into the prompt
+  agiPrompt = agiPrompt.replace(
+    /your own email address/gi,
+    `your own email address (${userContext.username}@aevoy.com)`
+  );
 
+  const parts: string[] = [agiPrompt];
+
+  // Add personality overlay if available
   if (files.soul) {
     parts.push(files.soul);
   }
@@ -112,18 +126,9 @@ export function compileSystemPrompt(
     parts.push(files.identity);
   }
 
-  // Action format (always included)
-  parts.push(`## Actions Format
-Include actions in your response using this format:
-[ACTION:browse("url")] - Navigate to a webpage
-[ACTION:search("query")] - Search the web
-[ACTION:screenshot("url")] - Take a screenshot
-[ACTION:fill_form("url", {"field": "value"})] - Fill a form
-[ACTION:send_email("to", "subject", "body")] - Send an email
-[ACTION:remember("fact")] - Save a fact to memory
-[ACTION:schedule("task", "cron")] - Schedule a task`);
-
   // User context
+  parts.push(`Your name is ${agentName}. Your email is ${userContext.username}@aevoy.com. You are helping ${humanName}. Address them as ${humanName}.`);
+
   if (files.userTemplate) {
     let userSection = files.userTemplate
       .replace("{{username}}", userContext.username)
@@ -133,8 +138,6 @@ Include actions in your response using this format:
       .replace("{{preferences}}", userContext.preferences || "none recorded")
       .replace("{{recentActivity}}", userContext.recentActivity || "no recent activity");
     parts.push(userSection);
-  } else {
-    parts.push(`Your name is ${agentName}. You are an AI assistant helping ${humanName}. Address them as ${humanName}.`);
   }
 
   return parts.join("\n\n");
