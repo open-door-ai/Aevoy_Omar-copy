@@ -1808,22 +1808,21 @@ RULES FOR YOUR NEW RESPONSE:
             aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0);
             aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0);
           } else {
-            // Final fallback: honest, direct answer from AI knowledge alone
-            console.log(`[QUALITY] Refinement also bad — using knowledge-only fallback`);
-            const fallbackPrompt = `The user asked: "${subject} ${body}"
-I tried to browse the web to help but the search results were not useful.
-Give the user a SHORT, HONEST, DIRECT answer based on your own knowledge.
-- Do NOT mention search failures, technical issues, or what you tried.
-- Do NOT give a numbered list of suggestions.
-- Give the SINGLE BEST concrete action they can take RIGHT NOW, with a specific URL or step.
-- Example: "The fastest way to make money online is [specific thing]. Go to [specific URL] and [specific action]."
-- Be confident and direct. 2-3 sentences max.`;
-            const fallbackResponse = await generateResponse(
-              memory, subject, fallbackPrompt, username, 'respond', userId, taskId, senderName
+            // Final fallback: go straight to Claude Haiku — bypasses DeepSeek/Groq narration
+            console.log(`[QUALITY] Refinement also bad — using Haiku direct fallback`);
+            const { generateForcedDirectAnswer } = await import("./ai.js");
+            const contextSummary = actionResults
+              .filter(r => r.success && r.result)
+              .map(r => typeof r.result === 'string' ? r.result.substring(0, 300) : JSON.stringify(r.result).substring(0, 300))
+              .join(' | ') || 'No web results available.';
+            const fallbackResponse = await generateForcedDirectAnswer(
+              `${subject} ${body}`,
+              contextSummary,
+              username
             );
             if (fallbackResponse.content) {
-              console.log(`[QUALITY] Fallback response used (${fallbackResponse.content.length} chars)`);
-              aiResponse.content = fallbackResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+              console.log(`[QUALITY] Haiku fallback used (${fallbackResponse.content.length} chars)`);
+              aiResponse.content = fallbackResponse.content.trim();
               aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0) + (fallbackResponse.cost || 0);
               aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
             }

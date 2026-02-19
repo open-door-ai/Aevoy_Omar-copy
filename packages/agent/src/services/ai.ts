@@ -730,6 +730,36 @@ export async function generateResponse(
 }
 
 /**
+ * Emergency quality-gate fallback: skip routing table, go straight to Claude Haiku.
+ * Produces a short direct answer with no narration. Used when normal pipeline fails.
+ */
+export async function generateForcedDirectAnswer(
+  userRequest: string,
+  context: string,
+  username: string
+): Promise<{ content: string; cost: number; tokensUsed: number }> {
+  const client = getAnthropicClient();
+  const systemPrompt = `You are ${username}@aevoy.com, a direct AI assistant. Answer in 2-3 sentences max. Be specific and concrete. Give the SINGLE BEST action the user can take RIGHT NOW with a real URL. Never say "I'll search" or "Let me try". Never give a numbered list. Just answer directly.`;
+
+  const response = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 300,
+    system: systemPrompt,
+    messages: [
+      { role: "user", content: `${userRequest}\n\nContext: ${context || "No additional context."}` }
+    ]
+  });
+
+  const content = response.content[0]?.type === "text" ? response.content[0].text : "";
+  const inputTokens = response.usage?.input_tokens || 0;
+  const outputTokens = response.usage?.output_tokens || 0;
+  const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
+
+  console.log(`[FALLBACK-HAIKU] Direct answer generated (${content.length} chars, $${cost.toFixed(5)})`);
+  return { content, cost, tokensUsed: inputTokens + outputTokens };
+}
+
+/**
  * Generate response for vision tasks (requires Claude Sonnet or Gemini Flash)
  */
 export async function generateVisionResponse(
