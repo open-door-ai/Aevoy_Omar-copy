@@ -1156,6 +1156,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const needsBrowser = aiResponse.actions.some(a =>
       ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'].includes(a.type)
     );
+    // Track whether any action type produces data that needs AI synthesis in round 2
+    const needsSynthesis = aiResponse.actions.some(a =>
+      ['read_email', 'remember', 'search', 'browse', 'extract'].includes(a.type)
+    );
 
     if (needsBrowser) {
       // Initialize browser when AI generates browser actions — trust the AI's judgment,
@@ -1453,8 +1457,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
 
       // If everything succeeded perfectly and task seems done, stop
-      if (failedActions.length === 0 && !needsBrowser) {
-        console.log('[ITERATE] All actions succeeded (non-browser), task complete');
+      // Exception: if there's meaningful action data (e.g. read_email results), let AI synthesize it
+      const hasActionData = iterationResults.some(r => r.success && r.result && typeof r.result === 'string' && r.result.length > 30);
+      if (failedActions.length === 0 && !needsBrowser && !hasActionData && !needsSynthesis) {
+        console.log('[ITERATE] All actions succeeded (non-browser, no data), task complete');
         isTaskComplete = true;
         break;
       }
