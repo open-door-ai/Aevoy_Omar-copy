@@ -96,7 +96,7 @@ export interface TaskResult {
 // ---- Actions ----
 
 export interface Action {
-  type: "browse" | "search" | "screenshot" | "fill_form" | "send_email" | "read_email" | "remember" | "schedule" | "click" | "fill" | "select" | "submit" | "login" | "scroll" | "wait" | "extract" | "create_excel" | "create_powerpoint" | "create_word" | "create_pdf" | "screenshot_ocr";
+  type: "browse" | "search" | "screenshot" | "fill_form" | "send_email" | "read_email" | "remember" | "schedule" | "click" | "fill" | "select" | "submit" | "login" | "scroll" | "wait" | "extract" | "create_excel" | "create_powerpoint" | "create_word" | "create_pdf" | "screenshot_ocr" | "generate_image" | "post_tweet";
   params: Record<string, unknown>;
 }
 

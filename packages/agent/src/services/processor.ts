@@ -5,6 +5,7 @@
  * Includes confirmation flow for unclear tasks based on user settings.
  */
 
+import crypto from "crypto";
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
 import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate } from "./ai.js";
 import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
@@ -2986,6 +2987,114 @@ async function executeAction(
         { action: 'extract', params: { selector: extractSelector } }
       ]);
       return { action, success: extractResult.success, result: extractResult.success ? `Extracted: ${String(extractResult.data).substring(0, 500)}` : undefined, error: extractResult.error };
+    }
+
+    case "generate_image": {
+      const { prompt, size = "1024x1024" } = action.params as {
+        prompt: string;
+        size?: string;
+      };
+      try {
+        const openaiKey = process.env.OPENAI_API_KEY;
+        if (!openaiKey) {
+          return { action, success: false, error: "Image generation not available — OPENAI_API_KEY not set" };
+        }
+        const { default: OpenAI } = await import("openai");
+        const openaiClient = new OpenAI({ apiKey: openaiKey });
+        const response = await openaiClient.images.generate({
+          model: "dall-e-3",
+          prompt,
+          n: 1,
+          size: (size as "1024x1024" | "1792x1024" | "1024x1792") || "1024x1024",
+          quality: "standard",
+        });
+        const imageUrl = response.data?.[0]?.url;
+        if (!imageUrl) {
+          return { action, success: false, error: "No image returned from DALL-E" };
+        }
+        console.log(`[GENERATE_IMAGE] Created: ${imageUrl.substring(0, 80)}...`);
+        return {
+          action,
+          success: true,
+          result: `Image generated: ${imageUrl}`,
+        };
+      } catch (imgErr) {
+        console.error("[GENERATE_IMAGE] Failed:", imgErr);
+        return { action, success: false, error: "Could not generate image right now" };
+      }
+    }
+
+    case "post_tweet": {
+      const { text } = action.params as { text: string };
+      try {
+        const consumerKey = process.env.TWITTER_CONSUMER_KEY;
+        const consumerSecret = process.env.TWITTER_CONSUMER_SECRET;
+        const accessToken = process.env.TWITTER_ACCESS_TOKEN;
+        const accessTokenSecret = process.env.TWITTER_ACCESS_TOKEN_SECRET;
+
+        if (!consumerKey || !consumerSecret || !accessToken || !accessTokenSecret) {
+          return {
+            action,
+            success: false,
+            error: "Twitter not connected. Add TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET, TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_TOKEN_SECRET to Railway env vars.",
+          };
+        }
+
+        const tweetUrl = "https://api.twitter.com/2/tweets";
+        const method = "POST";
+        const timestamp = Math.floor(Date.now() / 1000).toString();
+        const nonce = crypto.randomBytes(16).toString("hex");
+
+        const oauthParams: Record<string, string> = {
+          oauth_consumer_key: consumerKey,
+          oauth_nonce: nonce,
+          oauth_signature_method: "HMAC-SHA1",
+          oauth_timestamp: timestamp,
+          oauth_token: accessToken,
+          oauth_version: "1.0",
+        };
+
+        // OAuth 1.0a signature
+        const paramString = Object.entries(oauthParams)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+          .join("&");
+        const baseString = `${method}&${encodeURIComponent(tweetUrl)}&${encodeURIComponent(paramString)}`;
+        const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(accessTokenSecret)}`;
+        const signature = crypto.createHmac("sha1", signingKey).update(baseString).digest("base64");
+        oauthParams.oauth_signature = signature;
+
+        const authHeader =
+          "OAuth " +
+          Object.entries(oauthParams)
+            .map(([k, v]) => `${encodeURIComponent(k)}="${encodeURIComponent(v)}"`)
+            .join(", ");
+
+        const res = await fetch(tweetUrl, {
+          method: "POST",
+          headers: { Authorization: authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error("[POST_TWEET] Twitter API error:", errText);
+          return { action, success: false, error: "Could not post tweet right now" };
+        }
+
+        const data = await res.json() as { data?: { id: string } };
+        const id = data.data?.id;
+        const link = id ? `https://twitter.com/i/web/status/${id}` : undefined;
+        console.log(`[POST_TWEET] Posted tweet ${id}`);
+        return {
+          action,
+          success: true,
+          result: `Tweet posted!${link ? ` View: ${link}` : ""}`,
+        };
+      } catch (tweetErr) {
+        console.error("[POST_TWEET] Failed:", tweetErr);
+        return { action, success: false, error: "Could not post tweet right now" };
+      }
     }
 
     default:

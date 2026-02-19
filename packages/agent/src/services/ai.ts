@@ -476,6 +476,15 @@ NON-BROWSER ACTIONS:
 [ACTION:create_word("filename", [{"type":"heading", "text":"Title", "level":1}, {"type":"paragraph", "text":"Content"}])] — Create Word document with headings, paragraphs, tables, lists
 [ACTION:create_pdf("filename", [{"type":"title", "text":"Document Title"}, {"type":"paragraph", "text":"Content"}, {"type":"table", "tableData":{"headers":["H1","H2"], "rows":[["A","B"]]}}])] — Create PDF document with text, images, tables, professional formatting
 [ACTION:screenshot_ocr({"fullPage": true, "engine": "auto", "languages": ["eng"], "detectTables": true, "detectForms": true, "format": "structured"})] — Capture screenshot and extract text using OCR (Tesseract offline + AI vision fallback). Supports table/form detection, multi-language, region-specific extraction
+[ACTION:generate_image("detailed image prompt", "1024x1024")] — Generate an image using DALL-E 3. Returns a URL to the generated image. Use for creating marketing graphics, logos, social media images, illustrations, etc. Sizes: "1024x1024" (square), "1792x1024" (landscape), "1024x1792" (portrait)
+[ACTION:post_tweet("Your tweet text here (max 280 chars)")] — Post a tweet to Twitter/X on behalf of the user. Use this for social media marketing, announcements, updates. Combine with generate_image() to create and post visual content.
+
+SOCIAL MEDIA & MARKETING STRATEGY:
+- For "make me money online" → use search to find opportunities, generate_image to create marketing content, post_tweet to announce/promote
+- For "grow my Twitter" → research trending topics with search, write engaging tweets, post_tweet them
+- For "market my product" → generate_image (logo/banner), post_tweet (announcement), send_email (outreach)
+- DALL-E image URL from generate_image() can be shared in tweet text or remembered for later use
+- Always post actionable, engaging content — not generic filler
 
 EXECUTION MODEL (Reason → Observe → Plan → Act):
 - FIRST: If the task has conditional logic ("if X then Y", "if this fails try that"), EXPLICITLY reason through the branches BEFORE acting.
