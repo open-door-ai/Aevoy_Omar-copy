@@ -1832,6 +1832,28 @@ Give the user a SHORT, HONEST, DIRECT answer based on your own knowledge.
           console.error('[QUALITY] Refinement failed:', refinementErr);
         }
       }
+
+      // FINAL SAFETY NET: If response STILL looks like narration/plan after all gates,
+      // construct a response directly from successful action results
+      if (aiResponse.content) {
+        const finalLC = aiResponse.content.toLowerCase();
+        const stillBad = (
+          /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check)/i.test(finalLC) ||
+          /(?:search|page|results?)\s+(?:didn't|did not|doesn't)\s+(?:load|work|show)/i.test(finalLC) ||
+          (finalLC.includes('technical issues') || finalLC.includes('unable to process')) ||
+          (aiResponse.content.length < 100 && /(?:let me|i'll|i will|i'm going)/i.test(finalLC))
+        );
+        if (stillBad && actionResults.length > 0) {
+          const successData = actionResults
+            .filter(r => r.success && r.result)
+            .map(r => typeof r.result === 'string' ? r.result.substring(0, 1000) : JSON.stringify(r.result).substring(0, 1000))
+            .join('\n\n');
+          if (successData && successData.length > 50) {
+            console.log(`[QUALITY] Response still bad — constructing from ${actionResults.filter(r => r.success).length} action results`);
+            aiResponse.content = `Here's what I found:\n\n${successData.substring(0, 3000)}`;
+          }
+        }
+      }
     }
 
     // 7e. AGI-LEVEL OUTCOME VERIFICATION: Verify REAL-WORLD outcome (not just "no errors")
