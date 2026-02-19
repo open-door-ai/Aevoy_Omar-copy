@@ -1744,9 +1744,12 @@ OBSERVE the current page state above, then decide what to do next:
 
       const isNarration = (
         // Response is mostly about what the AI tried rather than what it found
-        (responseLC.includes('search results') && responseLC.includes("didn't show")) ||
+        (responseLC.includes('search results') && (responseLC.includes("didn't show") || responseLC.includes("didn't load") || responseLC.includes("not load"))) ||
         (responseLC.includes('returned technical') && responseLC.includes('search results')) ||
-        (responseLC.includes('what i can do next') || responseLC.includes('what i can next'))
+        (responseLC.includes('what i can do next') || responseLC.includes('what i can next')) ||
+        (responseLC.includes('technical issues') && (responseLC.includes('search') || responseLC.includes('bing') || responseLC.includes('google'))) ||
+        (responseLC.includes('unable to process') || responseLC.includes('error has occurred')) ||
+        (/(?:search|page|results?|site)\s+(?:didn't|did not|doesn't|does not|isn't|is not|wasn't|was not)\s+(?:load|work|show|display|return|respond)/i.test(responseLC))
       );
 
       // Detect advice-style numbered lists: "Here are N ways...", "1. ... 2. ... 3. ..."
@@ -1791,11 +1794,39 @@ RULES FOR YOUR NEW RESPONSE:
           const refinedResponse = await generateResponse(
             memory, subject, refinementPrompt, username, 'complex', userId, taskId, senderName
           );
-          if (refinedResponse.content && !refinedResponse.content.toLowerCase().includes("i'll search")) {
-            console.log(`[QUALITY] Refined response accepted (${refinedResponse.content.length} chars)`);
-            aiResponse.content = refinedResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+          // Check if refinement is also bad
+          const refinedLC = (refinedResponse.content || '').toLowerCase();
+          const refinedIsBad = (
+            !refinedResponse.content ||
+            /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check)/i.test(refinedLC) ||
+            /(?:search|page)\s+(?:didn't|did not|doesn't)\s+(?:load|work|show)/i.test(refinedLC) ||
+            (refinedLC.includes('technical issues') || refinedLC.includes('unable to process'))
+          );
+          if (!refinedIsBad) {
+            console.log(`[QUALITY] Refined response accepted (${refinedResponse.content!.length} chars)`);
+            aiResponse.content = refinedResponse.content!.replace(/\[TASK_COMPLETE\]/g, '').trim();
             aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0);
             aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0);
+          } else {
+            // Final fallback: honest, direct answer from AI knowledge alone
+            console.log(`[QUALITY] Refinement also bad — using knowledge-only fallback`);
+            const fallbackPrompt = `The user asked: "${subject} ${body}"
+I tried to browse the web to help but the search results were not useful.
+Give the user a SHORT, HONEST, DIRECT answer based on your own knowledge.
+- Do NOT mention search failures, technical issues, or what you tried.
+- Do NOT give a numbered list of suggestions.
+- Give the SINGLE BEST concrete action they can take RIGHT NOW, with a specific URL or step.
+- Example: "The fastest way to make money online is [specific thing]. Go to [specific URL] and [specific action]."
+- Be confident and direct. 2-3 sentences max.`;
+            const fallbackResponse = await generateResponse(
+              memory, subject, fallbackPrompt, username, 'respond', userId, taskId, senderName
+            );
+            if (fallbackResponse.content) {
+              console.log(`[QUALITY] Fallback response used (${fallbackResponse.content.length} chars)`);
+              aiResponse.content = fallbackResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+              aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0) + (fallbackResponse.cost || 0);
+              aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
+            }
           }
         } catch (refinementErr) {
           console.error('[QUALITY] Refinement failed:', refinementErr);

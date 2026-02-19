@@ -328,7 +328,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v2",
+    version: "2.0.0-agi-v3",
     timestamp: new Date().toISOString(),
     activeTasks,
     activeBrowserTasks: getActiveBrowserTasks(),

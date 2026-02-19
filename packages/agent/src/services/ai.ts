@@ -1140,7 +1140,13 @@ export function cleanResponseForEmail(response: string): string {
       (lower.startsWith('next, i') || lower.startsWith("next i'll")) ||
       (lower.startsWith('i need to find') || lower.startsWith('i need to search')) ||
       (lower.startsWith('let me try') || lower.startsWith('let me search') || lower.startsWith('let me find')) ||
-      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go to)\b/.test(lower) && p.length < 200)
+      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go to)\b/.test(lower) && p.length < 200) ||
+      // Drop narration about search/page failures
+      (/(?:search results?|the page|bing|google|duckduckgo)\s+(?:didn't|did not|doesn't|isn't|wasn't|seems? to have)\s+/i.test(lower) && p.length < 300) ||
+      (lower.includes('technical issues') && (lower.includes('search') || lower.includes('bing'))) ||
+      (lower.includes('unable to process') || lower.includes('error has occurred')) ||
+      // Drop "looking at the current state" type narration
+      (lower.startsWith('looking at the current') || lower.startsWith('i can see the search') || lower.startsWith('i can see that the'))
     ) {
       continue; // Drop this paragraph
     }
