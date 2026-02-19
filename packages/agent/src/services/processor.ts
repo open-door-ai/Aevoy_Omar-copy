@@ -1862,7 +1862,7 @@ RULES FOR YOUR NEW RESPONSE:
           (finalLC.includes('technical issues') || finalLC.includes('unable to process')) ||
           (aiResponse.content.length < 150 && /(?:let me|i'll|i will|i'm going|i can|i need to)/i.test(finalLC))
         );
-        if (stillBad && actionResults.length > 0) {
+        if (stillBad) {
           const successData = actionResults
             .filter(r => r.success && r.result)
             .map(r => typeof r.result === 'string' ? r.result.substring(0, 1000) : JSON.stringify(r.result).substring(0, 1000))
@@ -1870,6 +1870,25 @@ RULES FOR YOUR NEW RESPONSE:
           if (successData && successData.length > 50) {
             console.log(`[QUALITY] Response still bad — constructing from ${actionResults.filter(r => r.success).length} action results`);
             aiResponse.content = `Here's what I found:\n\n${successData.substring(0, 3000)}`;
+          } else {
+            // All actions failed AND response is narration — last resort: Haiku knowledge answer
+            console.log(`[QUALITY] Final safety net: all actions failed, response is narration — Haiku last resort`);
+            try {
+              const { generateForcedDirectAnswer } = await import("./ai.js");
+              const lastResort = await generateForcedDirectAnswer(
+                `${subject} ${body}`,
+                'No web results available — all browser actions failed.',
+                username
+              );
+              if (lastResort.content && lastResort.content.length > 20) {
+                aiResponse.content = lastResort.content.trim();
+                aiResponse.cost = (aiResponse.cost || 0) + (lastResort.cost || 0);
+                aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (lastResort.tokensUsed || 0);
+                console.log(`[QUALITY] Last resort Haiku answer: ${lastResort.content.substring(0, 100)}`);
+              }
+            } catch (lrErr) {
+              console.error('[QUALITY] Last resort failed:', lrErr);
+            }
           }
         }
       }
