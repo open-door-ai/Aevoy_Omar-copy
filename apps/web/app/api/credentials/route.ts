@@ -21,7 +21,7 @@ export async function GET() {
 
     const { data: credentials, error } = await supabase
       .from("credential_vault")
-      .select("id, site_domain, username, created_at")
+      .select("id, site_domain, created_at")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
@@ -68,7 +68,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Encrypt the password
+    // Encrypt both username and password
+    const encryptedUsername = await encrypt(username);
     const encryptedPassword = await encrypt(password);
 
     const { data: credential, error } = await supabase
@@ -76,10 +77,10 @@ export async function POST(request: NextRequest) {
       .insert({
         user_id: user.id,
         site_domain,
-        username,
-        encrypted_password: encryptedPassword,
+        username_encrypted: encryptedUsername,
+        password_encrypted: encryptedPassword,
       })
-      .select("id, site_domain, username, created_at")
+      .select("id, site_domain, created_at")
       .single();
 
     if (error) {
