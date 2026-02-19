@@ -497,6 +497,10 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
   instantly (no JS needed). Example: [ACTION:browse("https://wttr.in/West+Vancouver?format=4")]
 - BE RESOURCEFUL: If one approach fails, try a COMPLETELY different approach. Use APIs, plain-text websites,
   mobile versions of sites (m.site.com), or cached pages. Figure it out — don't give up.
+- JOBS/MONEY/FREELANCE STRATEGY: Never go directly to Upwork/Fiverr/Freelancer homepages (they block bots).
+  Instead: [ACTION:search("upwork writing jobs 2025 site:upwork.com")] or [ACTION:search("fiverr gig listings")]
+  to find SPECIFIC PUBLIC listing URLs, then browse those individual pages. Job boards and public RSS feeds work.
+  Alternative: search for "jobs.json" or public job APIs, or browse LinkedIn/Indeed public pages.
 - If after 2 failed attempts you still can't get the information, BE HONEST with the user. Tell them what you
   tried, what went wrong, and suggest they check the site directly. Never make up data or give a vague answer.
 - For complex tasks, break them into steps. Execute 2-5 actions MAX per round, observe results, then plan more.
