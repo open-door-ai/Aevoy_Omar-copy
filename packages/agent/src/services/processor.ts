@@ -1247,9 +1247,18 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const actionResults: ActionResult[] = [];
     let executionEngine: ExecutionEngine | null = null;
 
+    // Strip browser actions when classifier says no browser needed.
+    // Prevents browser init timeout on Railway for pure DB tasks (schedule, campaign, remember).
+    const BROWSER_ACTION_TYPES = ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
+    if (!classification.needsBrowser && aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type))) {
+      const before = aiResponse.actions.length;
+      aiResponse.actions = aiResponse.actions.filter(a => !BROWSER_ACTION_TYPES.includes(a.type));
+      console.log(`[BROWSER-STRIP] Classifier says no browser needed — removed ${before - aiResponse.actions.length} browser actions, ${aiResponse.actions.length} remaining`);
+    }
+
     // Check if we need browser for any action
     const needsBrowser = aiResponse.actions.some(a =>
-      ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'].includes(a.type)
+      BROWSER_ACTION_TYPES.includes(a.type)
     );
     // Track whether any action type produces data that needs AI synthesis in round 2
     const needsSynthesis = aiResponse.actions.some(a =>
