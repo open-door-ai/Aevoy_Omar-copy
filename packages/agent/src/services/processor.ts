@@ -1789,73 +1789,31 @@ OBSERVE the current page state above, then decide what to do next:
       );
 
       if (isPlanLike || isNarration || isAdviceList) {
-        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : 'narration'} — re-prompting for concrete answer`);
+        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : 'narration'} — going straight to Haiku direct answer`);
         try {
-          // Gather any useful data from successful actions
-          const successData = actionResults
+          // Skip DeepSeek/Groq refinement (they also produce narration) — go straight to Haiku
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const actionSummary = actionResults
             .filter(r => r.success && r.result)
-            .map(r => typeof r.result === 'string' ? r.result.substring(0, 500) : JSON.stringify(r.result).substring(0, 500))
+            .map((r, i) => {
+              const res = typeof r.result === 'string' ? r.result.substring(0, 400) : JSON.stringify(r.result).substring(0, 400);
+              return `Action ${i+1} (${r.action.type}): ${res}`;
+            })
             .join('\n');
-
-          const refinementPrompt = `The user asked: "${subject} ${body}"
-
-${successData ? `DATA FROM MY SEARCHES/BROWSING:\n${successData}\n` : ''}
-YOUR PREVIOUS RESPONSE WAS REJECTED because it was ${isAdviceList ? 'a numbered list of suggestions/advice instead of taking action' : 'a plan or narration instead of an actual answer'}.
-
-RULES FOR YOUR NEW RESPONSE:
-- You are an AGENT that DOES things. Report what you DID, not what the user COULD do.
-- NEVER give a numbered list of suggestions, tips, or ideas. That's what ChatGPT does.
-- If you completed an action, tell the user: "Done — I did X, here's the result."
-- If you couldn't complete it, tell the user exactly what you tried and what blocked you.
-- If you found useful data, summarize it clearly
-- NEVER say "I'll search for..." or "Let me try..." or "What I can do next..." — the task is DONE
-- NEVER say "You could try..." or "Here are some ways..." — the USER asked YOU to do it
-- Be conversational like a real assistant: "Done — here's what I found" or "I signed you up for X"
-- Include [TASK_COMPLETE] at the end`;
-
-          const refinedResponse = await generateResponse(
-            memory, subject, refinementPrompt, username, 'complex', userId, taskId, senderName
+          const contextSummary = actionSummary || 'No actions completed with results.';
+          const fallbackResponse = await generateForcedDirectAnswer(
+            `${subject} ${body}`,
+            contextSummary,
+            username
           );
-          // Check if refinement is also bad — expanded verb list to match isPlanLike
-          const refinedLC = (refinedResponse.content || '').toLowerCase();
-          const refinedIsBad = (
-            !refinedResponse.content ||
-            /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|go|head|visit|begin|open|access|sign|create|make|use|take|build|write|post|apply|join|switch|pivot|attempt)/i.test(refinedLC) ||
-            /(?:search|page)\s+(?:didn't|did not|doesn't)\s+(?:load|work|show)/i.test(refinedLC) ||
-            (refinedLC.includes('technical issues') || refinedLC.includes('unable to process')) ||
-            refinedLC.length < 30 // Too short to be useful
-          );
-          if (!refinedIsBad) {
-            console.log(`[QUALITY] Refined response accepted (${refinedResponse.content!.length} chars)`);
-            aiResponse.content = refinedResponse.content!.replace(/\[TASK_COMPLETE\]/g, '').trim();
-            aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0);
-            aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0);
-          } else {
-            // Final fallback: go straight to Claude Haiku — bypasses DeepSeek/Groq narration
-            console.log(`[QUALITY] Refinement also bad — using Haiku direct fallback`);
-            const { generateForcedDirectAnswer } = await import("./ai.js");
-            const actionSummary = actionResults
-              .filter(r => r.success && r.result)
-              .map((r, i) => {
-                const res = typeof r.result === 'string' ? r.result.substring(0, 400) : JSON.stringify(r.result).substring(0, 400);
-                return `Action ${i+1} (${r.action.type}): ${res}`;
-              })
-              .join('\n');
-            const contextSummary = actionSummary || 'No actions completed with results.';
-            const fallbackResponse = await generateForcedDirectAnswer(
-              `${subject} ${body}`,
-              contextSummary,
-              username
-            );
-            if (fallbackResponse.content) {
-              console.log(`[QUALITY] Haiku fallback used (${fallbackResponse.content.length} chars)`);
-              aiResponse.content = fallbackResponse.content.trim();
-              aiResponse.cost = (aiResponse.cost || 0) + (refinedResponse.cost || 0) + (fallbackResponse.cost || 0);
-              aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (refinedResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
-            }
+          if (fallbackResponse.content && fallbackResponse.content.length > 20) {
+            console.log(`[QUALITY] Haiku direct answer used (${fallbackResponse.content.length} chars)`);
+            aiResponse.content = fallbackResponse.content.trim();
+            aiResponse.cost = (aiResponse.cost || 0) + (fallbackResponse.cost || 0);
+            aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
           }
         } catch (refinementErr) {
-          console.error('[QUALITY] Refinement failed:', refinementErr);
+          console.error('[QUALITY] Haiku fallback failed:', refinementErr);
         }
       }
 
