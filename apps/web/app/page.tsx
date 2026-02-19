@@ -1667,8 +1667,6 @@ export default function AevoyLanding() {
   const [scrollY, setScrollY] = useState(0);
   const [selectedDemo, setSelectedDemo] = useState('call');
   const heroRef = useRef<HTMLElement>(null);
-  const proactiveRef = useRef<HTMLElement>(null);
-  const proactiveProgress = useScrollProgress(proactiveRef);
   
   const handleIntroComplete = useCallback(() => {
     setShowIntro(false);
@@ -2510,81 +2508,86 @@ export default function AevoyLanding() {
         </div>
       </section>
 
-      {/* Proactive Section - Scroll Hijack */}
-      <section 
-        ref={proactiveRef}
-        className="relative min-h-[140vh] bg-stone-900 text-white"
-      >
-        <div className="sticky top-0 h-screen flex items-center overflow-hidden">
-          <div className="max-w-6xl mx-auto px-6 w-full">
-            <div className="grid lg:grid-cols-2 gap-16 items-center">
-              <div
-                style={{
-                  opacity: Math.min(1, proactiveProgress * 3),
-                  transform: `translateY(${Math.max(0, 50 - proactiveProgress * 150)}px)`
-                }}
-              >
-                <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-6">
-                  It reaches out
-                  <br />
-                  <span className="text-stone-500">to you</span>
-                </h2>
-                <p className="text-xl text-stone-400 leading-relaxed mb-8">
-                  Most AI waits. Yours acts. Flight delayed? You&apos;ll know before the airline emails. 
-                  Deadline approaching? It calls to remind you. Price dropped on something you&apos;re watching? 
-                  Alert sent.
-                </p>
-                <div className="flex flex-wrap gap-6 text-sm text-stone-500">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-5 h-5 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                    </svg>
-                    <span>Phone calls</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <svg className="w-5 h-5 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    <span>SMS</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <svg className="w-5 h-5 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                    </svg>
-                    <span>Email</span>
-                  </div>
-                </div>
-              </div>
-              
-              <div
-                style={{
-                  opacity: Math.min(1, (proactiveProgress - 0.2) * 2.5),
-                  transform: `translateX(${Math.max(0, 100 - proactiveProgress * 250)}px)`
-                }}
-              >
-                <div className="bg-stone-800 rounded-2xl p-8 border border-stone-700">
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="w-12 h-12 rounded-full bg-stone-700 flex items-center justify-center">
-                      <svg className="w-6 h-6 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      {/* Proactive Section */}
+      {(() => {
+        const [leftRef, leftVisible] = useScrollReveal(0.2);
+        const [rightRef, rightVisible] = useScrollReveal(0.2);
+        return (
+          <section className="py-32 bg-stone-900 text-white">
+            <div className="max-w-6xl mx-auto px-6">
+              <div className="grid lg:grid-cols-2 gap-16 items-center">
+                <div
+                  ref={leftRef}
+                  style={{
+                    opacity: leftVisible ? 1 : 0,
+                    transform: leftVisible ? 'translateY(0)' : 'translateY(40px)',
+                    transition: 'all 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
+                  }}
+                >
+                  <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight mb-6">
+                    It reaches out
+                    <br />
+                    <span className="text-stone-500">to you</span>
+                  </h2>
+                  <p className="text-xl text-stone-400 leading-relaxed mb-8">
+                    Most AI waits. Yours acts. Flight delayed? You&apos;ll know before the airline emails.
+                    Deadline approaching? It calls to remind you. Price dropped on something you&apos;re watching?
+                    Alert sent.
+                  </p>
+                  <div className="flex flex-wrap gap-6 text-sm text-stone-500">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-5 h-5 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                       </svg>
+                      <span>Phone calls</span>
                     </div>
-                    <div>
-                      <p className="font-semibold">Incoming call</p>
-                      <p className="text-sm text-stone-500">Your AI</p>
+                    <div className="flex items-center gap-2">
+                      <svg className="w-5 h-5 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                      </svg>
+                      <span>SMS</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <svg className="w-5 h-5 text-stone-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                      <span>Email</span>
                     </div>
                   </div>
-                  <p className="text-stone-300 leading-relaxed">
-                    &ldquo;Hey, quick heads up—your flight tomorrow got pushed back 2 hours. 
-                    You&apos;ll still make dinner, but I moved your Uber pickup to 4:30 instead of 2:30. 
-                    Already confirmed with the driver. Anything else?&rdquo;
-                  </p>
+                </div>
+
+                <div
+                  ref={rightRef}
+                  style={{
+                    opacity: rightVisible ? 1 : 0,
+                    transform: rightVisible ? 'translateX(0)' : 'translateX(60px)',
+                    transition: 'all 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.15s',
+                  }}
+                >
+                  <div className="bg-stone-800 rounded-2xl p-8 border border-stone-700">
+                    <div className="flex items-center gap-4 mb-6">
+                      <div className="w-12 h-12 rounded-full bg-stone-700 flex items-center justify-center">
+                        <svg className="w-6 h-6 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="font-semibold">Incoming call</p>
+                        <p className="text-sm text-stone-500">Your AI</p>
+                      </div>
+                    </div>
+                    <p className="text-stone-300 leading-relaxed">
+                      &ldquo;Hey, quick heads up—your flight tomorrow got pushed back 2 hours.
+                      You&apos;ll still make dinner, but I moved your Uber pickup to 4:30 instead of 2:30.
+                      Already confirmed with the driver. Anything else?&rdquo;
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      </section>
+          </section>
+        );
+      })()}
 
       {/* Rolling Marquee Banner */}
       <section className="relative h-20 bg-stone-950 border-t border-stone-800 overflow-hidden">
