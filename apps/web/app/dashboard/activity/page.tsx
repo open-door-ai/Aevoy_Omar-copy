@@ -220,13 +220,11 @@ export default async function ActivityPage() {
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         {task.needs_takeover && (
-                          <Link
-                            href={`/dashboard/takeover/${task.id}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="px-3 py-1 text-xs rounded-full bg-orange-500 text-white font-medium animate-pulse hover:bg-orange-600 transition-colors"
+                          <span
+                            className="px-3 py-1 text-xs rounded-full bg-orange-500 text-white font-medium animate-pulse"
                           >
                             Needs Help
-                          </Link>
+                          </span>
                         )}
                         <span
                           className={`px-3 py-1 text-xs rounded-full flex items-center gap-1 ${getStatusColor(
