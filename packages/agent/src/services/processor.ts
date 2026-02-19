@@ -1149,6 +1149,69 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       aiResponse.actions = templateActions;
     }
 
+    // 6b. MISSING-ACTION GATE: If the task explicitly needs schedule/remember/campaign/email
+    // but AI returned 0 actions, re-prompt with explicit instruction to use the action tag.
+    // This catches the common failure where AI writes "Done. I've scheduled it" as text.
+    const taskTextLower = `${subject} ${body}`.toLowerCase();
+    const expectedActionPatterns: Array<{ keywords: string[]; actionType: string; example: string }> = [
+      { keywords: ['schedule', 'recurring', 'every day', 'daily task', 'every morning', 'weekly', 'cron'],
+        actionType: 'schedule', example: '[ACTION:schedule("task description", "0 9 * * *")]' },
+      { keywords: ['campaign', 'multi-day', 'drip', 'tweet series'],
+        actionType: 'create_campaign', example: '[ACTION:create_campaign("name", [{"task":"...", "days_from_now":0, "hour":9}])]' },
+      { keywords: ['remember that', 'remember my', 'don\'t forget', 'save that', 'note that'],
+        actionType: 'remember', example: '[ACTION:remember("fact to save")]' },
+      { keywords: ['generate image', 'create image', 'make an image', 'dall-e', 'generate a picture'],
+        actionType: 'generate_image', example: '[ACTION:generate_image("prompt", "1024x1024")]' },
+      { keywords: ['post tweet', 'tweet about', 'post on twitter'],
+        actionType: 'post_tweet', example: '[ACTION:post_tweet("tweet text")]' },
+    ];
+
+    if (aiResponse.actions.length === 0) {
+      for (const pattern of expectedActionPatterns) {
+        const matchesTask = pattern.keywords.some(kw => taskTextLower.includes(kw));
+        if (matchesTask) {
+          console.log(`[MISSING-ACTION] Task mentions "${pattern.actionType}" but AI returned 0 actions — re-prompting`);
+          const retryBody = `${body}\n\nIMPORTANT: You MUST output ${pattern.example} in your response. Writing "${pattern.actionType}" in plain text does NOTHING. The [ACTION:...] tag is what executes the action. Output the tag now.`;
+          const retryResponse = await generateResponse(memory, subject, retryBody, username, aiTaskType, userId, taskId, senderName);
+          if (retryResponse.actions.length > 0) {
+            console.log(`[MISSING-ACTION] Re-prompt succeeded: ${retryResponse.actions.length} actions`);
+            aiResponse = retryResponse;
+          } else {
+            console.warn(`[MISSING-ACTION] Re-prompt still returned 0 actions — injecting action directly`);
+            // Direct injection: construct the action ourselves from the task text
+            if (pattern.actionType === 'schedule') {
+              const cronGuess = taskTextLower.includes('every morning') || taskTextLower.includes('daily') || taskTextLower.includes('every day')
+                ? '0 9 * * *'
+                : taskTextLower.includes('weekly') || taskTextLower.includes('every week')
+                  ? '0 9 * * 1'
+                  : taskTextLower.includes('hourly') || taskTextLower.includes('every hour')
+                    ? '0 * * * *'
+                    : '0 9 * * *';
+              // Extract hour from "at Xam" or "at X:00" patterns
+              const hourMatch = taskTextLower.match(/at\s+(\d{1,2})\s*(am|pm|:00|utc)/i);
+              let hour = 9;
+              if (hourMatch) {
+                hour = parseInt(hourMatch[1]);
+                if (hourMatch[2].toLowerCase() === 'pm' && hour < 12) hour += 12;
+              }
+              const cronWithHour = cronGuess.replace(/^0\s+\d+/, `0 ${hour}`);
+              const description = body.replace(/^(schedule|create|set up)\s+(a\s+)?(daily|weekly|recurring|new)?\s*(task\s*(to|:)?)?/i, '').trim() || body;
+              aiResponse.actions = [{ type: 'schedule' as any, params: { description, cron: cronWithHour } }];
+              // Preserve the AI's text response but append confirmation
+              aiResponse.content = (aiResponse.content || '') + `\n\n[ACTION:schedule("${description}", "${cronWithHour}")]`;
+              console.log(`[MISSING-ACTION] Injected schedule action: "${description}" cron="${cronWithHour}"`);
+            } else if (pattern.actionType === 'remember') {
+              const fact = body.replace(/^remember\s+(that\s+)?/i, '').trim();
+              aiResponse.actions = [{ type: 'remember' as any, params: { text: fact } }];
+              aiResponse.content = (aiResponse.content || '') + `\n\n[ACTION:remember("${fact}")]`;
+              console.log(`[MISSING-ACTION] Injected remember action: "${fact}"`);
+            }
+          }
+          break; // Only fix the first matching pattern
+        }
+      }
+    }
+
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
     let executionEngine: ExecutionEngine | null = null;

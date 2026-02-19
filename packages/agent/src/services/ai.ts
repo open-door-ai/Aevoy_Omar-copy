@@ -480,6 +480,13 @@ NON-BROWSER ACTIONS:
 [ACTION:post_tweet("Your tweet text here (max 280 chars)")] — Post a tweet to Twitter/X on behalf of the user. Use this for social media marketing, announcements, updates. Combine with generate_image() to create and post visual content.
 [ACTION:create_campaign("Campaign Name", [{"task": "Post tweet about topic X", "days_from_now": 0, "hour": 9}, {"task": "Post tweet about topic Y", "days_from_now": 1, "hour": 9}, {"task": "Post tweet about topic Z", "days_from_now": 2, "hour": 9}])] — Create a multi-day campaign: schedules a sequence of one-time tasks to run at specific times over multiple days. Perfect for drip campaigns, tweet series, email sequences, or any multi-step marketing workflow. days_from_now=0 means today, hour is UTC hour (0-23).
 
+CRITICAL — NON-BROWSER ACTIONS MUST USE TAGS TOO:
+- "Schedule a daily weather check" → [ACTION:schedule("Check weather in Tokyo", "0 9 * * *")] [TASK_COMPLETE]
+- "Remember my favorite color is blue" → [ACTION:remember("User's favorite color is blue")] [TASK_COMPLETE]
+- "Email John about the meeting" → [ACTION:send_email("john@example.com", "Meeting Update", "Hi John, ...")] [TASK_COMPLETE]
+- If you write "I've scheduled it" or "I'll remember that" WITHOUT the [ACTION:...] tag, NOTHING HAPPENS. The tag IS the execution.
+- Cron format: "0 9 * * *" = daily at 9 AM UTC, "0 9 * * 1" = every Monday at 9 AM, "0 */6 * * *" = every 6 hours
+
 SOCIAL MEDIA & MARKETING STRATEGY:
 - For "make me money online" → use search to find opportunities, generate_image to create marketing content, post_tweet to announce/promote
 - For "grow my Twitter" → research trending topics with search, write engaging tweets, post_tweet them
@@ -585,7 +592,7 @@ ${taskBody}
 
 ---
 
-Please process this request. Remember to include [ACTION:...] for any actions you need to perform.`;
+Please process this request. You MUST include [ACTION:...] tags for EVERY action — including non-browser ones like schedule, remember, send_email. Writing "I've scheduled it" without an [ACTION:schedule(...)] tag means NOTHING happened. The action ONLY executes if you output the tag.`;
 }
 
 // ---- Main entry point ----
@@ -1430,6 +1437,8 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "research";
   } else if (text.includes("book") || text.includes("reservation") || text.includes("schedule appointment")) {
     taskType = "booking";
+  } else if (text.includes("schedule") || text.includes("recurring") || text.includes("every day") || text.includes("every morning") || text.includes("daily task") || text.includes("weekly task") || text.includes("campaign") || text.includes("cron")) {
+    taskType = "reminder";
   } else if (text.includes("form") || text.includes("fill") || text.includes("apply") || text.includes("submit")) {
     taskType = "form";
   } else if (text.includes("buy") || text.includes("purchase") || text.includes("order") || text.includes("shop")) {

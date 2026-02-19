@@ -78,7 +78,7 @@ const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] 
     forbidden: ['payment']
   },
   reminder: {
-    allowed: ['schedule', 'send_email', 'read_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    allowed: ['schedule', 'create_campaign', 'send_email', 'read_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot', 'generate_image', 'post_tweet'],
     forbidden: ['payment']
   }
 };
