@@ -1739,14 +1739,20 @@ OBSERVE the current page state above, then decide what to do next:
       const responseLC = aiResponse.content.toLowerCase();
       const isPlanLike = (
         // Future-tense promises at the end of the response (still planning to do something)
-        /(?:i'?ll|let me|i(?:'m going to| will| can))\s+(?:search|look|find|try|navigate|browse|check|get|fetch|start|go|head|visit|begin|open|access|sign|create|make|set)\b/i.test(
-          aiResponse.content.slice(-500) // Only check last 500 chars — the ending matters most
+        /(?:i'?ll|let me|i(?:'m going to| will| can))\s+(?:search|look|find|try|navigate|browse|check|get|fetch|start|go|head|visit|begin|open|access|sign|create|make|set|use|take|build|write|post|apply|join|switch|move|pivot|attempt|reach|contact|send|ask)\b/i.test(
+          aiResponse.content.slice(-600) // Check last 600 chars — the ending matters most
         ) &&
-        // AND the response doesn't contain concrete findings (prices, dates, lists, etc.)
+        // AND the response doesn't contain concrete findings (prices, dates, facts, links)
         !(/\d{1,2}:\d{2}\s*(?:am|pm)/i.test(aiResponse.content)) && // No times
         !/\$\d/.test(aiResponse.content) && // No prices
-        !aiResponse.content.includes('[TASK_COMPLETE]') &&
-        aiResponse.content.length < 400 // Short responses are almost always plan-like openers
+        !/https?:\/\/\S+/.test(aiResponse.content) && // No real URLs in results
+        !aiResponse.content.includes('[TASK_COMPLETE]')
+      ) || (
+        // Explicit pivot/plan narration patterns (any length)
+        /(?:i'?ll\s+take\s+a\s+(?:different|new|fresh|another)\s+approach)/i.test(responseLC) ||
+        /(?:as\s+an\s+alternative[,\s].*i'?ll)/i.test(responseLC) ||
+        /(?:instead[,\s]+i'?ll\s+)/i.test(responseLC) ||
+        /(?:i'?ll\s+(?:now\s+)?(?:pivot|switch|move)\s+to)/i.test(responseLC)
       );
 
       const isNarration = (
@@ -1818,10 +1824,14 @@ RULES FOR YOUR NEW RESPONSE:
             // Final fallback: go straight to Claude Haiku — bypasses DeepSeek/Groq narration
             console.log(`[QUALITY] Refinement also bad — using Haiku direct fallback`);
             const { generateForcedDirectAnswer } = await import("./ai.js");
-            const contextSummary = actionResults
+            const actionSummary = actionResults
               .filter(r => r.success && r.result)
-              .map(r => typeof r.result === 'string' ? r.result.substring(0, 300) : JSON.stringify(r.result).substring(0, 300))
-              .join(' | ') || 'No web results available.';
+              .map((r, i) => {
+                const res = typeof r.result === 'string' ? r.result.substring(0, 400) : JSON.stringify(r.result).substring(0, 400);
+                return `Action ${i+1} (${r.action.type}): ${res}`;
+              })
+              .join('\n');
+            const contextSummary = actionSummary || 'No actions completed with results.';
             const fallbackResponse = await generateForcedDirectAnswer(
               `${subject} ${body}`,
               contextSummary,

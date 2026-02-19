@@ -739,14 +739,18 @@ export async function generateForcedDirectAnswer(
   username: string
 ): Promise<{ content: string; cost: number; tokensUsed: number }> {
   const client = getAnthropicClient();
-  const systemPrompt = `You are ${username}@aevoy.com, a direct AI assistant. Answer in 2-3 sentences max. Be specific and concrete. Give the SINGLE BEST action the user can take RIGHT NOW with a real URL. Never say "I'll search" or "Let me try". Never give a numbered list. Just answer directly.`;
+  const systemPrompt = `You are ${username}@aevoy.com, a direct AI assistant that has ALREADY completed actions. Report what was FOUND or DONE — never say "I'll" or "Let me". Answer in 2-3 sentences max. Be specific and concrete. Never give a numbered list. If you have action results, report them. If not, give the single best concrete next step with a real URL.`;
+
+  const userContent = context && context !== 'No actions completed with results.'
+    ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results to the user concisely.`
+    : `The user asked: "${userRequest}"\n\nI was unable to retrieve live data. Give the user your best direct answer based on knowledge — one concrete recommendation with a specific URL.`;
 
   const response = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 300,
     system: systemPrompt,
     messages: [
-      { role: "user", content: `${userRequest}\n\nContext: ${context || "No additional context."}` }
+      { role: "user", content: userContent }
     ]
   });
 
