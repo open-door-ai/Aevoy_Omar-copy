@@ -453,7 +453,7 @@ Include these in your response in this EXACT format:
 
 BROWSER ACTIONS (require a browser - I'll open one automatically):
 [ACTION:browse("url")] — Navigate to URL and extract all text content
-[ACTION:search("query")] — Search the web (uses Bing, auto-fallback to Brave if blocked)
+[ACTION:search("query")] — Search the web (DuckDuckGo → Bing → Google → vision fallback)
 [ACTION:screenshot("url")] — Take a screenshot of a webpage
 [ACTION:click("selector_or_text")] — Click an element (CSS selector, button text, or description)
 [ACTION:fill("selector_or_label", "value")] — Type into a form field
@@ -751,7 +751,7 @@ export async function generateForcedDirectAnswer(
     : `The user asked: "${userRequest}"\n\nI was unable to retrieve live data. Give the user your best direct answer based on knowledge — one concrete recommendation with a specific URL.`;
 
   const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-3-5-haiku-latest",
     max_tokens: 300,
     system: systemPrompt,
     messages: [
@@ -1182,7 +1182,8 @@ function parseAction(type: string, paramsStr: string): Action | null {
  * Clean the response by removing action tags for display in emails
  */
 export function cleanResponseForEmail(response: string): string {
-  let cleaned = response.replace(/\[ACTION:.*?\]/g, "").trim();
+  // Strip action tags — use [\s\S]*? to match multiline JSON blobs in create_word/excel/etc
+  let cleaned = response.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
 
   // Strip plan-like paragraphs — the user sees a finished email, not a live process
   const paragraphs = cleaned.split(/\n\n/);

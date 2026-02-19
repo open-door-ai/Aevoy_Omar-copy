@@ -1735,6 +1735,12 @@ OBSERVE the current page state above, then decide what to do next:
       }
     }
 
+    // Strip [ACTION:...] tags from response content before quality checks
+    // Multiline tags (create_word/excel JSON blobs) would otherwise appear verbatim to users
+    if (aiResponse.content) {
+      aiResponse.content = aiResponse.content.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
+    }
+
     // 7d. RESPONSE QUALITY GATE: Detect plan-like/narration responses and re-prompt for concrete answer
     // Examples of BAD final responses: "I'll search for...", "Let me try...", "What I can do next..."
     // These are plans/narrations, not answers. The user expects an actual result.
