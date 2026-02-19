@@ -1733,13 +1733,14 @@ OBSERVE the current page state above, then decide what to do next:
       const responseLC = aiResponse.content.toLowerCase();
       const isPlanLike = (
         // Future-tense promises at the end of the response (still planning to do something)
-        /(?:i'?ll|let me|i(?:'m going to| will| can))\s+(?:search|look|find|try|navigate|browse|check|get|fetch)\b/i.test(
+        /(?:i'?ll|let me|i(?:'m going to| will| can))\s+(?:search|look|find|try|navigate|browse|check|get|fetch|start|go|head|visit|begin|open|access|sign|create|make|set)\b/i.test(
           aiResponse.content.slice(-500) // Only check last 500 chars — the ending matters most
         ) &&
         // AND the response doesn't contain concrete findings (prices, dates, lists, etc.)
         !(/\d{1,2}:\d{2}\s*(?:am|pm)/i.test(aiResponse.content)) && // No times
         !/\$\d/.test(aiResponse.content) && // No prices
-        !aiResponse.content.includes('[TASK_COMPLETE]')
+        !aiResponse.content.includes('[TASK_COMPLETE]') &&
+        aiResponse.content.length < 400 // Short responses are almost always plan-like openers
       );
 
       const isNarration = (
@@ -1837,10 +1838,10 @@ RULES FOR YOUR NEW RESPONSE:
       if (aiResponse.content) {
         const finalLC = aiResponse.content.toLowerCase();
         const stillBad = (
-          /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check)/i.test(finalLC) ||
+          /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|start|go|head|visit|begin|open|access|sign|create)/i.test(finalLC) ||
           /(?:search|page|results?)\s+(?:didn't|did not|doesn't)\s+(?:load|work|show)/i.test(finalLC) ||
           (finalLC.includes('technical issues') || finalLC.includes('unable to process')) ||
-          (aiResponse.content.length < 100 && /(?:let me|i'll|i will|i'm going)/i.test(finalLC))
+          (aiResponse.content.length < 150 && /(?:let me|i'll|i will|i'm going|i can|i need to)/i.test(finalLC))
         );
         if (stillBad && actionResults.length > 0) {
           const successData = actionResults
