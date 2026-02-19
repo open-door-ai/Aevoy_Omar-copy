@@ -1661,7 +1661,10 @@ OBSERVE the current page state above, then decide what to do next:
 
         // If Live View URL is available, request user takeover before cascade fallbacks
         const takeoverUrl = executionEngine?.getLiveViewUrl();
-        if (takeoverUrl && taskId && successRate < 0.4) {
+        // Only request takeover if: live view available, low success, AND many actions tried
+        // Never takeover for research/general tasks — they have AI fallback
+        const isTakeoverEligible = taskType !== 'general' && taskType !== 'research';
+        if (takeoverUrl && taskId && successRate < 0.4 && actionResults.length >= 3 && isTakeoverEligible) {
           // Update cost before takeover (otherwise cost data is lost)
           const aiCost = aiResponse.cost || 0;
           const browserCost = executionEngine?.getTotalCost() || 0;
