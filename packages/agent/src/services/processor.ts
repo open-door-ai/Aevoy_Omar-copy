@@ -1270,13 +1270,19 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
       // Check for [TASK_COMPLETE] signal in AI response
       if (aiResponse.content.includes('[TASK_COMPLETE]')) {
-        console.log('[ITERATE] AI signaled TASK_COMPLETE');
+        console.log(`[ITERATE] AI signaled TASK_COMPLETE (has ${aiResponse.actions.length} actions)`);
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+        // If AI included actions WITH the complete signal, execute them first
+        if (aiResponse.actions.length === 0) {
+          isTaskComplete = true;
+          aiSignaledComplete = true;
+          break;
+        }
+        // Mark for exit after this round's actions execute
         isTaskComplete = true;
         aiSignaledComplete = true;
-        // Stop immediately — don't execute remaining actions, task is done
-        break;
+        console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
       }
 
       // If no actions, we're done
@@ -1324,12 +1330,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
 
         // Execute action with failure memory integration
+        console.log(`[ACTION] Executing action ${actionIndex + 1}/${aiResponse.actions.length}: ${action.type}(${JSON.stringify(action.params).substring(0, 100)})`);
         let result = await executeActionWithLearning(
           action,
           userId,
           username,
           executionEngine
         );
+        console.log(`[ACTION] Result: ${action.type} → success=${result.success}${result.error ? ` error=${result.error}` : ''}`);
 
         // Action-level retry: on failure, retry once after 3s delay
         // Skip retry for bot-blocked actions — retrying won't help
@@ -1449,6 +1457,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
 
       // Merge this iteration's results into the master list
+      console.log(`[ITERATE] Round ${currentIteration} execution done: ${iterationResults.length} results (${iterationResults.filter(r => r.success).length} success)`);
       actionResults.push(...iterationResults);
 
       // Stream progress: round complete
@@ -2249,6 +2258,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       ? verificationResult.method === 'skip' || (verificationResult.confidence ?? 0) >= dbTierTarget
       : null;
 
+    const finalActionCount = actionResults.length;
+    const finalSuccessCount = actionResults.filter(r => r.success).length;
+    console.log(`[TASK] Final update: actions=${finalActionCount}, successes=${finalSuccessCount}, iterations=${currentIteration}`);
+
     await getSupabaseClient()
       .from("tasks")
       .update({
@@ -2260,6 +2273,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         execution_time_ms: elapsedMs,
         cascade_level: cascadeLevel,
         response_text: cleanResponse,
+        action_count: finalActionCount,
+        action_success_count: finalSuccessCount,
+        iteration_count: currentIteration,
         verification_status: dbVerificationPassed === true ? "verified" : (verificationResult ? "unverified" : null),
         verification_data: verificationResult ? {
           confidence: verificationResult.confidence,
