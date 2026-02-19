@@ -1788,6 +1788,7 @@ OBSERVE the current page state above, then decide what to do next:
         !/(?:found|here(?:'s| is| are) (?:the|what)|results|happening|events|listings|available)/i.test(responseLC)
       );
 
+      let qualityGateHaikuFired = false;
       if (isPlanLike || isNarration || isAdviceList) {
         console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : 'narration'} — going straight to Haiku direct answer`);
         try {
@@ -1811,6 +1812,7 @@ OBSERVE the current page state above, then decide what to do next:
             aiResponse.content = fallbackResponse.content.trim();
             aiResponse.cost = (aiResponse.cost || 0) + (fallbackResponse.cost || 0);
             aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
+            qualityGateHaikuFired = true; // Don't let final safety net overwrite Haiku's answer
           }
         } catch (refinementErr) {
           console.error('[QUALITY] Haiku fallback failed:', refinementErr);
@@ -1818,8 +1820,9 @@ OBSERVE the current page state above, then decide what to do next:
       }
 
       // FINAL SAFETY NET: If response STILL looks like narration/plan after all gates,
-      // construct a response directly from successful action results
-      if (aiResponse.content) {
+      // construct a response directly from successful action results.
+      // SKIP if quality gate already ran Haiku — trust that answer.
+      if (aiResponse.content && !qualityGateHaikuFired) {
         const finalLC = aiResponse.content.toLowerCase();
         const stillBad = (
           /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|start|go|head|visit|begin|open|access|sign|create)/i.test(finalLC) ||
