@@ -1439,6 +1439,9 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "booking";
   } else if (text.includes("schedule") || text.includes("recurring") || text.includes("every day") || text.includes("every morning") || text.includes("daily task") || text.includes("weekly task") || text.includes("campaign") || text.includes("cron")) {
     taskType = "reminder";
+    // Schedule/campaign tasks are pure DB operations — no browser needed.
+    // Browser init on Railway often times out and wastes resources.
+    needsBrowser = false;
   } else if (text.includes("form") || text.includes("fill") || text.includes("apply") || text.includes("submit")) {
     taskType = "form";
   } else if (text.includes("buy") || text.includes("purchase") || text.includes("order") || text.includes("shop")) {
@@ -1447,6 +1450,7 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "email";
   } else if (text.includes("remind") || text.includes("alert") || text.includes("notify")) {
     taskType = "reminder";
+    needsBrowser = false;
   } else if (text.includes("write") || text.includes("draft") || text.includes("compose")) {
     taskType = "writing";
   } else if (text.includes("call") || text.includes("phone") || text.includes("dial")) {
