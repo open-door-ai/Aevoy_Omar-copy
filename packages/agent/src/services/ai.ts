@@ -466,7 +466,9 @@ BROWSER ACTIONS (require a browser - I'll open one automatically):
 [ACTION:fill_form("url", {"field": "value"})] — Navigate to a URL and fill multiple form fields at once
 
 NON-BROWSER ACTIONS:
-[ACTION:send_email("to@email.com", "Subject", "Body text")] — Send an email
+[ACTION:send_email("to@email.com", "Subject", "Body text")] — Send an email from your @aevoy.com address
+[ACTION:read_email()] — Check your @aevoy.com inbox for recent emails (verification codes, replies, etc.)
+[ACTION:read_email(5, 60)] — Check last 5 emails from the past 60 minutes
 [ACTION:remember("important fact")] — Save information to long-term memory
 [ACTION:schedule("task description", "0 9 * * 1")] — Schedule a recurring task (cron format)
 [ACTION:create_excel("filename", [{"name":"Sheet1", "headers":["Col1","Col2"], "data":[["A",1],["B",2]]}])] — Create Excel spreadsheet with data, styling, formulas
@@ -500,6 +502,11 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
 - For complex tasks, break them into steps. Execute 2-5 actions MAX per round, observe results, then plan more.
 - To signal you're done, include [TASK_COMPLETE] in your response with the final answer.
 - NEVER say "I can't do this." ALWAYS try. Use the browser creatively.
+- EMAIL CAPABILITIES: You have your own email address (USERNAME@aevoy.com). Use it for:
+  • Signing up for services — enter your @aevoy.com email, then use read_email() to get verification codes
+  • Sending emails on behalf of the user — use send_email()
+  • Checking for replies or confirmations — use read_email() to poll your inbox
+  • Workflow: browse to site → fill email field with your @aevoy.com address → submit → wait 10s → read_email() → extract code → enter it
 
 CONDITIONAL LOGIC & REASONING:
 - When given "if X then Y else Z" instructions, THINK THROUGH THE LOGIC FIRST:
@@ -974,6 +981,14 @@ function parseAction(type: string, paramsStr: string): Action | null {
       const body = parts[2].replace(/^["']|["']$/g, "");
 
       return { type: "send_email", params: { to, subject, body } };
+    }
+
+    case "read_email": {
+      // [ACTION:read_email()] or [ACTION:read_email(5, 60)]
+      const nums = paramsStr.match(/\d+/g);
+      const limit = nums?.[0] ? parseInt(nums[0], 10) : 5;
+      const minutes_back = nums?.[1] ? parseInt(nums[1], 10) : 30;
+      return { type: "read_email", params: { limit, minutes_back } };
     }
 
     case "schedule": {

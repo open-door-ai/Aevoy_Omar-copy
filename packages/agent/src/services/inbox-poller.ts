@@ -507,3 +507,130 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
       return;
   }
 }
+
+// ---------------------------------------------------------------------------
+// On-demand email fetch — used by read_email action during task execution
+// ---------------------------------------------------------------------------
+
+export interface FetchedEmail {
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  date: string;
+}
+
+/**
+ * Fetch recent emails from the agent inbox for a specific @aevoy.com address.
+ * Used by the read_email action to let the AI check for verification codes, replies, etc.
+ *
+ * @param forAddress - The @aevoy.com address to filter for (e.g. "sage@aevoy.com")
+ * @param limit - Max emails to return (default 5)
+ * @param minutesBack - How far back to look (default 30 minutes)
+ */
+export async function fetchRecentEmails(
+  forAddress: string,
+  limit = 5,
+  minutesBack = 30
+): Promise<FetchedEmail[]> {
+  if (!INBOX_EMAIL || !INBOX_PASSWORD) {
+    console.log("[READ-EMAIL] IMAP not configured, falling back to DB");
+    return fetchFromDatabase(forAddress, limit);
+  }
+
+  try {
+    const { ImapFlow } = await import("imapflow");
+
+    const client = new ImapFlow({
+      host: INBOX_HOST,
+      port: INBOX_PORT,
+      secure: true,
+      auth: { user: INBOX_EMAIL, pass: INBOX_PASSWORD },
+      logger: false,
+      connectionTimeout: 10_000,
+      greetingTimeout: 8_000,
+    });
+
+    await client.connect();
+    const lock = await client.getMailboxLock("INBOX");
+    const results: FetchedEmail[] = [];
+
+    try {
+      const since = new Date(Date.now() - minutesBack * 60 * 1000);
+      // Search for recent emails addressed to the user's @aevoy.com address
+      const uids = await client.search({
+        since,
+        to: forAddress,
+      });
+
+      if (!uids || uids.length === 0) {
+        lock.release();
+        await client.logout();
+        return results;
+      }
+
+      // Take the most recent N
+      const batch = uids.slice(-limit);
+
+      for (const uid of batch) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const msg: any = await client.fetchOne(uid, {
+            envelope: true,
+            source: true,
+          }, { uid: true });
+
+          if (!msg?.envelope) continue;
+
+          const env = msg.envelope;
+          let body = "";
+          if (msg.source) {
+            body = await parseBodyFromSource(msg.source as Buffer);
+          }
+
+          results.push({
+            from: env.from?.[0]?.address?.toLowerCase() || "",
+            to: env.to?.[0]?.address?.toLowerCase() || forAddress,
+            subject: env.subject || "(no subject)",
+            body: body.substring(0, 2000), // Cap body length
+            date: env.date?.toISOString() || new Date().toISOString(),
+          });
+        } catch (msgErr) {
+          console.warn(`[READ-EMAIL] Error fetching uid=${uid}:`, msgErr);
+        }
+      }
+    } finally {
+      lock.release();
+      await client.logout();
+    }
+
+    console.log(`[READ-EMAIL] Fetched ${results.length} emails for ${forAddress}`);
+    return results;
+  } catch (err) {
+    console.error("[READ-EMAIL] IMAP fetch failed, falling back to DB:", err);
+    return fetchFromDatabase(forAddress, limit);
+  }
+}
+
+/**
+ * Fallback: fetch from processed_emails + tasks tables when IMAP unavailable.
+ */
+async function fetchFromDatabase(forAddress: string, limit: number): Promise<FetchedEmail[]> {
+  const supabase = getSupabaseClient();
+  const { data } = await supabase
+    .from("processed_emails")
+    .select("from_addr, to_addr, subject, processed_at")
+    .eq("to_addr", forAddress)
+    .order("processed_at", { ascending: false })
+    .limit(limit);
+
+  if (!data || data.length === 0) return [];
+
+  return data.map(row => ({
+    from: row.from_addr || "",
+    to: row.to_addr || forAddress,
+    subject: row.subject || "(no subject)",
+    body: "(body not available — fetched from metadata only)",
+    date: row.processed_at || new Date().toISOString(),
+  }));
+}

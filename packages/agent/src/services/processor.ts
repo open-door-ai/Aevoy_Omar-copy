@@ -2714,6 +2714,39 @@ async function executeAction(
       };
     }
 
+    case "read_email": {
+      const { limit: emailLimit, minutes_back } = action.params as {
+        limit?: number;
+        minutes_back?: number;
+      };
+      try {
+        const { fetchRecentEmails } = await import("./inbox-poller.js");
+        const emails = await fetchRecentEmails(
+          `${username}@aevoy.com`,
+          emailLimit || 5,
+          minutes_back || 30
+        );
+        if (emails.length === 0) {
+          return {
+            action,
+            success: true,
+            result: `No recent emails found for ${username}@aevoy.com in the last ${minutes_back || 30} minutes.`,
+          };
+        }
+        const summary = emails.map((e, i) =>
+          `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.body.substring(0, 500)}`
+        ).join('\n---\n');
+        return {
+          action,
+          success: true,
+          result: `Found ${emails.length} recent email(s) for ${username}@aevoy.com:\n${summary}`,
+        };
+      } catch (readErr) {
+        console.error(`[READ-EMAIL] Failed:`, readErr);
+        return { action, success: false, error: "Could not check emails right now" };
+      }
+    }
+
     case "schedule": {
       const { description, cron } = action.params as { description: string; cron: string };
       

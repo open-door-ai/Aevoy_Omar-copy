@@ -42,7 +42,7 @@ const TASK_LIMITS: Record<string, { maxDuration: number; maxActions: number }> =
 const FULL_BROWSER_ACTIONS = [
   'navigate', 'click', 'fill', 'select', 'submit', 'scroll',
   'screenshot', 'extract', 'search', 'browse', 'remember',
-  'wait', 'verify', 'login', 'upload', 'send_email', 'schedule',
+  'wait', 'verify', 'login', 'upload', 'send_email', 'read_email', 'schedule',
 ];
 
 const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] }> = {
@@ -67,15 +67,15 @@ const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] 
     forbidden: ['payment']
   },
   email: {
-    allowed: ['compose', 'send', 'send_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    allowed: ['compose', 'send', 'send_email', 'read_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
     forbidden: ['payment']
   },
   writing: {
-    allowed: ['generate', 'format', 'send_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    allowed: ['generate', 'format', 'send_email', 'read_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
     forbidden: ['payment']
   },
   reminder: {
-    allowed: ['schedule', 'send_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
+    allowed: ['schedule', 'send_email', 'read_email', 'remember', 'browse', 'search', 'navigate', 'extract', 'screenshot'],
     forbidden: ['payment']
   }
 };
