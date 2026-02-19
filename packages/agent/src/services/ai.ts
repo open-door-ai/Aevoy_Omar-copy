@@ -760,36 +760,74 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
     ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results concisely. No "I'll" or "Let me".`
     : `The user asked: "${userRequest}"\n\nGive the best specific knowledge-based answer. Name real websites with URLs. Start with a concrete fact. No "I'll" or "Let me".`;
 
+  // Helper: strip narration lines from any model output
+  const stripNarration = (text: string): string => {
+    const lines = text.split('\n');
+    const clean = lines.filter(line => {
+      const lc = line.toLowerCase().trim();
+      return !(/^(?:i'?ll|i\u2019ll|let me|i will|i'm going to|i\u2019m going to|i can try|i need to)\s/i.test(lc));
+    }).join('\n').trim();
+    return clean; // Return empty string if ALL lines were narration
+  };
+
   // Try Claude Haiku first (best instruction following)
   if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const client = getAnthropicClient();
-      const response = await client.messages.create({
-        model: "claude-3-5-haiku-latest",
-        max_tokens: 300,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userContent }]
-      });
-      const content = response.content[0]?.type === "text" ? response.content[0].text : "";
-      const inputTokens = response.usage?.input_tokens || 0;
-      const outputTokens = response.usage?.output_tokens || 0;
-      const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
-      if (content && content.length > 20) {
-        console.log(`[FALLBACK-HAIKU] Direct answer via Haiku (${content.length} chars, $${cost.toFixed(5)})`);
-        return { content, cost, tokensUsed: inputTokens + outputTokens };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1500)); // 1.5s retry delay for rate limits
+      try {
+        const client = getAnthropicClient();
+        const response = await client.messages.create({
+          model: "claude-3-5-haiku-latest",
+          max_tokens: 300,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userContent }]
+        });
+        const content = response.content[0]?.type === "text" ? response.content[0].text : "";
+        const inputTokens = response.usage?.input_tokens || 0;
+        const outputTokens = response.usage?.output_tokens || 0;
+        const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
+        const clean = stripNarration(content);
+        if (clean && clean.length > 20) {
+          console.log(`[FALLBACK-HAIKU] Direct answer via Haiku attempt ${attempt+1} (${clean.length} chars, $${cost.toFixed(5)})`);
+          return { content: clean, cost, tokensUsed: inputTokens + outputTokens };
+        }
+      } catch (haikuErr) {
+        const msg = haikuErr instanceof Error ? haikuErr.message : String(haikuErr);
+        console.warn(`[FALLBACK-HAIKU] Haiku attempt ${attempt+1} failed: ${msg}`);
+        if (!msg.includes('429') && !msg.includes('rate') && !msg.includes('overloaded')) break; // Non-rate-limit error, don't retry
       }
-    } catch (haikuErr) {
-      console.warn(`[FALLBACK-HAIKU] Haiku failed: ${haikuErr instanceof Error ? haikuErr.message : String(haikuErr)}`);
     }
   }
 
-  // Fallback: DeepSeek with ultra-strict prompt (no narration allowed)
+  // Second fallback: Groq (llama-3.3-70b) — better instruction following than DeepSeek
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const groqClient = getGroqClient();
+      const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. Include a real URL. Max 2-3 sentences.`;
+      const res = await groqClient.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 200,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: groqSystem },
+          { role: 'user', content: userContent }
+        ]
+      });
+      const content = res.choices[0]?.message?.content || '';
+      const clean = stripNarration(content);
+      if (clean && clean.length > 20) {
+        console.log(`[FALLBACK-GROQ] Direct answer via Groq (${clean.length} chars)`);
+        return { content: clean, cost: 0.0001, tokensUsed: 200 };
+      }
+    } catch (groqErr) {
+      console.warn(`[FALLBACK-GROQ] Groq fallback failed: ${groqErr instanceof Error ? groqErr.message : String(groqErr)}`);
+    }
+  }
+
+  // Last resort: DeepSeek with ultra-strict prompt
   if (process.env.DEEPSEEK_API_KEY) {
     try {
-      const strictSystem = `You are a RESULTS reporter. Report in present or past tense only.
-FORBIDDEN: "I'll", "I will", "Let me", "I'm going to", "I can", "I'll search", "I need to"
-FORMAT: State the answer as a fact. Include a specific URL. Max 2-3 sentences.
-EXAMPLE for "make me money": "The fastest path to income is freelancing on Upwork (upwork.com) — create a profile and apply to 10 jobs today. Alternatively, sell unused items on Facebook Marketplace (facebook.com/marketplace)."`;
+      const strictSystem = `RESULTS REPORT: Answer in present tense only. Start with a fact. Include a URL. Max 2 sentences. Do NOT begin with "I'll", "Let me", or "I will".`;
       const client = getDeepSeekClient();
       const res = await client.chat.completions.create({
         model: "deepseek-chat",
@@ -801,12 +839,10 @@ EXAMPLE for "make me money": "The fastest path to income is freelancing on Upwor
         ]
       });
       const content = res.choices[0]?.message?.content || "";
-      if (content && content.length > 20) {
-        // Final sanity check: strip narration if DeepSeek still slips through
-        const stripped = content.replace(/^(?:i'?ll|let me|i will|i'm going to)[^\n]*/gim, "").trim();
-        const final = stripped || content;
-        console.log(`[FALLBACK-DEEPSEEK] Direct answer (${final.length} chars)`);
-        return { content: final, cost: 0.0001, tokensUsed: 200 };
+      const clean = stripNarration(content);
+      if (clean && clean.length > 20) {
+        console.log(`[FALLBACK-DEEPSEEK] Direct answer (${clean.length} chars)`);
+        return { content: clean, cost: 0.0001, tokensUsed: 200 };
       }
     } catch (dsErr) {
       console.warn(`[FALLBACK-DEEPSEEK] DeepSeek fallback failed: ${dsErr instanceof Error ? dsErr.message : String(dsErr)}`);
