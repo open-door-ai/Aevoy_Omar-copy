@@ -43,6 +43,9 @@ const FULL_BROWSER_ACTIONS = [
   'navigate', 'click', 'fill', 'select', 'submit', 'scroll',
   'screenshot', 'extract', 'search', 'browse', 'remember',
   'wait', 'verify', 'login', 'upload', 'send_email', 'read_email', 'schedule',
+  'generate_image', 'post_tweet', 'create_campaign',
+  'fill_form', 'screenshot_ocr',
+  'create_excel', 'create_powerpoint', 'create_word', 'create_pdf',
 ];
 
 const TASK_PERMISSIONS: Record<string, { allowed: string[]; forbidden: string[] }> = {
