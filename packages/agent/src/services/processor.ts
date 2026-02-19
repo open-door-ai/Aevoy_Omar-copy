@@ -1149,9 +1149,18 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       aiResponse.actions = templateActions;
     }
 
+    // 6a2. Strip browser actions when classifier says no browser needed.
+    // Must happen BEFORE missing-action gate so the gate can inject correct actions
+    // after browser actions are removed. Prevents browser init timeout on Railway.
+    const BROWSER_ACTION_TYPES = ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
+    if (!classification.needsBrowser && aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type))) {
+      const before = aiResponse.actions.length;
+      aiResponse.actions = aiResponse.actions.filter(a => !BROWSER_ACTION_TYPES.includes(a.type));
+      console.log(`[BROWSER-STRIP] Classifier says no browser needed — removed ${before - aiResponse.actions.length} browser actions, ${aiResponse.actions.length} remaining`);
+    }
+
     // 6b. MISSING-ACTION GATE: If the task explicitly needs schedule/remember/campaign/email
-    // but AI returned 0 actions, re-prompt with explicit instruction to use the action tag.
-    // This catches the common failure where AI writes "Done. I've scheduled it" as text.
+    // but AI returned 0 matching actions, re-prompt or inject directly.
     const taskTextLower = `${subject} ${body}`.toLowerCase();
     const expectedActionPatterns: Array<{ keywords: string[]; actionType: string; example: string }> = [
       { keywords: ['schedule', 'recurring', 'every day', 'daily task', 'every morning', 'weekly', 'cron'],
@@ -1166,97 +1175,82 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         actionType: 'post_tweet', example: '[ACTION:post_tweet("tweet text")]' },
     ];
 
-    if (aiResponse.actions.length === 0) {
-      for (const pattern of expectedActionPatterns) {
-        const matchesTask = pattern.keywords.some(kw => taskTextLower.includes(kw));
-        if (matchesTask) {
-          console.log(`[MISSING-ACTION] Task mentions "${pattern.actionType}" but AI returned 0 actions — re-prompting`);
-          const retryBody = `${body}\n\nIMPORTANT: You MUST output ${pattern.example} in your response. Writing "${pattern.actionType}" in plain text does NOTHING. The [ACTION:...] tag is what executes the action. Output the tag now.`;
-          const retryResponse = await generateResponse(memory, subject, retryBody, username, aiTaskType, userId, taskId, senderName);
-          if (retryResponse.actions.length > 0) {
-            console.log(`[MISSING-ACTION] Re-prompt succeeded: ${retryResponse.actions.length} actions`);
-            aiResponse = retryResponse;
-          } else {
-            console.warn(`[MISSING-ACTION] Re-prompt still returned 0 actions — injecting action directly`);
-            // Direct injection: construct the action ourselves from the task text
-            if (pattern.actionType === 'schedule') {
-              const cronGuess = taskTextLower.includes('every morning') || taskTextLower.includes('daily') || taskTextLower.includes('every day')
-                ? '0 9 * * *'
-                : taskTextLower.includes('weekly') || taskTextLower.includes('every week')
-                  ? '0 9 * * 1'
-                  : taskTextLower.includes('hourly') || taskTextLower.includes('every hour')
-                    ? '0 * * * *'
-                    : '0 9 * * *';
-              // Extract hour from "at Xam" or "at X:00" patterns
-              const hourMatch = taskTextLower.match(/at\s+(\d{1,2})\s*(am|pm|:00|utc)/i);
-              let hour = 9;
-              if (hourMatch) {
-                hour = parseInt(hourMatch[1]);
-                if (hourMatch[2].toLowerCase() === 'pm' && hour < 12) hour += 12;
-              }
-              const cronWithHour = cronGuess.replace(/^0\s+\d+/, `0 ${hour}`);
-              const description = body.replace(/^(schedule|create|set up)\s+(a\s+)?(daily|weekly|recurring|new)?\s*(task\s*(to|:)?)?/i, '').trim() || body;
-              aiResponse.actions = [{ type: 'schedule' as any, params: { description, cron: cronWithHour } }];
-              // Preserve the AI's text response but append confirmation
-              aiResponse.content = (aiResponse.content || '') + `\n\n[ACTION:schedule("${description}", "${cronWithHour}")]`;
-              console.log(`[MISSING-ACTION] Injected schedule action: "${description}" cron="${cronWithHour}"`);
-            } else if (pattern.actionType === 'remember') {
-              const fact = body.replace(/^remember\s+(that\s+)?/i, '').trim();
-              aiResponse.actions = [{ type: 'remember' as any, params: { fact } }];
-              aiResponse.content = (aiResponse.content || '') + `\n\n[ACTION:remember("${fact}")]`;
-              console.log(`[MISSING-ACTION] Injected remember action: "${fact}"`);
-            } else if (pattern.actionType === 'create_campaign') {
-              // Parse multi-day campaign from task text
-              // Look for "Day X:" or "Step X:" patterns
-              const dayPattern = /(?:day|step)\s*(\d+)\s*[:\-–]\s*([^,.;]+(?:[,.;]\s*)?)/gi;
-              const steps: Array<{ task: string; days_from_now: number; hour: number }> = [];
-              let dayMatch;
-              while ((dayMatch = dayPattern.exec(body)) !== null) {
-                const dayNum = parseInt(dayMatch[1]);
-                const taskDesc = dayMatch[2].trim().replace(/[.,;]+$/, '');
-                steps.push({ task: taskDesc, days_from_now: dayNum - 1, hour: 9 });
-              }
-              // Fallback: if no day/step pattern found, create a single-step campaign
-              if (steps.length === 0) {
-                steps.push({ task: body.substring(0, 200), days_from_now: 0, hour: 9 });
-              }
-              const campaignName = subject.replace(/^(v\d+\w?\s+)?(campaign|test)\s*/i, '').trim() || 'Campaign';
-              aiResponse.actions = [{ type: 'create_campaign' as any, params: { name: campaignName, steps } }];
-              aiResponse.content = (aiResponse.content || '') + `\n\nCreating campaign "${campaignName}" with ${steps.length} steps.`;
-              console.log(`[MISSING-ACTION] Injected create_campaign: "${campaignName}" with ${steps.length} steps`);
-            } else if (pattern.actionType === 'generate_image') {
-              // Extract the image description from the task
-              const imgPrompt = body.replace(/^(generate|create|make)\s+(a\s+|an\s+)?(image|picture|photo|illustration)\s*(of|for|about|showing)?\s*/i, '').trim() || body;
-              aiResponse.actions = [{ type: 'generate_image' as any, params: { prompt: imgPrompt, size: '1024x1024' } }];
-              aiResponse.content = (aiResponse.content || '') + `\n\nGenerating image: "${imgPrompt}"`;
-              console.log(`[MISSING-ACTION] Injected generate_image: "${imgPrompt.substring(0, 60)}"`);
-            } else if (pattern.actionType === 'post_tweet') {
-              // Extract the tweet content from the task
-              const tweetContent = body.replace(/^(post|send|publish)\s+(a\s+)?tweet\s*(about|saying|that says|:)?\s*/i, '').trim() || body;
-              aiResponse.actions = [{ type: 'post_tweet' as any, params: { text: tweetContent.substring(0, 280) } }];
-              aiResponse.content = (aiResponse.content || '') + `\n\nPosting tweet: "${tweetContent.substring(0, 100)}..."`;
-              console.log(`[MISSING-ACTION] Injected post_tweet: "${tweetContent.substring(0, 60)}"`);
-            }
+    // Check if the expected action type is missing (either 0 actions total, or
+    // the specific expected type isn't present after browser action stripping)
+    for (const pattern of expectedActionPatterns) {
+      const matchesTask = pattern.keywords.some(kw => taskTextLower.includes(kw));
+      const hasExpectedAction = aiResponse.actions.some(a => a.type === pattern.actionType);
+      if (!matchesTask || hasExpectedAction) continue;
+
+      // Try re-prompt first (only if AI returned zero actions — otherwise injection is faster)
+      let needsInjection = true;
+      if (aiResponse.actions.length === 0) {
+        console.log(`[MISSING-ACTION] Task mentions "${pattern.actionType}" but AI returned 0 actions — re-prompting`);
+        const retryBody = `${body}\n\nIMPORTANT: You MUST output ${pattern.example} in your response. Writing "${pattern.actionType}" in plain text does NOTHING. The [ACTION:...] tag is what executes the action. Output the tag now.`;
+        const retryResponse = await generateResponse(memory, subject, retryBody, username, aiTaskType, userId, taskId, senderName);
+        if (retryResponse.actions.length > 0 && retryResponse.actions.some(a => a.type === pattern.actionType)) {
+          console.log(`[MISSING-ACTION] Re-prompt succeeded with ${pattern.actionType}`);
+          aiResponse = retryResponse;
+          needsInjection = false;
+        }
+      } else {
+        console.log(`[MISSING-ACTION] Task mentions "${pattern.actionType}" but AI only generated: ${aiResponse.actions.map(a => a.type).join(', ')}`);
+      }
+
+      // Direct injection fallback
+      if (needsInjection) {
+        console.log(`[MISSING-ACTION] Injecting ${pattern.actionType} directly from task text`);
+        if (pattern.actionType === 'schedule') {
+          const cronGuess = taskTextLower.includes('every morning') || taskTextLower.includes('daily') || taskTextLower.includes('every day')
+            ? '0 9 * * *'
+            : taskTextLower.includes('weekly') || taskTextLower.includes('every week')
+              ? '0 9 * * 1'
+              : taskTextLower.includes('hourly') || taskTextLower.includes('every hour')
+                ? '0 * * * *'
+                : '0 9 * * *';
+          const hourMatch = taskTextLower.match(/at\s+(\d{1,2})\s*(am|pm|:00|utc)/i);
+          let hour = 9;
+          if (hourMatch) {
+            hour = parseInt(hourMatch[1]);
+            if (hourMatch[2].toLowerCase() === 'pm' && hour < 12) hour += 12;
           }
-          break; // Only fix the first matching pattern
+          const cronWithHour = cronGuess.replace(/^0\s+\d+/, `0 ${hour}`);
+          const description = body.replace(/^(schedule|create|set up)\s+(a\s+)?(daily|weekly|recurring|new)?\s*(task\s*(to|:)?)?/i, '').trim() || body;
+          aiResponse.actions.push({ type: 'schedule' as any, params: { description, cron: cronWithHour } });
+          console.log(`[MISSING-ACTION] Injected schedule: "${description}" cron="${cronWithHour}"`);
+        } else if (pattern.actionType === 'remember') {
+          const fact = body.replace(/^remember\s+(that\s+)?/i, '').trim();
+          aiResponse.actions.push({ type: 'remember' as any, params: { fact } });
+          console.log(`[MISSING-ACTION] Injected remember: "${fact}"`);
+        } else if (pattern.actionType === 'create_campaign') {
+          const dayPattern = /(?:day|step)\s*(\d+)\s*[:\-–]\s*([^,.;]+(?:[,.;]\s*)?)/gi;
+          const steps: Array<{ task: string; days_from_now: number; hour: number }> = [];
+          let dayMatch;
+          while ((dayMatch = dayPattern.exec(body)) !== null) {
+            steps.push({ task: dayMatch[2].trim().replace(/[.,;]+$/, ''), days_from_now: parseInt(dayMatch[1]) - 1, hour: 9 });
+          }
+          if (steps.length === 0) steps.push({ task: body.substring(0, 200), days_from_now: 0, hour: 9 });
+          const campaignName = subject.replace(/^(v\d+\w?\s+)?(campaign|test)\s*/i, '').trim() || 'Campaign';
+          aiResponse.actions.push({ type: 'create_campaign' as any, params: { name: campaignName, steps } });
+          console.log(`[MISSING-ACTION] Injected create_campaign: "${campaignName}" with ${steps.length} steps`);
+        } else if (pattern.actionType === 'generate_image') {
+          const imgPrompt = body.replace(/^(generate|create|make)\s+(a\s+|an\s+)?(image|picture|photo|illustration)\s*(of|for|about|showing)?\s*/i, '').trim() || body;
+          aiResponse.actions.push({ type: 'generate_image' as any, params: { prompt: imgPrompt, size: '1024x1024' } });
+          console.log(`[MISSING-ACTION] Injected generate_image: "${imgPrompt.substring(0, 60)}"`);
+        } else if (pattern.actionType === 'post_tweet') {
+          const tweetContent = body.replace(/^(post|send|publish)\s+(a\s+)?tweet\s*(about|saying|that says|:)?\s*/i, '').trim() || body;
+          aiResponse.actions.push({ type: 'post_tweet' as any, params: { text: tweetContent.substring(0, 280) } });
+          console.log(`[MISSING-ACTION] Injected post_tweet: "${tweetContent.substring(0, 60)}"`);
         }
       }
+      break; // Only fix the first matching pattern
     }
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
     let executionEngine: ExecutionEngine | null = null;
 
-    // Strip browser actions when classifier says no browser needed.
-    // Prevents browser init timeout on Railway for pure DB tasks (schedule, campaign, remember).
-    const BROWSER_ACTION_TYPES = ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
-    if (!classification.needsBrowser && aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type))) {
-      const before = aiResponse.actions.length;
-      aiResponse.actions = aiResponse.actions.filter(a => !BROWSER_ACTION_TYPES.includes(a.type));
-      console.log(`[BROWSER-STRIP] Classifier says no browser needed — removed ${before - aiResponse.actions.length} browser actions, ${aiResponse.actions.length} remaining`);
-    }
-
-    // Check if we need browser for any action
+    // Check if we need browser for any action (browser actions already stripped above if not needed)
     const needsBrowser = aiResponse.actions.some(a =>
       BROWSER_ACTION_TYPES.includes(a.type)
     );
