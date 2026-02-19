@@ -1202,7 +1202,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
               console.log(`[MISSING-ACTION] Injected schedule action: "${description}" cron="${cronWithHour}"`);
             } else if (pattern.actionType === 'remember') {
               const fact = body.replace(/^remember\s+(that\s+)?/i, '').trim();
-              aiResponse.actions = [{ type: 'remember' as any, params: { text: fact } }];
+              aiResponse.actions = [{ type: 'remember' as any, params: { fact } }];
               aiResponse.content = (aiResponse.content || '') + `\n\n[ACTION:remember("${fact}")]`;
               console.log(`[MISSING-ACTION] Injected remember action: "${fact}"`);
             }
