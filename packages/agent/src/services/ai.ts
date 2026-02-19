@@ -1266,8 +1266,12 @@ function parseAction(type: string, paramsStr: string): Action | null {
  * Clean the response by removing action tags for display in emails
  */
 export function cleanResponseForEmail(response: string): string {
+  // Normalize curly/smart apostrophes before filtering — same as processor.ts normalizer
+  const normalized = response
+    .replace(/[\u2018\u2019\u201B]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"');
   // Strip action tags — use [\s\S]*? to match multiline JSON blobs in create_word/excel/etc
-  let cleaned = response.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
+  let cleaned = normalized.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
 
   // Strip plan-like paragraphs — the user sees a finished email, not a live process
   const paragraphs = cleaned.split(/\n\n/);

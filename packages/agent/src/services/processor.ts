@@ -1753,6 +1753,11 @@ OBSERVE the current page state above, then decide what to do next:
     // Multiline tags (create_word/excel JSON blobs) would otherwise appear verbatim to users
     if (aiResponse.content) {
       aiResponse.content = aiResponse.content.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
+      // Normalize curly/smart apostrophes to straight apostrophes so all regex checks match
+      // e.g. "I\u2019ll" (curly) → "I'll" (straight) — otherwise isPlanLike/stillBad regexes miss it
+      aiResponse.content = aiResponse.content
+        .replace(/[\u2018\u2019\u201B]/g, "'")  // curly single quotes → '
+        .replace(/[\u201C\u201D]/g, '"');        // curly double quotes → "
     }
 
     // 7d. RESPONSE QUALITY GATE: Detect plan-like/narration responses and re-prompt for concrete answer
