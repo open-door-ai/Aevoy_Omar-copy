@@ -91,7 +91,8 @@ async function loadPersonalityFiles(): Promise<{
  */
 export function compileSystemPrompt(
   files: { soul: string | null; identity: string | null; userTemplate: string | null },
-  userContext: { username: string; senderName?: string; timezone?: string; preferences?: string; recentActivity?: string }
+  userContext: { username: string; senderName?: string; timezone?: string; preferences?: string; recentActivity?: string },
+  agiBasePrompt?: string
 ): string {
   // username = agent's Aevoy username (e.g. "sage"), senderName = human's name (e.g. "Omar")
   const agentName = userContext.username.charAt(0).toUpperCase() + userContext.username.slice(1);
@@ -100,14 +101,7 @@ export function compileSystemPrompt(
   // ALWAYS start with the AGI system prompt — this contains all instructions,
   // action types, search strategies, response quality rules, and AGI behavior.
   // Without this, the AI is just a generic chatbot.
-  let agiPrompt: string;
-  try {
-    // Dynamic import to avoid circular dependency
-    const { SYSTEM_PROMPT } = require("./ai.js");
-    agiPrompt = SYSTEM_PROMPT;
-  } catch {
-    agiPrompt = FALLBACK_PROMPT;
-  }
+  let agiPrompt = agiBasePrompt || FALLBACK_PROMPT;
 
   // Inject the actual username's email address into the prompt
   agiPrompt = agiPrompt.replace(
@@ -150,7 +144,8 @@ export async function getCompiledPrompt(
   userId: string,
   username: string,
   memory?: { facts?: string; recentLogs?: string },
-  senderName?: string
+  senderName?: string,
+  agiBasePrompt?: string
 ): Promise<string> {
   const files = await loadPersonalityFiles();
 
@@ -159,7 +154,7 @@ export async function getCompiledPrompt(
     senderName,
     preferences: memory?.facts?.substring(0, 200),
     recentActivity: memory?.recentLogs?.substring(0, 200),
-  });
+  }, agiBasePrompt);
 }
 
 /**

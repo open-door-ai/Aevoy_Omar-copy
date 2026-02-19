@@ -593,12 +593,13 @@ export async function generateResponse(
     return generateMockResponse(username, taskSubject, taskBody);
   }
 
-  // Use personality system for system prompt (falls back to SYSTEM_PROMPT if files missing)
+  // Use personality system for system prompt — ALWAYS includes AGI base prompt
   const systemPromptWithUser = await getCompiledPrompt(
     userId || "anonymous",
     username,
     memory,
-    senderName
+    senderName,
+    SYSTEM_PROMPT
   );
   const userPrompt = buildUserPrompt(memory, taskSubject, taskBody);
 
