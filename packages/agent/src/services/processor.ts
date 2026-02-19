@@ -1205,6 +1205,37 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
               aiResponse.actions = [{ type: 'remember' as any, params: { fact } }];
               aiResponse.content = (aiResponse.content || '') + `\n\n[ACTION:remember("${fact}")]`;
               console.log(`[MISSING-ACTION] Injected remember action: "${fact}"`);
+            } else if (pattern.actionType === 'create_campaign') {
+              // Parse multi-day campaign from task text
+              // Look for "Day X:" or "Step X:" patterns
+              const dayPattern = /(?:day|step)\s*(\d+)\s*[:\-–]\s*([^,.;]+(?:[,.;]\s*)?)/gi;
+              const steps: Array<{ task: string; days_from_now: number; hour: number }> = [];
+              let dayMatch;
+              while ((dayMatch = dayPattern.exec(body)) !== null) {
+                const dayNum = parseInt(dayMatch[1]);
+                const taskDesc = dayMatch[2].trim().replace(/[.,;]+$/, '');
+                steps.push({ task: taskDesc, days_from_now: dayNum - 1, hour: 9 });
+              }
+              // Fallback: if no day/step pattern found, create a single-step campaign
+              if (steps.length === 0) {
+                steps.push({ task: body.substring(0, 200), days_from_now: 0, hour: 9 });
+              }
+              const campaignName = subject.replace(/^(v\d+\w?\s+)?(campaign|test)\s*/i, '').trim() || 'Campaign';
+              aiResponse.actions = [{ type: 'create_campaign' as any, params: { name: campaignName, steps } }];
+              aiResponse.content = (aiResponse.content || '') + `\n\nCreating campaign "${campaignName}" with ${steps.length} steps.`;
+              console.log(`[MISSING-ACTION] Injected create_campaign: "${campaignName}" with ${steps.length} steps`);
+            } else if (pattern.actionType === 'generate_image') {
+              // Extract the image description from the task
+              const imgPrompt = body.replace(/^(generate|create|make)\s+(a\s+|an\s+)?(image|picture|photo|illustration)\s*(of|for|about|showing)?\s*/i, '').trim() || body;
+              aiResponse.actions = [{ type: 'generate_image' as any, params: { prompt: imgPrompt, size: '1024x1024' } }];
+              aiResponse.content = (aiResponse.content || '') + `\n\nGenerating image: "${imgPrompt}"`;
+              console.log(`[MISSING-ACTION] Injected generate_image: "${imgPrompt.substring(0, 60)}"`);
+            } else if (pattern.actionType === 'post_tweet') {
+              // Extract the tweet content from the task
+              const tweetContent = body.replace(/^(post|send|publish)\s+(a\s+)?tweet\s*(about|saying|that says|:)?\s*/i, '').trim() || body;
+              aiResponse.actions = [{ type: 'post_tweet' as any, params: { text: tweetContent.substring(0, 280) } }];
+              aiResponse.content = (aiResponse.content || '') + `\n\nPosting tweet: "${tweetContent.substring(0, 100)}..."`;
+              console.log(`[MISSING-ACTION] Injected post_tweet: "${tweetContent.substring(0, 60)}"`);
             }
           }
           break; // Only fix the first matching pattern
