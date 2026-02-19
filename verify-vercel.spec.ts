@@ -89,7 +89,7 @@ test.describe('Vercel Production Deployment Verification', () => {
     // Test 7: Verify Skills API is accessible
     console.log('\n[TEST 7] Testing Skills API...');
     const apiResponse = await page.request.get(
-      'https://hissing-verile-aevoy-e721b4a6.koyeb.app/skills/search?q=google&limit=3'
+      'https://agent-production-1339.up.railway.app/skills/search?q=google&limit=3'
     );
 
     if (apiResponse.ok()) {
@@ -103,7 +103,7 @@ test.describe('Vercel Production Deployment Verification', () => {
     // Test 8: Verify agent health
     console.log('\n[TEST 8] Checking agent health...');
     const healthResponse = await page.request.get(
-      'https://hissing-verile-aevoy-e721b4a6.koyeb.app/health'
+      'https://agent-production-1339.up.railway.app/health'
     );
 
     if (healthResponse.ok()) {

@@ -582,9 +582,18 @@ export async function provisionPhoneNumber(
   if (!config) return { success: false, error: "Twilio not configured" };
 
   try {
+    // Detect country from area code (Canada vs US)
+    const CANADIAN_AREA_CODES = new Set([
+      '204','226','236','249','250','289','306','343','365','367','382',
+      '403','416','418','431','437','438','450','506','514','519','548',
+      '579','581','587','604','613','639','647','672','683','705','709',
+      '742','778','780','782','807','819','825','867','873','902','905'
+    ]);
+    const country = CANADIAN_AREA_CODES.has(areaCode) ? 'CA' : 'US';
+
     // Search for available numbers
     const searchResponse = await twilioRequest(
-      `/AvailablePhoneNumbers/US/Local.json?AreaCode=${areaCode}&SmsEnabled=true&VoiceEnabled=true`,
+      `/AvailablePhoneNumbers/${country}/Local.json?AreaCode=${areaCode}&SmsEnabled=true&VoiceEnabled=true`,
       "GET"
     );
 
@@ -1003,9 +1012,67 @@ export async function processVoiceCall(
   });
 }
 
+// ---- PIN Verification ----
+
+/**
+ * Verify a voice PIN against the stored hash/plaintext for a user.
+ * Supports bcrypt (preferred), SHA-256 (legacy), and plaintext (legacy).
+ * Auto-migrates to bcrypt on successful verification.
+ */
+export async function verifyVoicePin(userId: string, pin: string): Promise<boolean> {
+  const { hashPin, verifyPinHash, isBcryptHash } = await import("../utils/hashing.js");
+  const crypto = await import("crypto");
+
+  const { data: profile } = await getSupabaseClient()
+    .from("profiles")
+    .select("id, voice_pin, voice_pin_hash")
+    .eq("id", userId)
+    .single();
+
+  if (!profile || (!profile.voice_pin && !profile.voice_pin_hash)) {
+    return false;
+  }
+
+  let pinMatch = false;
+
+  // Priority 1: bcrypt hash (most secure)
+  if (profile.voice_pin_hash && isBcryptHash(profile.voice_pin_hash)) {
+    pinMatch = await verifyPinHash(pin, profile.voice_pin_hash);
+  }
+  // Priority 2: legacy SHA-256 or plaintext
+  else if (profile.voice_pin) {
+    const storedPin = profile.voice_pin;
+    const isHashed = storedPin.length === 64 && /^[0-9a-f]{64}$/.test(storedPin);
+
+    if (isHashed) {
+      const enteredHash = crypto.createHash("sha256").update(`${profile.id}:${pin}`).digest("hex");
+      const hashBuffer = Buffer.from(enteredHash);
+      const storedHashBuffer = Buffer.from(storedPin);
+      pinMatch = hashBuffer.length === storedHashBuffer.length &&
+        crypto.timingSafeEqual(hashBuffer, storedHashBuffer);
+    } else {
+      const pinBuffer = Buffer.from(pin);
+      const storedPinBuffer = Buffer.from(storedPin);
+      pinMatch = pinBuffer.length === storedPinBuffer.length &&
+        crypto.timingSafeEqual(pinBuffer, storedPinBuffer);
+    }
+
+    // Auto-migrate to bcrypt on success
+    if (pinMatch) {
+      const bcryptHash = await hashPin(pin);
+      await getSupabaseClient().from("profiles").update({
+        voice_pin_hash: bcryptHash,
+        voice_pin: null,
+      }).eq("id", profile.id);
+    }
+  }
+
+  return pinMatch;
+}
+
 // ---- Helpers ----
 
-function escapeXml(text: string): string {
+export function escapeXml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

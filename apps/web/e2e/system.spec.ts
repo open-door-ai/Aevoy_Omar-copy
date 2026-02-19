@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('System Health & Integration', () => {
-  const AGENT_URL = process.env.AGENT_URL || 'https://hissing-verile-aevoy-e721b4a6.koyeb.app';
+  const AGENT_URL = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
   const WEB_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com';
 
   test('should verify agent health', async ({ request }) => {

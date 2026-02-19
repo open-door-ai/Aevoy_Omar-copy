@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
 import { Switch } from "@/components/ui/switch";
-import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox } from "lucide-react";
+import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox, Copy, Check, Mic, Upload, Play, Pause, Trash2, Volume2 } from "lucide-react";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 import InboxManagementSettings from "@/components/settings/inbox-management";
 import { InboxSetupWizard } from "@/components/inbox-setup-wizard";
@@ -96,6 +96,23 @@ export default function SettingsPage() {
   const [eveningTime, setEveningTime] = useState("21:00");
   const [premiumNumber, setPremiumNumber] = useState<string | null>(null);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+
+  // Voicemail state
+  const [voicemailEnabled, setVoicemailEnabled] = useState(true);
+  const [voicemailText, setVoicemailText] = useState("");
+  const [voicemailAudioUrl, setVoicemailAudioUrl] = useState<string | null>(null);
+  const [uploadingVoicemail, setUploadingVoicemail] = useState(false);
+  const [recordingVoicemail, setRecordingVoicemail] = useState(false);
+  const [playingVoicemail, setPlayingVoicemail] = useState(false);
+  const voicemailAudioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+
+  // Copy button state
+  const [copiedPhone, setCopiedPhone] = useState(false);
+
+  // Save animation state
+  const [phoneSaveSuccess, setPhoneSaveSuccess] = useState(false);
 
   // Email PIN state
   const [emailPin, setEmailPin] = useState("");
@@ -221,12 +238,27 @@ export default function SettingsPage() {
       setLoadingCredentials(false);
     }
 
+    async function loadVoicemail() {
+      try {
+        const response = await fetch("/api/settings/voicemail");
+        if (response.ok) {
+          const data = await response.json();
+          setVoicemailEnabled(data.voicemail_enabled ?? true);
+          setVoicemailText(data.voicemail_greeting_text || "");
+          setVoicemailAudioUrl(data.voicemail_greeting_url || null);
+        }
+      } catch (error) {
+        console.error("Failed to load voicemail settings:", error);
+      }
+    }
+
     loadProfile();
     loadSettings();
     loadAgentCard();
     loadPhone();
     loadIntegrations();
     loadCredentials();
+    loadVoicemail();
   }, []);
 
   const handleSave = async () => {
@@ -451,17 +483,129 @@ export default function SettingsPage() {
         .update(updateData)
         .eq("id", profile.id);
 
+      // Also save voicemail settings
+      await fetch("/api/settings/voicemail", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          voicemail_enabled: voicemailEnabled,
+          voicemail_greeting_text: voicemailText.trim() || null,
+        }),
+      });
+
       if (error) {
         setMessage({ type: "error", text: "Failed to save phone settings" });
       } else {
+        setPhoneSaveSuccess(true);
         setMessage({ type: "success", text: "Phone settings saved successfully" });
         setVoicePin(""); // Clear PIN field after save
+        setTimeout(() => setPhoneSaveSuccess(false), 2000);
       }
     } catch {
       setMessage({ type: "error", text: "Failed to save phone settings" });
     }
 
     setSavingPhone(false);
+  };
+
+  // Copy phone number to clipboard
+  const handleCopyPhone = useCallback((text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedPhone(true);
+      setTimeout(() => setCopiedPhone(false), 2000);
+    });
+  }, []);
+
+  // Voicemail audio upload
+  const handleVoicemailUpload = async (file: File) => {
+    setUploadingVoicemail(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/settings/voicemail", {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setVoicemailAudioUrl(data.url);
+        setMessage({ type: "success", text: "Voicemail greeting uploaded" });
+      } else {
+        const err = await res.json();
+        setMessage({ type: "error", text: err.error || "Upload failed" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to upload voicemail" });
+    }
+    setUploadingVoicemail(false);
+  };
+
+  // Voicemail audio delete
+  const handleVoicemailDelete = async () => {
+    try {
+      const res = await fetch("/api/settings/voicemail", { method: "DELETE" });
+      if (res.ok) {
+        setVoicemailAudioUrl(null);
+        setMessage({ type: "success", text: "Voicemail greeting removed" });
+      }
+    } catch {
+      setMessage({ type: "error", text: "Failed to delete voicemail" });
+    }
+  };
+
+  // Voicemail recording via browser MediaRecorder
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      recordedChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+        const file = new File([blob], "greeting.webm", { type: "audio/webm" });
+        await handleVoicemailUpload(file);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setRecordingVoicemail(true);
+    } catch {
+      setMessage({ type: "error", text: "Microphone access denied" });
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setRecordingVoicemail(false);
+  };
+
+  // Voicemail audio playback
+  const togglePlayVoicemail = () => {
+    if (!voicemailAudioUrl) return;
+    if (playingVoicemail && voicemailAudioRef.current) {
+      voicemailAudioRef.current.pause();
+      setPlayingVoicemail(false);
+    } else {
+      if (!voicemailAudioRef.current) {
+        voicemailAudioRef.current = new Audio(voicemailAudioUrl);
+        voicemailAudioRef.current.onended = () => setPlayingVoicemail(false);
+      }
+      voicemailAudioRef.current.play();
+      setPlayingVoicemail(true);
+    }
+  };
+
+  // PIN strength helper
+  const getPinStrength = (pin: string) => {
+    if (!pin) return null;
+    if (pin.length < 4) return { label: "Too short", color: "bg-gray-300", width: "w-1/4" };
+    if (pin.length === 4) return { label: "Minimum", color: "bg-red-500", width: "w-1/3" };
+    if (pin.length === 5) return { label: "Good", color: "bg-yellow-500", width: "w-2/3" };
+    return { label: "Strong", color: "bg-green-500", width: "w-full" };
   };
 
   const handleUpdateEmailPin = async () => {
@@ -1643,7 +1787,7 @@ export default function SettingsPage() {
             <CardTitle>Phone & Voice</CardTitle>
           </div>
           <CardDescription>
-            Manage your phone number, voice calls, and daily check-ins
+            Manage your phone number, voice calls, voicemail, and daily check-ins
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -1658,12 +1802,27 @@ export default function SettingsPage() {
               placeholder="+1 (778) 123-4567"
               className="mt-2"
             />
-            <p className="text-xs text-muted-foreground mt-1">
-              Call or text <span className="font-mono font-semibold">+1 (778) 900-8951</span> from this number anytime
-            </p>
+            <div className="flex items-center gap-1 mt-1">
+              <p className="text-xs text-muted-foreground">
+                Call or text{" "}
+                <button
+                  type="button"
+                  onClick={() => handleCopyPhone("+17789008951")}
+                  className="inline-flex items-center gap-1 font-mono font-semibold hover:text-primary transition-colors"
+                >
+                  +1 (778) 900-8951
+                  {copiedPhone ? (
+                    <Check className="w-3 h-3 text-green-500 transition-all" />
+                  ) : (
+                    <Copy className="w-3 h-3 opacity-50" />
+                  )}
+                </button>
+                {" "}from this number anytime
+              </p>
+            </div>
           </div>
 
-          {/* Voice PIN */}
+          {/* Voice PIN with strength indicator */}
           {userPhoneNumber.trim() && (
             <div>
               <Label htmlFor="voicePin">Security PIN (4-6 digits)</Label>
@@ -1678,35 +1837,190 @@ export default function SettingsPage() {
                 maxLength={6}
                 className="mt-2"
               />
-              <p className="text-xs text-muted-foreground mt-1">
-                Required when calling from unknown numbers
-              </p>
+              {/* PIN strength bar */}
+              {voicePin && (
+                <div className="mt-2">
+                  <div className="h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ease-out ${getPinStrength(voicePin)?.color || "bg-gray-300"} ${getPinStrength(voicePin)?.width || "w-0"}`}
+                    />
+                  </div>
+                  <p className={`text-xs mt-1 ${
+                    getPinStrength(voicePin)?.color === "bg-green-500" ? "text-green-600" :
+                    getPinStrength(voicePin)?.color === "bg-yellow-500" ? "text-yellow-600" :
+                    getPinStrength(voicePin)?.color === "bg-red-500" ? "text-red-600" : "text-muted-foreground"
+                  }`}>
+                    {getPinStrength(voicePin)?.label}
+                  </p>
+                </div>
+              )}
+              {!voicePin && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Required when calling from unknown numbers
+                </p>
+              )}
             </div>
           )}
 
-          {/* Voice Preference */}
+          {/* Voice Preference — card-based picker */}
           <div>
-            <Label htmlFor="voicePreference">AI Voice</Label>
-            <select
-              id="voicePreference"
-              value={settings?.voice_preference || 'Google.en-US-Neural2-H'}
-              onChange={(e) => setSettings({ ...settings, voice_preference: e.target.value } as UserSettings)}
-              className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              <option value="Google.en-US-Neural2-H">Google Neural (Female, warm — default)</option>
-              <option value="Google.en-US-Neural2-F">Google Neural (Female, professional)</option>
-              <option value="Google.en-US-Neural2-C">Google Neural (Female, bright)</option>
-              <option value="Google.en-US-Neural2-D">Google Neural (Male, authoritative)</option>
-              <option value="Google.en-US-Neural2-A">Google Neural (Male, casual)</option>
-              <option value="Google.en-US-Neural2-J">Google Neural (Male, deep)</option>
-              <option value="Polly.Joanna-Neural">AWS Polly (Female, natural)</option>
-              <option value="Polly.Matthew-Neural">AWS Polly (Male, natural)</option>
-              <option value="Polly.Amy-Neural">AWS Polly (Female, British)</option>
-              <option value="Polly.Stephen-Neural">AWS Polly (Male, British)</option>
-            </select>
-            <p className="text-xs text-muted-foreground mt-1">
-              Choose the voice for phone calls and voice interactions
+            <Label className="mb-3 block">AI Voice</Label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                { id: "ElevenLabs.rachel", label: "Rachel", desc: "Natural, warm", tier: "premium" },
+                { id: "ElevenLabs.drew", label: "Drew", desc: "Confident, clear", tier: "premium" },
+                { id: "ElevenLabs.clyde", label: "Clyde", desc: "Deep, authoritative", tier: "premium" },
+                { id: "ElevenLabs.domi", label: "Domi", desc: "Bright, energetic", tier: "premium" },
+                { id: "Google.en-US-Neural2-H", label: "Neural H", desc: "Female, warm", tier: "standard" },
+                { id: "Google.en-US-Neural2-D", label: "Neural D", desc: "Male, authoritative", tier: "standard" },
+                { id: "Google.en-US-Neural2-F", label: "Neural F", desc: "Female, professional", tier: "standard" },
+                { id: "Google.en-US-Neural2-A", label: "Neural A", desc: "Male, casual", tier: "standard" },
+                { id: "Polly.Joanna-Neural", label: "Joanna", desc: "Female, natural", tier: "standard" },
+                { id: "Polly.Matthew-Neural", label: "Matthew", desc: "Male, natural", tier: "standard" },
+              ].map((voice) => (
+                <button
+                  key={voice.id}
+                  type="button"
+                  onClick={() => setSettings({ ...settings, voice_preference: voice.id } as UserSettings)}
+                  className={`relative flex items-center gap-3 p-3 rounded-lg border text-left transition-all duration-200 ${
+                    (settings?.voice_preference || "Google.en-US-Neural2-H") === voice.id
+                      ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                      : "border-input hover:border-primary/40 hover:bg-muted/50"
+                  }`}
+                >
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                    voice.tier === "premium" ? "bg-gradient-to-br from-violet-500 to-purple-600" : "bg-muted"
+                  }`}>
+                    <Volume2 className={`w-4 h-4 ${voice.tier === "premium" ? "text-white" : "text-muted-foreground"}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-medium">{voice.label}</span>
+                      {voice.tier === "premium" && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">ElevenLabs</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">{voice.desc}</span>
+                  </div>
+                  {(settings?.voice_preference || "Google.en-US-Neural2-H") === voice.id && (
+                    <Check className="w-4 h-4 text-primary flex-shrink-0" />
+                  )}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              ElevenLabs voices sound more natural and human-like. Standard voices work with all plans.
             </p>
+          </div>
+
+          {/* Voicemail */}
+          <div className="border-t pt-6">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h4 className="font-semibold text-sm flex items-center gap-2">
+                  <Volume2 className="w-4 h-4" />
+                  Voicemail
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Custom greeting for callers when you&apos;re unavailable
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={voicemailEnabled}
+                  onChange={(e) => setVoicemailEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 dark:peer-focus:ring-primary/30 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary"></div>
+              </label>
+            </div>
+
+            {voicemailEnabled && (
+              <div className="space-y-4 pl-4 border-l-2 border-primary/20">
+                {/* Text greeting */}
+                <div>
+                  <Label htmlFor="voicemailText" className="text-xs">Greeting Text</Label>
+                  <textarea
+                    id="voicemailText"
+                    value={voicemailText}
+                    onChange={(e) => setVoicemailText(e.target.value.slice(0, 1000))}
+                    placeholder="Hi, you've reached my AI assistant. I'm not available right now, but leave a message and I'll get back to you!"
+                    rows={3}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {voicemailText.length}/1000 characters. AI will speak this text with your chosen voice.
+                  </p>
+                </div>
+
+                {/* Audio greeting upload/record */}
+                <div>
+                  <Label className="text-xs mb-2 block">Or Upload/Record Audio</Label>
+
+                  {voicemailAudioUrl ? (
+                    <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg border">
+                      <button
+                        type="button"
+                        onClick={togglePlayVoicemail}
+                        className="w-8 h-8 rounded-full bg-primary flex items-center justify-center hover:bg-primary/90 transition-colors"
+                      >
+                        {playingVoicemail ? (
+                          <Pause className="w-4 h-4 text-primary-foreground" />
+                        ) : (
+                          <Play className="w-4 h-4 text-primary-foreground ml-0.5" />
+                        )}
+                      </button>
+                      <div className="flex-1">
+                        <p className="text-xs font-medium">Custom greeting uploaded</p>
+                        <p className="text-[10px] text-muted-foreground">Audio greeting overrides text greeting</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleVoicemailDelete}
+                        className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <label className="flex-1">
+                        <input
+                          type="file"
+                          accept="audio/mpeg,audio/wav,audio/webm,audio/ogg"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleVoicemailUpload(file);
+                            e.target.value = "";
+                          }}
+                        />
+                        <div className={`flex items-center justify-center gap-2 p-2.5 rounded-lg border border-dashed cursor-pointer transition-colors ${
+                          uploadingVoicemail ? "opacity-50 pointer-events-none" : "hover:border-primary hover:bg-primary/5"
+                        }`}>
+                          <Upload className="w-4 h-4 text-muted-foreground" />
+                          <span className="text-xs">{uploadingVoicemail ? "Uploading..." : "Upload MP3/WAV"}</span>
+                        </div>
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={recordingVoicemail ? stopRecording : startRecording}
+                        className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border transition-all ${
+                          recordingVoicemail
+                            ? "border-red-500 bg-red-50 dark:bg-red-950 text-red-600 animate-pulse"
+                            : "border-dashed hover:border-primary hover:bg-primary/5"
+                        }`}
+                      >
+                        <Mic className={`w-4 h-4 ${recordingVoicemail ? "text-red-500" : "text-muted-foreground"}`} />
+                        <span className="text-xs">{recordingVoicemail ? "Stop" : "Record"}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Email PIN Security */}
@@ -1735,7 +2049,7 @@ export default function SettingsPage() {
 
             {emailPinStatus && (
               <p
-                className={`text-xs mt-2 ${
+                className={`text-xs mt-2 transition-opacity duration-300 ${
                   emailPinStatus.success ? "text-green-600" : "text-red-600"
                 }`}
               >
@@ -1750,7 +2064,20 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <h4 className="font-semibold text-sm">Your Dedicated Number</h4>
-                  <p className="text-2xl font-mono mt-1">{premiumNumber}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <p className="text-2xl font-mono">{premiumNumber}</p>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyPhone(premiumNumber)}
+                      className="p-1 rounded hover:bg-primary/10 transition-colors"
+                    >
+                      {copiedPhone ? (
+                        <Check className="w-4 h-4 text-green-500" />
+                      ) : (
+                        <Copy className="w-4 h-4 text-muted-foreground" />
+                      )}
+                    </button>
+                  </div>
                   <p className="text-xs text-foreground/70 mt-1">
                     $2/mo • Next billing: {new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString()}
                   </p>
@@ -1776,7 +2103,7 @@ export default function SettingsPage() {
                 <div className="flex-1">
                   <h4 className="font-semibold text-sm">Get Your Own Number</h4>
                   <p className="text-xs text-foreground/70 mt-1">
-                    Purchase a dedicated number for $2/mo. Choose your area code and pattern!
+                    Purchase a dedicated US or Canadian number for $2/mo. Choose your area code!
                   </p>
                   <Button
                     variant="default"
@@ -1798,7 +2125,7 @@ export default function SettingsPage() {
                 <div>
                   <Label>Daily Check-in Calls</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    AI calls you twice a day with personalized greetings
+                    AI calls you with personalized greetings and task updates
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -1844,8 +2171,27 @@ export default function SettingsPage() {
           )}
         </CardContent>
         <CardFooter>
-          <Button onClick={handleSavePhoneSettings} disabled={savingPhone}>
-            {savingPhone ? "Saving..." : "Save Phone Settings"}
+          <Button
+            onClick={handleSavePhoneSettings}
+            disabled={savingPhone}
+            className="relative min-w-[160px] transition-all duration-300"
+          >
+            {phoneSaveSuccess ? (
+              <span className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-green-400" />
+                Saved
+              </span>
+            ) : savingPhone ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Saving...
+              </span>
+            ) : (
+              "Save Phone Settings"
+            )}
           </Button>
         </CardFooter>
       </Card>

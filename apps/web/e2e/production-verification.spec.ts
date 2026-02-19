@@ -8,7 +8,7 @@
 import { test, expect } from '@playwright/test';
 
 const PRODUCTION_WEB_URL = 'https://www.aevoy.com';
-const PRODUCTION_AGENT_URL = 'https://hissing-verile-aevoy-e721b4a6.koyeb.app';
+const PRODUCTION_AGENT_URL = 'https://agent-production-1339.up.railway.app';
 
 test.describe('Production Deployment Verification', () => {
   test('website loads successfully', async ({ page }) => {

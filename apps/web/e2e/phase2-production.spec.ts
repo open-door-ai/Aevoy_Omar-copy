@@ -142,7 +142,7 @@ test.describe('Phase 2 Post-Deploy: Dashboard Navigation', () => {
 test.describe('Phase 2 Post-Deploy: Agent Health', () => {
 
   test('Agent health check', async ({ request }) => {
-    const agentUrl = 'https://hissing-verile-aevoy-e721b4a6.koyeb.app';
+    const agentUrl = 'https://agent-production-1339.up.railway.app';
     try {
       const response = await request.get(`${agentUrl}/health`, { timeout: 10000 });
       expect(response.status()).toBe(200);

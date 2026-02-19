@@ -95,7 +95,7 @@ import { processorV2 } from "./services/processor-v2.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
 import { startInboxManager } from "./services/inbox-manager.js";
-import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE } from "./services/twilio.js";
+import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE, escapeXml } from "./services/twilio.js";
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest, TaskResult } from "./types/index.js";
@@ -107,9 +107,13 @@ import { globalLimiter, taskLimiter, twilioLimiter } from "./middleware/rate-lim
 import { sanitizeTaskInput } from "./security/validator.js";
 
 import crypto from "crypto";
+import { createServer } from "http";
+import { WebSocketServer } from "ws";
+import { handleVoiceWebSocket, getActiveSessionCount } from "./services/voice-conversation.js";
 
 const app = express();
 const PORT = process.env.AGENT_PORT || 3001;
+const USE_CONVERSATION_RELAY = process.env.USE_CONVERSATION_RELAY !== "false"; // default: true
 const WEBHOOK_SECRET = process.env.AGENT_WEBHOOK_SECRET;
 
 // ---- Rate Limiting (imported from centralized middleware) ----
@@ -329,13 +333,15 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v16",
+    version: "2.0.0-agi-v17",
     timestamp: new Date().toISOString(),
     activeTasks,
     activeBrowserTasks: getActiveBrowserTasks(),
+    activeVoiceSessions: getActiveSessionCount(),
     queuedTasks: taskQueue.length,
     maxConcurrent: MAX_CONCURRENT_TASKS,
     maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
+    conversationRelay: USE_CONVERSATION_RELAY,
     database: supabaseStatus,
   });
 });
@@ -832,7 +838,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         if (!tempResolved) return null;
         return supabase
           .from("profiles")
-          .select("id, username, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until, timezone")
+          .select("id, username, display_name, bot_name, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until, timezone")
           .eq("id", tempResolved.userId)
           .single();
       })()
@@ -940,16 +946,51 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       pin_success: null
     });
 
-    // Get user's greeting style preference
+    // Get user's greeting style and voice preference
     const { data: settings } = await supabase
       .from('user_settings')
-      .select('greeting_style')
+      .select('greeting_style, voice_preference')
       .eq('user_id', userId)
       .single();
 
     const greetingStyle = settings?.greeting_style || 'casual';
+    const voicePref = settings?.voice_preference || '';
 
-    // Generate greeting based on style
+    res.type("text/xml");
+
+    // ConversationRelay: real-time two-way voice conversation via WebSocket
+    if (USE_CONVERSATION_RELAY) {
+      const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
+      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+
+      // Generate AI greeting
+      let greeting: string;
+      try {
+        const { generatePersonalizedGreeting } = await import("./services/voice-prompts.js");
+        greeting = await generatePersonalizedGreeting({
+          userId,
+          userName: profile.display_name || profile.username || "there",
+          botName: profile.bot_name || "Nova",
+          callType: "incoming",
+          greetingStyle,
+          timezone: profile.timezone || "America/Los_Angeles",
+        });
+      } catch {
+        greeting = `Hey ${profile.username}! What's up?`;
+      }
+
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+      <Parameter name="userId" value="${userId}" />
+      <Parameter name="callType" value="task" />
+    </ConversationRelay>
+  </Connect>
+</Response>`);
+    }
+
+    // Legacy fallback: TwiML Say + Gather
     let greeting = '';
     const getTimeOfDay = () => {
       const hour = new Date().getHours();
@@ -983,7 +1024,6 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         greeting = casualGreetings[Math.floor(Math.random() * casualGreetings.length)];
     }
 
-    res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">${greeting}</Say>
@@ -1004,15 +1044,46 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
   const voice = await getUserVoice(userId);
-  const from = req.body.From || "";
-  const to = req.body.To || "";
-  const callSid = req.body.CallSid || "";
 
   console.log(`[TWILIO] Incoming voice call for user ${maskUserId(userId)}`);
 
   try {
-    const twiml = await handleIncomingVoice({ from, to, callSid });
     res.type("text/xml");
+
+    if (USE_CONVERSATION_RELAY) {
+      const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
+      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+
+      let greeting: string;
+      try {
+        const { generatePersonalizedGreeting } = await import("./services/voice-prompts.js");
+        const { data: profile } = await getSupabaseClient().from("profiles").select("display_name, username, bot_name, timezone").eq("id", userId).single();
+        greeting = await generatePersonalizedGreeting({
+          userId,
+          userName: profile?.display_name || profile?.username || "there",
+          botName: profile?.bot_name || "Nova",
+          callType: "incoming",
+          greetingStyle: "casual",
+          timezone: profile?.timezone || "America/Los_Angeles",
+        });
+      } catch { greeting = "Hey! What can I help with?"; }
+
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+      <Parameter name="userId" value="${userId}" />
+      <Parameter name="callType" value="task" />
+    </ConversationRelay>
+  </Connect>
+</Response>`);
+    }
+
+    // Legacy fallback
+    const from = req.body.From || "";
+    const to = req.body.To || "";
+    const callSid = req.body.CallSid || "";
+    const twiml = await handleIncomingVoice({ from, to, callSid });
     res.send(twiml);
   } catch (error) {
     console.error("[TWILIO] Voice webhook error:", error);
@@ -1470,8 +1541,25 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
       call_type: "task"
     });
 
-    // Route directly to task handler (no caller ID needed)
+    // Route to conversation handler
     res.type("text/xml");
+
+    if (USE_CONVERSATION_RELAY) {
+      const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
+      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?">
+      <Parameter name="userId" value="${userId}" />
+      <Parameter name="callType" value="task" />
+    </ConversationRelay>
+  </Connect>
+</Response>`);
+    }
+
+    // Legacy fallback
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Hey! What can I help you with?</Say>
@@ -1558,12 +1646,43 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
     const userName = profile?.display_name || profile?.username || "there";
     const botName = profile?.bot_name || "your AI assistant";
 
-    // Generate dynamic greeting using AI
+    res.type("text/xml");
+
+    if (USE_CONVERSATION_RELAY) {
+      const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
+      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      const checkinCallType = callType === "evening" ? "checkin_evening" : "checkin_morning";
+
+      let greeting: string;
+      try {
+        const { generatePersonalizedGreeting } = await import("./services/voice-prompts.js");
+        greeting = await generatePersonalizedGreeting({
+          userId, userName, botName,
+          callType: checkinCallType as any,
+          greetingStyle: "casual",
+          timezone: "America/Los_Angeles",
+        });
+      } catch {
+        greeting = callType === "morning"
+          ? `Good morning ${userName}! How's your day looking?`
+          : `Hey ${userName}! How did today go?`;
+      }
+
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+      <Parameter name="userId" value="${userId}" />
+      <Parameter name="callType" value="${checkinCallType}" />
+    </ConversationRelay>
+  </Connect>
+</Response>`);
+    }
+
+    // Legacy fallback
     const { generateCheckinGreeting } = await import("./services/checkin.js");
     const greeting = await generateCheckinGreeting(userName, botName, callType as "morning" | "evening");
 
-    // TwiML: Say greeting, listen for response, process as task
-    res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">${greeting}</Say>
@@ -1894,9 +2013,31 @@ process.on("SIGINT", () => {
 
 // ---- Start Server ----
 
-app.listen(PORT, async () => {
+const server = createServer(app);
+
+// WebSocket server for ConversationRelay voice calls
+const wss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (request, socket, head) => {
+  const url = new URL(request.url!, `http://${request.headers.host}`);
+  if (url.pathname === "/ws/voice") {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+wss.on("connection", (ws, request) => {
+  handleVoiceWebSocket(ws, request);
+});
+
+server.listen(PORT, async () => {
   console.log(`Agent server v2.0 running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`WebSocket: ws://localhost:${PORT}/ws/voice`);
+  console.log(`ConversationRelay: ${USE_CONVERSATION_RELAY ? "ENABLED" : "DISABLED (legacy TwiML)"}`);
   console.log(`[DEPLOY-VERIFY] Wiring test deployment - commit d90c4af+`);
 
   // START HEALTH SYSTEM (The Final Boss - Never Fails)

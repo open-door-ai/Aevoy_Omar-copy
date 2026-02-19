@@ -50,7 +50,7 @@ test.describe('Production UI Verification', () => {
     console.log('[VERIFY] Testing Skills API endpoint');
 
     const response = await request.get(
-      'https://hissing-verile-aevoy-e721b4a6.koyeb.app/skills/search?q=google&limit=3'
+      'https://agent-production-1339.up.railway.app/skills/search?q=google&limit=3'
     );
 
     expect(response.ok()).toBeTruthy();
@@ -70,7 +70,7 @@ test.describe('Production UI Verification', () => {
   test('should verify agent health endpoint', async ({ request }) => {
     console.log('[VERIFY] Testing agent health');
 
-    const response = await request.get('https://hissing-verile-aevoy-e721b4a6.koyeb.app/health');
+    const response = await request.get('https://agent-production-1339.up.railway.app/health');
 
     expect(response.ok()).toBeTruthy();
     const health = await response.json();

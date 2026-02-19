@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     // 1. Purchase number from Twilio
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const agentUrl = process.env.AGENT_URL || "https://hissing-verile-aevoy-e721b4a6.koyeb.app";
+    const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
 
     const purchaseUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/IncomingPhoneNumbers.json`;
 

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Skills System', () => {
-  const AGENT_URL = process.env.AGENT_URL || 'https://hissing-verile-aevoy-e721b4a6.koyeb.app';
+  const AGENT_URL = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
   const WEBHOOK_SECRET = process.env.AGENT_WEBHOOK_SECRET;
 
   test('should search for skills via API', async ({ request }) => {
