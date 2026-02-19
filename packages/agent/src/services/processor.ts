@@ -2889,14 +2889,15 @@ async function executeAction(
 
     case "schedule": {
       const { description, cron } = action.params as { description: string; cron: string };
-      
+
       // Calculate next run time
       const nextRun = calculateNextRun(cron);
-      
+
       const { error } = await getSupabaseClient()
         .from("scheduled_tasks")
         .insert({
           user_id: userId,
+          description,
           task_template: description,
           cron_expression: cron,
           next_run_at: nextRun,
@@ -2987,6 +2988,68 @@ async function executeAction(
         { action: 'extract', params: { selector: extractSelector } }
       ]);
       return { action, success: extractResult.success, result: extractResult.success ? `Extracted: ${String(extractResult.data).substring(0, 500)}` : undefined, error: extractResult.error };
+    }
+
+    case "create_campaign": {
+      const { name, steps } = action.params as {
+        name: string;
+        steps: Array<{ task: string; days_from_now: number; hour?: number }>;
+      };
+      if (!steps || !Array.isArray(steps) || steps.length === 0) {
+        return { action, success: false, error: "Campaign requires at least one step" };
+      }
+      try {
+        // Create the campaign record
+        const { data: campaign, error: campErr } = await getSupabaseClient()
+          .from("campaigns")
+          .insert({ user_id: userId, name, total_steps: steps.length })
+          .select()
+          .single();
+
+        if (campErr || !campaign) {
+          return { action, success: false, error: "Could not create campaign" };
+        }
+
+        // Create one-time scheduled tasks for each step
+        const now = Date.now();
+        const scheduleInserts = steps.map((step, idx) => {
+          const runAt = new Date(now + step.days_from_now * 24 * 60 * 60 * 1000);
+          if (step.hour !== undefined) {
+            runAt.setUTCHours(step.hour, 0, 0, 0);
+          }
+          return {
+            user_id: userId,
+            description: step.task,
+            task_template: step.task,
+            cron_expression: "once",
+            next_run_at: runAt.toISOString(),
+            is_active: true,
+            max_runs: 1,
+            campaign_id: campaign.id,
+            step_number: idx + 1,
+          };
+        });
+
+        const { error: stepsErr } = await getSupabaseClient()
+          .from("scheduled_tasks")
+          .insert(scheduleInserts);
+
+        if (stepsErr) {
+          console.error("[CREATE_CAMPAIGN] Failed to create steps:", stepsErr.message);
+          return { action, success: false, error: "Campaign created but steps could not be scheduled" };
+        }
+
+        const stepList = steps.map((s, i) => `Day ${s.days_from_now}: ${s.task}`).join("\n");
+        console.log(`[CREATE_CAMPAIGN] Created campaign "${name}" with ${steps.length} steps`);
+        return {
+          action,
+          success: true,
+          result: `Campaign "${name}" created with ${steps.length} steps:\n${stepList}`,
+        };
+      } catch (campCatchErr) {
+        console.error("[CREATE_CAMPAIGN] Failed:", campCatchErr);
+        return { action, success: false, error: "Could not create campaign" };
+      }
     }
 
     case "generate_image": {

@@ -478,6 +478,7 @@ NON-BROWSER ACTIONS:
 [ACTION:screenshot_ocr({"fullPage": true, "engine": "auto", "languages": ["eng"], "detectTables": true, "detectForms": true, "format": "structured"})] — Capture screenshot and extract text using OCR (Tesseract offline + AI vision fallback). Supports table/form detection, multi-language, region-specific extraction
 [ACTION:generate_image("detailed image prompt", "1024x1024")] — Generate an image using DALL-E 3. Returns a URL to the generated image. Use for creating marketing graphics, logos, social media images, illustrations, etc. Sizes: "1024x1024" (square), "1792x1024" (landscape), "1024x1792" (portrait)
 [ACTION:post_tweet("Your tweet text here (max 280 chars)")] — Post a tweet to Twitter/X on behalf of the user. Use this for social media marketing, announcements, updates. Combine with generate_image() to create and post visual content.
+[ACTION:create_campaign("Campaign Name", [{"task": "Post tweet about topic X", "days_from_now": 0, "hour": 9}, {"task": "Post tweet about topic Y", "days_from_now": 1, "hour": 9}, {"task": "Post tweet about topic Z", "days_from_now": 2, "hour": 9}])] — Create a multi-day campaign: schedules a sequence of one-time tasks to run at specific times over multiple days. Perfect for drip campaigns, tweet series, email sequences, or any multi-step marketing workflow. days_from_now=0 means today, hour is UTC hour (0-23).
 
 SOCIAL MEDIA & MARKETING STRATEGY:
 - For "make me money online" → use search to find opportunities, generate_image to create marketing content, post_tweet to announce/promote

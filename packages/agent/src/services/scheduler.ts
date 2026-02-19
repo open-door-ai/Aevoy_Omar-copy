@@ -651,24 +651,30 @@ async function runDueScheduledTasksInner(): Promise<void> {
         continue;
       }
       
-      // Process the scheduled task
+      // Process the scheduled task (task_template is canonical, description is legacy fallback)
+      const taskText = scheduled.task_template || scheduled.description || "scheduled task";
       await processTask({
         userId: scheduled.user_id,
         username: profile.username,
         from: profile.email,
-        subject: `[Scheduled] ${scheduled.description}`,
-        body: scheduled.description
+        subject: `[Scheduled] ${taskText}`,
+        body: taskText,
       });
       
       // Update last_run_at and calculate next_run_at
-      const nextRun = calculateNextRun(scheduled.cron_expression, scheduled.timezone);
-      
+      const newRunCount = (scheduled.run_count || 0) + 1;
+      const maxRuns = scheduled.max_runs ?? null;
+      const isOnce = scheduled.cron_expression === "once";
+      const isOneTime = isOnce || (maxRuns !== null && newRunCount >= maxRuns);
+      const nextRun = isOneTime ? null : calculateNextRun(scheduled.cron_expression, scheduled.timezone);
+
       await getSupabaseClient()
         .from('scheduled_tasks')
         .update({
           last_run_at: now,
           next_run_at: nextRun,
-          run_count: (scheduled.run_count || 0) + 1
+          run_count: newRunCount,
+          is_active: !isOneTime,
         })
         .eq('id', scheduled.id);
       
