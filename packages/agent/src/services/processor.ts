@@ -271,7 +271,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       };
     } else {
       // Execute immediately
-      await sendTaskAccepted(from, `${username}@aevoy.com`, clarified.structuredIntent.goal);
+      await sendTaskAccepted(from, `${username}@aevoy.com`, clarified.structuredIntent.goal, taskId);
       
       // Process the task in full (this handles the actual execution)
       return processTask({ ...task, taskId });
@@ -1205,12 +1205,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // Send progress update for long tasks (include Live View link if available)
     if (aiResponse.actions.length > 3 || (needsBrowser && classification.needsBrowser)) {
-      const liveViewUrl = executionEngine?.getLiveViewUrl();
+      const liveViewUrl = executionEngine ? await executionEngine.getLiveViewUrl() : null; // must await — async method
       let progressMsg = `Working on your request...`;
       if (liveViewUrl) {
         progressMsg += `\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`;
       }
-      await sendProgressEmail(from, `${username}@aevoy.com`, subject, progressMsg);
+      await sendProgressEmail(from, `${username}@aevoy.com`, subject, progressMsg, taskId);
     }
 
     // ============================================================
@@ -1391,6 +1391,30 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           } catch {
             // Non-critical
           }
+        }
+
+        // LIVE VIEW: After browser navigation actions, upload a screenshot so users
+        // can see what the agent is doing in real-time from the dashboard.
+        const _isVisualAction = ['browse', 'search', 'click', 'navigate', 'fill', 'submit', 'scroll'].includes(action.type);
+        if (result.success && _isVisualAction && executionEngine && taskId) {
+          // Fire-and-forget — don't block execution over a screenshot
+          (async () => {
+            try {
+              const page = executionEngine.getPage();
+              if (!page) return;
+              const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 55, fullPage: false });
+              const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+              if (!supabaseUrl) return;
+              const storagePath = `task-${taskId}/live.jpg`;
+              const { error: uploadErr } = await getSupabaseClient().storage
+                .from('screenshots')
+                .upload(storagePath, screenshotBuffer, { contentType: 'image/jpeg', upsert: true });
+              if (!uploadErr) {
+                const publicUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${storagePath}`;
+                await getSupabaseClient().from('tasks').update({ live_view_url: publicUrl }).eq('id', taskId);
+              }
+            } catch { /* Non-critical */ }
+          })();
         }
 
         // Send progress update every 5 actions

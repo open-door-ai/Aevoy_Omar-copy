@@ -246,11 +246,14 @@ export async function sendProgressEmail(
   to: string,
   from: string,
   originalSubject: string,
-  progressMessage: string
+  progressMessage: string,
+  taskId?: string
 ): Promise<boolean> {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com';
+  const taskLink = taskId ? `\n\n📊 **Track your task:** ${appUrl}/dashboard/tasks/${taskId}` : '';
   const body = `**Task Update**
 
-${progressMessage}
+${progressMessage}${taskLink}
 
 I'm still working on your request and will email you when complete.`;
 
@@ -347,11 +350,14 @@ A code was just sent to your phone/email.
 export async function sendTaskAccepted(
   to: string,
   from: string,
-  goal: string
+  goal: string,
+  taskId?: string
 ): Promise<boolean> {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com';
+  const taskLink = taskId ? `\n\n📊 **Track progress:** ${appUrl}/dashboard/tasks/${taskId}` : '';
   const body = `Got it! Working on: "${goal}"
 
-I'll email you when it's done.`;
+I'll email you when it's done.${taskLink}`;
 
   try {
     const htmlBody = formatResponseEmail(body);
