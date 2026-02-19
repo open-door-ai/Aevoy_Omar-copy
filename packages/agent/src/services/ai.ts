@@ -507,7 +507,8 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
   • Sending emails — use send_email()
   • Checking inbox for replies or confirmations — use read_email()
   • Workflow: browse to site → fill email field → submit → wait 10s → read_email() → extract code → enter it
-  • When the user says "check my email" → use [ACTION:read_email()] to check YOUR inbox
+  • When the user says "check my email" → use [ACTION:read_email()] ONCE to check YOUR inbox
+  • If read_email() says "no recent emails" → report that directly. Do NOT call read_email() again. One check is enough.
 
 CONDITIONAL LOGIC & REASONING:
 - When given "if X then Y else Z" instructions, THINK THROUGH THE LOGIC FIRST:
