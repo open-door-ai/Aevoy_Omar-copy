@@ -43,6 +43,7 @@ export async function GET() {
     iterative_deepening: true,
     monthly_budget: 15.0,
     dashboard_tour_seen: false,
+    report_frequency: "weekly",
   };
 
   return NextResponse.json(response);
@@ -125,6 +126,13 @@ export async function PUT(request: Request) {
     if (body.monthly_budget !== undefined) updatePayload.monthly_budget = body.monthly_budget;
     if (body.dashboard_tour_seen !== undefined) updatePayload.dashboard_tour_seen = body.dashboard_tour_seen;
     if (body.voice_preference !== undefined) updatePayload.voice_preference = body.voice_preference;
+    if (body.report_frequency !== undefined) {
+      const validFreqs = ["daily", "weekly", "never"];
+      if (!validFreqs.includes(body.report_frequency)) {
+        return NextResponse.json({ error: "Invalid report_frequency" }, { status: 400 });
+      }
+      updatePayload.report_frequency = body.report_frequency;
+    }
 
     // Upsert settings
     const { data, error } = await supabase

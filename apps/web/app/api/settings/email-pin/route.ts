@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { createCipheriv, randomBytes, scrypt } from "crypto";
 import { promisify } from "util";
+import { checkRateLimit, getClientIp } from "../../_rate-limit";
 
 const scryptAsync = promisify(scrypt);
 
@@ -27,6 +28,12 @@ async function encryptPin(pin: string, userId: string): Promise<string> {
 }
 
 export async function POST(request: Request) {
+  // Rate limit: 5 PIN updates per 15 minutes per IP
+  const ip = getClientIp(request);
+  if (!checkRateLimit('email-pin', ip, 5, 15 * 60 * 1000)) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
   const supabase = await createClient();
   const {
     data: { user },

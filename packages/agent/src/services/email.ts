@@ -37,7 +37,7 @@ export async function sendResponse(options: EmailOptions): Promise<boolean> {
   }
 
   const apiKey = process.env.RESEND_API_KEY;
-  console.log(`[EMAIL-SEND] RESEND_API_KEY present=${!!apiKey}, prefix=${apiKey?.substring(0, 8) || 'MISSING'}`);
+  if (!apiKey) console.warn('[EMAIL-SEND] RESEND_API_KEY not configured');
 
   const maxRetries = 2;
 

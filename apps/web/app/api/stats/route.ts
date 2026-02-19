@@ -55,6 +55,13 @@ export async function GET() {
     
     const totalTokens = tokenData?.reduce((sum, t) => sum + (t.tokens_used || 0), 0) || 0;
 
+    // Get 7-day success rate from the view
+    const { data: weeklyStats } = await supabase
+      .from('user_task_stats')
+      .select('completed_last_7d, failed_last_7d, success_rate_7d, completed_last_30d, tasks_last_30d')
+      .eq('user_id', user.id)
+      .single();
+
     return NextResponse.json({
       messagesUsed: profile?.messages_used || 0,
       messagesLimit: profile?.messages_limit || 20,
@@ -63,6 +70,12 @@ export async function GET() {
       failedTasks: failedTasks || 0,
       totalCostUsd: totalCost,
       totalTokensUsed: totalTokens,
+      // Weekly metrics
+      completedLast7d: weeklyStats?.completed_last_7d || 0,
+      failedLast7d: weeklyStats?.failed_last_7d || 0,
+      successRate7d: weeklyStats?.success_rate_7d || null,
+      completedLast30d: weeklyStats?.completed_last_30d || 0,
+      tasksLast30d: weeklyStats?.tasks_last_30d || 0,
     });
   } catch {
     return NextResponse.json(

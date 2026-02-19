@@ -1,12 +1,19 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import crypto from "crypto";
+import { checkRateLimit, getClientIp } from "../../_rate-limit";
 
 function hashVoicePin(pin: string, userId: string): string {
   return crypto.createHash('sha256').update(`${userId}:${pin}`).digest('hex');
 }
 
 export async function POST(request: Request) {
+  // Rate limit: 5 PIN updates per 15 minutes per IP
+  const ip = getClientIp(request);
+  if (!checkRateLimit('voice-pin', ip, 5, 15 * 60 * 1000)) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 

@@ -331,6 +331,19 @@ async function runProactiveChecks(): Promise<void> {
     // Non-critical
   }
 
+  // COMPLETION METRICS REPORTS: daily/weekly per user preference (9 AM UTC)
+  try {
+    const now = new Date();
+    const isNineAM = now.getUTCHours() === 9;
+    const isMonday = now.getUTCDay() === 1;
+
+    if (isNineAM) {
+      await runCompletionReports({ includeDaily: true, includeWeekly: isMonday });
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Completion reports error:', error);
+  }
+
   // Clean up old processed_emails (>7 days)
   try {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -734,4 +747,101 @@ export async function cancelScheduledTask(taskId: string, userId: string): Promi
     .eq('user_id', userId);
   
   return !error;
+}
+
+/**
+ * Send completion metrics reports (daily or weekly) to opted-in users.
+ * Uses the user_task_stats view for stats.
+ * Tracks last_report_sent_at to avoid duplicate sends.
+ */
+async function runCompletionReports(opts: { includeDaily: boolean; includeWeekly: boolean }): Promise<void> {
+  const { sendResponse } = await import("./email.js");
+  const supabase = getSupabaseClient();
+
+  const frequencies: string[] = [];
+  if (opts.includeDaily) frequencies.push("daily");
+  if (opts.includeWeekly) frequencies.push("weekly");
+  if (frequencies.length === 0) return;
+
+  // Get users with matching report_frequency and have not already received a report today
+  const today = new Date().toISOString().split("T")[0];
+  const { data: settingsRows } = await supabase
+    .from("user_settings")
+    .select("user_id, report_frequency, last_report_sent_at")
+    .in("report_frequency", frequencies);
+
+  if (!settingsRows || settingsRows.length === 0) return;
+
+  // Filter out users who already received a report today
+  const eligibleUserIds = settingsRows
+    .filter((s) => {
+      if (!s.last_report_sent_at) return true;
+      return new Date(s.last_report_sent_at).toISOString().split("T")[0] !== today;
+    })
+    .map((s) => s.user_id);
+
+  if (eligibleUserIds.length === 0) return;
+
+  console.log(`[SCHEDULER] Sending completion reports to ${eligibleUserIds.length} users`);
+
+  for (const userId of eligibleUserIds) {
+    try {
+      // Get profile
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("email, username, bot_name")
+        .eq("id", userId)
+        .single();
+
+      if (!profile?.email) continue;
+
+      // Get stats from view
+      const { data: stats } = await supabase
+        .from("user_task_stats")
+        .select("completed_last_7d, failed_last_7d, success_rate_7d, completed_last_30d, tasks_last_30d")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      const botName = profile.bot_name || "Your AI";
+      const freq = settingsRows.find((s) => s.user_id === userId)?.report_frequency || "weekly";
+      const periodLabel = freq === "daily" ? "today" : "this week";
+      const completedCount = stats?.completed_last_7d ?? 0;
+      const successRate = stats?.success_rate_7d ?? 0;
+      const totalMonth = stats?.tasks_last_30d ?? 0;
+
+      if (completedCount === 0 && totalMonth === 0) continue; // Skip users with no activity
+
+      const subject = `${botName}'s ${freq === "daily" ? "Daily" : "Weekly"} Report`;
+      const body = [
+        `**${subject}**`,
+        ``,
+        `Here's what ${botName} accomplished ${periodLabel}:`,
+        ``,
+        `✅ **Tasks completed:** ${completedCount}`,
+        `📊 **7-day success rate:** ${successRate}%`,
+        `📅 **Tasks this month:** ${totalMonth}`,
+        ``,
+        `View your full task history at https://www.aevoy.com/dashboard/tasks`,
+        ``,
+        `To change how often you receive these reports, visit https://www.aevoy.com/dashboard/settings`,
+      ].join("\n");
+
+      await sendResponse({
+        to: profile.email,
+        from: `${profile.username}@aevoy.com`,
+        subject,
+        body,
+      });
+
+      // Update last_report_sent_at
+      await supabase
+        .from("user_settings")
+        .update({ last_report_sent_at: new Date().toISOString() })
+        .eq("user_id", userId);
+
+      console.log(`[SCHEDULER] Completion report sent to ${profile.username}`);
+    } catch {
+      // Non-critical, continue to next user
+    }
+  }
 }

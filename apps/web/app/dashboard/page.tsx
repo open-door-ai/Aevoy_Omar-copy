@@ -74,6 +74,13 @@ export default async function DashboardPage() {
     .eq("user_id", user?.id)
     .in("status", ["pending", "processing"]);
 
+  // Get 7-day success rate from the stats view
+  const { data: taskStats } = await supabase
+    .from('user_task_stats')
+    .select('completed_last_7d, success_rate_7d, tasks_last_30d')
+    .eq('user_id', user?.id)
+    .maybeSingle();
+
   const username = profile?.username || user?.email?.split("@")[0] || "user";
   const botName = profile?.bot_name || null;
   const aiEmail = `${username}@aevoy.com`;
@@ -153,7 +160,7 @@ export default async function DashboardPage() {
       </StaggerContainer>
 
       {/* Task Stats + Budget */}
-      <StaggerContainer className="grid grid-cols-1 md:grid-cols-3 gap-4" staggerDelay={0.08}>
+      <StaggerContainer className="grid grid-cols-2 md:grid-cols-4 gap-4" staggerDelay={0.08}>
         <StaggerItem>
           <Card>
             <CardContent className="pt-4 pb-4">
@@ -167,6 +174,23 @@ export default async function DashboardPage() {
             <CardContent className="pt-4 pb-4">
               <p className="text-sm text-muted-foreground">This Week</p>
               <p className="text-2xl font-bold">{weekCount || 0}</p>
+            </CardContent>
+          </Card>
+        </StaggerItem>
+        <StaggerItem>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <p className="text-sm text-muted-foreground">7-Day Success Rate</p>
+              {taskStats?.success_rate_7d != null ? (
+                <div className="flex items-end gap-1">
+                  <p className={`text-2xl font-bold ${Number(taskStats.success_rate_7d) >= 80 ? 'text-green-600 dark:text-green-400' : Number(taskStats.success_rate_7d) >= 50 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {taskStats.success_rate_7d}%
+                  </p>
+                  <p className="text-xs text-muted-foreground mb-1">({taskStats.completed_last_7d} done)</p>
+                </div>
+              ) : (
+                <p className="text-2xl font-bold text-muted-foreground">—</p>
+              )}
             </CardContent>
           </Card>
         </StaggerItem>

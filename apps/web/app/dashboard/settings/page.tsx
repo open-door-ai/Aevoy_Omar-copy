@@ -44,6 +44,7 @@ interface UserSettings {
   parallel_execution?: boolean;
   iterative_deepening?: boolean;
   monthly_budget?: number;
+  report_frequency?: string;
 }
 
 interface AgentCard {
@@ -78,6 +79,9 @@ export default function SettingsPage() {
 
   // Proactive notifications limit
   const [proactiveLimit, setProactiveLimit] = useState(10);
+
+  // Report frequency
+  const [reportFrequency, setReportFrequency] = useState<string>("weekly");
 
   // Phone provisioning state
   const [phone, setPhone] = useState<string | null>(null);
@@ -153,6 +157,7 @@ export default function SettingsPage() {
           const data = await response.json();
           setSettings(data);
           setProactiveLimit(data.proactive_daily_limit ?? 10);
+          setReportFrequency(data.report_frequency ?? "weekly");
         }
       } catch (error) {
         console.error("Failed to load settings:", error);
@@ -292,6 +297,7 @@ export default function SettingsPage() {
         body: JSON.stringify({
           ...settings,
           proactive_daily_limit: proactiveLimit,
+          report_frequency: reportFrequency,
         }),
       });
 
@@ -948,6 +954,40 @@ export default function SettingsPage() {
                   {proactiveLimit > 10 && "🔊 Maximum - your AI will be very proactive in finding ways to help."}
                 </p>
               </div>
+            </div>
+
+            {/* Report Frequency */}
+            <div className="space-y-3 border-t pt-6">
+              <Label>Progress Reports</Label>
+              <p className="text-sm text-muted-foreground">
+                How often should your AI email you a summary of completed tasks and success rates?
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: "daily", label: "Daily", desc: "Every day" },
+                  { value: "weekly", label: "Weekly", desc: "Every Monday" },
+                  { value: "never", label: "Never", desc: "Opt out" },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setReportFrequency(opt.value)}
+                    className={`p-3 rounded-lg border text-left transition-colors ${
+                      reportFrequency === opt.value
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:bg-muted/50"
+                    }`}
+                  >
+                    <p className="font-medium text-sm">{opt.label}</p>
+                    <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                  </button>
+                ))}
+              </div>
+              {reportFrequency !== "never" && (
+                <p className="text-xs text-muted-foreground">
+                  Reports include: tasks completed, success rate, time saved, and top wins for the period.
+                </p>
+              )}
             </div>
 
             <div className="space-y-3 border-t pt-6">
