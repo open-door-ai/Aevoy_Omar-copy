@@ -1465,6 +1465,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         break;
       }
 
+      // EARLY EXIT: If ALL Round 1 actions failed for a research/general task,
+      // don't run 5 more rounds of DeepSeek narration — go straight to Haiku fallback.
+      // Round 1 is the ONLY round with actions if search/browse fails; subsequent rounds
+      // just produce more "I'll search..." narration from iterative prompts.
+      const isResearchOrGeneral = taskType === 'research' || taskType === 'general' || taskType === 'email';
+      const allFailedFirstRound = currentIteration === 1 && failedActions.length > 0 && successfulActions.length === 0;
+      if (allFailedFirstRound && isResearchOrGeneral) {
+        console.log('[ITERATE] All Round 1 actions failed for research/general task — exiting loop for Haiku fallback');
+        break;
+      }
+
       // RE-PROMPT with VISUAL OBSERVATION: Feed results + page state back to AI
       const resultsSummary = iterationResults.map((r, i) => {
         const actionDesc = `${r.action.type}(${Object.values(r.action.params).map(v => typeof v === 'string' ? v.substring(0, 60) : v).join(', ')})`;
