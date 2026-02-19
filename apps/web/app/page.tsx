@@ -2383,32 +2383,26 @@ export default function AevoyLanding() {
             ];
 
             const [currentIndex, setCurrentIndex] = React.useState(0);
-            const [isFlipping, setIsFlipping] = React.useState(false);
+            const [visible, setVisible] = React.useState(true);
             const [touchStart, setTouchStart] = React.useState(0);
             const [touchEnd, setTouchEnd] = React.useState(0);
 
-            const next = () => {
-              setIsFlipping(true);
+            const goTo = (getNext: (prev: number) => number) => {
+              setVisible(false);
               setTimeout(() => {
-                setCurrentIndex((prev) => (prev + 1) % threats.length);
-                setTimeout(() => setIsFlipping(false), 50);
-              }, 300);
+                setCurrentIndex(getNext);
+                setVisible(true);
+              }, 250);
             };
+
+            const next = () => goTo((prev) => (prev + 1) % threats.length);
+            const prev = () => goTo((prev) => (prev - 1 + threats.length) % threats.length);
 
             // Auto-rotation every 8 seconds
             React.useEffect(() => {
-              const timer = setInterval(() => {
-                setCurrentIndex((prev) => (prev + 1) % threats.length);
-              }, 8000);
+              const timer = setInterval(next, 8000);
               return () => clearInterval(timer);
-            }, [threats.length]);
-            const prev = () => {
-              setIsFlipping(true);
-              setTimeout(() => {
-                setCurrentIndex((prev) => (prev - 1 + threats.length) % threats.length);
-                setTimeout(() => setIsFlipping(false), 50);
-              }, 300);
-            };
+            }, []);
 
             const handleTouchStart = (e: React.TouchEvent) => {
               setTouchStart(e.targetTouches[0].clientX);
@@ -2467,10 +2461,10 @@ export default function AevoyLanding() {
 
                   {/* Threat content */}
                   <div
-                    className="min-h-[400px] transition-all duration-300 ease-in-out"
+                    className="min-h-[400px] transition-all duration-300 ease-out"
                     style={{
-                      transform: isFlipping ? 'perspective(1000px) rotateY(90deg)' : 'perspective(1000px) rotateY(0deg)',
-                      transformStyle: 'preserve-3d'
+                      opacity: visible ? 1 : 0,
+                      transform: visible ? 'translateY(0)' : 'translateY(12px)',
                     }}
                   >
                     <h3 className="text-3xl font-bold mb-6">{threats[currentIndex].name}</h3>
@@ -2519,7 +2513,7 @@ export default function AevoyLanding() {
       {/* Proactive Section - Scroll Hijack */}
       <section 
         ref={proactiveRef}
-        className="relative min-h-[200vh] bg-stone-900 text-white"
+        className="relative min-h-[140vh] bg-stone-900 text-white"
       >
         <div className="sticky top-0 h-screen flex items-center overflow-hidden">
           <div className="max-w-6xl mx-auto px-6 w-full">
@@ -2600,7 +2594,7 @@ export default function AevoyLanding() {
             100% { transform: translateX(-50%); }
           }
           .animate-marquee {
-            animation: marquee 60s linear infinite;
+            animation: marquee 90s linear infinite;
           }
           .animate-marquee:hover {
             animation-play-state: paused;
@@ -2608,25 +2602,39 @@ export default function AevoyLanding() {
         `}} />
         <div className="absolute inset-0 flex items-center">
           <div className="flex gap-16 animate-marquee whitespace-nowrap">
-            {[
-              "Proactive Jarvis Made Real",
-              "Meet AGI That Actually Works",
-              "Your AI Calls You (Not the Other Way Around)",
-              "The Future of Work Is Here",
-              "It Doesn't Just Answer—It Acts",
-              "24/7 Monitoring While You Sleep",
-              "The Assistant That Never Forgets",
-              "It emails you",
-              "It calls you",
-              "Daily brief delivered"
-            ].flatMap((phrase, i) => [
-              <span key={`a-${i}`} className="text-2xl md:text-3xl font-bold text-white">
-                {phrase}
-              </span>,
-              <span key={`b-${i}`} className="text-2xl md:text-3xl font-bold text-white">
-                {phrase}
-              </span>
-            ])}
+            {(() => {
+              const phrases = [
+                "The Future of Work Is Here",
+                "Text It. It Does It.",
+                "It Calls You. It Texts You. It Handles It.",
+                "Vibe Your Life — Let AI Do the Rest",
+                "Not a Chatbot — An Employee",
+                "Call It. Text It. Email It. Done.",
+                "24/7 Monitoring While You Sleep",
+                "Your AI Manages Everything",
+                "One Email. Task Done.",
+                "It Doesn't Just Answer — It Acts",
+                "You Text It a Task. It Actually Does It.",
+                "Books Reservations While You Sleep",
+                "Proactive Jarvis Made Real",
+                "No App. No Login. Just Email.",
+                "Forms Filled. Calls Made. Life Handled.",
+                "It Reaches Out to You First",
+                "An Employee That Never Calls in Sick",
+                "Manage Your Life From Your Inbox",
+                "Research Done Before Your Coffee's Ready",
+                "Your Tasks. Actually Completed.",
+                "Daily Brief Delivered to You",
+                "Browser Automation on Autopilot",
+                "Fills 47 Fields in 60 Seconds",
+                "Just Vibe — Your AI's Got This",
+              ];
+              return [...phrases, ...phrases].map((phrase, i) => (
+                <span key={i} className="text-2xl md:text-3xl font-bold text-white">
+                  {phrase}
+                </span>
+              ));
+            })()}
           </div>
         </div>
       </section>
@@ -2667,23 +2675,20 @@ export default function AevoyLanding() {
             ];
 
             const [currentIndex, setCurrentIndex] = React.useState(0);
-            const [isFlipping, setIsFlipping] = React.useState(false);
+            const [visible, setVisible] = React.useState(true);
             const [touchStart, setTouchStart] = React.useState(0);
             const [touchEnd, setTouchEnd] = React.useState(0);
-            const next = () => {
-              setIsFlipping(true);
+
+            const goTo = (getNext: (prev: number) => number) => {
+              setVisible(false);
               setTimeout(() => {
-                setCurrentIndex((prev) => (prev + 1) % examples.length);
-                setTimeout(() => setIsFlipping(false), 50);
-              }, 300);
+                setCurrentIndex(getNext);
+                setVisible(true);
+              }, 250);
             };
-            const prev = () => {
-              setIsFlipping(true);
-              setTimeout(() => {
-                setCurrentIndex((prev) => (prev - 1 + examples.length) % examples.length);
-                setTimeout(() => setIsFlipping(false), 50);
-              }, 300);
-            };
+
+            const next = () => goTo((prev) => (prev + 1) % examples.length);
+            const prev = () => goTo((prev) => (prev - 1 + examples.length) % examples.length);
 
             const handleTouchStart = (e: React.TouchEvent) => {
               setTouchStart(e.targetTouches[0].clientX);
@@ -2742,7 +2747,13 @@ export default function AevoyLanding() {
                   </button>
 
                   {/* Content */}
-                  <div className="text-center px-16">
+                  <div
+                    className="text-center px-16 transition-all duration-300 ease-out"
+                    style={{
+                      opacity: visible ? 1 : 0,
+                      transform: visible ? 'translateY(0)' : 'translateY(12px)',
+                    }}
+                  >
                     <h3 className="text-2xl font-bold text-stone-900 mb-4">{examples[currentIndex].title}</h3>
                     <p className="text-lg text-stone-600 leading-relaxed">{examples[currentIndex].description}</p>
                   </div>
