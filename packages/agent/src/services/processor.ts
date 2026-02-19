@@ -2605,8 +2605,8 @@ async function executeAction(
         return isErrorPage || jsHits >= 3 || (text.length > 200 && text.replace(/\s+/g, ' ').split(' ').filter(w => w.length > 3).length < 20);
       };
 
-      // Strategy 1: DuckDuckGo HTML (no JavaScript, works perfectly in headless)
-      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      // Strategy 1: DuckDuckGo Lite (lighter, less rate-limited than html endpoint)
+      const ddgUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
       const ddgResult = await executionEngine.executeSteps([
         { action: 'navigate', params: { url: ddgUrl } },
         { action: 'wait', params: { ms: 1500 } },
@@ -2675,13 +2675,14 @@ async function executeAction(
       }
 
       const cleanText = pageText.replace(/\s+/g, ' ').trim().substring(0, 3000);
+      const isUsableResult = cleanText.length > 100 && !isGarbageText(pageText);
       return {
         action,
-        success: cleanText.length > 100,
-        result: cleanText.length > 100
+        success: isUsableResult,
+        result: isUsableResult
           ? `Search results from ${usedEngine} for "${query}":\n${cleanText}`
           : undefined,
-        error: cleanText.length <= 100 ? 'Search returned no useful content' : undefined,
+        error: !isUsableResult ? 'Search engines rate-limited or returned error pages — no usable results' : undefined,
       };
     }
 
