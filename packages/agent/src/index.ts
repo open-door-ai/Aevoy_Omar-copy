@@ -104,6 +104,7 @@ import { trackBackgroundJob } from "./utils/job-tracker.js";
 import { maskPhone, maskEmail, maskUserId, maskPin } from "./utils/logging.js";
 import { hashPin, verifyPinHash, isBcryptHash } from "./utils/hashing.js";
 import { globalLimiter, taskLimiter, twilioLimiter } from "./middleware/rate-limit.js";
+import { sanitizeTaskInput } from "./security/validator.js";
 
 import crypto from "crypto";
 
@@ -328,7 +329,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v6",
+    version: "2.0.0-agi-v7",
     timestamp: new Date().toISOString(),
     activeTasks,
     activeBrowserTasks: getActiveBrowserTasks(),
@@ -426,6 +427,13 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
 
+  // Sanitize + prompt injection check
+  const sanitizedV2 = sanitizeTaskInput(subject || '', body || '');
+  if (sanitizedV2.injectionDetected) {
+    console.warn(`[SECURITY] Prompt injection blocked for user ${String(userId).substring(0, 8)}: ${sanitizedV2.injectionPattern}`);
+    return res.status(400).json({ error: "invalid_request", message: "Request contains disallowed patterns" });
+  }
+
   console.log(`[TASK-V2] Received`, {
     userId: maskUserId(userId),
     channel: inputChannel || "email",
@@ -433,13 +441,13 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
   });
 
   activeTasks++;
-  
+
   try {
     const result = await processorV2.processTask({
       userId,
       username,
       email: from,
-      task: body,
+      task: sanitizedV2.body,
       channel: inputChannel || "email",
     });
 
@@ -485,6 +493,15 @@ app.post("/task", taskLimiter, async (req, res) => {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
 
+  // Sanitize + prompt injection check
+  const sanitized = sanitizeTaskInput(task.subject || '', task.body || '');
+  if (sanitized.injectionDetected) {
+    console.warn(`[SECURITY] Prompt injection blocked for user ${task.userId.substring(0, 8)}: ${sanitized.injectionPattern}`);
+    return res.status(400).json({ error: "invalid_request", message: "Request contains disallowed patterns" });
+  }
+  task.subject = sanitized.subject;
+  task.body = sanitized.body;
+
   console.log(`[TASK] Received`, {
     userId: task.userId.substring(0, 8),
     timestamp: new Date().toISOString(),
@@ -512,6 +529,13 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
 
+  // Sanitize + prompt injection check
+  const sanitizedIncoming = sanitizeTaskInput(task.subject || '', task.body || '');
+  if (sanitizedIncoming.injectionDetected) {
+    console.warn(`[SECURITY] Prompt injection blocked for user ${task.userId.substring(0, 8)}: ${sanitizedIncoming.injectionPattern}`);
+    return res.status(400).json({ error: "invalid_request", message: "Request contains disallowed patterns" });
+  }
+
   console.log(`[TASK] Incoming (FULL PROCESSOR with 30x iterations)`, {
     userId: task.userId.substring(0, 8),
     channel: task.inputChannel || "email",
@@ -530,8 +554,8 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     userId: task.userId,
     username: task.username,
     from: task.from,
-    subject: task.subject || '',
-    body: task.body || '',
+    subject: sanitizedIncoming.subject,
+    body: sanitizedIncoming.body,
     inputChannel: (task.inputChannel as "email" | "sms" | "voice" | "web") || "email",
   });
 

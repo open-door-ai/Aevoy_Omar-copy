@@ -743,29 +743,77 @@ export async function generateForcedDirectAnswer(
   context: string,
   username: string
 ): Promise<{ content: string; cost: number; tokensUsed: number }> {
-  const client = getAnthropicClient();
-  const systemPrompt = `You are ${username}@aevoy.com, a direct AI assistant that has ALREADY completed actions. Report what was FOUND or DONE — never say "I'll" or "Let me". Answer in 2-3 sentences max. Be specific and concrete. Never give a numbered list. If you have action results, report them. If not, give the single best concrete next step with a real URL.`;
+  const hasContext = context && context !== 'No actions completed with results.';
 
-  const userContent = context && context !== 'No actions completed with results.'
-    ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results to the user concisely.`
-    : `The user asked: "${userRequest}"\n\nGive the single best concrete recommendation based on your knowledge. Start with the action (e.g. "Go to upwork.com and..."). Include a real URL. Be direct.`;
+  const systemPrompt = `You are Aevoy, a done-state AI reporter. You have ALREADY run browser and search actions. Your ONLY job is to share results.
 
-  const response = await client.messages.create({
-    model: "claude-3-5-haiku-latest",
-    max_tokens: 300,
-    system: systemPrompt,
-    messages: [
-      { role: "user", content: userContent }
-    ]
-  });
+FORBIDDEN phrases (NEVER use these): "I'll", "I will", "Let me", "I'm going to", "I can try", "I'll search", "I'll find", "Let me look"
 
-  const content = response.content[0]?.type === "text" ? response.content[0].text : "";
-  const inputTokens = response.usage?.input_tokens || 0;
-  const outputTokens = response.usage?.output_tokens || 0;
-  const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
+GOOD examples:
+- "The top freelance writing platforms are Upwork (upwork.com) and Fiverr (fiverr.com). Upwork has 1,000+ writing jobs posted right now."
+- "Vancouver events tonight include the Jazz Festival at Orpheum Theatre and a Comedy Night at The Biltmore."
+- "The weather in Toronto is 31°F with cloudy skies and west winds at 12 mph."
 
-  console.log(`[FALLBACK-HAIKU] Direct answer generated (${content.length} chars, $${cost.toFixed(5)})`);
-  return { content, cost, tokensUsed: inputTokens + outputTokens };
+Rules: Use past or present tense only. If no live data: give specific knowledge-based answer with a real URL. Max 3 sentences. No numbered lists.`;
+
+  const userContent = hasContext
+    ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results concisely. No "I'll" or "Let me".`
+    : `The user asked: "${userRequest}"\n\nGive the best specific knowledge-based answer. Name real websites with URLs. Start with a concrete fact. No "I'll" or "Let me".`;
+
+  // Try Claude Haiku first (best instruction following)
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const client = getAnthropicClient();
+      const response = await client.messages.create({
+        model: "claude-3-5-haiku-latest",
+        max_tokens: 300,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userContent }]
+      });
+      const content = response.content[0]?.type === "text" ? response.content[0].text : "";
+      const inputTokens = response.usage?.input_tokens || 0;
+      const outputTokens = response.usage?.output_tokens || 0;
+      const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
+      if (content && content.length > 20) {
+        console.log(`[FALLBACK-HAIKU] Direct answer via Haiku (${content.length} chars, $${cost.toFixed(5)})`);
+        return { content, cost, tokensUsed: inputTokens + outputTokens };
+      }
+    } catch (haikuErr) {
+      console.warn(`[FALLBACK-HAIKU] Haiku failed: ${haikuErr instanceof Error ? haikuErr.message : String(haikuErr)}`);
+    }
+  }
+
+  // Fallback: DeepSeek with ultra-strict prompt (no narration allowed)
+  if (process.env.DEEPSEEK_API_KEY) {
+    try {
+      const strictSystem = `You are a RESULTS reporter. Report in present or past tense only.
+FORBIDDEN: "I'll", "I will", "Let me", "I'm going to", "I can", "I'll search", "I need to"
+FORMAT: State the answer as a fact. Include a specific URL. Max 2-3 sentences.
+EXAMPLE for "make me money": "The fastest path to income is freelancing on Upwork (upwork.com) — create a profile and apply to 10 jobs today. Alternatively, sell unused items on Facebook Marketplace (facebook.com/marketplace)."`;
+      const client = getDeepSeekClient();
+      const res = await client.chat.completions.create({
+        model: "deepseek-chat",
+        max_tokens: 200,
+        temperature: 0.1,
+        messages: [
+          { role: "system", content: strictSystem },
+          { role: "user", content: userContent }
+        ]
+      });
+      const content = res.choices[0]?.message?.content || "";
+      if (content && content.length > 20) {
+        // Final sanity check: strip narration if DeepSeek still slips through
+        const stripped = content.replace(/^(?:i'?ll|let me|i will|i'm going to)[^\n]*/gim, "").trim();
+        const final = stripped || content;
+        console.log(`[FALLBACK-DEEPSEEK] Direct answer (${final.length} chars)`);
+        return { content: final, cost: 0.0001, tokensUsed: 200 };
+      }
+    } catch (dsErr) {
+      console.warn(`[FALLBACK-DEEPSEEK] DeepSeek fallback failed: ${dsErr instanceof Error ? dsErr.message : String(dsErr)}`);
+    }
+  }
+
+  return { content: "", cost: 0, tokensUsed: 0 };
 }
 
 /**

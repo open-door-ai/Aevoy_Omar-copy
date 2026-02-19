@@ -1714,24 +1714,27 @@ OBSERVE the current page state above, then decide what to do next:
       }
     }
 
-    // 7c. LAST RESORT: If ALL actions failed, generate AI-only response from knowledge
+    // 7c. LAST RESORT: If ALL actions failed, go straight to Haiku/DeepSeek for a direct knowledge answer.
+    // Do NOT use generateResponse() here — cheap models (Groq/DeepSeek) produce narration ("I'll search...")
+    // which then needs the quality gate to fix. Skip the middleman.
     if (actionResults.length > 0 && actionResults.every(r => !r.success)) {
-      console.log('[FALLBACK] All actions failed, generating honest AI-only response');
-      // Build a summary of what we tried so the AI can be honest about it
-      const failedDomains = [...domainFailures.entries()].map(([d, c]) => `${d} (${c}x)`).join(', ');
-      const attemptSummary = failedDomains ? `Attempted to browse: ${failedDomains}. All blocked or failed.` : 'All browser actions failed.';
+      console.log('[FALLBACK] All actions failed, using Haiku direct answer');
       try {
-        const fallbackResponse = await generateResponse(
-          memory, subject,
-          `${body}\n\nCONTEXT: I tried to complete this task using a web browser but couldn't access the websites needed. ${attemptSummary}\n\nBe HONEST with the user. If you know the answer from your knowledge, share it but note that you couldn't verify it live. If you DON'T know (e.g., a current price that changes), tell the user what happened and suggest they check the site directly. NEVER make up specific numbers like prices or stock levels.`,
-          username, undefined, userId, taskId, senderName
+        const { generateForcedDirectAnswer } = await import("./ai.js");
+        const directAnswer = await generateForcedDirectAnswer(
+          `${subject} ${body}`,
+          'No actions completed with results.',
+          username
         );
-        if (fallbackResponse.content) {
-          aiResponse.content = fallbackResponse.content;
-          aiResponse.actions = []; // Clear failed actions
+        if (directAnswer.content && directAnswer.content.length > 20) {
+          aiResponse.content = directAnswer.content;
+          aiResponse.actions = [];
+          aiResponse.cost = (aiResponse.cost || 0) + (directAnswer.cost || 0);
+          aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (directAnswer.tokensUsed || 0);
+          console.log(`[FALLBACK] Direct answer injected (${directAnswer.content.length} chars)`);
         }
-      } catch {
-        // Non-critical — we still have the original AI content
+      } catch (err) {
+        console.error('[FALLBACK] generateForcedDirectAnswer failed:', err);
       }
     }
 
@@ -1812,17 +1815,17 @@ OBSERVE the current page state above, then decide what to do next:
             aiResponse.content = fallbackResponse.content.trim();
             aiResponse.cost = (aiResponse.cost || 0) + (fallbackResponse.cost || 0);
             aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
-            qualityGateHaikuFired = true; // Don't let final safety net overwrite Haiku's answer
+            qualityGateHaikuFired = true;
           }
         } catch (refinementErr) {
           console.error('[QUALITY] Haiku fallback failed:', refinementErr);
         }
       }
 
-      // FINAL SAFETY NET: If response STILL looks like narration/plan after all gates,
-      // construct a response directly from successful action results.
-      // SKIP if quality gate already ran Haiku — trust that answer.
-      if (aiResponse.content && !qualityGateHaikuFired) {
+      // FINAL SAFETY NET: Always runs — catches cases where Haiku itself returns plan-like text.
+      // If qualityGateHaikuFired=true and response is still bad, don't call Haiku again.
+      // Instead use hard fallbacks to avoid infinite loops.
+      if (aiResponse.content) {
         const finalLC = aiResponse.content.toLowerCase();
         const stillBad = (
           /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|start|go|head|visit|begin|open|access|sign|create)/i.test(finalLC) ||
@@ -1838,6 +1841,13 @@ OBSERVE the current page state above, then decide what to do next:
           if (successData && successData.length > 50) {
             console.log(`[QUALITY] Response still bad — constructing from ${actionResults.filter(r => r.success).length} action results`);
             aiResponse.content = `Here's what I found:\n\n${successData.substring(0, 3000)}`;
+          } else if (qualityGateHaikuFired) {
+            // Haiku already ran and STILL returned plan-like text — use hard fallback (no infinite loop)
+            console.log(`[QUALITY] Haiku also plan-like — hard fallback`);
+            const failedDomains = [...domainFailures.entries()].map(([d]) => d).join(', ');
+            aiResponse.content = failedDomains
+              ? `I tried to access ${failedDomains} but was blocked by rate limits or site restrictions. Please check those sites directly for the information you need.`
+              : `Search engines are temporarily rate-limited, so I couldn't retrieve live results right now. Please try again in a few minutes or visit the relevant site directly.`;
           } else {
             // All actions failed AND response is narration — last resort: Haiku knowledge answer
             console.log(`[QUALITY] Final safety net: all actions failed, response is narration — Haiku last resort`);
