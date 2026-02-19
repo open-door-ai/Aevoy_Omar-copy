@@ -1197,7 +1197,7 @@ export function cleanResponseForEmail(response: string): string {
       (lower.startsWith('next, i') || lower.startsWith("next i'll")) ||
       (lower.startsWith('i need to find') || lower.startsWith('i need to search')) ||
       (lower.startsWith('let me try') || lower.startsWith('let me search') || lower.startsWith('let me find')) ||
-      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go to)\b/.test(lower) && p.length < 200) ||
+      (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go|find|head|visit|begin|open|access|sign|create|make|build|write|post|apply)\b/.test(lower) && p.length < 300) ||
       // Drop narration about search/page failures
       (/(?:search results?|the page|bing|google|duckduckgo)\s+(?:didn't|did not|doesn't|isn't|wasn't|seems? to have)\s+/i.test(lower) && p.length < 300) ||
       (lower.includes('technical issues') && (lower.includes('search') || lower.includes('bing'))) ||
@@ -1210,7 +1210,11 @@ export function cleanResponseForEmail(response: string): string {
     filtered.push(p);
   }
 
-  return filtered.join('\n\n').trim() || cleaned;
+  const result = filtered.join('\n\n').trim();
+  // If filtered produces content, use it. If nothing passed the filter AND we had paragraphs,
+  // the whole response was plan-like — return empty so caller can handle it.
+  // Only use 'cleaned' fallback if we genuinely had nothing to filter (empty input edge case).
+  return result || (paragraphs.every(p => !p.trim()) ? cleaned : '');
 }
 
 /**

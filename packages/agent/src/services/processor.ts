@@ -1816,13 +1816,14 @@ RULES FOR YOUR NEW RESPONSE:
           const refinedResponse = await generateResponse(
             memory, subject, refinementPrompt, username, 'complex', userId, taskId, senderName
           );
-          // Check if refinement is also bad
+          // Check if refinement is also bad — expanded verb list to match isPlanLike
           const refinedLC = (refinedResponse.content || '').toLowerCase();
           const refinedIsBad = (
             !refinedResponse.content ||
-            /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check)/i.test(refinedLC) ||
+            /(?:i'?ll|let me)\s+(?:search|look|find|try|navigate|browse|check|go|head|visit|begin|open|access|sign|create|make|use|take|build|write|post|apply|join|switch|pivot|attempt)/i.test(refinedLC) ||
             /(?:search|page)\s+(?:didn't|did not|doesn't)\s+(?:load|work|show)/i.test(refinedLC) ||
-            (refinedLC.includes('technical issues') || refinedLC.includes('unable to process'))
+            (refinedLC.includes('technical issues') || refinedLC.includes('unable to process')) ||
+            refinedLC.length < 30 // Too short to be useful
           );
           if (!refinedIsBad) {
             console.log(`[QUALITY] Refined response accepted (${refinedResponse.content!.length} chars)`);
@@ -1891,9 +1892,17 @@ RULES FOR YOUR NEW RESPONSE:
                 aiResponse.cost = (aiResponse.cost || 0) + (lastResort.cost || 0);
                 aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (lastResort.tokensUsed || 0);
                 console.log(`[QUALITY] Last resort Haiku answer: ${lastResort.content.substring(0, 100)}`);
+              } else {
+                // Haiku returned nothing useful — construct honest fallback from task context
+                const failedDomains = [...domainFailures.entries()].map(([d]) => d).join(', ');
+                aiResponse.content = failedDomains
+                  ? `I tried to access ${failedDomains} for your request but the sites blocked my browser. I wasn't able to get live data. Please check those sites directly or try rephrasing your request.`
+                  : `I wasn't able to retrieve the information you requested — my web access was blocked. Please try checking the relevant website directly.`;
               }
             } catch (lrErr) {
               console.error('[QUALITY] Last resort failed:', lrErr);
+              // Hard fallback: never leave user with a plan-as-response
+              aiResponse.content = `I tried to complete your request but ran into technical issues with web access. Please try again in a moment or check the relevant site directly.`;
             }
           }
         }
@@ -2129,7 +2138,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // 11. Send response via the same channel the task arrived on
-    const cleanResponse = cleanResponseForEmail(aiResponse.content);
+    const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
+    // Safety: if cleanResponseForEmail stripped everything (all plan-like), use a safe fallback
+    const cleanResponse = rawCleanResponse || `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
     const successCount = actionResults.filter(r => r.success).length;
     const totalActions = actionResults.length;
 
