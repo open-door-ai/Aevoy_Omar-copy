@@ -2565,14 +2565,24 @@ async function executeAction(
 
       const query = action.params.query as string;
 
-      // Helper: detect if extracted text is garbage (JS errors, framework noise, not real content)
+      // Helper: detect if extracted text is garbage (JS errors, framework noise, error pages)
       const isGarbageText = (text: string): boolean => {
         const lower = text.toLowerCase();
         const jsSignals = ['noscript', 'javascript', 'enable javascript', 'error has occurred',
           'webpack', 'react', 'vue', '__next', 'window.', 'document.', 'function('];
         const jsHits = jsSignals.filter(s => lower.includes(s)).length;
-        // If 3+ JS signals found, or text is mostly single-char words, it's garbage
-        return jsHits >= 3 || (text.length > 200 && text.replace(/\s+/g, ' ').split(' ').filter(w => w.length > 3).length < 20);
+        // Search engine error pages
+        const isErrorPage = (
+          lower.includes('if this persists, please email us') ||
+          lower.includes('your search could not be completed') ||
+          lower.includes('something went wrong') ||
+          lower.includes('unusual traffic from your computer') ||
+          lower.includes('are not a robot') ||
+          lower.includes('captcha') ||
+          (lower.includes('error') && lower.includes('anonymized') && lower.includes('code'))
+        );
+        // If 3+ JS signals, or error page, or text is mostly single-char words
+        return isErrorPage || jsHits >= 3 || (text.length > 200 && text.replace(/\s+/g, ' ').split(' ').filter(w => w.length > 3).length < 20);
       };
 
       // Strategy 1: DuckDuckGo HTML (no JavaScript, works perfectly in headless)
@@ -2588,7 +2598,7 @@ async function executeAction(
 
       // Strategy 2: If DDG failed or returned garbage, try Bing
       if (!ddgResult.success || isGarbageText(pageText) || pageText.length < 200) {
-        console.log(`[SEARCH] DDG ${!ddgResult.success ? 'failed' : 'garbage'}, trying Bing...`);
+        console.log(`[SEARCH] DDG ${!ddgResult.success ? 'failed' : isGarbageText(pageText) ? 'error page' : 'too short'}, trying Bing...`);
         const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
         const bingResult = await executionEngine.executeSteps([
           { action: 'navigate', params: { url: bingUrl } },
@@ -2597,14 +2607,30 @@ async function executeAction(
         ]);
         const bingText = typeof bingResult.data === 'string' ? bingResult.data : JSON.stringify(bingResult.data || '');
 
-        if (bingResult.success && !isGarbageText(bingText) && bingText.length > pageText.length) {
+        if (bingResult.success && !isGarbageText(bingText) && bingText.length > (isGarbageText(pageText) ? 0 : pageText.length)) {
           pageText = bingText;
           usedEngine = 'bing';
         }
       }
 
+      // Strategy 2b: If Bing also failed, try Google
+      if (isGarbageText(pageText) || pageText.length < 200) {
+        console.log(`[SEARCH] Bing also ${isGarbageText(pageText) ? 'garbage' : 'too short'}, trying Google...`);
+        const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en`;
+        const googleResult = await executionEngine.executeSteps([
+          { action: 'navigate', params: { url: googleUrl } },
+          { action: 'wait', params: { ms: 2000 } },
+          { action: 'extract', params: { selector: 'body' } }
+        ]);
+        const googleText = typeof googleResult.data === 'string' ? googleResult.data : JSON.stringify(googleResult.data || '');
+        if (googleResult.success && !isGarbageText(googleText) && googleText.length > 200) {
+          pageText = googleText;
+          usedEngine = 'google';
+        }
+      }
+
       // Strategy 3: If text is still garbage, use screenshot + AI vision to read the page
-      if (isGarbageText(pageText)) {
+      if (isGarbageText(pageText) || pageText.length < 200) {
         console.log(`[SEARCH] Text extraction returned garbage, falling back to vision...`);
         try {
           const page = executionEngine.getPage();
