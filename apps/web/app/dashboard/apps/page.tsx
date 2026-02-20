@@ -52,9 +52,12 @@ function ConnectedAppsContent() {
   const [twitterStatus, setTwitterStatus] = useState<IntegrationStatus | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<IntegrationStatus | null>(null);
   const [whatsappStatus, setWhatsappStatus] = useState<IntegrationStatus | null>(null);
+  const [fitbitStatus, setFitbitStatus] = useState<{ connected: boolean; connectedAt: string | null; displayName: string | null; lastSynced: string | null } | null>(null);
   const [telegramQrData, setTelegramQrData] = useState<{ qrCodeDataUrl: string; deepLink: string } | null>(null);
   const [whatsappQrData, setWhatsappQrData] = useState<{ sandboxJoinQr: string; sandboxJoinUrl: string; linkQrDataUrl: string; linkUrl: string; sandboxNumber: string } | null>(null);
   const [connectingWhatsapp, setConnectingWhatsapp] = useState(false);
+  const [connectingFitbit, setConnectingFitbit] = useState(false);
+  const [disconnectingFitbit, setDisconnectingFitbit] = useState(false);
   const [whatsappPolling, setWhatsappPolling] = useState(false);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
@@ -77,12 +80,13 @@ function ConnectedAppsContent() {
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      const [googleRes, msRes, twitterRes, telegramRes, whatsappRes] = await Promise.all([
+      const [googleRes, msRes, twitterRes, telegramRes, whatsappRes, fitbitRes] = await Promise.all([
         fetch('/api/integrations/gmail'),
         fetch('/api/integrations/microsoft'),
         fetch('/api/integrations/twitter'),
         fetch('/api/integrations/telegram'),
         fetch('/api/integrations/whatsapp'),
+        fetch('/api/integrations/fitbit'),
       ]);
       if (googleRes.ok) setGoogleStatus(await googleRes.json());
       if (msRes.ok) setMicrosoftStatus(await msRes.json());
@@ -95,6 +99,7 @@ function ConnectedAppsContent() {
         const wd = await whatsappRes.json();
         setWhatsappStatus({ connected: wd.connected || false, connectedAt: null, email: wd.phone || null });
       }
+      if (fitbitRes.ok) setFitbitStatus(await fitbitRes.json());
     } catch (err) {
       console.error('Error fetching integrations:', err);
     } finally {
@@ -163,7 +168,15 @@ function ConnectedAppsContent() {
       toast.error(`WhatsApp connection failed: ${whatsapp}`);
     }
 
-    if (gmail || microsoft || twitter || telegram || whatsapp) {
+    const fitbit = searchParams.get('fitbit');
+    if (fitbit === 'connected') {
+      toast.success('Fitbit connected successfully');
+      fetchIntegrations();
+    } else if (fitbit && fitbit !== 'connected') {
+      toast.error(`Fitbit connection failed: ${fitbit}`);
+    }
+
+    if (gmail || microsoft || twitter || telegram || whatsapp || fitbit) {
       router.replace('/dashboard/apps', { scroll: false });
     }
   }, [searchParams]);
@@ -310,6 +323,38 @@ function ConnectedAppsContent() {
       toast.error('Failed to disconnect WhatsApp');
     } finally {
       setDisconnectingWhatsapp(false);
+    }
+  };
+
+  const handleConnectFitbit = async () => {
+    setConnectingFitbit(true);
+    try {
+      const response = await fetch('/api/integrations/fitbit', { method: 'POST' });
+      const data = await response.json();
+      if (data.authUrl) {
+        window.location.href = data.authUrl;
+      } else {
+        toast.error(data.error || 'Failed to start Fitbit connection');
+      }
+    } catch {
+      toast.error('Failed to connect Fitbit');
+    } finally {
+      setConnectingFitbit(false);
+    }
+  };
+
+  const handleDisconnectFitbit = async () => {
+    setDisconnectingFitbit(true);
+    try {
+      const response = await fetch('/api/integrations/fitbit', { method: 'DELETE' });
+      if (response.ok) {
+        setFitbitStatus({ connected: false, connectedAt: null, displayName: null, lastSynced: null });
+        toast.success('Fitbit disconnected');
+      }
+    } catch {
+      toast.error('Failed to disconnect Fitbit');
+    } finally {
+      setDisconnectingFitbit(false);
     }
   };
 
@@ -803,6 +848,123 @@ function ConnectedAppsContent() {
                 Connect WhatsApp
               </Button>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Fitbit */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#00B0B9' }}>
+                  <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white" aria-label="Fitbit">
+                    <circle cx="12" cy="12" r="3" />
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                    <circle cx="5" cy="12" r="2" />
+                    <circle cx="19" cy="12" r="2" />
+                    <circle cx="7.2" cy="7.2" r="1.5" />
+                    <circle cx="16.8" cy="16.8" r="1.5" />
+                    <circle cx="16.8" cy="7.2" r="1.5" />
+                    <circle cx="7.2" cy="16.8" r="1.5" />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-base">Fitbit</CardTitle>
+                  <CardDescription>Heart rate, sleep, steps, HRV</CardDescription>
+                </div>
+              </div>
+              {loadingIntegrations ? null : fitbitStatus?.connected ? (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              ) : (
+                <XCircle className="w-5 h-5 text-muted-foreground" />
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loadingIntegrations ? (
+              <SkeletonCard variant="stats" />
+            ) : fitbitStatus?.connected ? (
+              <div className="space-y-3">
+                {fitbitStatus.displayName && (
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Connected as: </span>
+                    <span className="font-medium">{fitbitStatus.displayName}</span>
+                  </div>
+                )}
+                {fitbitStatus.lastSynced && (
+                  <div className="text-xs text-muted-foreground">
+                    Last synced: {new Date(fitbitStatus.lastSynced).toLocaleString()}
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDisconnectFitbit}
+                  disabled={disconnectingFitbit}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  {disconnectingFitbit ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">Sync heart rate, sleep, steps, and HRV daily for AI health insights.</p>
+                <Button onClick={handleConnectFitbit} disabled={connectingFitbit}>
+                  {connectingFitbit ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  ) : (
+                    <ExternalLink className="w-4 h-4 mr-1" />
+                  )}
+                  Connect Fitbit
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Apple Health (Shortcuts) */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#FF375F' }}>
+                  <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white" aria-label="Apple Health">
+                    <path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191 5.281-5.191 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447 5.726-4.447 2.54 0 5.274 1.621 5.274 5.181 0 4.069-5.136 8.625-11 14.402z"/>
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-base">Apple Health</CardTitle>
+                  <CardDescription>Sync via Apple Shortcuts automation</CardDescription>
+                </div>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Apple Health data syncs via an iOS Shortcut automation that runs daily. Install in one tap:
+              </p>
+              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+                <li>Open this link on your iPhone</li>
+                <li>Tap <span className="font-semibold">Add Shortcut</span></li>
+                <li>Grant Apple Health permissions</li>
+              </ol>
+              <div className="flex flex-col gap-2">
+                <a
+                  href="/shortcuts/health-sync.shortcut"
+                  className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+                  download
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Download Apple Shortcut
+                </a>
+                <p className="text-xs text-muted-foreground">
+                  The shortcut sends: heart rate, steps, sleep, HRV, SpO₂ to your Aevoy account securely.
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>

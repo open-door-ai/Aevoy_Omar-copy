@@ -2343,6 +2343,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
         if (r.action.type === 'generate_image') return `Image generated`;
         if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
+        if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
         if (r.action.type === 'post_tweet') return `Tweet posted`;
         if (r.action.type === 'send_email') return `Email sent`;
         return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
@@ -3345,6 +3346,63 @@ async function executeAction(
       } catch (videoErr) {
         console.error("[VIDEO_CALL] Failed:", videoErr);
         return { action, success: false, error: "Could not create video call room" };
+      }
+    }
+
+    case "analyze_health_data": {
+      const { query = "general health summary" } = action.params as { query?: string };
+      try {
+        console.log(`[HEALTH] Analyzing health data for user ${userId}: "${query}"`);
+        // Fetch last 7 days of health metrics from DB
+        const { data: metrics } = await getSupabaseClient()
+          .from("health_metrics")
+          .select("metric_type, value, unit, recorded_at, source")
+          .eq("user_id", userId)
+          .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+          .order("recorded_at", { ascending: false });
+
+        if (!metrics || metrics.length === 0) {
+          return {
+            action,
+            success: true,
+            result: "No health data connected yet. You can connect Fitbit or Apple Health in the Health section of your dashboard (/dashboard/health) to get personalized health insights.",
+          };
+        }
+
+        // Aggregate by metric type
+        const grouped: Record<string, { values: number[]; unit: string; source: string }> = {};
+        for (const m of metrics) {
+          if (!grouped[m.metric_type]) grouped[m.metric_type] = { values: [], unit: m.unit || "", source: m.source };
+          grouped[m.metric_type].values.push(Number(m.value));
+        }
+        const summary = Object.entries(grouped).map(([type, data]) => {
+          const avg = (data.values.reduce((a, b) => a + b, 0) / data.values.length).toFixed(1);
+          const latest = data.values[0].toFixed(1);
+          return `${type.replace(/_/g, " ")}: latest ${latest} ${data.unit}, avg ${avg} ${data.unit} (${data.values.length} readings, source: ${data.source})`;
+        }).join("\n");
+
+        // Also fetch latest AI insight
+        const { data: latestInsight } = await getSupabaseClient()
+          .from("health_insights")
+          .select("insight_text, severity, anomalies, generated_at")
+          .eq("user_id", userId)
+          .order("generated_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        let result = `Health data summary (last 7 days):\n${summary}`;
+        if (latestInsight) {
+          result += `\n\nAI Health Insight (${new Date(latestInsight.generated_at).toLocaleDateString()}): ${latestInsight.insight_text}`;
+          if (latestInsight.severity && latestInsight.severity !== "normal") {
+            result += `\nSeverity flag: ${latestInsight.severity}`;
+          }
+        }
+
+        console.log(`[HEALTH] Returning health summary: ${metrics.length} metrics across ${Object.keys(grouped).length} types`);
+        return { action, success: true, result };
+      } catch (healthErr) {
+        console.error("[HEALTH] Failed to analyze health data:", healthErr);
+        return { action, success: false, error: "Could not retrieve health data right now" };
       }
     }
 

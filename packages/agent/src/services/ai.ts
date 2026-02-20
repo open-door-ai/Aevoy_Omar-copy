@@ -600,6 +600,7 @@ NON-BROWSER ACTIONS:
 [ACTION:post_tweet("Your tweet text here (max 280 chars)")] — Post a tweet to Twitter/X via API (fast). If this fails because Twitter isn't connected, FALL BACK to browser: browse to x.com, login with saved credentials, compose and post the tweet via the UI.
 [ACTION:create_campaign("Campaign Name", [{"task": "Post tweet about topic X", "days_from_now": 0, "hour": 9}, {"task": "Post tweet about topic Y", "days_from_now": 1, "hour": 9}, {"task": "Post tweet about topic Z", "days_from_now": 2, "hour": 9}])] — Create a multi-day campaign: schedules a sequence of one-time tasks to run at specific times over multiple days. Perfect for drip campaigns, tweet series, email sequences, or any multi-step marketing workflow. days_from_now=0 means today, hour is UTC hour (0-23).
 [ACTION:generate_video_call("topic")] — Instantly create a free Jitsi Meet video call room and share the join link. No account required, works in any browser. Use when the user wants to do a video call, show something live, join a meeting, or video chat. The link can be shared via any channel (email, WhatsApp, Telegram, SMS).
+[ACTION:analyze_health_data("query")] — Check the user's connected health data (Fitbit, Apple Health) and analyze trends, anomalies, and wellness metrics. Use when the user asks about their health stats, heart rate, sleep, steps, HRV, fitness progress, or anything health/wellness related.
 
 CRITICAL — NON-BROWSER ACTIONS MUST USE TAGS TOO:
 - "Schedule a daily weather check" → [ACTION:schedule("Check weather in Tokyo", "0 9 * * *")] [TASK_COMPLETE]
@@ -1460,6 +1461,12 @@ function parseAction(type: string, paramsStr: string): Action | null {
       // Parse: generate_video_call("optional topic")
       const topic = paramsStr.replace(/^["']|["']$/g, "") || "meeting";
       return { type: "generate_video_call", params: { topic } };
+    }
+
+    case "analyze_health_data": {
+      // Parse: analyze_health_data("query or focus area")
+      const query = paramsStr.replace(/^["']|["']$/g, "") || "general health summary";
+      return { type: "analyze_health_data", params: { query } };
     }
 
     default:

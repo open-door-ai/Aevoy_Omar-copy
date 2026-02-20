@@ -19,6 +19,7 @@ import {
   Plug,
   Sparkles,
   BarChart2,
+  Heart,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme";
 
@@ -27,6 +28,7 @@ const navItems = [
   { href: "/dashboard/activity", label: "Activity", icon: Activity, id: "nav-activity" },
   { href: "/dashboard/queue", label: "Queue", icon: Clock, id: "nav-queue" },
   { href: "/dashboard/scheduled", label: "Scheduled", icon: Calendar, id: "nav-scheduled" },
+  { href: "/dashboard/health", label: "Health", icon: Heart, id: "nav-health" },
   { href: "/dashboard/apps", label: "Connected Apps", icon: Plug, id: "nav-apps" },
   { href: "/dashboard/skills", label: "Skills", icon: Sparkles, id: "nav-skills" },
   { href: "/dashboard/cost-analytics", label: "Cost Analytics", icon: BarChart2, id: "nav-costs" },
