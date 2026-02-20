@@ -1730,77 +1730,82 @@ app.post("/webhook/telegram", async (req, res) => {
 
 app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const rawFrom = req.body.From || ""; // "whatsapp:+1234567890"
-  const rawTo = req.body.To || "";
-  const message = req.body.Body || "";
+  const message = (req.body.Body || "").trim();
 
   // Strip "whatsapp:" prefix to get E.164 phone number
   const fromPhone = rawFrom.replace(/^whatsapp:/i, "");
 
   console.log(`[WHATSAPP] Incoming from ${maskPhone(fromPhone)}: "${message.slice(0, 50)}"`);
 
-  // Respond immediately with empty TwiML (response sent async via API)
+  // Respond immediately with empty TwiML (Twilio requires fast ack)
   res.type("text/xml");
   res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
 
-  if (!fromPhone || !message.trim()) return;
+  if (!fromPhone || !message) return;
+
+  const { sendWhatsAppMessage } = await import("./services/whatsapp.js");
 
   try {
+    const webUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com";
+
+    // ── STEP 1: Handle account linking via "AEVOY {code}" message ──
+    // Users generate a code from aevoy.com/dashboard/apps, then send it here
+    if (/^AEVOY\s+[0-9a-f]{24}$/i.test(message)) {
+      const code = message.split(/\s+/)[1]?.trim();
+      if (code) {
+        const linkRes = await fetch(`${webUrl}/api/integrations/whatsapp/link`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-whatsapp-link-secret": process.env.TELEGRAM_WEBHOOK_SECRET || "",
+          },
+          body: JSON.stringify({ code, phone: fromPhone }),
+        });
+
+        if (linkRes.ok) {
+          await sendWhatsAppMessage(fromPhone,
+            "✅ Your WhatsApp is now linked to your Aevoy account!\n\nSend me any message to get started. Try: \"What can you do?\" or \"call me\"");
+        } else {
+          const err = await linkRes.json().catch(() => ({})) as { error?: string };
+          const reason = err?.error === "Code expired"
+            ? "That link code has expired. Please generate a new one from your dashboard."
+            : "That link code is invalid or already used. Get a fresh code at aevoy.com/dashboard/apps";
+          await sendWhatsAppMessage(fromPhone, `❌ ${reason}`);
+        }
+        return;
+      }
+    }
+
+    // ── STEP 2: Resolve user — only by whatsapp_phone (explicit link) ──
+    // We do NOT auto-link by profile.phone — that's insecure (shared phones, SIM swaps)
     const supabase = getSupabaseClient();
-
-    // Resolve user by registered phone OR linked whatsapp_phone
-    let profile: { id: string; username: string; email: string; phone: string | null } | null = null;
-
-    // Try profiles.phone first (their registered number)
-    const { data: byPhone } = await supabase
+    const { data: profile } = await supabase
       .from("profiles")
       .select("id, username, email, phone")
-      .eq("phone", fromPhone)
-      .single();
-
-    if (byPhone) {
-      profile = byPhone;
-    } else {
-      // Try whatsapp_phone (explicitly linked)
-      const { data: byWhatsApp } = await supabase
-        .from("profiles")
-        .select("id, username, email, phone")
-        .eq("whatsapp_phone", fromPhone)
-        .maybeSingle();
-      if (byWhatsApp) profile = byWhatsApp;
-    }
+      .eq("whatsapp_phone", fromPhone)
+      .maybeSingle();
 
     if (!profile) {
-      const { sendWhatsAppMessage } = await import("./services/whatsapp.js");
-      await sendWhatsAppMessage(fromPhone, "👋 I don't recognize this number. Sign up at aevoy.com and connect WhatsApp in your settings.");
+      await sendWhatsAppMessage(fromPhone,
+        "👋 Hi! To use Aevoy AI on WhatsApp:\n\n1. Sign up at aevoy.com\n2. Go to Connected Apps\n3. Scan the WhatsApp QR code\n\nTakes 30 seconds!");
       return;
     }
 
-    // Auto-link whatsapp_phone if not already set (first message from this number)
-    const { data: profileFull } = await supabase
-      .from("profiles")
-      .select("whatsapp_phone")
-      .eq("id", profile.id)
-      .single();
-
-    if (!profileFull?.whatsapp_phone) {
-      await supabase
-        .from("profiles")
-        .update({ whatsapp_phone: fromPhone })
-        .eq("id", profile.id);
-    }
-
-    // Handle "call me" shortcut
+    // ── STEP 3: Handle built-in shortcuts ──
     const CALL_ME = /^(call me|call my phone|ring me)\b/i;
-    if (CALL_ME.test(message.trim())) {
+    if (CALL_ME.test(message)) {
       const callTo = profile.phone || fromPhone;
-      const { callUser } = await import("./services/twilio.js");
-      await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Aevoy AI assistant." });
-      const { sendWhatsAppMessage } = await import("./services/whatsapp.js");
-      await sendWhatsAppMessage(fromPhone, "📞 Calling you now...");
+      if (callTo) {
+        const { callUser } = await import("./services/twilio.js");
+        await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Aevoy AI." });
+        await sendWhatsAppMessage(fromPhone, "📞 Calling you now...");
+      } else {
+        await sendWhatsAppMessage(fromPhone, "⚠️ No phone number on file. Add one in Settings to enable calling.");
+      }
       return;
     }
 
-    // Process as task
+    // ── STEP 4: Process as AI task ──
     activeTasks++;
     const { processTask } = await import("./services/processor.js");
     processTask({

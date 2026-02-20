@@ -53,7 +53,9 @@ function ConnectedAppsContent() {
   const [telegramStatus, setTelegramStatus] = useState<IntegrationStatus | null>(null);
   const [whatsappStatus, setWhatsappStatus] = useState<IntegrationStatus | null>(null);
   const [telegramQrData, setTelegramQrData] = useState<{ qrCodeDataUrl: string; deepLink: string } | null>(null);
-  const [whatsappQrData, setWhatsappQrData] = useState<{ joinQrDataUrl: string; joinUrl: string } | null>(null);
+  const [whatsappQrData, setWhatsappQrData] = useState<{ sandboxJoinQr: string; sandboxJoinUrl: string; linkQrDataUrl: string; linkUrl: string; sandboxNumber: string } | null>(null);
+  const [connectingWhatsapp, setConnectingWhatsapp] = useState(false);
+  const [whatsappPolling, setWhatsappPolling] = useState(false);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
   const [loadingCredentials, setLoadingCredentials] = useState(true);
@@ -91,10 +93,7 @@ function ConnectedAppsContent() {
       }
       if (whatsappRes.ok) {
         const wd = await whatsappRes.json();
-        setWhatsappStatus({ connected: wd.connected || false, connectedAt: wd.connectedAt || null, email: wd.phone || null });
-        if (!wd.connected && (wd.joinQrDataUrl || wd.joinUrl)) {
-          setWhatsappQrData({ joinQrDataUrl: wd.joinQrDataUrl || '', joinUrl: wd.joinUrl || '' });
-        }
+        setWhatsappStatus({ connected: wd.connected || false, connectedAt: null, email: wd.phone || null });
       }
     } catch (err) {
       console.error('Error fetching integrations:', err);
@@ -304,12 +303,51 @@ function ConnectedAppsContent() {
       const response = await fetch('/api/integrations/whatsapp', { method: 'DELETE' });
       if (response.ok) {
         setWhatsappStatus({ connected: false, connectedAt: null, email: null });
+        setWhatsappQrData(null);
         toast.success('WhatsApp disconnected');
       }
     } catch {
       toast.error('Failed to disconnect WhatsApp');
     } finally {
       setDisconnectingWhatsapp(false);
+    }
+  };
+
+  const handleConnectWhatsapp = async () => {
+    setConnectingWhatsapp(true);
+    try {
+      const res = await fetch('/api/integrations/whatsapp', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to generate code');
+      const data = await res.json();
+      setWhatsappQrData({
+        sandboxJoinQr: data.sandboxJoinQr || '',
+        sandboxJoinUrl: data.sandboxJoinUrl || '',
+        linkQrDataUrl: data.linkQrDataUrl || '',
+        linkUrl: data.linkUrl || '',
+        sandboxNumber: data.sandboxNumber || '+14155238886',
+      });
+      // Poll every 3s to detect when user has linked
+      setWhatsappPolling(true);
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        if (attempts > 200) { clearInterval(poll); setWhatsappPolling(false); return; } // 10 min max
+        const check = await fetch('/api/integrations/whatsapp');
+        if (check.ok) {
+          const status = await check.json();
+          if (status.connected) {
+            clearInterval(poll);
+            setWhatsappPolling(false);
+            setWhatsappQrData(null);
+            setWhatsappStatus({ connected: true, connectedAt: null, email: status.phone || null });
+            toast.success('WhatsApp connected!');
+          }
+        }
+      }, 3000);
+    } catch {
+      toast.error('Failed to generate WhatsApp link code');
+    } finally {
+      setConnectingWhatsapp(false);
     }
   };
 
@@ -714,25 +752,56 @@ function ConnectedAppsContent() {
                 </Button>
               </div>
             ) : whatsappQrData ? (
-              <div className="space-y-3">
-                <img
-                  src={whatsappQrData.joinQrDataUrl}
-                  alt="WhatsApp QR Code"
-                  className="w-36 h-36 rounded-lg"
-                />
-                <a
-                  href={whatsappQrData.joinUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-green-600 hover:underline flex items-center gap-1"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  Open WhatsApp
-                </a>
-                <p className="text-xs text-muted-foreground">Scan the QR or tap the link, then send any message to connect</p>
+              <div className="space-y-4">
+                {/* Step 1: Join sandbox */}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Step 1 — Join sandbox (first time only)</p>
+                  {whatsappQrData.sandboxJoinQr && (
+                    <img src={whatsappQrData.sandboxJoinQr} alt="WhatsApp Sandbox QR" className="w-36 h-36 rounded-lg border" />
+                  )}
+                  <a
+                    href={whatsappQrData.sandboxJoinUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-green-600 hover:underline flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Open WhatsApp ({whatsappQrData.sandboxNumber})
+                  </a>
+                </div>
+                {/* Step 2: Link account */}
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Step 2 — Link your account</p>
+                  {whatsappQrData.linkQrDataUrl && (
+                    <img src={whatsappQrData.linkQrDataUrl} alt="WhatsApp Link QR" className="w-36 h-36 rounded-lg border" />
+                  )}
+                  <a
+                    href={whatsappQrData.linkUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-green-600 hover:underline flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    Send link message
+                  </a>
+                  {whatsappPolling && (
+                    <p className="text-xs text-muted-foreground animate-pulse flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Waiting for connection...
+                    </p>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">Link expires in 10 minutes</p>
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">WhatsApp not configured</p>
+              <Button onClick={handleConnectWhatsapp} disabled={connectingWhatsapp}>
+                {connectingWhatsapp ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                ) : (
+                  <ExternalLink className="w-4 h-4 mr-1" />
+                )}
+                Connect WhatsApp
+              </Button>
             )}
           </CardContent>
         </Card>

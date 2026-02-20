@@ -39,6 +39,7 @@ interface UserSettings {
   virtual_phone: string | null;
   voice_preference?: string;
   proactive_daily_limit?: number;
+  proactive_channel?: string;
   auto_install_skills?: boolean;
   auto_acquire_oauth?: boolean;
   auto_signup_free_trial?: boolean;
@@ -80,6 +81,9 @@ export default function SettingsPage() {
 
   // Proactive notifications limit
   const [proactiveLimit, setProactiveLimit] = useState(10);
+
+  // Proactive channel preference
+  const [proactiveChannel, setProactiveChannel] = useState<string>("sms");
 
   // Report frequency
   const [reportFrequency, setReportFrequency] = useState<string>("weekly");
@@ -187,6 +191,7 @@ export default function SettingsPage() {
           const data = await response.json();
           setSettings(data);
           setProactiveLimit(data.proactive_daily_limit ?? 10);
+          setProactiveChannel(data.proactive_channel ?? "sms");
           setReportFrequency(data.report_frequency ?? "weekly");
         }
       } catch (error) {
@@ -409,6 +414,7 @@ export default function SettingsPage() {
         body: JSON.stringify({
           ...settings,
           proactive_daily_limit: proactiveLimit,
+          proactive_channel: proactiveChannel,
           report_frequency: reportFrequency,
         }),
       });
@@ -1187,6 +1193,44 @@ export default function SettingsPage() {
                   {proactiveLimit > 10 && "🔊 Maximum - your AI will be very proactive in finding ways to help."}
                 </p>
               </div>
+
+              {/* Preferred channel for proactive alerts */}
+              {proactiveLimit > 0 && (
+                <div className="space-y-2 pt-2">
+                  <Label className="text-sm">Delivery Channel</Label>
+                  <p className="text-xs text-muted-foreground">Where should proactive alerts be sent?</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {[
+                      { value: "sms", label: "SMS", icon: "💬" },
+                      { value: "telegram", label: "Telegram", icon: "✈️" },
+                      { value: "whatsapp", label: "WhatsApp", icon: "📱" },
+                      { value: "voice", label: "Voice call", icon: "📞" },
+                      { value: "email", label: "Email", icon: "📧" },
+                    ].map((ch) => (
+                      <button
+                        key={ch.value}
+                        type="button"
+                        onClick={() => setProactiveChannel(ch.value)}
+                        className={`flex items-center gap-2 p-2 rounded-lg border text-sm transition-colors ${
+                          proactiveChannel === ch.value
+                            ? "border-primary bg-primary/10 text-primary font-medium"
+                            : "border-border hover:border-muted-foreground"
+                        }`}
+                      >
+                        <span>{ch.icon}</span>
+                        {ch.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {proactiveChannel === "telegram" && "Requires Telegram connected in Connected Apps."}
+                    {proactiveChannel === "whatsapp" && "Requires WhatsApp connected in Connected Apps."}
+                    {proactiveChannel === "voice" && "Requires a phone number on your account."}
+                    {proactiveChannel === "sms" && "Sent to your registered phone number."}
+                    {proactiveChannel === "email" && "Sent to your account email address."}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Report Frequency */}

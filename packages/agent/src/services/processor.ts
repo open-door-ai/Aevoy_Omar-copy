@@ -2342,6 +2342,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
         if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
         if (r.action.type === 'generate_image') return `Image generated`;
+        if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
         if (r.action.type === 'post_tweet') return `Tweet posted`;
         if (r.action.type === 'send_email') return `Email sent`;
         return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
@@ -3326,6 +3327,24 @@ async function executeAction(
       } catch (imgErr) {
         console.error("[GENERATE_IMAGE] Failed:", imgErr);
         return { action, success: false, error: "Could not generate image right now" };
+      }
+    }
+
+    case "generate_video_call": {
+      const { topic = "meeting" } = action.params as { topic?: string };
+      try {
+        // Generate a zero-setup Jitsi Meet room URL
+        const roomId = `aevoy-${userId.slice(0, 8)}-${Date.now()}`;
+        const videoUrl = `https://meet.jit.si/${roomId}`;
+        console.log(`[VIDEO_CALL] Generated Jitsi room: ${videoUrl}`);
+        return {
+          action,
+          success: true,
+          result: `Video call room created for "${topic}": ${videoUrl}`,
+        };
+      } catch (videoErr) {
+        console.error("[VIDEO_CALL] Failed:", videoErr);
+        return { action, success: false, error: "Could not create video call room" };
       }
     }
 

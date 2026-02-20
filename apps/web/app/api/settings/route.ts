@@ -133,6 +133,14 @@ export async function PUT(request: Request) {
       }
       updatePayload.report_frequency = body.report_frequency;
     }
+    if (body.proactive_channel !== undefined) {
+      const validChannels = ["sms", "email", "telegram", "whatsapp", "voice"];
+      if (!validChannels.includes(body.proactive_channel)) {
+        return NextResponse.json({ error: "Invalid proactive_channel" }, { status: 400 });
+      }
+      updatePayload.proactive_channel = body.proactive_channel;
+    }
+    if (body.proactive_enabled !== undefined) updatePayload.proactive_enabled = body.proactive_enabled;
 
     // Upsert settings
     const { data, error } = await supabase

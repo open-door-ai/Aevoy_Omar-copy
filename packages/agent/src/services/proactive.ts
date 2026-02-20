@@ -124,7 +124,7 @@ export class ProactiveEngine {
       // Get all users with proactive enabled
       const { data: users, error } = await getSupabaseClient()
         .from("profiles")
-        .select("id, username, email, twilio_number, timezone")
+        .select("id, username, email, twilio_number, timezone, telegram_chat_id, whatsapp_phone")
         .eq("proactive_enabled", true);
 
       if (error || !users || users.length === 0) {
@@ -157,6 +157,8 @@ export class ProactiveEngine {
               username: user.username,
               email: user.email,
               phone: user.twilio_number,
+              telegramChatId: user.telegram_chat_id || null,
+              whatsappPhone: user.whatsapp_phone || null,
             });
             await this.incrementDailyCounter(user.id);
             findingsCount++;
@@ -436,9 +438,9 @@ export class ProactiveEngine {
    */
   private async routeFinding(
     finding: ProactiveFinding,
-    user: { userId: string; username: string; email: string; phone: string | null }
+    user: { userId: string; username: string; email: string; phone: string | null; telegramChatId?: string | null; whatsappPhone?: string | null }
   ): Promise<void> {
-    const { priority, action, channel } = finding;
+    const { priority, action } = finding;
 
     try {
       // 24h dedup: skip if same trigger was sent to this user recently
@@ -457,59 +459,76 @@ export class ProactiveEngine {
         return;
       }
 
+      // Look up user's preferred proactive channel
+      const { data: settings } = await getSupabaseClient()
+        .from("user_settings")
+        .select("proactive_channel")
+        .eq("user_id", user.userId)
+        .single();
+
+      const preferredChannel = settings?.proactive_channel || "sms";
+      const message = `[Aevoy] ${action}`;
+      const emailSubject = "[Aevoy] " + finding.trigger.replace(/_/g, " ");
+
+      // Helper: send via preferred channel with email fallback
+      const sendViaPreferred = async (fallbackToCall = false) => {
+        if (preferredChannel === "telegram" && user.telegramChatId) {
+          const { sendTelegramMessage } = await import("./telegram.js");
+          await sendTelegramMessage(user.telegramChatId, message);
+          return;
+        }
+        if (preferredChannel === "whatsapp" && user.whatsappPhone) {
+          const { sendWhatsAppMessage } = await import("./whatsapp.js");
+          await sendWhatsAppMessage(user.whatsappPhone, message);
+          return;
+        }
+        if ((preferredChannel === "sms" || preferredChannel === "voice") && user.phone) {
+          if (fallbackToCall && preferredChannel === "voice") {
+            await callUser({ userId: user.userId, to: user.phone, message: action });
+          }
+          await sendSms({ userId: user.userId, to: user.phone, body: message });
+          return;
+        }
+        // Default: email
+        await sendResponse({
+          to: user.email,
+          from: `${user.username}@aevoy.com`,
+          subject: emailSubject,
+          body: action,
+        });
+      };
+
       switch (priority) {
         case "high": {
-          // High priority: Call + SMS
+          // High priority: always call + send via preferred channel
           if (user.phone) {
-            await callUser({
-              userId: user.userId,
-              to: user.phone,
-              message: action,
-            });
-            await sendSms({
-              userId: user.userId,
-              to: user.phone,
-              body: `[Aevoy] ${action}`,
-            });
-          } else {
-            // Fallback to email if no phone
-            await sendResponse({
-              to: user.email,
-              from: `${user.username}@aevoy.com`,
-              subject: "[Aevoy Alert] " + finding.trigger.replace(/_/g, " "),
-              body: action,
-            });
+            await callUser({ userId: user.userId, to: user.phone, message: action });
           }
+          await sendViaPreferred(false);
           break;
         }
 
         case "medium": {
-          // Medium: SMS preferred, email fallback
-          if (user.phone && (channel === "sms" || channel === "voice")) {
-            await sendSms({
-              userId: user.userId,
-              to: user.phone,
-              body: `[Aevoy] ${action}`,
-            });
-          } else {
-            await sendResponse({
-              to: user.email,
-              from: `${user.username}@aevoy.com`,
-              subject: "[Aevoy] " + finding.trigger.replace(/_/g, " "),
-              body: action,
-            });
-          }
+          await sendViaPreferred(false);
           break;
         }
 
         case "low": {
-          // Low: Email only (don't bother with calls/SMS)
-          await sendResponse({
-            to: user.email,
-            from: `${user.username}@aevoy.com`,
-            subject: "[Aevoy Suggestion] " + finding.trigger.replace(/_/g, " "),
-            body: action,
-          });
+          // Low: email only (never interrupt with calls/SMS for low-priority)
+          if (preferredChannel === "telegram" && user.telegramChatId) {
+            const { sendTelegramMessage } = await import("./telegram.js");
+            await sendTelegramMessage(user.telegramChatId, message);
+          } else if (preferredChannel === "whatsapp" && user.whatsappPhone) {
+            const { sendWhatsAppMessage } = await import("./whatsapp.js");
+            await sendWhatsAppMessage(user.whatsappPhone, message);
+          } else {
+            await sendResponse({
+              to: user.email,
+              from: `${user.username}@aevoy.com`,
+              subject: "[Aevoy Suggestion] " + finding.trigger.replace(/_/g, " "),
+              body: action,
+            });
+          }
           break;
         }
       }
