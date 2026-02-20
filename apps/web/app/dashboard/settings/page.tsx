@@ -548,14 +548,23 @@ export default function SettingsPage() {
         updated_at: new Date().toISOString(),
       };
 
-      // Only update PIN if user entered a new one
+      // Only update PIN if user entered a new one — saves as unified_pin_hash (covers all channels)
       if (voicePin.trim()) {
         if (!/^\d{4,6}$/.test(voicePin)) {
           setMessage({ type: "error", text: "PIN must be 4-6 digits" });
           setSavingPhone(false);
           return;
         }
-        updateData.voice_pin = voicePin;
+        const pinRes = await fetch("/api/settings/unified-pin", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pin: voicePin }),
+        });
+        if (!pinRes.ok) {
+          setMessage({ type: "error", text: "Failed to save PIN" });
+          setSavingPhone(false);
+          return;
+        }
       }
 
       const { error } = await createClient()
@@ -1936,7 +1945,7 @@ export default function SettingsPage() {
               )}
               {!voicePin && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  Required when calling from unknown numbers
+                  Works across: Voice • Email • Telegram • WhatsApp
                 </p>
               )}
             </div>
@@ -2103,39 +2112,32 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {/* Email PIN Security */}
+          {/* Messaging Channels Status */}
           <div className="border-t pt-6">
-            <h4 className="font-semibold text-sm mb-2">Email PIN</h4>
-            <p className="text-xs text-muted-foreground mb-4">
-              Required when someone emails your AI from an address other than{" "}
-              <strong>{profile?.email}</strong>
-            </p>
-
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                inputMode="numeric"
-                pattern="\d{4,6}"
-                placeholder="Set Email PIN (4-6 digits)"
-                value={emailPin}
-                onChange={(e) => setEmailPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                maxLength={6}
-                className="flex-1"
-              />
-              <Button onClick={handleUpdateEmailPin} disabled={savingEmailPin}>
-                {savingEmailPin ? "Saving..." : "Set PIN"}
-              </Button>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold text-sm">Messaging Channels</h4>
+              <a href="/dashboard/apps" className="text-xs text-primary hover:underline">Manage →</a>
             </div>
-
-            {emailPinStatus && (
-              <p
-                className={`text-xs mt-2 transition-opacity duration-300 ${
-                  emailPinStatus.success ? "text-green-600" : "text-red-600"
-                }`}
-              >
-                {emailPinStatus.message}
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground mb-3">
+              Your Security PIN works across all channels below.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                ✓ Email
+              </span>
+              <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                ✓ SMS
+              </span>
+              <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                ✓ Voice
+              </span>
+              <a href="/dashboard/apps" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-muted text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors">
+                + Telegram
+              </a>
+              <a href="/dashboard/apps" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-muted text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors">
+                + WhatsApp
+              </a>
+            </div>
           </div>
 
           {/* Premium Number */}
