@@ -188,6 +188,7 @@ export class ProactiveEngine {
       this.checkUpcomingScheduledTasks(userId, timezone),
       this.checkUpcomingMeetings(userId),
       this.checkRecurringBills(userId),
+      this.checkHealthAnomalies(userId),
     ];
 
     const results = await Promise.allSettled(checks);
@@ -429,6 +430,50 @@ export class ProactiveEngine {
         }
       }
     }
+
+    return findings;
+  }
+
+  /**
+   * Check for unnotified health anomalies with severity >= 'moderate'.
+   * Fires after the daily health insight cron generates new insights.
+   */
+  private async checkHealthAnomalies(userId: string): Promise<ProactiveFinding[]> {
+    const findings: ProactiveFinding[] = [];
+
+    const { data: insights } = await getSupabaseClient()
+      .from("health_insights")
+      .select("id, insight_text, severity, anomalies")
+      .eq("user_id", userId)
+      .eq("notified", false)
+      .in("severity", ["moderate", "high"])
+      .order("generated_at", { ascending: false })
+      .limit(1); // One alert per cycle max
+
+    if (!insights || insights.length === 0) return findings;
+
+    const insight = insights[0];
+    const anomalyList = Array.isArray(insight.anomalies) ? insight.anomalies : [];
+    const anomalySummary = anomalyList.length > 0
+      ? ` Anomalies detected: ${anomalyList.map((a: { metric?: string; value?: unknown }) => a.metric || String(a.value)).join(", ")}.`
+      : "";
+
+    const priority: ProactivePriority = insight.severity === "high" ? "high" : "medium";
+
+    findings.push({
+      trigger: "health_anomaly",
+      action: `⚠️ Health Alert: ${insight.insight_text}${anomalySummary} Visit your health dashboard for details.`,
+      channel: "sms",
+      priority,
+      userId,
+      data: { insightId: insight.id, severity: insight.severity },
+    });
+
+    // Mark as notified so we don't send the same alert again
+    await getSupabaseClient()
+      .from("health_insights")
+      .update({ notified: true })
+      .eq("id", insight.id);
 
     return findings;
   }

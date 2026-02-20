@@ -279,3 +279,42 @@ export async function getHealthSummaryForUser(userId: string): Promise<string> {
 
   return `Health summary (last 7 days): ${insight.insight_text}${anomalyNote} Overall severity: ${insight.severity}.`;
 }
+
+/**
+ * Run daily AI insight generation for all users who have health data synced today.
+ * Called by the daily cron at 6 AM UTC (after Fitbit sync completes).
+ * Returns the number of users who received new insights.
+ */
+export async function generateDailyInsightsForAllUsers(): Promise<number> {
+  const sb = getSupabaseClient();
+
+  // Find distinct users with health metrics synced in the last 48h (covers timezone differences)
+  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const { data: rows, error } = await sb
+    .from("health_metrics")
+    .select("user_id")
+    .gte("created_at", cutoff);
+
+  if (error || !rows || rows.length === 0) {
+    console.log("[HEALTH ANALYZER] No users with recent health data to analyze");
+    return 0;
+  }
+
+  const uniqueUserIds = [...new Set(rows.map((r) => r.user_id as string))];
+  console.log(`[HEALTH ANALYZER] Generating insights for ${uniqueUserIds.length} user(s)`);
+
+  let successCount = 0;
+  const results = await Promise.allSettled(
+    uniqueUserIds.map(async (userId) => {
+      const insight = await generateDailyInsight(userId);
+      if (insight) successCount++;
+    })
+  );
+
+  const failed = results.filter((r) => r.status === "rejected").length;
+  if (failed > 0) {
+    console.warn(`[HEALTH ANALYZER] ${failed} insight generation(s) failed`);
+  }
+
+  return successCount;
+}

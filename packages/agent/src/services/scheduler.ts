@@ -237,6 +237,22 @@ async function runProactiveChecks(): Promise<void> {
     console.error('[SCHEDULER] Meta-learning error:', error);
   }
 
+  // HEALTH SYNC: Fitbit data sync + AI insight generation (daily at 6 AM UTC)
+  try {
+    const now = new Date();
+    if (now.getUTCHours() === 6) {
+      const { syncFitbitForAllUsers } = await import("./health-sync.js");
+      const { generateDailyInsightsForAllUsers } = await import("./health-analyzer.js");
+      console.log(`[SCHEDULER] Running daily health sync (Fitbit + AI insights)`);
+      await syncFitbitForAllUsers();
+      console.log(`[SCHEDULER] Health sync: Fitbit data fetched for all active connections`);
+      const insights = await generateDailyInsightsForAllUsers();
+      console.log(`[SCHEDULER] Health insights: ${insights} users analyzed`);
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Health sync error:', error);
+  }
+
   // CAPABILITY EXPANSION: Detect gaps and auto-expand (daily at 6 AM UTC)
   try {
     const now = new Date();
