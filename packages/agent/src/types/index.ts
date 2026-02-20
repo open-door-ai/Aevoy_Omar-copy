@@ -19,7 +19,8 @@ export type ModelProvider =
   | 'groq'
   | 'sonnet'
   | 'haiku'
-  | 'ollama';
+  | 'ollama'
+  | 'openrouter';
 
 // ---- Execution Plan ----
 

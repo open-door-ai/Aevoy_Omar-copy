@@ -18,6 +18,7 @@ import {
   Calendar,
   Plug,
   Sparkles,
+  BarChart2,
 } from "lucide-react";
 import { useTheme } from "@/lib/theme";
 
@@ -28,6 +29,7 @@ const navItems = [
   { href: "/dashboard/scheduled", label: "Scheduled", icon: Calendar, id: "nav-scheduled" },
   { href: "/dashboard/apps", label: "Connected Apps", icon: Plug, id: "nav-apps" },
   { href: "/dashboard/skills", label: "Skills", icon: Sparkles, id: "nav-skills" },
+  { href: "/dashboard/cost-analytics", label: "Cost Analytics", icon: BarChart2, id: "nav-costs" },
   { href: "/dashboard/settings", label: "Settings", icon: Settings, id: "nav-settings" },
 ];
 

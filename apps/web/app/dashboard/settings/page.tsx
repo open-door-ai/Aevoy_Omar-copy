@@ -10,7 +10,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
 import { Switch } from "@/components/ui/switch";
-import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox, Copy, Check, Mic, Upload, Play, Pause, Trash2, Volume2 } from "lucide-react";
+import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox, Copy, Check, Mic, Upload, Play, Pause, Trash2, Volume2, Code2, ChevronDown, ChevronRight, AlertTriangle, Eye, EyeOff, ExternalLink, BarChart2 } from "lucide-react";
+import Link from "next/link";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 import InboxManagementSettings from "@/components/settings/inbox-management";
 import { InboxSetupWizard } from "@/components/inbox-setup-wizard";
@@ -136,6 +137,18 @@ export default function SettingsPage() {
   const [integrationsLoading, setIntegrationsLoading] = useState(true);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
 
+  // OpenRouter Developer Mode state
+  const [devModeOpen, setDevModeOpen] = useState(false);
+  const [orHasKey, setOrHasKey] = useState(false);
+  const [orMaskedKey, setOrMaskedKey] = useState<string | null>(null);
+  const [orEnabled, setOrEnabled] = useState(false);
+  const [orPreset, setOrPreset] = useState("auto");
+  const [orApiKeyInput, setOrApiKeyInput] = useState("");
+  const [orShowKey, setOrShowKey] = useState(false);
+  const [orSaving, setOrSaving] = useState(false);
+  const [orMessage, setOrMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [orLoading, setOrLoading] = useState(false);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -252,6 +265,21 @@ export default function SettingsPage() {
       }
     }
 
+    async function loadOpenRouter() {
+      try {
+        const res = await fetch("/api/settings/openrouter");
+        if (res.ok) {
+          const data = await res.json();
+          setOrHasKey(data.hasKey ?? false);
+          setOrMaskedKey(data.maskedKey ?? null);
+          setOrEnabled(data.enabled ?? false);
+          setOrPreset(data.modelPreset ?? "auto");
+        }
+      } catch {
+        // non-critical
+      }
+    }
+
     loadProfile();
     loadSettings();
     loadAgentCard();
@@ -259,6 +287,7 @@ export default function SettingsPage() {
     loadIntegrations();
     loadCredentials();
     loadVoicemail();
+    loadOpenRouter();
   }, []);
 
   const handleSave = async () => {
@@ -284,6 +313,57 @@ export default function SettingsPage() {
     }
 
     setSaving(false);
+  };
+
+  const handleSaveOpenRouter = async () => {
+    setOrSaving(true);
+    setOrMessage(null);
+    try {
+      const payload: Record<string, unknown> = {
+        enabled: orEnabled,
+        modelPreset: orPreset,
+      };
+      if (orApiKeyInput.trim()) {
+        payload.apiKey = orApiKeyInput.trim();
+      }
+      const res = await fetch("/api/settings/openrouter", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setOrMessage({ type: "success", text: "Developer settings saved." });
+        setOrApiKeyInput("");
+        // Refresh masked key
+        const refreshRes = await fetch("/api/settings/openrouter");
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          setOrHasKey(data.hasKey ?? false);
+          setOrMaskedKey(data.maskedKey ?? null);
+        }
+      } else {
+        const data = await res.json();
+        setOrMessage({ type: "error", text: data.error || "Failed to save settings." });
+      }
+    } catch {
+      setOrMessage({ type: "error", text: "Network error. Please try again." });
+    } finally {
+      setOrSaving(false);
+    }
+  };
+
+  const handleRemoveOpenRouterKey = async () => {
+    if (!confirm("Remove your OpenRouter API key? This will disable custom model routing.")) return;
+    setOrLoading(true);
+    try {
+      await fetch("/api/settings/openrouter", { method: "DELETE" });
+      setOrHasKey(false);
+      setOrMaskedKey(null);
+      setOrEnabled(false);
+      setOrMessage({ type: "success", text: "API key removed." });
+    } finally {
+      setOrLoading(false);
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -2195,6 +2275,213 @@ export default function SettingsPage() {
           </Button>
         </CardFooter>
       </Card>
+
+      {/* Developer Mode */}
+      <div id="developer">
+        <Card className="border-border">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Code2 className="w-5 h-5 text-muted-foreground" />
+                <div>
+                  <CardTitle>Developer Mode</CardTitle>
+                  <CardDescription>Custom model routing via OpenRouter and advanced AI configuration</CardDescription>
+                </div>
+              </div>
+              <button
+                onClick={() => setDevModeOpen(!devModeOpen)}
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {devModeOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                {devModeOpen ? "Hide" : "Show"}
+              </button>
+            </div>
+          </CardHeader>
+
+          {devModeOpen && (
+            <CardContent className="space-y-6">
+              {/* Warning banner */}
+              <div className="flex items-start gap-3 p-4 bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-semibold text-yellow-800 dark:text-yellow-300">For technical users only</p>
+                  <p className="text-yellow-700 dark:text-yellow-400 mt-1">
+                    Custom model settings can affect AI quality, response style, and costs. Changes take effect immediately.
+                    The system may fall back to default models if your settings cause failures.
+                  </p>
+                </div>
+              </div>
+
+              {/* What is OpenRouter */}
+              <div className="space-y-2">
+                <h3 className="font-semibold flex items-center gap-2">
+                  OpenRouter Integration
+                  <a
+                    href="https://openrouter.ai"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    openrouter.ai
+                  </a>
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  OpenRouter provides access to 200+ AI models through a single API key.
+                  This includes free models (rate-limited), frontier models, and specialized models.
+                  Connect your own key to route Aevoy&apos;s AI calls through your preferred models.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                  <div className="border border-border rounded-lg p-3 text-sm">
+                    <p className="font-medium text-green-700 dark:text-green-400">Free Models</p>
+                    <p className="text-muted-foreground text-xs mt-1">
+                      Llama 3.3 70B, DeepSeek V3, Qwen 2.5 72B — rate-limited but free. Good for non-critical tasks.
+                    </p>
+                  </div>
+                  <div className="border border-border rounded-lg p-3 text-sm">
+                    <p className="font-medium text-blue-700 dark:text-blue-400">Quality Models</p>
+                    <p className="text-muted-foreground text-xs mt-1">
+                      Claude Sonnet, GPT-4o, Gemini 1.5 Pro — best quality, higher cost via your OpenRouter credits.
+                    </p>
+                  </div>
+                  <div className="border border-border rounded-lg p-3 text-sm">
+                    <p className="font-medium text-purple-700 dark:text-purple-400">Live Pricing</p>
+                    <p className="text-muted-foreground text-xs mt-1">
+                      OpenRouter exposes real-time pricing via API — the only source of live rates across all providers.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* API Key field */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="or-api-key">OpenRouter API Key</Label>
+                  {orHasKey && (
+                    <span className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" />
+                      Key saved
+                    </span>
+                  )}
+                </div>
+                {orHasKey && orMaskedKey && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-md font-mono">
+                    {orMaskedKey}
+                    <button
+                      onClick={handleRemoveOpenRouterKey}
+                      disabled={orLoading}
+                      className="ml-auto text-xs text-red-600 hover:text-red-700 dark:text-red-400"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+                <div className="relative">
+                  <Input
+                    id="or-api-key"
+                    type={orShowKey ? "text" : "password"}
+                    placeholder={orHasKey ? "Enter new key to replace existing..." : "sk-or-v1-..."}
+                    value={orApiKeyInput}
+                    onChange={(e) => setOrApiKeyInput(e.target.value)}
+                    className="pr-10 font-mono text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setOrShowKey(!orShowKey)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {orShowKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Get your key at{" "}
+                  <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                    openrouter.ai/keys
+                  </a>
+                  . Keys start with <span className="font-mono">sk-or-</span>. Stored encrypted at rest.
+                </p>
+              </div>
+
+              {/* Enable toggle + preset */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable OpenRouter Routing</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      When on, AI calls route through your OpenRouter key. Requires valid key above.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={orEnabled}
+                    onCheckedChange={setOrEnabled}
+                    disabled={!orHasKey && !orApiKeyInput}
+                  />
+                </div>
+
+                {orEnabled && (
+                  <div className="space-y-2 pl-4 border-l-2 border-primary/30">
+                    <Label>Model Preset</Label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {[
+                        { id: "auto", label: "Auto", desc: "System picks best model per task type" },
+                        { id: "free", label: "Free Only", desc: "Free models only (rate-limited)" },
+                        { id: "quality", label: "Quality", desc: "Best quality models, higher cost" },
+                        { id: "balanced", label: "Balanced", desc: "Good quality at moderate cost" },
+                      ].map((preset) => (
+                        <button
+                          key={preset.id}
+                          onClick={() => setOrPreset(preset.id)}
+                          className={`p-3 text-left border rounded-lg transition-all text-sm ${
+                            orPreset === preset.id
+                              ? "border-primary bg-primary/5"
+                              : "border-border hover:border-muted-foreground"
+                          }`}
+                        >
+                          <p className="font-medium">{preset.label}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">{preset.desc}</p>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg mt-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        <strong>Free Only</strong> preset uses rate-limited free models. Tasks may fail or be slower during peak hours.
+                        <strong> Quality</strong> preset will charge your OpenRouter account.
+                        Aevoy is not responsible for OpenRouter charges.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Cost Analytics link */}
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <BarChart2 className="w-4 h-4" />
+                <Link href="/dashboard/cost-analytics" className="text-primary hover:underline">
+                  View Cost Analytics →
+                </Link>
+                <span>to see per-model spend and exact token counts</span>
+              </div>
+
+              {/* Save */}
+              {orMessage && (
+                <div className={`text-sm px-3 py-2 rounded-md ${
+                  orMessage.type === "success"
+                    ? "bg-green-50 text-green-700 dark:bg-green-950/20 dark:text-green-300"
+                    : "bg-red-50 text-red-700 dark:bg-red-950/20 dark:text-red-300"
+                }`}>
+                  {orMessage.text}
+                </div>
+              )}
+              <Button onClick={handleSaveOpenRouter} disabled={orSaving} variant="outline">
+                {orSaving ? "Saving..." : "Save Developer Settings"}
+              </Button>
+            </CardContent>
+          )}
+        </Card>
+      </div>
 
       {/* Danger Zone */}
       <Card className="border-red-200">

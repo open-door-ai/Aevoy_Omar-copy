@@ -69,6 +69,102 @@ let kimiClient: OpenAI | null = null;
 let groqClient: OpenAI | null = null;
 let ollamaClient: OpenAI | null = null;
 
+// ---- OpenRouter per-user client cache ----
+// Keyed by decrypted API key (not userId) — shared across users with same key
+const openRouterClients = new Map<string, OpenAI>();
+
+function getOpenRouterClient(apiKey: string): OpenAI {
+  if (!openRouterClients.has(apiKey)) {
+    openRouterClients.set(apiKey, new OpenAI({
+      apiKey,
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://www.aevoy.com",
+        "X-Title": "Aevoy AI Assistant",
+      },
+    }));
+  }
+  return openRouterClients.get(apiKey)!;
+}
+
+// ---- OpenRouter user settings cache (5-min TTL) ----
+interface OrSettings {
+  apiKey: string | null;
+  enabled: boolean;
+  modelPreset: string;
+  expiresAt: number;
+}
+const orSettingsCache = new Map<string, OrSettings>();
+
+function decryptApiKey(ciphertext: string): string {
+  const keyHex = process.env.ENCRYPTION_KEY || "";
+  const key = Buffer.from(keyHex.slice(0, 64), "hex");
+  const iv = Buffer.from(ciphertext.slice(0, 32), "hex");
+  const authTag = Buffer.from(ciphertext.slice(32, 64), "hex");
+  const encrypted = Buffer.from(ciphertext.slice(64), "hex");
+  const { createDecipheriv } = crypto;
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(authTag);
+  return decipher.update(encrypted).toString("utf8") + decipher.final("utf8");
+}
+
+async function getUserOpenRouterSettings(userId: string): Promise<OrSettings | null> {
+  const cached = orSettingsCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+
+  try {
+    const { data } = await getSupabaseClient()
+      .from("user_settings")
+      .select("openrouter_api_key, openrouter_enabled, openrouter_model_preset")
+      .eq("user_id", userId)
+      .single();
+
+    if (!data || !data.openrouter_enabled || !data.openrouter_api_key) {
+      const result: OrSettings = { apiKey: null, enabled: false, modelPreset: "auto", expiresAt: Date.now() + 5 * 60_000 };
+      orSettingsCache.set(userId, result);
+      return result;
+    }
+
+    let apiKey: string | null = null;
+    try {
+      apiKey = decryptApiKey(data.openrouter_api_key);
+    } catch {
+      // Decryption failed, treat as no key
+    }
+
+    const result: OrSettings = {
+      apiKey,
+      enabled: !!apiKey,
+      modelPreset: data.openrouter_model_preset || "auto",
+      expiresAt: Date.now() + 5 * 60_000,
+    };
+    orSettingsCache.set(userId, result);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+// Map preset → OpenRouter model ID
+function getOpenRouterModel(preset: string, taskType: string): string {
+  switch (preset) {
+    case "free":
+      return "meta-llama/llama-3.3-70b-instruct:free";
+    case "quality":
+      if (taskType === "vision" || taskType === "complex") return "anthropic/claude-3.5-sonnet";
+      return "anthropic/claude-3.5-haiku";
+    case "balanced":
+      return "deepseek/deepseek-chat";
+    case "auto":
+    default:
+      // Match our default routing
+      if (taskType === "vision" || taskType === "complex" || taskType === "reason") {
+        return "anthropic/claude-3.5-sonnet";
+      }
+      return "meta-llama/llama-3.3-70b-instruct:free";
+  }
+}
+
 function getAnthropicClient(): Anthropic {
   if (!anthropicClient) {
     anthropicClient = new Anthropic({
@@ -136,27 +232,28 @@ interface ModelConfig {
   model: string;
   costPerMInput: number;  // Cost per 1M input tokens
   costPerMOutput: number; // Cost per 1M output tokens
+  extra?: { apiKey?: string }; // For per-user providers (e.g. OpenRouter)
 }
 
 // Task type → ordered list of models to try
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
+    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   plan: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
+    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   reason: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   vision: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
@@ -165,32 +262,32 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   validate: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   respond: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'ollama', model: 'mistral', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   classify: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   generate: [
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.25, costPerMOutput: 1.25 },
+    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   complex: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.25, costPerMOutput: 0.38 },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
 };
 
@@ -203,6 +300,7 @@ const MODEL_TIMEOUTS: Record<ModelProvider, number> = {
   sonnet: 45000,
   haiku: 20000,
   ollama: 60000,
+  openrouter: 45000,
 };
 
 // ---- Circuit breakers per provider ----
@@ -219,7 +317,7 @@ function getCircuitBreaker(provider: ModelProvider): CircuitBreaker {
 
 // ---- Provider availability checks ----
 
-function isProviderAvailable(provider: ModelProvider): boolean {
+function isProviderAvailable(provider: ModelProvider, config?: ModelConfig): boolean {
   switch (provider) {
     case 'deepseek': return !!process.env.DEEPSEEK_API_KEY;
     case 'kimi': return !!process.env.KIMI_API_KEY;
@@ -228,6 +326,7 @@ function isProviderAvailable(provider: ModelProvider): boolean {
     case 'sonnet':
     case 'haiku': return !!process.env.ANTHROPIC_API_KEY;
     case 'ollama': return !!process.env.OLLAMA_HOST;
+    case 'openrouter': return !!(config?.extra?.apiKey); // per-user, key in config
     default: return false;
   }
 }
@@ -339,6 +438,27 @@ async function callProvider(
         content,
         inputTokens: response.usage?.input_tokens || 0,
         outputTokens: response.usage?.output_tokens || 0,
+      };
+    }
+
+    case 'openrouter': {
+      // config.extra.apiKey must be set before calling this case
+      const orApiKey = (config as ModelConfig & { extra?: { apiKey?: string } }).extra?.apiKey;
+      if (!orApiKey) throw new Error("OpenRouter API key not set");
+      const orClient = getOpenRouterClient(orApiKey);
+      const response = await orClient.chat.completions.create({
+        model: config.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+      });
+      return {
+        content: response.choices[0]?.message?.content || "",
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
       };
     }
 
@@ -651,12 +771,29 @@ export async function generateResponse(
 
   // Get the fallback chain for this task type — adaptive if we have history
   const defaultChain = ROUTING_TABLE[taskType] || ROUTING_TABLE.understand;
-  const chain = userId
+  let chain: ModelConfig[] = userId
     ? await getAdaptiveChain(userId, taskType, "", defaultChain)
     : defaultChain;
 
+  // If user has OpenRouter enabled, prepend it to the chain (user's custom routing takes priority)
+  if (userId) {
+    const orSettings = await getUserOpenRouterSettings(userId).catch(() => null);
+    if (orSettings?.enabled && orSettings.apiKey) {
+      const orModel = getOpenRouterModel(orSettings.modelPreset, taskType);
+      const orConfig: ModelConfig = {
+        provider: 'openrouter',
+        model: orModel,
+        costPerMInput: 0, // actual cost tracked via response tokens × dynamic rate
+        costPerMOutput: 0,
+        extra: { apiKey: orSettings.apiKey },
+      };
+      chain = [orConfig, ...chain];
+      console.log(`[AI] OpenRouter enabled for user ${userId}: ${orModel} (${orSettings.modelPreset})`);
+    }
+  }
+
   for (const config of chain) {
-    if (!isProviderAvailable(config.provider)) {
+    if (!isProviderAvailable(config.provider, config)) {
       continue;
     }
 
