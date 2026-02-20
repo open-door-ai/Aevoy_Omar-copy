@@ -1621,6 +1621,204 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
   }
 });
 
+// ---- Telegram Webhook ----
+
+app.post("/webhook/telegram", async (req, res) => {
+  // Validate Telegram webhook secret header
+  const { verifyTelegramWebhookSecret, sendTelegramMessage } = await import("./services/telegram.js");
+  const headerSecret = req.headers["x-telegram-bot-api-secret-token"] as string || "";
+  if (!verifyTelegramWebhookSecret(headerSecret)) {
+    console.warn("[TELEGRAM] Invalid webhook secret");
+    return res.status(401).json({ ok: false });
+  }
+
+  res.json({ ok: true }); // Respond immediately (Telegram requires fast response)
+
+  try {
+    const update = req.body;
+    const message = update?.message;
+    if (!message) return;
+
+    const chatId = String(message.chat?.id || "");
+    const text = message.text || "";
+    const voice = message.voice;
+
+    if (!chatId) return;
+
+    const supabase = getSupabaseClient();
+
+    // Handle /start {code} — link Telegram account to Aevoy user
+    if (text.startsWith("/start ") || text.startsWith("/start@")) {
+      const parts = text.split(" ");
+      const code = parts[1]?.trim();
+      if (code) {
+        // Call Next.js link API to complete the linking
+        const webUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com";
+        const linkRes = await fetch(`${webUrl}/api/integrations/telegram/link`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-telegram-link-secret": process.env.TELEGRAM_WEBHOOK_SECRET || "",
+          },
+          body: JSON.stringify({ code, chatId }),
+        });
+        if (linkRes.ok) {
+          await sendTelegramMessage(chatId, "✅ Connected! Your Aevoy AI is now available on Telegram. Send me any message to get started.");
+        } else {
+          await sendTelegramMessage(chatId, "❌ That link code is invalid or expired. Please get a new code from your Aevoy dashboard.");
+        }
+        return;
+      }
+    }
+
+    // Resolve Aevoy user by telegram_chat_id
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, username, email, phone")
+      .eq("telegram_chat_id", chatId)
+      .single();
+
+    if (!profile) {
+      await sendTelegramMessage(chatId, "👋 I don't recognize this account. Please connect your Telegram from your Aevoy dashboard at aevoy.com");
+      return;
+    }
+
+    // Determine message body (text or transcribed voice note)
+    let body = text;
+
+    if (voice && !text) {
+      // Voice note received — transcription coming soon
+      await sendTelegramMessage(chatId, "🎙️ Voice notes coming soon! Please send your message as text for now.");
+      return;
+    }
+
+    if (!body.trim()) return;
+
+    // Handle "call me" shortcut
+    const CALL_ME = /^(call me|call my phone|ring me)\b/i;
+    if (CALL_ME.test(body.trim())) {
+      if (profile.phone) {
+        const { callUser } = await import("./services/twilio.js");
+        await callUser({ userId: profile.id, to: profile.phone, message: "Calling you now from your Aevoy AI assistant." });
+        await sendTelegramMessage(chatId, "📞 Calling you now on " + profile.phone.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") + "...");
+      } else {
+        await sendTelegramMessage(chatId, "⚠️ No phone number registered. Add one in your Aevoy settings to enable calling.");
+      }
+      return;
+    }
+
+    // Process as normal task
+    activeTasks++;
+    const { processTask } = await import("./services/processor.js");
+    processTask({
+      userId: profile.id,
+      username: profile.username,
+      from: chatId,
+      subject: "[Telegram]",
+      body,
+      inputChannel: "telegram",
+    })
+      .catch(console.error)
+      .finally(() => { activeTasks--; });
+
+  } catch (err) {
+    console.error("[TELEGRAM] Webhook error:", err);
+  }
+});
+
+// ---- WhatsApp Webhook (Twilio) ----
+
+app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req, res) => {
+  const rawFrom = req.body.From || ""; // "whatsapp:+1234567890"
+  const rawTo = req.body.To || "";
+  const message = req.body.Body || "";
+
+  // Strip "whatsapp:" prefix to get E.164 phone number
+  const fromPhone = rawFrom.replace(/^whatsapp:/i, "");
+
+  console.log(`[WHATSAPP] Incoming from ${maskPhone(fromPhone)}: "${message.slice(0, 50)}"`);
+
+  // Respond immediately with empty TwiML (response sent async via API)
+  res.type("text/xml");
+  res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+
+  if (!fromPhone || !message.trim()) return;
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Resolve user by registered phone OR linked whatsapp_phone
+    let profile: { id: string; username: string; email: string; phone: string | null } | null = null;
+
+    // Try profiles.phone first (their registered number)
+    const { data: byPhone } = await supabase
+      .from("profiles")
+      .select("id, username, email, phone")
+      .eq("phone", fromPhone)
+      .single();
+
+    if (byPhone) {
+      profile = byPhone;
+    } else {
+      // Try whatsapp_phone (explicitly linked)
+      const { data: byWhatsApp } = await supabase
+        .from("profiles")
+        .select("id, username, email, phone")
+        .eq("whatsapp_phone", fromPhone)
+        .maybeSingle();
+      if (byWhatsApp) profile = byWhatsApp;
+    }
+
+    if (!profile) {
+      const { sendWhatsAppMessage } = await import("./services/whatsapp.js");
+      await sendWhatsAppMessage(fromPhone, "👋 I don't recognize this number. Sign up at aevoy.com and connect WhatsApp in your settings.");
+      return;
+    }
+
+    // Auto-link whatsapp_phone if not already set (first message from this number)
+    const { data: profileFull } = await supabase
+      .from("profiles")
+      .select("whatsapp_phone")
+      .eq("id", profile.id)
+      .single();
+
+    if (!profileFull?.whatsapp_phone) {
+      await supabase
+        .from("profiles")
+        .update({ whatsapp_phone: fromPhone })
+        .eq("id", profile.id);
+    }
+
+    // Handle "call me" shortcut
+    const CALL_ME = /^(call me|call my phone|ring me)\b/i;
+    if (CALL_ME.test(message.trim())) {
+      const callTo = profile.phone || fromPhone;
+      const { callUser } = await import("./services/twilio.js");
+      await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Aevoy AI assistant." });
+      const { sendWhatsAppMessage } = await import("./services/whatsapp.js");
+      await sendWhatsAppMessage(fromPhone, "📞 Calling you now...");
+      return;
+    }
+
+    // Process as task
+    activeTasks++;
+    const { processTask } = await import("./services/processor.js");
+    processTask({
+      userId: profile.id,
+      username: profile.username,
+      from: fromPhone,
+      subject: "[WhatsApp]",
+      body: message,
+      inputChannel: "whatsapp",
+    })
+      .catch(console.error)
+      .finally(() => { activeTasks--; });
+
+  } catch (err) {
+    console.error("[WHATSAPP] Webhook error:", err);
+  }
+});
+
 // ---- Daily Check-in Call Webhook ----
 
 app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {

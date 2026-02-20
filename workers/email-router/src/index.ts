@@ -45,6 +45,7 @@ interface Profile {
   email_pin_hash?: string | null;
   email_pin_attempts?: number;
   email_pin_locked_until?: string | null;
+  unified_pin_hash?: string | null; // Unified PIN (replaces separate voice/email PINs)
 }
 
 type EmailType = 'confirmation_reply' | 'verification_reply' | 'magic_link' | 'new_task';
@@ -537,8 +538,8 @@ export default {
 
         const supabase = getSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
 
-        // Check if user has email PIN configured (check both new hash and legacy encrypted)
-        if (!user.email_pin && !user.email_pin_hash) {
+        // Check if user has a PIN configured (unified PIN, or legacy email PIN)
+        if (!user.unified_pin_hash && !user.email_pin && !user.email_pin_hash) {
           // No PIN - send setup instructions to registered email
           await sendEmailViaAgent({
             to: registeredEmail,

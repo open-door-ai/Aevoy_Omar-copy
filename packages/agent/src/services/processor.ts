@@ -97,6 +97,20 @@ async function sendViaChannel(
     }
   }
 
+  if (channel === "telegram") {
+    // from = telegram chat ID (stored as the task's 'from' field)
+    const { sendTelegramMessage } = await import("./telegram.js");
+    await sendTelegramMessage(from, body);
+    return;
+  }
+
+  if (channel === "whatsapp") {
+    // from = E.164 phone number
+    const { sendWhatsAppMessage } = await import("./whatsapp.js");
+    await sendWhatsAppMessage(from, body);
+    return;
+  }
+
   // Default to email
   await sendResponse({ to: email, from: aevoyFrom, subject, body });
 }

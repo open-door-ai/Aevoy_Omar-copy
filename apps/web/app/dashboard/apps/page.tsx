@@ -50,15 +50,22 @@ function ConnectedAppsContent() {
   const [googleStatus, setGoogleStatus] = useState<IntegrationStatus | null>(null);
   const [microsoftStatus, setMicrosoftStatus] = useState<IntegrationStatus | null>(null);
   const [twitterStatus, setTwitterStatus] = useState<IntegrationStatus | null>(null);
+  const [telegramStatus, setTelegramStatus] = useState<IntegrationStatus | null>(null);
+  const [whatsappStatus, setWhatsappStatus] = useState<IntegrationStatus | null>(null);
+  const [telegramQrData, setTelegramQrData] = useState<{ qrCodeDataUrl: string; deepLink: string } | null>(null);
+  const [whatsappQrData, setWhatsappQrData] = useState<{ joinQrDataUrl: string; joinUrl: string } | null>(null);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
   const [loadingCredentials, setLoadingCredentials] = useState(true);
   const [connectingGoogle, setConnectingGoogle] = useState(false);
   const [connectingMicrosoft, setConnectingMicrosoft] = useState(false);
   const [connectingTwitter, setConnectingTwitter] = useState(false);
+  const [connectingTelegram, setConnectingTelegram] = useState(false);
   const [disconnectingGoogle, setDisconnectingGoogle] = useState(false);
   const [disconnectingMicrosoft, setDisconnectingMicrosoft] = useState(false);
   const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
+  const [disconnectingTelegram, setDisconnectingTelegram] = useState(false);
+  const [disconnectingWhatsapp, setDisconnectingWhatsapp] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCred, setNewCred] = useState({ site_domain: '', username: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
@@ -68,14 +75,27 @@ function ConnectedAppsContent() {
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      const [googleRes, msRes, twitterRes] = await Promise.all([
+      const [googleRes, msRes, twitterRes, telegramRes, whatsappRes] = await Promise.all([
         fetch('/api/integrations/gmail'),
         fetch('/api/integrations/microsoft'),
         fetch('/api/integrations/twitter'),
+        fetch('/api/integrations/telegram'),
+        fetch('/api/integrations/whatsapp'),
       ]);
       if (googleRes.ok) setGoogleStatus(await googleRes.json());
       if (msRes.ok) setMicrosoftStatus(await msRes.json());
       if (twitterRes.ok) setTwitterStatus(await twitterRes.json());
+      if (telegramRes.ok) {
+        const td = await telegramRes.json();
+        setTelegramStatus({ connected: td.connected || false, connectedAt: td.connectedAt || null, email: td.username || null });
+      }
+      if (whatsappRes.ok) {
+        const wd = await whatsappRes.json();
+        setWhatsappStatus({ connected: wd.connected || false, connectedAt: wd.connectedAt || null, email: wd.phone || null });
+        if (!wd.connected && (wd.joinQrDataUrl || wd.joinUrl)) {
+          setWhatsappQrData({ joinQrDataUrl: wd.joinQrDataUrl || '', joinUrl: wd.joinUrl || '' });
+        }
+      }
     } catch (err) {
       console.error('Error fetching integrations:', err);
     } finally {
@@ -105,8 +125,9 @@ function ConnectedAppsContent() {
   useEffect(() => {
     const gmail = searchParams.get('gmail');
     const microsoft = searchParams.get('microsoft');
-
     const twitter = searchParams.get('twitter');
+    const telegram = searchParams.get('telegram');
+    const whatsapp = searchParams.get('whatsapp');
 
     if (gmail === 'connected') {
       toast.success('Google account connected successfully');
@@ -129,7 +150,21 @@ function ConnectedAppsContent() {
       toast.error(`Twitter connection failed: ${twitter}`);
     }
 
-    if (gmail || microsoft || twitter) {
+    if (telegram === 'connected') {
+      toast.success('Telegram connected successfully');
+      fetchIntegrations();
+    } else if (telegram && telegram !== 'connected') {
+      toast.error(`Telegram connection failed: ${telegram}`);
+    }
+
+    if (whatsapp === 'connected') {
+      toast.success('WhatsApp connected successfully');
+      fetchIntegrations();
+    } else if (whatsapp && whatsapp !== 'connected') {
+      toast.error(`WhatsApp connection failed: ${whatsapp}`);
+    }
+
+    if (gmail || microsoft || twitter || telegram || whatsapp) {
       router.replace('/dashboard/apps', { scroll: false });
     }
   }, [searchParams]);
@@ -229,6 +264,73 @@ function ConnectedAppsContent() {
       setDisconnectingTwitter(false);
     }
   };
+
+  const handleConnectTelegram = async () => {
+    setConnectingTelegram(true);
+    try {
+      const response = await fetch('/api/integrations/telegram', { method: 'POST' });
+      const data = await response.json();
+      if (data.qrCodeDataUrl || data.deepLink) {
+        setTelegramQrData({ qrCodeDataUrl: data.qrCodeDataUrl || '', deepLink: data.deepLink || '' });
+      } else {
+        toast.error(data.error || 'Failed to start Telegram connection');
+      }
+    } catch {
+      toast.error('Failed to connect Telegram');
+    } finally {
+      setConnectingTelegram(false);
+    }
+  };
+
+  const handleDisconnectTelegram = async () => {
+    setDisconnectingTelegram(true);
+    try {
+      const response = await fetch('/api/integrations/telegram', { method: 'DELETE' });
+      if (response.ok) {
+        setTelegramStatus({ connected: false, connectedAt: null, email: null });
+        setTelegramQrData(null);
+        toast.success('Telegram disconnected');
+      }
+    } catch {
+      toast.error('Failed to disconnect Telegram');
+    } finally {
+      setDisconnectingTelegram(false);
+    }
+  };
+
+  const handleDisconnectWhatsapp = async () => {
+    setDisconnectingWhatsapp(true);
+    try {
+      const response = await fetch('/api/integrations/whatsapp', { method: 'DELETE' });
+      if (response.ok) {
+        setWhatsappStatus({ connected: false, connectedAt: null, email: null });
+        toast.success('WhatsApp disconnected');
+      }
+    } catch {
+      toast.error('Failed to disconnect WhatsApp');
+    } finally {
+      setDisconnectingWhatsapp(false);
+    }
+  };
+
+  // Poll for Telegram connection after QR is shown
+  useEffect(() => {
+    if (!telegramQrData || telegramStatus?.connected) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/integrations/telegram');
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d.connected) {
+          setTelegramStatus({ connected: true, connectedAt: d.connectedAt || null, email: d.username || null });
+          setTelegramQrData(null);
+          toast.success('Telegram connected successfully');
+          clearInterval(interval);
+        }
+      } catch {}
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [telegramQrData, telegramStatus?.connected]);
 
   const handleAddCredential = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -474,6 +576,163 @@ function ConnectedAppsContent() {
                   Or save your login in the Credential Vault below — the agent can use the browser instead.
                 </p>
               </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Telegram */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#2AABEE' }}>
+                  <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white" aria-label="Telegram">
+                    <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.820 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.800-.945-.629-.332-1.077.205-1.551.137-.12 2.583-2.364 2.63-2.575.006-.026.012-.12-.046-.169-.058-.051-.144-.033-.205-.019-.088.02-1.495.949-4.22 2.787-.399.27-.76.402-1.085.395-.357-.008-1.044-.2-1.556-.364-.627-.2-1.126-.307-1.082-.648.021-.177.333-.357.934-.539 3.660-1.598 6.1-2.652 7.324-3.164 3.488-1.434 4.212-1.683 4.684-1.69z"/>
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-base">Telegram</CardTitle>
+                  <CardDescription>Chat with your AI via Telegram bot</CardDescription>
+                </div>
+              </div>
+              {loadingIntegrations ? null : telegramStatus?.connected ? (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              ) : (
+                <XCircle className="w-5 h-5 text-muted-foreground" />
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loadingIntegrations ? (
+              <SkeletonCard variant="stats" />
+            ) : telegramStatus?.connected ? (
+              <div className="space-y-3">
+                {telegramStatus.email && (
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Connected as: </span>
+                    <span className="font-medium">@{telegramStatus.email}</span>
+                  </div>
+                )}
+                {telegramStatus.connectedAt && (
+                  <div className="text-xs text-muted-foreground">
+                    Since {new Date(telegramStatus.connectedAt).toLocaleDateString()}
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDisconnectTelegram}
+                  disabled={disconnectingTelegram}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  {disconnectingTelegram ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  ) : null}
+                  Disconnect
+                </Button>
+              </div>
+            ) : telegramQrData ? (
+              <div className="space-y-3">
+                <img
+                  src={telegramQrData.qrCodeDataUrl}
+                  alt="Telegram QR Code"
+                  className="w-36 h-36 rounded-lg"
+                />
+                <a
+                  href={telegramQrData.deepLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-500 hover:underline flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Open Telegram
+                </a>
+                <p className="text-xs text-muted-foreground animate-pulse">Waiting for connection...</p>
+              </div>
+            ) : (
+              <Button onClick={handleConnectTelegram} disabled={connectingTelegram}>
+                {connectingTelegram ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                ) : (
+                  <ExternalLink className="w-4 h-4 mr-1" />
+                )}
+                Connect Telegram
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* WhatsApp */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#25D366' }}>
+                  <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white" aria-label="WhatsApp">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.890-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413z"/>
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-base">WhatsApp</CardTitle>
+                  <CardDescription>Chat with your AI via WhatsApp</CardDescription>
+                </div>
+              </div>
+              {loadingIntegrations ? null : whatsappStatus?.connected ? (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              ) : (
+                <XCircle className="w-5 h-5 text-muted-foreground" />
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loadingIntegrations ? (
+              <SkeletonCard variant="stats" />
+            ) : whatsappStatus?.connected ? (
+              <div className="space-y-3">
+                {whatsappStatus.email && (
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Connected: </span>
+                    <span className="font-medium">{whatsappStatus.email}</span>
+                  </div>
+                )}
+                {whatsappStatus.connectedAt && (
+                  <div className="text-xs text-muted-foreground">
+                    Since {new Date(whatsappStatus.connectedAt).toLocaleDateString()}
+                  </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDisconnectWhatsapp}
+                  disabled={disconnectingWhatsapp}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  {disconnectingWhatsapp ? (
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                  ) : null}
+                  Disconnect
+                </Button>
+              </div>
+            ) : whatsappQrData ? (
+              <div className="space-y-3">
+                <img
+                  src={whatsappQrData.joinQrDataUrl}
+                  alt="WhatsApp QR Code"
+                  className="w-36 h-36 rounded-lg"
+                />
+                <a
+                  href={whatsappQrData.joinUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-green-600 hover:underline flex items-center gap-1"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  Open WhatsApp
+                </a>
+                <p className="text-xs text-muted-foreground">Scan the QR or tap the link, then send any message to connect</p>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">WhatsApp not configured</p>
             )}
           </CardContent>
         </Card>

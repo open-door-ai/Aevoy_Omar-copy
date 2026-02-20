@@ -8,13 +8,14 @@ import { StepEmailVerification } from "./step-email-verification";
 import StepPhoneNew from "./step-phone-new";
 import StepInterview, { type InterviewData } from "./step-interview";
 import StepTour from "./step-tour";
+import StepMessaging from "./step-messaging";
 
 interface OnboardingFlowProps {
   username: string;
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
 
 export default function OnboardingFlow({ username, onComplete }: OnboardingFlowProps) {
   const [step, setStep] = useState(1);
@@ -189,11 +190,8 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
               transition={springs.default}
               className="w-full"
             >
-              <StepInterview
-                onNext={(interview) => {
-                  setData((d) => ({ ...d, interview }));
-                  goTo(6);
-                }}
+              <StepMessaging
+                onNext={() => goTo(6)}
                 onBack={() => goTo(4)}
               />
             </motion.div>
@@ -202,6 +200,27 @@ export default function OnboardingFlow({ username, onComplete }: OnboardingFlowP
           {step === 6 && (
             <motion.div
               key="step-6"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
+              <StepInterview
+                onNext={(interview) => {
+                  setData((d) => ({ ...d, interview }));
+                  goTo(7);
+                }}
+                onBack={() => goTo(5)}
+              />
+            </motion.div>
+          )}
+
+          {step === 7 && (
+            <motion.div
+              key="step-7"
               custom={direction}
               variants={slideVariants}
               initial="enter"
