@@ -69,7 +69,7 @@ function WaveformBars({ active }: { active: boolean }) {
         <div
           key={i}
           className={`w-1 rounded-full transition-all duration-300 ${
-            active ? 'bg-primary' : 'bg-zinc-600'
+            active ? 'bg-primary' : 'bg-border'
           }`}
           style={{
             height: active ? `${12 + Math.sin(i * 1.2) * 8}px` : '4px',
@@ -112,7 +112,7 @@ function AiAvatar({ speaking }: { speaking: boolean }) {
         className={`relative w-20 h-20 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
           speaking
             ? 'border-primary bg-primary/20'
-            : 'border-zinc-700 bg-zinc-800'
+            : 'border-border bg-muted'
         }`}
       >
         <div className="text-3xl select-none">🩺</div>
@@ -421,24 +421,23 @@ function ConsultationInner() {
 
   if (sessionEnded) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6">
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="max-w-md w-full text-center space-y-6">
-          <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mx-auto">
-            <PhoneOff className="w-7 h-7 text-zinc-400" />
+          <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto">
+            <PhoneOff className="w-7 h-7 text-muted-foreground" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-white">Session Ended</h2>
-            <p className="text-zinc-400 mt-2 text-sm leading-relaxed">
+            <h2 className="text-xl font-semibold text-foreground">Session Ended</h2>
+            <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
               Always consult a qualified healthcare provider for proper diagnosis and treatment.
             </p>
-            <p className="text-red-400 mt-3 text-sm font-medium">
+            <p className="text-red-500 mt-3 text-sm font-medium">
               If this is a medical emergency, call 911 immediately.
             </p>
           </div>
           <Button
             onClick={() => router.push('/dashboard/health')}
             variant="outline"
-            className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
           >
             Back to Health Dashboard
           </Button>
@@ -450,19 +449,19 @@ function ConsultationInner() {
   // ── Main consultation UI ──────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col">
+    <div className="min-h-screen bg-background text-foreground flex flex-col">
 
       {/* ── Top header ── */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-950/90 backdrop-blur sticky top-0 z-10">
+      <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-background/90 backdrop-blur sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-semibold tracking-tight">AI Health Consultation</h1>
           {connecting ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="w-3 h-3 animate-spin" />
               Connecting…
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-400">
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-500">
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               LIVE
             </span>
@@ -472,7 +471,7 @@ function ConsultationInner() {
           <button
             onClick={() => setVoiceEnabled((v) => !v)}
             className={`p-2 rounded-lg transition-colors ${
-              voiceEnabled ? 'text-zinc-300 hover:bg-zinc-800' : 'text-zinc-600 hover:bg-zinc-800'
+              voiceEnabled ? 'text-foreground hover:bg-muted' : 'text-muted-foreground hover:bg-muted'
             }`}
             title={voiceEnabled ? 'Mute AI voice' : 'Enable AI voice'}
           >
@@ -493,10 +492,10 @@ function ConsultationInner() {
       <div className="flex-1 grid md:grid-cols-[1fr_1.2fr] gap-0 overflow-hidden">
 
         {/* ══ LEFT COLUMN: Camera + controls ══ */}
-        <div className="flex flex-col gap-4 p-4 border-r border-zinc-800 overflow-y-auto">
+        <div className="flex flex-col gap-4 p-4 border-r border-border overflow-y-auto">
 
           {/* Camera feed */}
-          <div className="relative rounded-xl overflow-hidden bg-zinc-900 border border-zinc-800 aspect-video">
+          <div className="relative rounded-xl overflow-hidden bg-muted border border-border aspect-video">
             {cameraEnabled && !cameraError ? (
               <video
                 ref={videoRef}
@@ -507,7 +506,7 @@ function ConsultationInner() {
                 style={{ transform: 'scaleX(-1)' }} /* mirror mode */
               />
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 gap-2">
+              <div className="w-full h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <CameraOff className="w-8 h-8" />
                 <p className="text-xs text-center px-4">
                   {cameraError ?? 'Camera off'}
@@ -518,7 +517,7 @@ function ConsultationInner() {
             {/* Camera toggle overlay */}
             <button
               onClick={() => setCameraEnabled((v) => !v)}
-              className="absolute bottom-2 right-2 p-2 rounded-lg bg-zinc-900/80 backdrop-blur text-zinc-300 hover:bg-zinc-700 transition-colors"
+              className="absolute bottom-2 right-2 p-2 rounded-lg bg-background/80 backdrop-blur text-foreground hover:bg-muted transition-colors"
               title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
             >
               {cameraEnabled ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
@@ -532,7 +531,7 @@ function ConsultationInner() {
               disabled={analyzing || !cameraEnabled || !!cameraError}
               variant="outline"
               size="sm"
-              className="flex-1 border-zinc-700 text-zinc-300 hover:bg-zinc-800 gap-1.5"
+              className="flex-1 gap-1.5"
             >
               {analyzing ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -546,7 +545,7 @@ function ConsultationInner() {
               onClick={() => fileInputRef.current?.click()}
               variant="outline"
               size="sm"
-              className="flex-1 border-zinc-700 text-zinc-300 hover:bg-zinc-800 gap-1.5"
+              className="flex-1 gap-1.5"
             >
               <Upload className="w-4 h-4" />
               Upload Image
@@ -562,7 +561,7 @@ function ConsultationInner() {
 
           {/* Upload preview */}
           {uploadPreview && (
-            <div className="relative rounded-lg overflow-hidden border border-zinc-700">
+            <div className="relative rounded-lg overflow-hidden border border-border">
               <img
                 src={uploadPreview}
                 alt="Upload preview"
@@ -573,7 +572,7 @@ function ConsultationInner() {
                   setUploadPreview(null);
                   setUploadBase64(null);
                 }}
-                className="absolute top-2 right-2 p-1 rounded-full bg-zinc-900/80 text-zinc-300 hover:bg-zinc-700"
+                className="absolute top-2 right-2 p-1 rounded-full bg-background/80 text-foreground hover:bg-muted"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -593,7 +592,7 @@ function ConsultationInner() {
 
           {/* Symptoms text input */}
           <div className="space-y-1.5">
-            <label className="text-xs text-zinc-500 font-medium uppercase tracking-wider">
+            <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
               Describe your symptoms
             </label>
             <textarea
@@ -601,7 +600,7 @@ function ConsultationInner() {
               onChange={(e) => setSymptomsText(e.target.value)}
               placeholder="What are you showing or experiencing? Be as specific as possible…"
               rows={3}
-              className="w-full resize-none rounded-lg border border-zinc-700 bg-zinc-900 text-sm text-zinc-100 placeholder-zinc-600 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full resize-none rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground/60 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
 
@@ -610,8 +609,8 @@ function ConsultationInner() {
             onClick={listening ? stopListening : startListening}
             className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border transition-all ${
               listening
-                ? 'border-red-500 bg-red-950/40 text-red-400 animate-pulse'
-                : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:bg-zinc-800'
+                ? 'border-red-500 bg-red-500/10 text-red-500 animate-pulse'
+                : 'border-border bg-card text-muted-foreground hover:bg-muted'
             }`}
           >
             {listening ? (
@@ -628,7 +627,7 @@ function ConsultationInner() {
           </button>
 
           {/* Connectivity indicator */}
-          <div className="flex items-center gap-1.5 text-xs text-zinc-600">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
             <Wifi className="w-3.5 h-3.5" />
             <span>Encrypted session &middot; {consultId ? `ID ${consultId.slice(0, 8)}…` : 'No session ID'}</span>
           </div>
@@ -638,11 +637,11 @@ function ConsultationInner() {
         <div className="flex flex-col h-[calc(100vh-57px)] overflow-hidden">
 
           {/* AI avatar header */}
-          <div className="p-5 border-b border-zinc-800 flex items-center gap-4">
+          <div className="p-5 border-b border-border flex items-center gap-4">
             <AiAvatar speaking={aiSpeaking} />
             <div>
               <p className="font-semibold text-sm">AI Health Advisor</p>
-              <p className="text-xs text-zinc-500 leading-snug mt-0.5">
+              <p className="text-xs text-muted-foreground leading-snug mt-0.5">
                 <AlertTriangle className="w-3 h-3 inline mr-0.5 text-amber-500" />
                 Not a licensed physician. For informational purposes only.
               </p>
@@ -664,7 +663,7 @@ function ConsultationInner() {
                 <div
                   className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                     msg.role === 'ai'
-                      ? 'bg-zinc-800 text-zinc-100 rounded-tl-sm'
+                      ? 'bg-muted text-foreground rounded-tl-sm'
                       : 'bg-primary text-primary-foreground rounded-tr-sm'
                   }`}
                 >
@@ -682,10 +681,10 @@ function ConsultationInner() {
             {/* Typing indicator */}
             {analyzing && (
               <div className="flex justify-start">
-                <div className="bg-zinc-800 px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <div className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <div className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                <div className="bg-muted px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
               </div>
             )}
@@ -694,7 +693,7 @@ function ConsultationInner() {
           </div>
 
           {/* Text input bar */}
-          <div className="p-3 border-t border-zinc-800 bg-zinc-950">
+          <div className="p-3 border-t border-border bg-background">
             <div className="flex items-end gap-2">
               <textarea
                 value={textInput}
@@ -707,7 +706,7 @@ function ConsultationInner() {
                 }}
                 placeholder="Type a message or ask a question…"
                 rows={1}
-                className="flex-1 resize-none rounded-xl border border-zinc-700 bg-zinc-900 text-sm text-zinc-100 placeholder-zinc-600 px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary max-h-32 overflow-y-auto"
+                className="flex-1 resize-none rounded-xl border border-border bg-card text-sm text-foreground placeholder:text-muted-foreground/60 px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary max-h-32 overflow-y-auto"
                 style={{ minHeight: '40px' }}
               />
               <Button
@@ -723,7 +722,7 @@ function ConsultationInner() {
                 )}
               </Button>
             </div>
-            <p className="text-[10px] text-zinc-700 mt-1.5 px-1">
+            <p className="text-[10px] text-muted-foreground/50 mt-1.5 px-1">
               Press Enter to send &middot; Shift+Enter for new line
             </p>
           </div>
@@ -739,8 +738,8 @@ export default function ConsultationPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-3 text-zinc-400">
+        <div className="min-h-screen bg-background flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-muted-foreground">
             <Loader2 className="w-8 h-8 animate-spin" />
             <p className="text-sm">Starting consultation…</p>
           </div>

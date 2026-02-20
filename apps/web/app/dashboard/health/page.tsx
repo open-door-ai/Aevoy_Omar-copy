@@ -176,6 +176,8 @@ export default function HealthPage() {
   const [loadingMetrics, setLoadingMetrics] = useState(true);
   const [loadingInsight, setLoadingInsight] = useState(true);
   const [dismissingDisclaimer, setDismissingDisclaimer] = useState(false);
+  const [connectingFitbit, setConnectingFitbit] = useState(false);
+  const [fitbitError, setFitbitError] = useState<string | null>(null);
 
   // ── Data fetch ────────────────────────────────────────────────────────────
 
@@ -288,14 +290,20 @@ export default function HealthPage() {
   };
 
   const connectFitbit = async () => {
+    setFitbitError(null);
+    setConnectingFitbit(true);
     try {
       const res = await fetch('/api/integrations/fitbit', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.authUrl) window.location.href = data.authUrl;
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.authUrl) {
+        window.location.href = data.authUrl;
+        return;
       }
+      setFitbitError(data.error ?? 'Unable to connect. Fitbit integration may not be configured yet.');
     } catch {
-      // silent
+      setFitbitError('Network error. Please try again.');
+    } finally {
+      setConnectingFitbit(false);
     }
   };
 
@@ -383,14 +391,12 @@ export default function HealthPage() {
                 >
                   Fitbit
                 </button>
-                {' '}or use our{' '}
+                {' '}or set up an{' '}
                 <a
-                  href="https://www.icloud.com/shortcuts"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="/dashboard/apps"
                   className="text-primary underline underline-offset-2 hover:no-underline"
                 >
-                  Apple Shortcut
+                  Apple Shortcuts webhook
                 </a>{' '}
                 to start tracking.
               </p>
@@ -749,10 +755,21 @@ export default function HealthPage() {
                 variant={fitbitConnected ? 'outline' : 'default'}
                 className="w-full gap-2"
                 onClick={connectFitbit}
+                disabled={connectingFitbit}
               >
-                <ExternalLink className="w-4 h-4" />
+                {connectingFitbit ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <ExternalLink className="w-4 h-4" />
+                )}
                 {fitbitConnected ? 'Reconnect Fitbit' : 'Connect Fitbit'}
               </Button>
+              {fitbitError && (
+                <p className="text-xs text-destructive mt-2 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  {fitbitError}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -764,38 +781,26 @@ export default function HealthPage() {
                 Apple Health
               </CardTitle>
               <CardDescription>
-                Send health data from your iPhone via a Shortcut.
+                Push iPhone health data to Aevoy via a personal webhook.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
-                <ol className="space-y-1.5 text-xs text-muted-foreground">
-                  <li className="flex items-start gap-1.5">
-                    <span className="font-bold text-foreground shrink-0">1.</span>
-                    Open the Shortcuts app on your iPhone.
-                  </li>
-                  <li className="flex items-start gap-1.5">
-                    <span className="font-bold text-foreground shrink-0">2.</span>
-                    Install the Aevoy Health shortcut via the link below.
-                  </li>
-                  <li className="flex items-start gap-1.5">
-                    <span className="font-bold text-foreground shrink-0">3.</span>
-                    Run it daily or set an automation.
-                  </li>
-                </ol>
-                {/* QR code placeholder */}
-                <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center shrink-0 border border-border">
-                  <p className="text-[8px] text-muted-foreground text-center leading-tight">QR Code</p>
-                </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Use Apple Shortcuts, Automations, or any HTTP tool to POST your health metrics
+                to your personal endpoint. Your webhook URL is shown in{' '}
+                <a href="/dashboard/apps" className="text-primary underline underline-offset-2 hover:no-underline">
+                  Connected Apps
+                </a>.
+              </p>
+              <div className="rounded-lg border border-border bg-muted/50 px-3 py-2">
+                <p className="text-[11px] font-mono text-muted-foreground truncate">
+                  POST /api/health/shortcuts?token=YOUR_TOKEN
+                </p>
               </div>
-              <a
-                href="https://www.icloud.com/shortcuts"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <a href="/dashboard/apps">
                 <Button variant="outline" className="w-full gap-2 text-sm">
                   <ExternalLink className="w-4 h-4" />
-                  Install Apple Shortcut
+                  View Webhook Setup
                 </Button>
               </a>
             </CardContent>
