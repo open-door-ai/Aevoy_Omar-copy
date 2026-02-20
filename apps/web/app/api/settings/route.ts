@@ -44,6 +44,7 @@ export async function GET() {
     monthly_budget: 15.0,
     dashboard_tour_seen: false,
     report_frequency: "weekly",
+    health_disclaimer_acknowledged: false,
   };
 
   return NextResponse.json(response);

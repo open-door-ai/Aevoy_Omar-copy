@@ -3361,11 +3361,12 @@ async function executeAction(
           .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
           .order("recorded_at", { ascending: false });
 
+        const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com";
         if (!metrics || metrics.length === 0) {
           return {
             action,
             success: true,
-            result: "No health data connected yet. You can connect Fitbit or Apple Health in the Health section of your dashboard (/dashboard/health) to get personalized health insights.",
+            result: `No health data connected yet. Connect Fitbit or Apple Health at ${appUrl}/dashboard/health to get personalized insights.`,
           };
         }
 
