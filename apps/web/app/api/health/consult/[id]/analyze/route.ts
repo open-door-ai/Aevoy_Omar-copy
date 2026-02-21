@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+// Use vision model when image is present, fast model for text-only
+const GROQ_TEXT_MODEL = "llama-3.3-70b-versatile";
+const GROQ_VISION_MODEL = "llama-3.2-90b-vision-preview";
 
 // ─── Doctor system prompt ─────────────────────────────────────────────────────
 // Warm, human-sounding. No bullet points, no lists, no "Certainly!" openers.
@@ -61,17 +63,21 @@ interface AnalyzeBody {
   conversationHistory?: Array<{ role: "ai" | "user"; text: string }>;
 }
 
-interface ClaudeAnalysisResult {
-  response: string;
-  urgency?: "routine" | "monitor" | "seek_care";
+type MessageContent =
+  | string
+  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+
+interface GroqMessage {
+  role: "system" | "user" | "assistant";
+  content: MessageContent;
 }
 
 /**
  * POST /api/health/consult/[id]/analyze
  *
  * Handles both:
- * 1. Visual analysis: imageBase64 + symptoms text
- * 2. Text-only chat: symptoms/message text (no image)
+ * 1. Visual analysis: imageBase64 + symptoms text (uses Groq vision model)
+ * 2. Text-only chat: symptoms/message text (uses fast Groq text model)
  * 3. Conversation history is forwarded for context
  */
 export async function POST(
@@ -130,7 +136,7 @@ export async function POST(
       );
     }
 
-    if (!ANTHROPIC_API_KEY) {
+    if (!GROQ_API_KEY) {
       return NextResponse.json(
         { error: "AI analysis not configured" },
         { status: 503 }
@@ -160,13 +166,12 @@ export async function POST(
       }
     }
 
-    // Build conversation history for multi-turn context
-    const conversationMessages: Array<{ role: string; content: string }> = [];
+    // Build conversation history for multi-turn context (Groq/OpenAI format)
+    const messages: GroqMessage[] = [];
     if (body.conversationHistory && body.conversationHistory.length > 0) {
-      // Include last 6 messages for context (3 turns)
       const recent = body.conversationHistory.slice(-6);
       for (const msg of recent) {
-        conversationMessages.push({
+        messages.push({
           role: msg.role === "ai" ? "assistant" : "user",
           content: msg.text,
         });
@@ -174,36 +179,6 @@ export async function POST(
     }
 
     // Build the user message content
-    const userMessageContent: Array<{ type: string; [key: string]: unknown }> = [];
-
-    // Add image if present
-    if (hasImage) {
-      let mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg";
-      const rawBase64 = body.imageBase64!;
-
-      if (rawBase64.startsWith("data:")) {
-        const mimeMatch = rawBase64.match(/^data:(image\/\w+);base64,/);
-        if (mimeMatch) {
-          const mime = mimeMatch[1];
-          if (mime === "image/png" || mime === "image/gif" || mime === "image/webp") {
-            mediaType = mime as typeof mediaType;
-          }
-        }
-      }
-
-      const imageData = rawBase64.replace(/^data:image\/\w+;base64,/, "");
-
-      userMessageContent.push({
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: mediaType,
-          data: imageData,
-        },
-      });
-    }
-
-    // Add text message
     const textContent = [
       userText ? `Patient says: ${userText}` : "[Patient shared an image]",
       metricsContext,
@@ -211,46 +186,71 @@ export async function POST(
       .filter(Boolean)
       .join("\n");
 
-    userMessageContent.push({ type: "text", text: textContent });
+    let userMessageContent: MessageContent;
 
-    // Build messages array
-    const messages: Array<{ role: string; content: unknown }> = [
-      ...conversationMessages,
-      {
-        role: "user",
-        content: userMessageContent.length === 1 ? userMessageContent[0].text : userMessageContent,
-      },
+    if (hasImage) {
+      // Vision format: image_url + text
+      const rawBase64 = body.imageBase64!;
+      let dataUrl = rawBase64;
+      if (!rawBase64.startsWith("data:")) {
+        dataUrl = `data:image/jpeg;base64,${rawBase64}`;
+      }
+
+      userMessageContent = [
+        {
+          type: "image_url" as const,
+          image_url: { url: dataUrl },
+        },
+        {
+          type: "text" as const,
+          text: textContent,
+        },
+      ];
+    } else {
+      // Text-only: just a string
+      userMessageContent = textContent;
+    }
+
+    messages.push({ role: "user", content: userMessageContent });
+
+    // Choose model — vision model when image present
+    const model = hasImage ? GROQ_VISION_MODEL : GROQ_TEXT_MODEL;
+
+    // Prepend system message (OpenAI/Groq format — system goes in messages array)
+    const fullMessages: GroqMessage[] = [
+      { role: "system", content: DOCTOR_SYSTEM_PROMPT },
+      ...messages,
     ];
 
-    // Call Claude
-    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    // Call Groq (OpenAI-compatible endpoint)
+    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        "Authorization": `Bearer ${GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: CLAUDE_MODEL,
+        model,
         max_tokens: 400,
-        system: DOCTOR_SYSTEM_PROMPT,
-        messages,
+        temperature: 0.7,
+        messages: fullMessages,
       }),
     });
 
-    if (!claudeRes.ok) {
-      console.error(`[CONSULT ANALYZE] Claude API error: HTTP ${claudeRes.status}`);
+    if (!groqRes.ok) {
+      const errText = await groqRes.text().catch(() => "");
+      console.error(`[CONSULT ANALYZE] Groq API error: HTTP ${groqRes.status} — ${errText.slice(0, 200)}`);
       return NextResponse.json(
         { error: "AI analysis failed" },
         { status: 502 }
       );
     }
 
-    const claudeData = await claudeRes.json() as {
-      content?: Array<{ type: string; text?: string }>;
+    const groqData = await groqRes.json() as {
+      choices?: Array<{ message?: { content?: string } }>;
     };
 
-    const rawText = claudeData.content?.[0]?.text?.trim() || "";
+    const rawText = groqData.choices?.[0]?.message?.content?.trim() || "";
 
     // The doctor responds in plain text — no JSON parsing needed
     const response = rawText || "Let me look into that. Can you describe what you're experiencing in a bit more detail?";
