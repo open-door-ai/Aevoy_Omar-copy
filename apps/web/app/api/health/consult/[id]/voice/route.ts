@@ -97,7 +97,7 @@ export async function POST(
     // - style 0.4: adds natural expressiveness (turbo_v2_5 feature)
     // - use_speaker_boost: improves clarity on medical terminology
     const ttsRes = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream`,
       {
         method: "POST",
         headers: {
@@ -127,14 +127,12 @@ export async function POST(
       );
     }
 
-    // Return audio stream to client
-    const audioBuffer = await ttsRes.arrayBuffer();
-
-    return new NextResponse(audioBuffer, {
+    // Stream audio directly to client — first byte arrives in ~300ms
+    return new Response(ttsRes.body, {
       status: 200,
       headers: {
         "Content-Type": "audio/mpeg",
-        "Content-Length": String(audioBuffer.byteLength),
+        "Transfer-Encoding": "chunked",
         "Cache-Control": "no-store",
       },
     });
