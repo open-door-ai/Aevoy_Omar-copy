@@ -10,8 +10,10 @@ interface StepEmailCalendarProps {
 type Provider = "google" | "microsoft" | "imap" | null;
 type ImapProvider = "gmail" | "outlook" | "yahoo" | "icloud" | "other";
 
-const IMAP_GUIDES: Record<ImapProvider, { steps: { text: string; url?: string; urlLabel?: string }[] }> = {
+const IMAP_GUIDES: Record<ImapProvider, { videoId?: string; videoDuration?: string; steps: { text: string; url?: string; urlLabel?: string }[] }> = {
   gmail: {
+    videoId: "N_J3HCATA1c",
+    videoDuration: "41s",
     steps: [
       { text: "Go to", url: "https://myaccount.google.com/security", urlLabel: "Google Account Security" },
       { text: "Ensure 2-Step Verification is On" },
@@ -20,6 +22,8 @@ const IMAP_GUIDES: Record<ImapProvider, { steps: { text: string; url?: string; u
     ],
   },
   outlook: {
+    videoId: "7yU97IFDWKw",
+    videoDuration: "1:34",
     steps: [
       { text: "Go to", url: "https://account.microsoft.com/security", urlLabel: "Microsoft Security" },
       { text: "Click Advanced security options → enable Two-step verification" },
@@ -28,6 +32,8 @@ const IMAP_GUIDES: Record<ImapProvider, { steps: { text: string; url?: string; u
     ],
   },
   yahoo: {
+    videoId: "ZNsQQT9KoIU",
+    videoDuration: "1:20",
     steps: [
       { text: "Go to", url: "https://login.yahoo.com/account/security", urlLabel: "Yahoo Account Security" },
       { text: "Enable Two-step verification" },
@@ -36,6 +42,8 @@ const IMAP_GUIDES: Record<ImapProvider, { steps: { text: string; url?: string; u
     ],
   },
   icloud: {
+    videoId: "IeFkbBI0DXs",
+    videoDuration: "33s",
     steps: [
       { text: "Sign in at", url: "https://appleid.apple.com", urlLabel: "appleid.apple.com" },
       { text: "Under Sign-In and Security → App-Specific Passwords" },
@@ -244,7 +252,22 @@ export default function StepEmailCalendar({ onNext, onBack }: StepEmailCalendarP
 
               {/* Guide steps */}
               <div className="bg-gray-50 rounded-xl p-4">
-                <p className="text-xs font-semibold text-gray-700 mb-3">Step-by-step: getting your app password</p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-gray-700">Step-by-step: getting your app password</p>
+                  {guide.videoId && (
+                    <a
+                      href={`https://www.youtube.com/watch?v=${guide.videoId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-[11px] font-medium text-red-600 hover:text-red-700 transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                      </svg>
+                      Watch {guide.videoDuration} tutorial →
+                    </a>
+                  )}
+                </div>
                 <ol className="space-y-2">
                   {guide.steps.map((step, i) => (
                     <li key={i} className="flex gap-3 text-xs text-gray-600">

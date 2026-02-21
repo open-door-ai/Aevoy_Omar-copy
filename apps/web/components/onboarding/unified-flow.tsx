@@ -11,6 +11,7 @@ import { StepAIBehavior } from "./step-ai-behavior";
 import { StepTimezone } from "./step-timezone";
 import StepVerification from "./step-verification";
 import { StepLegal } from "./step-legal";
+import StepEmailCalendar from "./step-email-calendar";
 import StepInterview, { type InterviewData } from "./step-interview";
 import StepTour from "./step-tour";
 
@@ -19,7 +20,7 @@ interface UnifiedFlowProps {
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 11;
+const TOTAL_STEPS = 12;
 
 export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) {
   const [step, setStep] = useState(1);
@@ -281,11 +282,8 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepInterview
-                onNext={(interviewData) => {
-                  setData((d) => ({ ...d, interview: interviewData }));
-                  goTo(11);
-                }}
+              <StepEmailCalendar
+                onNext={() => goTo(11)}
                 onBack={() => goTo(9)}
               />
             </motion.div>
@@ -294,6 +292,27 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
           {step === 11 && (
             <motion.div
               key="step-11"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
+              <StepInterview
+                onNext={(interviewData) => {
+                  setData((d) => ({ ...d, interview: interviewData }));
+                  goTo(12);
+                }}
+                onBack={() => goTo(10)}
+              />
+            </motion.div>
+          )}
+
+          {step === 12 && (
+            <motion.div
+              key="step-12"
               custom={direction}
               variants={slideVariants}
               initial="enter"
