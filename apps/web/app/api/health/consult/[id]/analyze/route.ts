@@ -4,31 +4,75 @@ import { createClient } from "@/lib/supabase/server";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 
-const ANALYSIS_SYSTEM_PROMPT = `You are a health information assistant (not a licensed physician). Analyze the provided image and user's description.
-Describe what you observe (colors, patterns, size estimates if visible).
-List 2-4 conditions this COULD resemble (educational only, not a diagnosis).
-Rate urgency: 'routine' (can wait for next appointment), 'monitor' (watch closely), or 'seek_care' (see a doctor soon).
-Always end with: 'Please consult a healthcare professional for proper diagnosis and treatment.'
-Keep response under 200 words. Format as JSON: { "observations": string[], "conditions": string[], "urgency": "routine" | "monitor" | "seek_care", "advice": string }`;
+// ─── Doctor system prompt ─────────────────────────────────────────────────────
+// Warm, human-sounding. No bullet points, no lists, no "Certainly!" openers.
+// Talks like a real doctor would on a video call — concise, direct, empathetic.
+
+const DOCTOR_SYSTEM_PROMPT = `You are Dr. Nova, a GP with a background in internal medicine, conducting a video consultation. You speak exactly how a real doctor does on a video call — warm, direct, conversational, and clinically precise.
+
+PERSONALITY:
+- You're genuinely interested in the patient. You ask follow-up questions naturally.
+- You use plain language. No medical jargon unless you immediately explain it.
+- You're honest about uncertainty — "this could be a few different things."
+- You're calm under pressure, occasionally reassuring with dry humor when it fits.
+- If something is probably fine, say so directly. Don't hedge everything.
+
+VOICE RULES (this conversation is spoken aloud — TTS will render it):
+- Keep responses SHORT: 2-4 sentences max unless the situation genuinely requires more.
+- Never use bullet points, numbered lists, headers, or markdown symbols.
+- Never use em dashes (—) mid-sentence. Use a comma or break it into two sentences.
+- Vary your sentence length: mix short punchy observations with longer explanatory ones.
+- React briefly before analyzing: start with "Hm.", "Okay so", "Right," or "Yeah" — sounds live, not pre-written.
+
+BANNED PHRASES (these make you sound like a chatbot, not a doctor):
+- Never start with: "Certainly!", "Absolutely!", "Of course!", "Great question!", "I'd be happy to..."
+- Never say: "I understand your concern" — call center script, not how doctors talk
+- Never say: "It's important to note", "It's worth mentioning", "This underscores"
+- Never use: "Furthermore", "Moreover", "In addition", "In summary", "In conclusion"
+- Never use inflated words: "delve", "leverage", "utilize", "commence", "endeavor", "illuminate"
+- Don't narrate empathy performatively: not "That sounds really difficult." Instead absorb it: "How long has this been going on — has it affected your sleep?"
+
+WHAT REAL DOCTORS DO ON VIDEO CALLS:
+- React to what the patient says before analyzing: "Hm, okay." then the clinical thought
+- Ask one question at a time — not "tell me about X, Y, and Z"
+- Give a verdict with an invitation to push back: "Sounds like it could be tension headaches — does that track with you?"
+- Use "could be", "my read is", "I'd want to know more before saying" — real diagnostic uncertainty language
+- It's okay to say "let me think about this for a sec" — doctors do this
+
+MEDICAL APPROACH:
+- Give real clinical thinking: what it could be, what would rule things out, what to watch for.
+- Mention when to seek urgent care if symptoms warrant it.
+- If shown an image: describe what you see clinically, give 2-3 differential possibilities, ask clarifying questions.
+- Never sound more certain than you are. "Could be a few things" is the honest, appropriate response.
+
+RESPONSE FORMAT:
+- Plain sentences only — no JSON, no lists, no formatting
+- Weave the disclaimer in once naturally: "worth seeing someone in person if this doesn't clear up"
+- End most responses with exactly one specific follow-up question
+- BAD: "Can you tell me more about your symptoms?" | GOOD: "Is the pain constant or does it come and go?"
+
+DISCLAIMER: Work in once naturally that this is informational and not a formal medical diagnosis.`;
 
 interface AnalyzeBody {
-  imageBase64: string;
-  symptoms: string;
+  imageBase64?: string;  // optional — text-only messages don't include it
+  symptoms?: string;
+  message?: string;      // alias for symptoms in text-only mode
   includeMetrics?: boolean;
+  conversationHistory?: Array<{ role: "ai" | "user"; text: string }>;
 }
 
 interface ClaudeAnalysisResult {
-  observations: string[];
-  conditions: string[];
-  urgency: "routine" | "monitor" | "seek_care";
-  advice: string;
+  response: string;
+  urgency?: "routine" | "monitor" | "seek_care";
 }
 
 /**
  * POST /api/health/consult/[id]/analyze
  *
- * Performs real-time visual analysis of an image (e.g. skin condition photo)
- * during an active health consultation session.
+ * Handles both:
+ * 1. Visual analysis: imageBase64 + symptoms text
+ * 2. Text-only chat: symptoms/message text (no image)
+ * 3. Conversation history is forwarded for context
  */
 export async function POST(
   request: Request,
@@ -76,16 +120,12 @@ export async function POST(
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    if (!body.imageBase64 || typeof body.imageBase64 !== "string") {
-      return NextResponse.json(
-        { error: "imageBase64 is required" },
-        { status: 400 }
-      );
-    }
+    const userText = body.symptoms || body.message || "";
+    const hasImage = !!body.imageBase64 && typeof body.imageBase64 === "string";
 
-    if (!body.symptoms || typeof body.symptoms !== "string") {
+    if (!userText && !hasImage) {
       return NextResponse.json(
-        { error: "symptoms description is required" },
+        { error: "Please describe your symptoms or share an image" },
         { status: 400 }
       );
     }
@@ -116,35 +156,73 @@ export async function POST(
           (m) =>
             `${m.metric_type}: ${m.value} ${m.unit} (${new Date(m.recorded_at).toLocaleDateString()})`
         );
-        metricsContext = `\n\nUser's recent health metrics (last 3 days):\n${summaryLines.join("\n")}`;
+        metricsContext = `\n\nPatient's recent health metrics:\n${summaryLines.join("\n")}`;
       }
     }
 
-    // Detect image media type from base64 prefix or default to jpeg
-    let mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" =
-      "image/jpeg";
-    if (body.imageBase64.startsWith("data:")) {
-      const mimeMatch = body.imageBase64.match(/^data:(image\/\w+);base64,/);
-      if (mimeMatch) {
-        const mime = mimeMatch[1];
-        if (
-          mime === "image/png" ||
-          mime === "image/gif" ||
-          mime === "image/webp"
-        ) {
-          mediaType = mime;
+    // Build conversation history for multi-turn context
+    const conversationMessages: Array<{ role: string; content: string }> = [];
+    if (body.conversationHistory && body.conversationHistory.length > 0) {
+      // Include last 6 messages for context (3 turns)
+      const recent = body.conversationHistory.slice(-6);
+      for (const msg of recent) {
+        conversationMessages.push({
+          role: msg.role === "ai" ? "assistant" : "user",
+          content: msg.text,
+        });
+      }
+    }
+
+    // Build the user message content
+    const userMessageContent: Array<{ type: string; [key: string]: unknown }> = [];
+
+    // Add image if present
+    if (hasImage) {
+      let mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp" = "image/jpeg";
+      const rawBase64 = body.imageBase64!;
+
+      if (rawBase64.startsWith("data:")) {
+        const mimeMatch = rawBase64.match(/^data:(image\/\w+);base64,/);
+        if (mimeMatch) {
+          const mime = mimeMatch[1];
+          if (mime === "image/png" || mime === "image/gif" || mime === "image/webp") {
+            mediaType = mime as typeof mediaType;
+          }
         }
       }
+
+      const imageData = rawBase64.replace(/^data:image\/\w+;base64,/, "");
+
+      userMessageContent.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: mediaType,
+          data: imageData,
+        },
+      });
     }
 
-    // Strip data URI prefix if present
-    const imageData = body.imageBase64.replace(/^data:image\/\w+;base64,/, "");
+    // Add text message
+    const textContent = [
+      userText ? `Patient says: ${userText}` : "[Patient shared an image]",
+      metricsContext,
+    ]
+      .filter(Boolean)
+      .join("\n");
 
-    const userMessage = `User describes: ${body.symptoms}${metricsContext}
+    userMessageContent.push({ type: "text", text: textContent });
 
-Please analyze the image and provide your health information observations in the requested JSON format.`;
+    // Build messages array
+    const messages: Array<{ role: string; content: unknown }> = [
+      ...conversationMessages,
+      {
+        role: "user",
+        content: userMessageContent.length === 1 ? userMessageContent[0].text : userMessageContent,
+      },
+    ];
 
-    // Call Claude Vision API
+    // Call Claude
     const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -154,27 +232,9 @@ Please analyze the image and provide your health information observations in the
       },
       body: JSON.stringify({
         model: CLAUDE_MODEL,
-        max_tokens: 512,
-        system: ANALYSIS_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType,
-                  data: imageData,
-                },
-              },
-              {
-                type: "text",
-                text: userMessage,
-              },
-            ],
-          },
-        ],
+        max_tokens: 400,
+        system: DOCTOR_SYSTEM_PROMPT,
+        messages,
       }),
     });
 
@@ -190,54 +250,33 @@ Please analyze the image and provide your health information observations in the
       content?: Array<{ type: string; text?: string }>;
     };
 
-    const rawText = claudeData.content?.[0]?.text || "";
+    const rawText = claudeData.content?.[0]?.text?.trim() || "";
 
-    // Parse Claude's JSON response
-    let analysis: ClaudeAnalysisResult;
-    try {
-      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON found in response");
-      analysis = JSON.parse(jsonMatch[0]);
-    } catch {
-      // Fallback: treat raw text as advice
-      analysis = {
-        observations: [rawText],
-        conditions: [],
-        urgency: "routine",
-        advice:
-          "Please consult a healthcare professional for proper diagnosis and treatment.",
-      };
-    }
+    // The doctor responds in plain text — no JSON parsing needed
+    const response = rawText || "Let me look into that. Can you describe what you're experiencing in a bit more detail?";
 
-    const disclaimer =
-      "This is NOT a medical diagnosis. The observations above are for informational purposes only. Always consult a licensed healthcare professional for medical advice, diagnosis, or treatment.";
-
-    // Append analysis to consultation transcript (best-effort)
+    // Append to consultation transcript (best-effort)
     const transcriptEntry = {
       timestamp: new Date().toISOString(),
-      type: "image_analysis",
-      symptoms: body.symptoms,
-      analysis,
+      type: hasImage ? "image_analysis" : "text_message",
+      userMessage: userText,
+      aiResponse: response,
     };
 
-    const existingTranscript = Array.isArray(consult.transcript)
-      ? consult.transcript
-      : [];
-
+    const existingTranscript = Array.isArray(consult.transcript) ? consult.transcript : [];
     await supabase
       .from("health_consultations")
-      .update({
-        transcript: [...existingTranscript, transcriptEntry],
-      })
+      .update({ transcript: [...existingTranscript, transcriptEntry] })
       .eq("id", id)
       .eq("user_id", user.id);
 
     return NextResponse.json({
-      observations: analysis.observations || [],
-      urgency: analysis.urgency || "routine",
-      conditions: analysis.conditions || [],
-      response: analysis.advice || "",
-      disclaimer,
+      response,
+      urgency: "routine" as const,
+      observations: [],
+      conditions: [],
+      disclaimer:
+        "This is for informational purposes only and is not a medical diagnosis. Always consult a licensed healthcare professional.",
     });
   } catch (err) {
     console.error("[CONSULT ANALYZE] Unexpected error:", err);

@@ -19,7 +19,6 @@ import {
   PhoneOff,
   AlertTriangle,
   Loader2,
-  Wifi,
   Volume2,
   VolumeX,
   X,
@@ -33,7 +32,6 @@ interface Message {
   timestamp: Date;
 }
 
-// Browser speech recognition type shim
 interface SpeechRecognitionInstance {
   continuous: boolean;
   lang: string;
@@ -47,98 +45,81 @@ interface SpeechRecognitionInstance {
 interface SpeechRecognitionEvent {
   results: SpeechRecognitionResultList;
 }
-
 interface SpeechRecognitionResultList {
   [index: number]: SpeechRecognitionResult;
 }
-
 interface SpeechRecognitionResult {
   [index: number]: SpeechRecognitionAlternative;
 }
-
 interface SpeechRecognitionAlternative {
   transcript: string;
 }
 
-// ─── AI waveform animation (CSS-only) ─────────────────────────────────────────
+// ─── Waveform animation ───────────────────────────────────────────────────────
 
 function WaveformBars({ active }: { active: boolean }) {
   return (
-    <div className="flex items-center justify-center gap-0.5 h-6">
-      {[0, 1, 2, 3, 4].map((i) => (
+    <div className="flex items-end justify-center gap-0.5 h-8">
+      {[0.6, 1.0, 0.7, 1.2, 0.5, 0.9, 0.4].map((h, i) => (
         <div
           key={i}
-          className={`w-1 rounded-full transition-all duration-300 ${
-            active ? 'bg-primary' : 'bg-border'
-          }`}
+          className={`w-1 rounded-full transition-all duration-200 ${active ? 'bg-emerald-400' : 'bg-border'}`}
           style={{
-            height: active ? `${12 + Math.sin(i * 1.2) * 8}px` : '4px',
-            animation: active
-              ? `pulse-bar ${0.6 + i * 0.1}s ease-in-out infinite alternate`
-              : 'none',
+            height: active ? `${8 + h * 18}px` : '4px',
+            animation: active ? `wave-bar ${0.5 + i * 0.07}s ease-in-out infinite alternate` : 'none',
           }}
         />
       ))}
       <style>{`
-        @keyframes pulse-bar {
-          from { transform: scaleY(0.4); }
-          to   { transform: scaleY(1.6); }
+        @keyframes wave-bar {
+          from { transform: scaleY(0.3); }
+          to   { transform: scaleY(1.0); }
         }
       `}</style>
     </div>
   );
 }
 
-// ─── AI Avatar ────────────────────────────────────────────────────────────────
+// ─── Doctor Avatar ────────────────────────────────────────────────────────────
 
-function AiAvatar({ speaking }: { speaking: boolean }) {
+function DoctorAvatar({ speaking }: { speaking: boolean }) {
   return (
-    <div className="relative flex items-center justify-center">
-      {/* Outer pulse ring */}
-      <div
-        className={`absolute inset-0 rounded-full transition-all duration-500 ${
-          speaking ? 'scale-110 opacity-30 bg-primary' : 'scale-100 opacity-0'
-        }`}
-        style={{ transitionTimingFunction: 'ease-out' }}
-      />
-      {/* Middle ring */}
-      <div
-        className={`absolute inset-1 rounded-full transition-all duration-700 ${
-          speaking ? 'scale-105 opacity-20 bg-primary' : 'scale-100 opacity-0'
-        }`}
-      />
-      {/* Avatar circle */}
-      <div
-        className={`relative w-20 h-20 rounded-full flex items-center justify-center border-2 transition-all duration-300 ${
-          speaking
-            ? 'border-primary bg-primary/20'
-            : 'border-border bg-muted'
-        }`}
-      >
-        <div className="text-3xl select-none">🩺</div>
+    <div className="relative flex items-center justify-center w-24 h-24">
+      {/* Ripple rings when speaking */}
+      {speaking && (
+        <>
+          <div className="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping" style={{ animationDuration: '1.2s' }} />
+          <div className="absolute inset-2 rounded-full bg-emerald-500/15 animate-ping" style={{ animationDuration: '1.6s', animationDelay: '0.3s' }} />
+        </>
+      )}
+      {/* Avatar */}
+      <div className={`relative w-20 h-20 rounded-full flex items-center justify-center border-2 transition-all duration-300 shadow-lg ${
+        speaking
+          ? 'border-emerald-400 bg-emerald-500/10 shadow-emerald-500/20'
+          : 'border-border bg-muted'
+      }`}>
+        <span className="text-3xl select-none">🩺</span>
       </div>
     </div>
   );
 }
 
-// ─── Consultation inner (needs useSearchParams) ────────────────────────────────
+// ─── Main consultation component ──────────────────────────────────────────────
 
 function ConsultationInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [consultId, setConsultId] = useState<string | null>(
-    searchParams.get('id')
-  );
+  const [consultId, setConsultId] = useState<string | null>(searchParams.get('id'));
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'ai',
-      text: "Hello! I'm your AI health advisor. Please note: I provide general health information only and am not a licensed physician. Show me what you'd like to discuss, and describe your symptoms below. How can I help you today?",
+      text: "Hey, good to see you. I'm Dr. Nova — what's going on today? Tell me what's been bothering you, and feel free to show me anything on camera.",
       timestamp: new Date(),
     },
   ]);
-  const [symptomsText, setSymptomsText] = useState('');
   const [textInput, setTextInput] = useState('');
+  const [symptomsText, setSymptomsText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
@@ -150,14 +131,17 @@ function ConsultationInner() {
   const [uploadBase64, setUploadBase64] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [connecting, setConnecting] = useState(true);
+  // Track whether user has interacted (needed for audio autoplay unlock)
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // ── Init consultation ────────────────────────────────────────────────────
+  // ── Init consultation ──────────────────────────────────────────────────────
 
   useEffect(() => {
     const init = async () => {
@@ -173,7 +157,7 @@ function ConsultationInner() {
             if (data.id) setConsultId(data.id);
           }
         } catch {
-          // proceed without id
+          // proceed without session id
         }
       }
       setConnecting(false);
@@ -181,49 +165,38 @@ function ConsultationInner() {
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Camera setup ─────────────────────────────────────────────────────────
+  // ── Camera ─────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!cameraEnabled || sessionEnded) return;
-
     navigator.mediaDevices
-      .getUserMedia({ video: true, audio: false })
+      .getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
       .then((stream) => {
         streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
+        if (videoRef.current) videoRef.current.srcObject = stream;
         setCameraError(null);
         setCameraPermissionDenied(false);
       })
       .catch((err: Error) => {
         const isDenied = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
         setCameraPermissionDenied(isDenied);
-        setCameraError(
-          isDenied
-            ? null // Show dedicated UI instead
-            : 'Camera not available. You can still use text and image upload.'
-        );
+        setCameraError(isDenied ? null : 'Camera not available. Text and image upload still work.');
         setCameraEnabled(false);
       });
-
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
+    return () => { streamRef.current?.getTracks().forEach((t) => t.stop()); };
   }, [cameraEnabled, sessionEnded]);
 
-  // ── Auto-scroll chat ──────────────────────────────────────────────────────
+  // ── Auto-scroll ────────────────────────────────────────────────────────────
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── End session on unmount ────────────────────────────────────────────────
+  // ── Cleanup on unmount ─────────────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
       if (consultId) {
-        // Best-effort: PATCH to mark completed
         fetch(`/api/health/consult/${consultId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -233,79 +206,121 @@ function ConsultationInner() {
       }
       streamRef.current?.getTracks().forEach((t) => t.stop());
       recognitionRef.current?.stop();
+      currentAudioRef.current?.pause();
     };
   }, [consultId]);
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   const addMessage = useCallback((role: 'ai' | 'user', text: string) => {
     setMessages((prev) => [...prev, { role, text, timestamp: new Date() }]);
   }, []);
 
-  const playVoiceResponse = useCallback(
-    async (text: string) => {
-      if (!voiceEnabled || !consultId) return;
-      try {
-        const res = await fetch(`/api/health/consult/${consultId}/voice`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        });
-        if (res.ok) {
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          setAiSpeaking(true);
-          audio.onended = () => {
-            setAiSpeaking(false);
-            URL.revokeObjectURL(url);
-          };
-          await audio.play();
-        }
-      } catch {
-        setAiSpeaking(false);
-      }
-    },
-    [consultId, voiceEnabled]
-  );
+  // Unlock audio on first user interaction (browser autoplay policy)
+  const unlockAudio = useCallback(() => {
+    if (audioUnlocked) return;
+    // Play a silent audio context to unlock autoplay
+    try {
+      const ctx = new AudioContext();
+      ctx.resume().then(() => ctx.close());
+    } catch { /* ignore */ }
+    setAudioUnlocked(true);
+  }, [audioUnlocked]);
 
-  // ── Capture frame from camera ─────────────────────────────────────────────
+  const playVoiceResponse = useCallback(async (text: string) => {
+    if (!voiceEnabled || !consultId) return;
+
+    // Stop any currently playing audio
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+
+    try {
+      const res = await fetch(`/api/health/consult/${consultId}/voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) return;
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentAudioRef.current = audio;
+
+      setAiSpeaking(true);
+
+      audio.onended = () => {
+        setAiSpeaking(false);
+        URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
+      };
+
+      audio.onerror = () => {
+        setAiSpeaking(false);
+        URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
+      };
+
+      // play() can throw if autoplay is blocked; silently degrade
+      await audio.play().catch(() => {
+        setAiSpeaking(false);
+      });
+
+    } catch {
+      setAiSpeaking(false);
+    }
+  }, [consultId, voiceEnabled]);
+
+  // Build conversation history for context (last 10 messages)
+  const getConversationHistory = useCallback(() => {
+    return messages.slice(-10).map((m) => ({ role: m.role, text: m.text }));
+  }, [messages]);
+
+  // ── Capture camera frame ───────────────────────────────────────────────────
 
   const captureFrame = useCallback(async () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || analyzing) return;
+    unlockAudio();
+
     const canvas = document.createElement('canvas');
     canvas.width = videoRef.current.videoWidth || 640;
     canvas.height = videoRef.current.videoHeight || 480;
     canvas.getContext('2d')!.drawImage(videoRef.current, 0, 0);
-    const imageBase64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
 
+    const userMsg = symptomsText || '[Shared camera frame]';
+    addMessage('user', userMsg);
     setAnalyzing(true);
-    addMessage('user', symptomsText || '[Shared camera frame]');
 
     try {
-      const endpoint = consultId
-        ? `/api/health/consult/${consultId}/analyze`
-        : '/api/health/analyze';
+      const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64, symptoms: symptomsText }),
+        body: JSON.stringify({
+          imageBase64,
+          symptoms: symptomsText || 'Patient shared a camera frame for visual assessment.',
+          conversationHistory: getConversationHistory(),
+        }),
       });
       const data = await res.json();
-      const reply = data.response || data.observations?.join('. ') || "I've analyzed the image. Please describe any symptoms you're experiencing.";
+      const reply = data.response || "Let me take a closer look. Can you describe what you're experiencing?";
       addMessage('ai', reply);
       await playVoiceResponse(reply);
     } catch {
-      const fallback = "I couldn't analyze the image right now. Could you describe what you're seeing?";
+      const fallback = "I'm having some trouble right now. Can you describe what you're experiencing?";
       addMessage('ai', fallback);
       await playVoiceResponse(fallback);
     } finally {
       setAnalyzing(false);
       setSymptomsText('');
     }
-  }, [consultId, symptomsText, addMessage, playVoiceResponse]);
+  }, [consultId, symptomsText, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
 
-  // ── Upload image ──────────────────────────────────────────────────────────
+  // ── Upload image ───────────────────────────────────────────────────────────
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -320,65 +335,74 @@ function ConsultationInner() {
   };
 
   const analyzeUpload = useCallback(async () => {
-    if (!uploadBase64) return;
+    if (!uploadBase64 || analyzing) return;
+    unlockAudio();
+
+    const userMsg = symptomsText || '[Uploaded image]';
+    addMessage('user', userMsg);
     setAnalyzing(true);
-    addMessage('user', symptomsText || '[Uploaded image]');
+
     try {
-      const endpoint = consultId
-        ? `/api/health/consult/${consultId}/analyze`
-        : '/api/health/analyze';
+      const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: uploadBase64, symptoms: symptomsText }),
+        body: JSON.stringify({
+          imageBase64: uploadBase64,
+          symptoms: symptomsText || 'Patient uploaded an image for review.',
+          conversationHistory: getConversationHistory(),
+        }),
       });
       const data = await res.json();
-      const reply = data.response || data.observations?.join('. ') || "I've reviewed the image. Can you describe any additional symptoms?";
+      const reply = data.response || "Okay, I can see the image. Can you tell me more about what you're experiencing?";
       addMessage('ai', reply);
       await playVoiceResponse(reply);
     } catch {
-      const fallback = "Image analysis failed. Please describe your symptoms in text.";
+      const fallback = "Image came through but I'm having trouble analyzing right now. Walk me through what you're seeing.";
       addMessage('ai', fallback);
+      await playVoiceResponse(fallback);
     } finally {
       setAnalyzing(false);
       setUploadPreview(null);
       setUploadBase64(null);
       setSymptomsText('');
     }
-  }, [consultId, uploadBase64, symptomsText, addMessage, playVoiceResponse]);
+  }, [consultId, uploadBase64, symptomsText, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
 
-  // ── Send text message ─────────────────────────────────────────────────────
+  // ── Send text message ──────────────────────────────────────────────────────
 
-  const sendTextMessage = useCallback(
-    async (text: string) => {
-      if (!text.trim()) return;
-      addMessage('user', text);
-      setTextInput('');
-      setAnalyzing(true);
-      try {
-        const endpoint = consultId
-          ? `/api/health/consult/${consultId}/analyze`
-          : '/api/health/analyze';
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symptoms: text }),
-        });
-        const data = await res.json();
-        const reply = data.response || "I understand. Can you tell me more about when these symptoms started?";
-        addMessage('ai', reply);
-        await playVoiceResponse(reply);
-      } catch {
-        const fallback = "I'm having trouble connecting. Please try again.";
-        addMessage('ai', fallback);
-      } finally {
-        setAnalyzing(false);
-      }
-    },
-    [consultId, addMessage, playVoiceResponse]
-  );
+  const sendTextMessage = useCallback(async (text: string) => {
+    if (!text.trim() || analyzing) return;
+    unlockAudio();
 
-  // ── Voice recognition ─────────────────────────────────────────────────────
+    addMessage('user', text);
+    setTextInput('');
+    setAnalyzing(true);
+
+    try {
+      const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symptoms: text,
+          conversationHistory: getConversationHistory(),
+        }),
+      });
+      const data = await res.json();
+      const reply = data.response || "Tell me more — when did this start?";
+      addMessage('ai', reply);
+      await playVoiceResponse(reply);
+    } catch {
+      const fallback = "Sorry, I'm having a connection issue. Try again in a moment.";
+      addMessage('ai', fallback);
+      await playVoiceResponse(fallback);
+    } finally {
+      setAnalyzing(false);
+    }
+  }, [consultId, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
+
+  // ── Voice recognition ──────────────────────────────────────────────────────
 
   const requestCameraAccess = useCallback(() => {
     setCameraPermissionDenied(false);
@@ -388,6 +412,7 @@ function ConsultationInner() {
 
   const startListening = useCallback(() => {
     if (typeof window === 'undefined') return;
+    unlockAudio();
     const w = window as unknown as {
       SpeechRecognition?: new () => SpeechRecognitionInstance;
       webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
@@ -399,25 +424,26 @@ function ConsultationInner() {
     rec.continuous = false;
     rec.lang = 'en-US';
     rec.onresult = (e: SpeechRecognitionEvent) => {
-      const text = e.results[0][0].transcript;
+      const transcript = e.results[0][0].transcript;
       setListening(false);
-      sendTextMessage(text);
+      sendTextMessage(transcript);
     };
     rec.onerror = () => setListening(false);
     rec.onend = () => setListening(false);
     rec.start();
     recognitionRef.current = rec;
     setListening(true);
-  }, [sendTextMessage]);
+  }, [sendTextMessage, unlockAudio]);
 
   const stopListening = useCallback(() => {
     recognitionRef.current?.stop();
     setListening(false);
   }, []);
 
-  // ── End session ───────────────────────────────────────────────────────────
+  // ── End session ────────────────────────────────────────────────────────────
 
   const endSession = useCallback(async () => {
+    currentAudioRef.current?.pause();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     recognitionRef.current?.stop();
     setCameraEnabled(false);
@@ -432,7 +458,7 @@ function ConsultationInner() {
     setSessionEnded(true);
   }, [consultId]);
 
-  // ── Session ended screen ──────────────────────────────────────────────────
+  // ── Session ended ──────────────────────────────────────────────────────────
 
   if (sessionEnded) {
     return (
@@ -444,16 +470,13 @@ function ConsultationInner() {
           <div>
             <h2 className="text-xl font-semibold text-foreground">Session Ended</h2>
             <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-              Always consult a qualified healthcare provider for proper diagnosis and treatment.
+              Always follow up with a licensed healthcare provider for any diagnosis or treatment decisions.
             </p>
             <p className="text-red-500 mt-3 text-sm font-medium">
-              If this is a medical emergency, call 911 immediately.
+              In a medical emergency, call 911 immediately.
             </p>
           </div>
-          <Button
-            onClick={() => router.push('/dashboard/health')}
-            variant="outline"
-          >
+          <Button onClick={() => router.push('/dashboard/health')} variant="outline">
             Back to Health Dashboard
           </Button>
         </div>
@@ -461,34 +484,40 @@ function ConsultationInner() {
     );
   }
 
-  // ── Main consultation UI ──────────────────────────────────────────────────
+  // ── Main UI ────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
 
-      {/* ── Top header ── */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-background/90 backdrop-blur sticky top-0 z-10">
+      {/* ── Header ── */}
+      <header className="flex items-center justify-between px-4 py-3 border-b border-border bg-background/95 backdrop-blur sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <h1 className="text-sm font-semibold tracking-tight">AI Health Consultation</h1>
+          <h1 className="text-sm font-semibold tracking-tight">Health Consultation</h1>
           {connecting ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="w-3 h-3 animate-spin" />
               Connecting…
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-500">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-500">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               LIVE
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Mute toggle */}
           <button
-            onClick={() => setVoiceEnabled((v) => !v)}
-            className={`p-2 rounded-lg transition-colors ${
-              voiceEnabled ? 'text-foreground hover:bg-muted' : 'text-muted-foreground hover:bg-muted'
-            }`}
-            title={voiceEnabled ? 'Mute AI voice' : 'Enable AI voice'}
+            onClick={() => {
+              unlockAudio();
+              if (voiceEnabled && currentAudioRef.current) {
+                currentAudioRef.current.pause();
+                setAiSpeaking(false);
+              }
+              setVoiceEnabled((v) => !v);
+            }}
+            className={`p-2 rounded-lg transition-colors ${voiceEnabled ? 'text-foreground hover:bg-muted' : 'text-muted-foreground hover:bg-muted'}`}
+            title={voiceEnabled ? 'Mute doctor voice' : 'Unmute doctor voice'}
           >
             {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
@@ -498,19 +527,19 @@ function ConsultationInner() {
             className="bg-red-600 hover:bg-red-700 text-white border-0 gap-1.5"
           >
             <PhoneOff className="w-4 h-4" />
-            End Session
+            End
           </Button>
         </div>
       </header>
 
-      {/* ── Main two-column layout ── */}
-      <div className="flex-1 grid md:grid-cols-[1fr_1.2fr] gap-0 overflow-hidden">
+      {/* ── Main layout ── */}
+      <div className="flex-1 grid md:grid-cols-[1fr_1.3fr] gap-0 overflow-hidden">
 
-        {/* ══ LEFT COLUMN: Camera + controls ══ */}
-        <div className="flex flex-col gap-4 p-4 border-r border-border overflow-y-auto">
+        {/* ══ LEFT: Camera + controls ══ */}
+        <div className="flex flex-col gap-3 p-4 border-r border-border overflow-y-auto">
 
-          {/* Camera feed */}
-          <div className="relative rounded-xl overflow-hidden bg-muted border border-border aspect-video">
+          {/* Camera feed — Zoom-call style */}
+          <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-border aspect-video shadow-md">
             {cameraEnabled && !cameraError && !cameraPermissionDenied ? (
               <video
                 ref={videoRef}
@@ -518,70 +547,67 @@ function ConsultationInner() {
                 playsInline
                 muted
                 className="w-full h-full object-cover"
-                style={{ transform: 'scaleX(-1)' }} /* mirror mode */
+                style={{ transform: 'scaleX(-1)' }}
               />
             ) : cameraPermissionDenied ? (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4">
-                <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-                  <Camera className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+              <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 bg-zinc-900">
+                <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center">
+                  <Camera className="w-6 h-6 text-amber-400" />
                 </div>
                 <div className="text-center">
-                  <p className="text-sm font-medium text-foreground">Camera access needed</p>
-                  <p className="text-xs text-muted-foreground mt-1">Click below and allow camera in your browser</p>
+                  <p className="text-sm font-medium text-white">Camera access needed</p>
+                  <p className="text-xs text-zinc-400 mt-1">Allow camera in your browser settings</p>
                 </div>
                 <button
                   onClick={requestCameraAccess}
-                  className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex items-center gap-2"
+                  className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
                 >
-                  <Camera className="w-4 h-4" />
                   Allow Camera
                 </button>
               </div>
             ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
+              <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 gap-2 bg-zinc-900">
                 <CameraOff className="w-8 h-8" />
-                <p className="text-xs text-center px-4">
-                  {cameraError ?? 'Camera off'}
-                </p>
+                <p className="text-xs text-center px-4">{cameraError ?? 'Camera off'}</p>
               </div>
             )}
 
-            {/* Camera toggle overlay — only show when camera is active */}
+            {/* Camera label */}
+            <div className="absolute top-2 left-2">
+              <span className="text-[10px] font-medium text-white/70 bg-black/40 px-2 py-0.5 rounded-full">You</span>
+            </div>
+
+            {/* Camera toggle */}
             {!cameraPermissionDenied && (
               <button
                 onClick={() => setCameraEnabled((v) => !v)}
-                className="absolute bottom-2 right-2 p-2 rounded-lg bg-background/80 backdrop-blur text-foreground hover:bg-muted transition-colors"
+                className="absolute bottom-2 right-2 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
                 title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
               >
-                {cameraEnabled ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
+                {cameraEnabled ? <Camera className="w-3.5 h-3.5" /> : <CameraOff className="w-3.5 h-3.5" />}
               </button>
             )}
           </div>
 
-          {/* Camera action buttons */}
+          {/* Camera actions */}
           <div className="flex gap-2">
             <Button
               onClick={captureFrame}
               disabled={analyzing || !cameraEnabled || !!cameraError}
               variant="outline"
               size="sm"
-              className="flex-1 gap-1.5"
+              className="flex-1 gap-1.5 text-xs"
             >
-              {analyzing ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Camera className="w-4 h-4" />
-              )}
+              {analyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
               Share Frame
             </Button>
-
             <Button
               onClick={() => fileInputRef.current?.click()}
               variant="outline"
               size="sm"
-              className="flex-1 gap-1.5"
+              className="flex-1 gap-1.5 text-xs"
             >
-              <Upload className="w-4 h-4" />
+              <Upload className="w-3.5 h-3.5" />
               Upload Image
             </Button>
             <input
@@ -595,94 +621,79 @@ function ConsultationInner() {
 
           {/* Upload preview */}
           {uploadPreview && (
-            <div className="relative rounded-lg overflow-hidden border border-border">
-              <img
-                src={uploadPreview}
-                alt="Upload preview"
-                className="w-full max-h-40 object-cover"
-              />
+            <div className="relative rounded-xl overflow-hidden border border-border">
+              <img src={uploadPreview} alt="Upload preview" className="w-full max-h-40 object-cover" />
               <button
-                onClick={() => {
-                  setUploadPreview(null);
-                  setUploadBase64(null);
-                }}
+                onClick={() => { setUploadPreview(null); setUploadBase64(null); }}
                 className="absolute top-2 right-2 p-1 rounded-full bg-background/80 text-foreground hover:bg-muted"
               >
                 <X className="w-3 h-3" />
               </button>
               <div className="p-2">
-                <Button
-                  onClick={analyzeUpload}
-                  disabled={analyzing}
-                  size="sm"
-                  className="w-full gap-1.5"
-                >
-                  {analyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                  Analyze Uploaded Image
+                <Button onClick={analyzeUpload} disabled={analyzing} size="sm" className="w-full gap-1.5 text-xs">
+                  {analyzing ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                  Send to Doctor
                 </Button>
               </div>
             </div>
           )}
 
-          {/* Symptoms text input */}
-          <div className="space-y-1.5">
-            <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-              Describe your symptoms
+          {/* Symptom context (optional — for camera frame) */}
+          <div className="space-y-1">
+            <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+              Add context for camera frame (optional)
             </label>
             <textarea
               value={symptomsText}
               onChange={(e) => setSymptomsText(e.target.value)}
-              placeholder="What are you showing or experiencing? Be as specific as possible…"
-              rows={3}
-              className="w-full resize-none rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground/60 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
+              placeholder="E.g. redness for 3 days, doesn't itch…"
+              rows={2}
+              className="w-full resize-none rounded-lg border border-border bg-background text-xs text-foreground placeholder:text-muted-foreground/50 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
 
-          {/* Mic speaking button */}
+          {/* Voice input */}
           <button
             onClick={listening ? stopListening : startListening}
-            className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium border transition-all ${
+            className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border transition-all ${
               listening
-                ? 'border-red-500 bg-red-500/10 text-red-500 animate-pulse'
+                ? 'border-red-500 bg-red-500/10 text-red-400 animate-pulse'
                 : 'border-border bg-card text-muted-foreground hover:bg-muted'
             }`}
           >
             {listening ? (
-              <>
-                <Mic className="w-4 h-4 fill-current text-red-400" />
-                Speaking… (click to stop)
-              </>
+              <><Mic className="w-4 h-4 fill-current text-red-400" />Listening… tap to stop</>
             ) : (
-              <>
-                <MicOff className="w-4 h-4" />
-                Hold to Speak
-              </>
+              <><Mic className="w-4 h-4" />Tap to Speak</>
             )}
           </button>
 
-          {/* Connectivity indicator */}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60">
-            <Wifi className="w-3.5 h-3.5" />
-            <span>Encrypted session &middot; {consultId ? `ID ${consultId.slice(0, 8)}…` : 'No session ID'}</span>
+          {/* Disclaimer */}
+          <div className="flex items-start gap-1.5 text-[10px] text-muted-foreground/60 bg-amber-500/5 rounded-lg p-2 border border-amber-500/15">
+            <AlertTriangle className="w-3 h-3 text-amber-500/70 mt-0.5 shrink-0" />
+            <span>Informational only. Not a medical diagnosis. Call 911 in emergencies.</span>
           </div>
         </div>
 
-        {/* ══ RIGHT COLUMN: AI assistant ══ */}
+        {/* ══ RIGHT: Doctor chat ══ */}
         <div className="flex flex-col h-[calc(100vh-57px)] overflow-hidden">
 
-          {/* AI avatar header */}
-          <div className="p-5 border-b border-border flex items-center gap-4">
-            <AiAvatar speaking={aiSpeaking} />
-            <div>
-              <p className="font-semibold text-sm">AI Health Advisor</p>
-              <p className="text-xs text-muted-foreground leading-snug mt-0.5">
-                <AlertTriangle className="w-3 h-3 inline mr-0.5 text-amber-500" />
-                Not a licensed physician. For informational purposes only.
-              </p>
-              {aiSpeaking && (
-                <div className="mt-1.5">
+          {/* Doctor panel header */}
+          <div className="p-4 border-b border-border flex items-center gap-4 bg-gradient-to-r from-emerald-500/5 to-transparent">
+            <DoctorAvatar speaking={aiSpeaking} />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="font-semibold text-sm">Dr. Nova</p>
+                <span className="text-[10px] bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full font-medium">AI Health Advisor</span>
+              </div>
+              {aiSpeaking ? (
+                <div className="mt-1">
                   <WaveformBars active={aiSpeaking} />
                 </div>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {analyzing ? 'Thinking…' : 'Ready'}
+                </p>
               )}
             </div>
           </div>
@@ -690,23 +701,20 @@ function ConsultationInner() {
           {/* Chat transcript */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.map((msg, i) => (
-              <div
-                key={i}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                    msg.role === 'ai'
-                      ? 'bg-muted text-foreground rounded-tl-sm'
-                      : 'bg-primary text-primary-foreground rounded-tr-sm'
-                  }`}
-                >
+              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                {msg.role === 'ai' && (
+                  <div className="w-7 h-7 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mr-2 mt-0.5 shrink-0">
+                    <span className="text-xs">🩺</span>
+                  </div>
+                )}
+                <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-sm ${
+                  msg.role === 'ai'
+                    ? 'bg-card border border-border text-foreground rounded-tl-sm'
+                    : 'bg-primary text-primary-foreground rounded-tr-sm'
+                }`}>
                   <p>{msg.text}</p>
-                  <p className="text-[10px] opacity-50 mt-1">
-                    {msg.timestamp.toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+                  <p className="text-[10px] opacity-40 mt-1.5">
+                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 </div>
               </div>
@@ -714,20 +722,22 @@ function ConsultationInner() {
 
             {/* Typing indicator */}
             {analyzing && (
-              <div className="flex justify-start">
-                <div className="bg-muted px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-1.5">
+              <div className="flex justify-start items-center gap-2">
+                <div className="w-7 h-7 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                  <span className="text-xs">🩺</span>
+                </div>
+                <div className="bg-card border border-border px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
                   <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
                   <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
               </div>
             )}
-
             <div ref={chatBottomRef} />
           </div>
 
-          {/* Text input bar */}
-          <div className="p-3 border-t border-border bg-background">
+          {/* Input bar */}
+          <div className="p-3 border-t border-border bg-background/95">
             <div className="flex items-end gap-2">
               <textarea
                 value={textInput}
@@ -738,9 +748,10 @@ function ConsultationInner() {
                     sendTextMessage(textInput);
                   }
                 }}
-                placeholder="Type a message or ask a question…"
+                onFocus={unlockAudio}
+                placeholder="Describe your symptoms or ask a question…"
                 rows={1}
-                className="flex-1 resize-none rounded-xl border border-border bg-card text-sm text-foreground placeholder:text-muted-foreground/60 px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary max-h-32 overflow-y-auto"
+                className="flex-1 resize-none rounded-xl border border-border bg-card text-sm text-foreground placeholder:text-muted-foreground/50 px-3 py-2.5 focus:outline-none focus:ring-1 focus:ring-primary max-h-32 overflow-y-auto"
                 style={{ minHeight: '40px' }}
               />
               <Button
@@ -749,15 +760,11 @@ function ConsultationInner() {
                 size="sm"
                 className="h-10 w-10 p-0 rounded-xl shrink-0"
               >
-                {analyzing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4" />
-                )}
+                {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
               </Button>
             </div>
-            <p className="text-[10px] text-muted-foreground/50 mt-1.5 px-1">
-              Press Enter to send &middot; Shift+Enter for new line
+            <p className="text-[10px] text-muted-foreground/40 mt-1.5 px-1">
+              Enter to send · Shift+Enter for new line · Or tap the mic
             </p>
           </div>
         </div>
@@ -766,7 +773,7 @@ function ConsultationInner() {
   );
 }
 
-// ─── Export: wraps ConsultationInner in Suspense (required for useSearchParams) ──
+// ─── Export ───────────────────────────────────────────────────────────────────
 
 export default function ConsultationPage() {
   return (

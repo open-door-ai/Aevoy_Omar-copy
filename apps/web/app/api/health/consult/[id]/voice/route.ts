@@ -2,8 +2,16 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const DEFAULT_VOICE_ID =
-  process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+
+// Dr. Nova's dedicated voice — "Daniel" (ElevenLabs Deep British Male, authoritative but warm)
+// Fallback chain: user env → Daniel → Rachel
+const DOCTOR_VOICE_ID =
+  process.env.ELEVENLABS_DOCTOR_VOICE_ID ||
+  process.env.ELEVENLABS_DEFAULT_VOICE_ID ||
+  "onwK4e9ZLuTAKqWW03F9"; // Daniel — British male, warm + authoritative
+
+// ElevenLabs model: turbo_v2_5 is faster + higher quality than turbo_v2
+const TTS_MODEL = "eleven_turbo_v2_5";
 
 interface VoiceBody {
   text: string;
@@ -13,8 +21,8 @@ interface VoiceBody {
 /**
  * POST /api/health/consult/[id]/voice
  *
- * Generates AI doctor TTS audio for a health consultation session.
- * Uses ElevenLabs Turbo v2 and streams audio/mpeg back to the client.
+ * Generates ElevenLabs TTS audio for the AI doctor's response.
+ * Uses tuned voice settings to sound natural and human — not robotic.
  */
 export async function POST(
   request: Request,
@@ -69,17 +77,25 @@ export async function POST(
       );
     }
 
-    const voiceId = body.voiceId || DEFAULT_VOICE_ID;
+    const voiceId = body.voiceId || DOCTOR_VOICE_ID;
 
-    // Sanitize text — strip any HTML/markdown for cleaner TTS output
+    // Sanitize text — strip HTML/markdown, normalize spacing for cleaner TTS
     const cleanText = body.text
-      .replace(/<[^>]*>/g, "")
-      .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
-      .replace(/_{1,2}([^_]+)_{1,2}/g, "$1")
+      .replace(/<[^>]*>/g, "")                    // strip HTML tags
+      .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")   // strip bold/italic markdown
+      .replace(/_{1,2}([^_]+)_{1,2}/g, "$1")      // strip underline markdown
+      .replace(/#{1,6}\s+/g, "")                   // strip headers
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")    // links → just text
+      .replace(/—/g, ",")                          // em dashes → pause
+      .replace(/\s+/g, " ")                        // normalize whitespace
       .trim()
-      .slice(0, 5000); // ElevenLabs max character limit
+      .slice(0, 3000); // keep it concise for voice
 
-    // Call ElevenLabs TTS REST API
+    // ElevenLabs voice settings tuned for natural, human-sounding doctor speech:
+    // - stability 0.35: enough variation to sound alive, not monotone
+    // - similarity_boost 0.75: preserve voice character without artifacting
+    // - style 0.4: adds natural expressiveness (turbo_v2_5 feature)
+    // - use_speaker_boost: improves clarity on medical terminology
     const ttsRes = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`,
       {
@@ -91,25 +107,27 @@ export async function POST(
         },
         body: JSON.stringify({
           text: cleanText,
-          model_id: "eleven_turbo_v2",
+          model_id: TTS_MODEL,
           voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.8,
-            speed: 0.9,
+            stability: 0.35,
+            similarity_boost: 0.75,
+            style: 0.4,
+            use_speaker_boost: true,
           },
         }),
       }
     );
 
     if (!ttsRes.ok) {
-      console.error(`[CONSULT VOICE] ElevenLabs error: HTTP ${ttsRes.status}`);
+      const errText = await ttsRes.text().catch(() => "");
+      console.error(`[CONSULT VOICE] ElevenLabs error: HTTP ${ttsRes.status} — ${errText}`);
       return NextResponse.json(
         { error: "TTS generation failed" },
         { status: 502 }
       );
     }
 
-    // Stream audio back to client
+    // Return audio stream to client
     const audioBuffer = await ttsRes.arrayBuffer();
 
     return new NextResponse(audioBuffer, {

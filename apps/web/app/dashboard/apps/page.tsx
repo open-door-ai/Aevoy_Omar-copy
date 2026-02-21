@@ -1043,21 +1043,28 @@ function ConnectedAppsContent() {
               <div className="h-10 bg-muted/50 rounded-lg animate-pulse" />
             )}
 
-            {/* Setup steps — clean, non-technical */}
+            {/* Setup steps */}
             <div className="space-y-2 pt-1">
-              <p className="text-xs font-semibold text-foreground">Set up in 3 steps on your iPhone</p>
-              <div className="space-y-1.5">
+              <p className="text-xs font-semibold text-foreground">Set up in 4 steps on your iPhone</p>
+              <div className="space-y-2">
                 {[
-                  { step: '1', text: 'Open the Shortcuts app and create a new automation' },
-                  { step: '2', text: 'Add a "Get Contents of URL" action, paste your URL above' },
-                  { step: '3', text: 'Set it to run daily — your health data syncs automatically' },
+                  { step: '1', text: 'Open Shortcuts → Automation tab → tap + → Personal Automation → Time of Day → Daily at 7:00 AM' },
+                  { step: '2', text: 'Tap Add Action → search "Get Contents of URL" → paste your endpoint above, set Method: POST' },
+                  { step: '3', text: 'Set Request Body to JSON. Add a key "metrics" with a list containing your health values (heart rate, steps, sleep, HRV)' },
+                  { step: '4', text: 'Tap Next → turn off "Ask Before Running" → Done. Data syncs every morning automatically.' },
                 ].map(({ step, text }) => (
                   <div key={step} className="flex items-start gap-2.5">
-                    <span className="shrink-0 w-5 h-5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 text-[10px] font-bold flex items-center justify-center">{step}</span>
-                    <p className="text-xs text-muted-foreground leading-snug pt-0.5">{text}</p>
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 text-[10px] font-bold flex items-center justify-center mt-0.5">{step}</span>
+                    <p className="text-xs text-muted-foreground leading-snug">{text}</p>
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* JSON format hint */}
+            <div className="rounded-lg bg-muted/60 border border-border/50 p-3 space-y-1.5">
+              <p className="text-[10px] font-semibold text-foreground uppercase tracking-wide">Expected JSON format</p>
+              <pre className="text-[10px] text-muted-foreground font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap">{`{"metrics":[{"type":"heart_rate","value":72,"unit":"bpm"},{"type":"steps","value":8432,"unit":"steps"},{"type":"sleep_hours","value":7.5,"unit":"hours"}]}`}</pre>
             </div>
 
             <p className="text-[10px] text-muted-foreground">
