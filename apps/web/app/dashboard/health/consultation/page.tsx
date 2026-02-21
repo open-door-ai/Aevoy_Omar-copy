@@ -35,24 +35,18 @@ interface Message {
 interface SpeechRecognitionInstance {
   continuous: boolean;
   lang: string;
+  interimResults: boolean;
   onresult: ((e: SpeechRecognitionEvent) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
   onend: (() => void) | null;
+  onstart: (() => void) | null;
   start: () => void;
   stop: () => void;
+  abort: () => void;
 }
 
 interface SpeechRecognitionEvent {
-  results: SpeechRecognitionResultList;
-}
-interface SpeechRecognitionResultList {
-  [index: number]: SpeechRecognitionResult;
-}
-interface SpeechRecognitionResult {
-  [index: number]: SpeechRecognitionAlternative;
-}
-interface SpeechRecognitionAlternative {
-  transcript: string;
+  results: { [index: number]: { [index: number]: { transcript: string } } };
 }
 
 // ─── Waveform animation ───────────────────────────────────────────────────────
@@ -85,14 +79,12 @@ function WaveformBars({ active }: { active: boolean }) {
 function DoctorAvatar({ speaking }: { speaking: boolean }) {
   return (
     <div className="relative flex items-center justify-center w-24 h-24">
-      {/* Ripple rings when speaking */}
       {speaking && (
         <>
           <div className="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping" style={{ animationDuration: '1.2s' }} />
           <div className="absolute inset-2 rounded-full bg-emerald-500/15 animate-ping" style={{ animationDuration: '1.6s', animationDelay: '0.3s' }} />
         </>
       )}
-      {/* Avatar */}
       <div className={`relative w-20 h-20 rounded-full flex items-center justify-center border-2 transition-all duration-300 shadow-lg ${
         speaking
           ? 'border-emerald-400 bg-emerald-500/10 shadow-emerald-500/20'
@@ -103,6 +95,10 @@ function DoctorAvatar({ speaking }: { speaking: boolean }) {
     </div>
   );
 }
+
+// ─── Mic button with speech recognition ──────────────────────────────────────
+
+type SpeechStatus = 'idle' | 'requesting' | 'listening' | 'not-supported' | 'denied' | 'error';
 
 // ─── Main consultation component ──────────────────────────────────────────────
 
@@ -122,7 +118,8 @@ function ConsultationInner() {
   const [symptomsText, setSymptomsText] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [aiSpeaking, setAiSpeaking] = useState(false);
-  const [listening, setListening] = useState(false);
+  const [speechStatus, setSpeechStatus] = useState<SpeechStatus>('idle');
+  const [speechErrorMsg, setSpeechErrorMsg] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [cameraPermissionDenied, setCameraPermissionDenied] = useState(false);
@@ -131,8 +128,12 @@ function ConsultationInner() {
   const [uploadBase64, setUploadBase64] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [connecting, setConnecting] = useState(true);
-  // Track whether user has interacted (needed for audio autoplay unlock)
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [autoCapture, setAutoCapture] = useState(false);
+  const [autoCaptureCountdown, setAutoCaptureCountdown] = useState(0);
+  const greetingPlayedRef = useRef(false);
+  const autoCaptureTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoCaptureCountRef = useRef(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -140,6 +141,16 @@ function ConsultationInner() {
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Check if SpeechRecognition is available
+  const getSpeechRecognition = () => {
+    if (typeof window === 'undefined') return null;
+    const w = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionInstance;
+      webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
+    };
+    return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+  };
 
   // ── Init consultation ──────────────────────────────────────────────────────
 
@@ -210,16 +221,22 @@ function ConsultationInner() {
     };
   }, [consultId]);
 
+  // ── Auto-capture cleanup ───────────────────────────────────────────────────
+
+  useEffect(() => {
+    return () => {
+      if (autoCaptureTimerRef.current) clearInterval(autoCaptureTimerRef.current);
+    };
+  }, []);
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const addMessage = useCallback((role: 'ai' | 'user', text: string) => {
     setMessages((prev) => [...prev, { role, text, timestamp: new Date() }]);
   }, []);
 
-  // Unlock audio on first user interaction (browser autoplay policy)
   const unlockAudio = useCallback(() => {
     if (audioUnlocked) return;
-    // Play a silent audio context to unlock autoplay
     try {
       const ctx = new AudioContext();
       ctx.resume().then(() => ctx.close());
@@ -229,82 +246,171 @@ function ConsultationInner() {
 
   const playVoiceResponse = useCallback(async (text: string) => {
     if (!voiceEnabled || !consultId) return;
-
-    // Stop any currently playing audio
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
-
     try {
       const res = await fetch(`/api/health/consult/${consultId}/voice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       });
-
       if (!res.ok) return;
-
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       currentAudioRef.current = audio;
-
       setAiSpeaking(true);
-
-      audio.onended = () => {
-        setAiSpeaking(false);
-        URL.revokeObjectURL(url);
-        currentAudioRef.current = null;
-      };
-
-      audio.onerror = () => {
-        setAiSpeaking(false);
-        URL.revokeObjectURL(url);
-        currentAudioRef.current = null;
-      };
-
-      // play() can throw if autoplay is blocked; silently degrade
-      await audio.play().catch(() => {
-        setAiSpeaking(false);
-      });
-
+      audio.onended = () => { setAiSpeaking(false); URL.revokeObjectURL(url); currentAudioRef.current = null; };
+      audio.onerror = () => { setAiSpeaking(false); URL.revokeObjectURL(url); currentAudioRef.current = null; };
+      await audio.play().catch(() => { setAiSpeaking(false); });
     } catch {
       setAiSpeaking(false);
     }
   }, [consultId, voiceEnabled]);
 
-  // Build conversation history for context (last 10 messages)
+  // Play greeting once when consultId is ready and audio is unlocked
+  useEffect(() => {
+    if (consultId && audioUnlocked && !greetingPlayedRef.current && !connecting) {
+      greetingPlayedRef.current = true;
+      playVoiceResponse(messages[0].text);
+    }
+  }, [consultId, audioUnlocked, connecting]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const getConversationHistory = useCallback(() => {
     return messages.slice(-10).map((m) => ({ role: m.role, text: m.text }));
   }, [messages]);
+
+  // ── Send text message ──────────────────────────────────────────────────────
+
+  const sendTextMessage = useCallback(async (text: string) => {
+    if (!text.trim() || analyzing) return;
+    unlockAudio();
+    addMessage('user', text);
+    setTextInput('');
+    setAnalyzing(true);
+    try {
+      const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symptoms: text, conversationHistory: getConversationHistory() }),
+      });
+      const data = await res.json();
+      const reply = data.response || "Tell me more — when did this start?";
+      addMessage('ai', reply);
+      await playVoiceResponse(reply);
+    } catch {
+      const fallback = "Sorry, I'm having a connection issue. Try again in a moment.";
+      addMessage('ai', fallback);
+      await playVoiceResponse(fallback);
+    } finally {
+      setAnalyzing(false);
+    }
+  }, [consultId, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
+
+  // ── Voice recognition ──────────────────────────────────────────────────────
+
+  const startListening = useCallback(() => {
+    unlockAudio();
+
+    const SpeechRecognitionAPI = getSpeechRecognition();
+    if (!SpeechRecognitionAPI) {
+      // Not supported — Chrome on iOS, some Android browsers
+      setSpeechStatus('not-supported');
+      setSpeechErrorMsg('Speech not supported in this browser. Use Safari on iPhone, or type your message below.');
+      return;
+    }
+
+    setSpeechStatus('requesting');
+    setSpeechErrorMsg('');
+
+    // Request microphone permission explicitly first
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((micStream) => {
+        // Got microphone permission — stop the stream immediately (we just needed the permission)
+        micStream.getTracks().forEach((t) => t.stop());
+
+        const rec = new SpeechRecognitionAPI();
+        rec.continuous = false;
+        rec.interimResults = false;
+        rec.lang = 'en-US';
+
+        rec.onstart = () => {
+          setSpeechStatus('listening');
+        };
+
+        rec.onresult = (e: SpeechRecognitionEvent) => {
+          const transcript = e.results[0][0].transcript;
+          setSpeechStatus('idle');
+          setSpeechErrorMsg('');
+          recognitionRef.current = null;
+          sendTextMessage(transcript);
+        };
+
+        rec.onerror = (e: { error: string }) => {
+          recognitionRef.current = null;
+          if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+            setSpeechStatus('denied');
+            setSpeechErrorMsg('Microphone permission denied. Allow it in your browser settings, then try again.');
+          } else if (e.error === 'no-speech') {
+            setSpeechStatus('idle');
+            setSpeechErrorMsg('No speech detected — tap again and speak clearly.');
+          } else if (e.error === 'network') {
+            setSpeechStatus('error');
+            setSpeechErrorMsg('Network error. Try typing your message instead.');
+          } else {
+            setSpeechStatus('idle');
+            setSpeechErrorMsg(`Couldn't hear that (${e.error}). Try again or type below.`);
+          }
+        };
+
+        rec.onend = () => {
+          if (speechStatus === 'listening') setSpeechStatus('idle');
+          recognitionRef.current = null;
+        };
+
+        try {
+          rec.start();
+          recognitionRef.current = rec;
+        } catch {
+          setSpeechStatus('error');
+          setSpeechErrorMsg('Failed to start speech recognition. Try typing instead.');
+        }
+      })
+      .catch(() => {
+        // Microphone permission denied
+        setSpeechStatus('denied');
+        setSpeechErrorMsg('Microphone access denied. Allow microphone in your browser settings and try again.');
+      });
+  }, [sendTextMessage, unlockAudio, speechStatus]);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setSpeechStatus('idle');
+  }, []);
 
   // ── Capture camera frame ───────────────────────────────────────────────────
 
   const captureFrame = useCallback(async () => {
     if (!videoRef.current || analyzing) return;
     unlockAudio();
-
     const canvas = document.createElement('canvas');
     canvas.width = videoRef.current.videoWidth || 640;
     canvas.height = videoRef.current.videoHeight || 480;
     canvas.getContext('2d')!.drawImage(videoRef.current, 0, 0);
     const imageBase64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
-
     const userMsg = symptomsText || '[Shared camera frame]';
     addMessage('user', userMsg);
     setAnalyzing(true);
-
     try {
       const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64,
-          symptoms: symptomsText || 'Patient shared a camera frame for visual assessment.',
-          conversationHistory: getConversationHistory(),
-        }),
+        body: JSON.stringify({ imageBase64, symptoms: symptomsText || 'Patient shared a camera frame for visual assessment.', conversationHistory: getConversationHistory() }),
       });
       const data = await res.json();
       const reply = data.response || "Let me take a closer look. Can you describe what you're experiencing?";
@@ -319,6 +425,81 @@ function ConsultationInner() {
       setSymptomsText('');
     }
   }, [consultId, symptomsText, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
+
+  // ── Auto-capture toggle (real-time frame analysis every 8s) ───────────────
+
+  const toggleAutoCapture = useCallback(() => {
+    if (autoCapture) {
+      // Stop
+      if (autoCaptureTimerRef.current) clearInterval(autoCaptureTimerRef.current);
+      autoCaptureTimerRef.current = null;
+      autoCaptureCountRef.current = 0;
+      setAutoCapture(false);
+      setAutoCaptureCountdown(0);
+    } else {
+      if (!videoRef.current || !cameraEnabled) return;
+      setAutoCapture(true);
+      autoCaptureCountRef.current = 0;
+      setAutoCaptureCountdown(8);
+
+      // Immediately capture first frame
+      setTimeout(() => {
+        if (videoRef.current && !analyzing) {
+          const canvas = document.createElement('canvas');
+          canvas.width = videoRef.current.videoWidth || 640;
+          canvas.height = videoRef.current.videoHeight || 480;
+          canvas.getContext('2d')!.drawImage(videoRef.current, 0, 0);
+          const imageBase64 = canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
+          const count = ++autoCaptureCountRef.current;
+          const ctx = count === 1
+            ? 'Starting visual assessment. Please look at the camera and describe any symptoms.'
+            : `Continuous frame ${count} — ongoing visual check.`;
+          fetch(
+            consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ imageBase64, symptoms: ctx, conversationHistory: [] }),
+            }
+          ).then((r) => r.json()).then((data) => {
+            if (data.response) { addMessage('ai', data.response); playVoiceResponse(data.response); }
+          }).catch(() => {});
+        }
+      }, 500);
+
+      // Interval
+      const interval = setInterval(() => {
+        setAutoCaptureCountdown(8);
+        if (!videoRef.current) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth || 640;
+        canvas.height = videoRef.current.videoHeight || 480;
+        canvas.getContext('2d')!.drawImage(videoRef.current, 0, 0);
+        const imageBase64 = canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
+        const count = ++autoCaptureCountRef.current;
+        const ctx = `Continuous monitoring frame ${count}. Looking for any visible changes or symptoms.`;
+        fetch(
+          consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageBase64, symptoms: ctx, conversationHistory: [] }),
+          }
+        ).then((r) => r.json()).then((data) => {
+          if (data.response) { addMessage('ai', data.response); playVoiceResponse(data.response); }
+        }).catch(() => {});
+      }, 8000);
+
+      // Countdown tick
+      const countdownInterval = setInterval(() => {
+        setAutoCaptureCountdown((c) => (c <= 1 ? 8 : c - 1));
+      }, 1000);
+
+      autoCaptureTimerRef.current = interval;
+      // Clean up countdown interval on stop
+      return () => clearInterval(countdownInterval);
+    }
+  }, [autoCapture, cameraEnabled, analyzing, consultId, addMessage, playVoiceResponse]);
 
   // ── Upload image ───────────────────────────────────────────────────────────
 
@@ -337,21 +518,15 @@ function ConsultationInner() {
   const analyzeUpload = useCallback(async () => {
     if (!uploadBase64 || analyzing) return;
     unlockAudio();
-
     const userMsg = symptomsText || '[Uploaded image]';
     addMessage('user', userMsg);
     setAnalyzing(true);
-
     try {
       const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: uploadBase64,
-          symptoms: symptomsText || 'Patient uploaded an image for review.',
-          conversationHistory: getConversationHistory(),
-        }),
+        body: JSON.stringify({ imageBase64: uploadBase64, symptoms: symptomsText || 'Patient uploaded an image for review.', conversationHistory: getConversationHistory() }),
       });
       const data = await res.json();
       const reply = data.response || "Okay, I can see the image. Can you tell me more about what you're experiencing?";
@@ -369,75 +544,12 @@ function ConsultationInner() {
     }
   }, [consultId, uploadBase64, symptomsText, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
 
-  // ── Send text message ──────────────────────────────────────────────────────
-
-  const sendTextMessage = useCallback(async (text: string) => {
-    if (!text.trim() || analyzing) return;
-    unlockAudio();
-
-    addMessage('user', text);
-    setTextInput('');
-    setAnalyzing(true);
-
-    try {
-      const endpoint = consultId ? `/api/health/consult/${consultId}/analyze` : '/api/health/analyze';
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symptoms: text,
-          conversationHistory: getConversationHistory(),
-        }),
-      });
-      const data = await res.json();
-      const reply = data.response || "Tell me more — when did this start?";
-      addMessage('ai', reply);
-      await playVoiceResponse(reply);
-    } catch {
-      const fallback = "Sorry, I'm having a connection issue. Try again in a moment.";
-      addMessage('ai', fallback);
-      await playVoiceResponse(fallback);
-    } finally {
-      setAnalyzing(false);
-    }
-  }, [consultId, analyzing, addMessage, playVoiceResponse, getConversationHistory, unlockAudio]);
-
-  // ── Voice recognition ──────────────────────────────────────────────────────
+  // ── Camera helpers ─────────────────────────────────────────────────────────
 
   const requestCameraAccess = useCallback(() => {
     setCameraPermissionDenied(false);
     setCameraError(null);
     setCameraEnabled(true);
-  }, []);
-
-  const startListening = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    unlockAudio();
-    const w = window as unknown as {
-      SpeechRecognition?: new () => SpeechRecognitionInstance;
-      webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
-    };
-    const SpeechRecognitionAPI = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!SpeechRecognitionAPI) return;
-
-    const rec = new SpeechRecognitionAPI();
-    rec.continuous = false;
-    rec.lang = 'en-US';
-    rec.onresult = (e: SpeechRecognitionEvent) => {
-      const transcript = e.results[0][0].transcript;
-      setListening(false);
-      sendTextMessage(transcript);
-    };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    rec.start();
-    recognitionRef.current = rec;
-    setListening(true);
-  }, [sendTextMessage, unlockAudio]);
-
-  const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    setListening(false);
   }, []);
 
   // ── End session ────────────────────────────────────────────────────────────
@@ -447,7 +559,6 @@ function ConsultationInner() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     recognitionRef.current?.stop();
     setCameraEnabled(false);
-
     if (consultId) {
       await fetch(`/api/health/consult/${consultId}`, {
         method: 'PATCH',
@@ -458,7 +569,7 @@ function ConsultationInner() {
     setSessionEnded(true);
   }, [consultId]);
 
-  // ── Session ended ──────────────────────────────────────────────────────────
+  // ── Session ended screen ───────────────────────────────────────────────────
 
   if (sessionEnded) {
     return (
@@ -484,6 +595,43 @@ function ConsultationInner() {
     );
   }
 
+  // ── Mic button UI ──────────────────────────────────────────────────────────
+
+  const isListening = speechStatus === 'listening';
+  const isRequesting = speechStatus === 'requesting';
+  const isSpeechError = speechStatus === 'not-supported' || speechStatus === 'denied' || speechStatus === 'error';
+
+  const MicButton = () => (
+    <div className="space-y-1.5">
+      <button
+        onClick={isListening ? stopListening : startListening}
+        disabled={isRequesting || analyzing}
+        className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-medium border transition-all select-none ${
+          isListening
+            ? 'border-red-500 bg-red-500/10 text-red-400'
+            : isRequesting
+            ? 'border-border bg-muted text-muted-foreground'
+            : isSpeechError && speechStatus === 'not-supported'
+            ? 'border-border bg-muted/50 text-muted-foreground cursor-not-allowed opacity-60'
+            : 'border-border bg-card text-muted-foreground hover:bg-muted active:scale-95'
+        }`}
+      >
+        {isListening ? (
+          <><Mic className="w-4 h-4 fill-current text-red-400 animate-pulse" />Listening… tap to stop</>
+        ) : isRequesting ? (
+          <><Loader2 className="w-4 h-4 animate-spin" />Requesting mic…</>
+        ) : speechStatus === 'not-supported' ? (
+          <><MicOff className="w-4 h-4" />Not available</>
+        ) : (
+          <><Mic className="w-4 h-4" />Tap to Speak</>
+        )}
+      </button>
+      {speechErrorMsg && (
+        <p className="text-[11px] text-amber-500 px-1 leading-relaxed">{speechErrorMsg}</p>
+      )}
+    </div>
+  );
+
   // ── Main UI ────────────────────────────────────────────────────────────────
 
   return (
@@ -506,14 +654,10 @@ function ConsultationInner() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {/* Mute toggle */}
           <button
             onClick={() => {
               unlockAudio();
-              if (voiceEnabled && currentAudioRef.current) {
-                currentAudioRef.current.pause();
-                setAiSpeaking(false);
-              }
+              if (voiceEnabled && currentAudioRef.current) { currentAudioRef.current.pause(); setAiSpeaking(false); }
               setVoiceEnabled((v) => !v);
             }}
             className={`p-2 rounded-lg transition-colors ${voiceEnabled ? 'text-foreground hover:bg-muted' : 'text-muted-foreground hover:bg-muted'}`}
@@ -521,34 +665,23 @@ function ConsultationInner() {
           >
             {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </button>
-          <Button
-            onClick={endSession}
-            size="sm"
-            className="bg-red-600 hover:bg-red-700 text-white border-0 gap-1.5"
-          >
+          <Button onClick={endSession} size="sm" className="bg-red-600 hover:bg-red-700 text-white border-0 gap-1.5">
             <PhoneOff className="w-4 h-4" />
             End
           </Button>
         </div>
       </header>
 
-      {/* ── Main layout ── */}
-      <div className="flex-1 grid md:grid-cols-[1fr_1.3fr] gap-0 overflow-hidden">
+      {/* ── Main layout — stacks on mobile, side by side on md+ ── */}
+      <div className="flex-1 flex flex-col md:grid md:grid-cols-[1fr_1.3fr] overflow-hidden">
 
         {/* ══ LEFT: Camera + controls ══ */}
-        <div className="flex flex-col gap-3 p-4 border-r border-border overflow-y-auto">
+        <div className="flex flex-col gap-3 p-4 border-b md:border-b-0 md:border-r border-border md:overflow-y-auto">
 
-          {/* Camera feed — Zoom-call style */}
+          {/* Camera feed */}
           <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-border aspect-video shadow-md">
             {cameraEnabled && !cameraError && !cameraPermissionDenied ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-                style={{ transform: 'scaleX(-1)' }}
-              />
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ transform: 'scaleX(-1)' }} />
             ) : cameraPermissionDenied ? (
               <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4 bg-zinc-900">
                 <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center">
@@ -558,10 +691,7 @@ function ConsultationInner() {
                   <p className="text-sm font-medium text-white">Camera access needed</p>
                   <p className="text-xs text-zinc-400 mt-1">Allow camera in your browser settings</p>
                 </div>
-                <button
-                  onClick={requestCameraAccess}
-                  className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
-                >
+                <button onClick={requestCameraAccess} className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
                   Allow Camera
                 </button>
               </div>
@@ -571,19 +701,11 @@ function ConsultationInner() {
                 <p className="text-xs text-center px-4">{cameraError ?? 'Camera off'}</p>
               </div>
             )}
-
-            {/* Camera label */}
             <div className="absolute top-2 left-2">
               <span className="text-[10px] font-medium text-white/70 bg-black/40 px-2 py-0.5 rounded-full">You</span>
             </div>
-
-            {/* Camera toggle */}
             {!cameraPermissionDenied && (
-              <button
-                onClick={() => setCameraEnabled((v) => !v)}
-                className="absolute bottom-2 right-2 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
-                title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
-              >
+              <button onClick={() => setCameraEnabled((v) => !v)} className="absolute bottom-2 right-2 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors" title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}>
                 {cameraEnabled ? <Camera className="w-3.5 h-3.5" /> : <CameraOff className="w-3.5 h-3.5" />}
               </button>
             )}
@@ -591,42 +713,39 @@ function ConsultationInner() {
 
           {/* Camera actions */}
           <div className="flex gap-2">
-            <Button
-              onClick={captureFrame}
-              disabled={analyzing || !cameraEnabled || !!cameraError}
-              variant="outline"
-              size="sm"
-              className="flex-1 gap-1.5 text-xs"
-            >
+            <Button onClick={captureFrame} disabled={analyzing || !cameraEnabled || !!cameraError || autoCapture} variant="outline" size="sm" className="flex-1 gap-1.5 text-xs">
               {analyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
               Share Frame
             </Button>
-            <Button
-              onClick={() => fileInputRef.current?.click()}
-              variant="outline"
-              size="sm"
-              className="flex-1 gap-1.5 text-xs"
-            >
+            <Button onClick={() => fileInputRef.current?.click()} variant="outline" size="sm" className="flex-1 gap-1.5 text-xs">
               <Upload className="w-3.5 h-3.5" />
               Upload Image
             </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
           </div>
+
+          {/* Auto-capture toggle */}
+          {cameraEnabled && !cameraPermissionDenied && (
+            <button
+              onClick={toggleAutoCapture}
+              className={`flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-medium border transition-all ${
+                autoCapture
+                  ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500'
+                  : 'border-border bg-card text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${autoCapture ? 'bg-emerald-500 animate-pulse' : 'bg-muted-foreground/40'}`} />
+              {autoCapture
+                ? `Auto-analyzing… next frame in ${autoCaptureCountdown}s`
+                : 'Enable Auto-Analyze (every 8s)'}
+            </button>
+          )}
 
           {/* Upload preview */}
           {uploadPreview && (
             <div className="relative rounded-xl overflow-hidden border border-border">
               <img src={uploadPreview} alt="Upload preview" className="w-full max-h-40 object-cover" />
-              <button
-                onClick={() => { setUploadPreview(null); setUploadBase64(null); }}
-                className="absolute top-2 right-2 p-1 rounded-full bg-background/80 text-foreground hover:bg-muted"
-              >
+              <button onClick={() => { setUploadPreview(null); setUploadBase64(null); }} className="absolute top-2 right-2 p-1 rounded-full bg-background/80 text-foreground hover:bg-muted">
                 <X className="w-3 h-3" />
               </button>
               <div className="p-2">
@@ -638,7 +757,7 @@ function ConsultationInner() {
             </div>
           )}
 
-          {/* Symptom context (optional — for camera frame) */}
+          {/* Symptom context (optional) */}
           <div className="space-y-1">
             <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
               Add context for camera frame (optional)
@@ -652,21 +771,8 @@ function ConsultationInner() {
             />
           </div>
 
-          {/* Voice input */}
-          <button
-            onClick={listening ? stopListening : startListening}
-            className={`flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium border transition-all ${
-              listening
-                ? 'border-red-500 bg-red-500/10 text-red-400 animate-pulse'
-                : 'border-border bg-card text-muted-foreground hover:bg-muted'
-            }`}
-          >
-            {listening ? (
-              <><Mic className="w-4 h-4 fill-current text-red-400" />Listening… tap to stop</>
-            ) : (
-              <><Mic className="w-4 h-4" />Tap to Speak</>
-            )}
-          </button>
+          {/* Voice input — with proper feedback */}
+          <MicButton />
 
           {/* Disclaimer */}
           <div className="flex items-start gap-1.5 text-[10px] text-muted-foreground/60 bg-amber-500/5 rounded-lg p-2 border border-amber-500/15">
@@ -676,10 +782,10 @@ function ConsultationInner() {
         </div>
 
         {/* ══ RIGHT: Doctor chat ══ */}
-        <div className="flex flex-col h-[calc(100vh-57px)] overflow-hidden">
+        <div className="flex flex-col flex-1 md:h-[calc(100vh-57px)] overflow-hidden min-h-[50vh]">
 
           {/* Doctor panel header */}
-          <div className="p-4 border-b border-border flex items-center gap-4 bg-gradient-to-r from-emerald-500/5 to-transparent">
+          <div className="p-4 border-b border-border flex items-center gap-4 bg-gradient-to-r from-emerald-500/5 to-transparent shrink-0">
             <DoctorAvatar speaking={aiSpeaking} />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
@@ -687,13 +793,9 @@ function ConsultationInner() {
                 <span className="text-[10px] bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full font-medium">AI Health Advisor</span>
               </div>
               {aiSpeaking ? (
-                <div className="mt-1">
-                  <WaveformBars active={aiSpeaking} />
-                </div>
+                <div className="mt-1"><WaveformBars active={aiSpeaking} /></div>
               ) : (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {analyzing ? 'Thinking…' : 'Ready'}
-                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">{analyzing ? 'Thinking…' : 'Ready'}</p>
               )}
             </div>
           </div>
@@ -719,8 +821,6 @@ function ConsultationInner() {
                 </div>
               </div>
             ))}
-
-            {/* Typing indicator */}
             {analyzing && (
               <div className="flex justify-start items-center gap-2">
                 <div className="w-7 h-7 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
@@ -737,7 +837,7 @@ function ConsultationInner() {
           </div>
 
           {/* Input bar */}
-          <div className="p-3 border-t border-border bg-background/95">
+          <div className="p-3 border-t border-border bg-background/95 shrink-0">
             <div className="flex items-end gap-2">
               <textarea
                 value={textInput}
@@ -764,7 +864,7 @@ function ConsultationInner() {
               </Button>
             </div>
             <p className="text-[10px] text-muted-foreground/40 mt-1.5 px-1">
-              Enter to send · Shift+Enter for new line · Or tap the mic
+              Enter to send · Or tap the mic in the left panel
             </p>
           </div>
         </div>
