@@ -6,16 +6,7 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // Consultation page: allow camera + microphone for video consultation
-        source: "/dashboard/health/consultation",
-        headers: [
-          {
-            key: "Permissions-Policy",
-            value: "camera=(self), microphone=(self), geolocation=()",
-          },
-        ],
-      },
-      {
+        // Global security headers for all routes
         source: "/(.*)",
         headers: [
           {
@@ -45,6 +36,16 @@ const nextConfig: NextConfig = {
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
+          },
+        ],
+      },
+      {
+        // Consultation page override: allow camera + microphone (must come AFTER global rule)
+        source: "/dashboard/health/consultation",
+        headers: [
+          {
+            key: "Permissions-Policy",
+            value: "camera=(self), microphone=(self), geolocation=()",
           },
         ],
       },
