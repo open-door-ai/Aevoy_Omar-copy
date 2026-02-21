@@ -14,14 +14,20 @@ import { sendResponse } from "./email.js";
 import { processVoiceCall } from "./twilio.js";
 
 // Configuration
-const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+// Global tick every 15 minutes; per-user interval respected via lastChecked map
+const POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes (tick)
+const DEFAULT_USER_INTERVAL_MINUTES = 30; // Default per-user check frequency
 let managerInterval: ReturnType<typeof setInterval> | null = null;
+
+// Track last check time per user (in-memory; resets on restart = first check always runs)
+const userLastChecked = new Map<string, Date>();
 
 // User cache to avoid re-querying settings
 interface UserInboxConfig {
   userId: string;
   autonomyLevel: number;
   enabled: boolean;
+  checkIntervalMinutes: number;
   settings: {
     monitorInbox: boolean;
     deleteSpam: boolean;
@@ -49,7 +55,7 @@ export function startInboxManager(): void {
     return;
   }
 
-  console.log("[INBOX-MANAGER] Starting - polling every 5 minutes");
+  console.log("[INBOX-MANAGER] Starting - global tick every 15 min, per-user intervals respected");
 
   // Run immediately, then on interval
   processAllInboxes().catch((err) =>
@@ -84,7 +90,7 @@ async function processAllInboxes(): Promise<void> {
     // Get all users with inbox management enabled
     const { data: enabledUsers } = await getSupabaseClient()
       .from("inbox_settings")
-      .select("user_id, autonomy_level, enabled, monitor_inbox, delete_spam, respond_to_simple, schedule_meetings, call_for_complex, ai_signature_enabled, ai_signature_text, user_rules, max_emails_per_day, notify_urgent_immediately")
+      .select("user_id, autonomy_level, enabled, check_interval_minutes, monitor_inbox, delete_spam, respond_to_simple, schedule_meetings, call_for_complex, ai_signature_enabled, ai_signature_text, user_rules, max_emails_per_day, notify_urgent_immediately")
       .eq("enabled", true);
 
     if (!enabledUsers || enabledUsers.length === 0) {
@@ -93,12 +99,26 @@ async function processAllInboxes(): Promise<void> {
     }
 
     console.log(`[INBOX-MANAGER] Processing ${enabledUsers.length} users`);
+    const now = new Date();
 
     for (const user of enabledUsers) {
       try {
+        // Respect per-user check interval
+        const intervalMinutes = user.check_interval_minutes ?? DEFAULT_USER_INTERVAL_MINUTES;
+        const lastCheck = userLastChecked.get(user.user_id);
+        if (lastCheck) {
+          const minutesSinceLastCheck = (now.getTime() - lastCheck.getTime()) / 60000;
+          if (minutesSinceLastCheck < intervalMinutes) {
+            console.log(`[INBOX-MANAGER] Skipping user ${user.user_id} — checked ${Math.round(minutesSinceLastCheck)}m ago (interval: ${intervalMinutes}m)`);
+            continue;
+          }
+        }
+        userLastChecked.set(user.user_id, now);
+
         await processUserInbox(user.user_id, {
           autonomyLevel: user.autonomy_level,
           enabled: user.enabled,
+          checkIntervalMinutes: intervalMinutes,
           settings: {
             monitorInbox: user.monitor_inbox,
             deleteSpam: user.delete_spam,
@@ -112,7 +132,7 @@ async function processAllInboxes(): Promise<void> {
             notifyUrgentImmediately: user.notify_urgent_immediately,
           },
           emailProvider: await detectEmailProvider(user.user_id),
-          lastChecked: new Date(),
+          lastChecked: now,
         });
       } catch (err) {
         console.error(`[INBOX-MANAGER] Error processing user ${user.user_id}:`, err);

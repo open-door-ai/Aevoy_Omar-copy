@@ -81,6 +81,7 @@ function ConnectedAppsContent() {
   const [imapPassword, setImapPassword] = useState('');
   const [connectingImap, setConnectingImap] = useState(false);
   const [disconnectingImap, setDisconnectingImap] = useState(false);
+  const [imapProvider, setImapProvider] = useState<'gmail' | 'outlook' | 'yahoo' | 'icloud' | 'other'>('gmail');
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCred, setNewCred] = useState({ site_domain: '', username: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
@@ -668,7 +669,7 @@ function ConnectedAppsContent() {
           </CardContent>
         </Card>
         {/* Other Email (IMAP + App Password) */}
-        <Card>
+        <Card className={showImapForm && !imapStatus?.connected ? 'md:col-span-2 lg:col-span-3' : ''}>
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -709,31 +710,151 @@ function ConnectedAppsContent() {
                 </Button>
               </div>
             ) : showImapForm ? (
-              <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  Use an <strong>app password</strong> — not your main password.{' '}
-                  <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" className="underline">Gmail</a>,{' '}
-                  <a href="https://account.live.com/proofs/AppPassword" target="_blank" rel="noopener" className="underline">Outlook</a>,{' '}
-                  <a href="https://help.yahoo.com/kb/SLN15241.html" target="_blank" rel="noopener" className="underline">Yahoo</a>
-                </p>
-                <Input
-                  type="email"
-                  placeholder="your@email.com"
-                  value={imapEmail}
-                  onChange={(e) => setImapEmail(e.target.value)}
-                  className="h-8 text-sm"
-                />
-                <Input
-                  type="password"
-                  placeholder="App password (16 chars)"
-                  value={imapPassword}
-                  onChange={(e) => setImapPassword(e.target.value)}
-                  className="h-8 text-sm"
-                />
+              <div className="space-y-5">
+                {/* Provider selector */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Select your email provider</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(['gmail', 'outlook', 'yahoo', 'icloud', 'other'] as const).map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setImapProvider(p)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors capitalize ${
+                          imapProvider === p
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
+                        }`}
+                      >
+                        {p === 'gmail' ? 'Gmail' : p === 'outlook' ? 'Outlook' : p === 'yahoo' ? 'Yahoo' : p === 'icloud' ? 'iCloud' : 'Other'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Step-by-step guide */}
+                <div className="bg-muted/30 rounded-xl p-4 border border-border">
+                  <p className="text-xs font-semibold mb-3 text-foreground">
+                    {imapProvider === 'gmail' && 'How to get a Gmail App Password'}
+                    {imapProvider === 'outlook' && 'How to get an Outlook App Password'}
+                    {imapProvider === 'yahoo' && 'How to get a Yahoo App Password'}
+                    {imapProvider === 'icloud' && 'How to get an iCloud App Password'}
+                    {imapProvider === 'other' && 'How to get an App Password'}
+                  </p>
+                  <ol className="space-y-2.5">
+                    {imapProvider === 'gmail' && (<>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
+                        <span className="text-muted-foreground">Sign in to your Google Account → go to <a href="https://myaccount.google.com/security" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Security settings</a></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
+                        <span className="text-muted-foreground">Under "How you sign in to Google", ensure <strong className="text-foreground">2-Step Verification</strong> is turned On</span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
+                        <span className="text-muted-foreground">Go to <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">App Passwords</a> (search "App Passwords" in your account)</span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
+                        <span className="text-muted-foreground">Type <strong className="text-foreground">Aevoy</strong> in the app name box → click <strong className="text-foreground">Create</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">5</span>
+                        <span className="text-muted-foreground">Copy the <strong className="text-foreground">16-character password</strong> shown (spaces don't matter) → paste below</span>
+                      </li>
+                    </>)}
+                    {imapProvider === 'outlook' && (<>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
+                        <span className="text-muted-foreground">Sign in at <a href="https://account.microsoft.com/security" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">account.microsoft.com/security</a></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
+                        <span className="text-muted-foreground">Click <strong className="text-foreground">Advanced security options</strong> → turn on <strong className="text-foreground">Two-step verification</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
+                        <span className="text-muted-foreground">Scroll to <strong className="text-foreground">App passwords</strong> → click <a href="https://account.live.com/proofs/AppPassword" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Create a new app password</a></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
+                        <span className="text-muted-foreground">Copy the generated password → paste it below</span>
+                      </li>
+                    </>)}
+                    {imapProvider === 'yahoo' && (<>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
+                        <span className="text-muted-foreground">Sign in at <a href="https://login.yahoo.com" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Yahoo Mail</a> → click your name → <strong className="text-foreground">Account Info</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
+                        <span className="text-muted-foreground">Go to <a href="https://login.yahoo.com/account/security" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Account Security</a> → turn on <strong className="text-foreground">Two-step verification</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
+                        <span className="text-muted-foreground">Click <strong className="text-foreground">Generate app password</strong> → select <strong className="text-foreground">Other app</strong> → type Aevoy</span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
+                        <span className="text-muted-foreground">Click <strong className="text-foreground">Generate</strong> → copy the password shown → paste below</span>
+                      </li>
+                    </>)}
+                    {imapProvider === 'icloud' && (<>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
+                        <span className="text-muted-foreground">Sign in at <a href="https://appleid.apple.com" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">appleid.apple.com</a></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
+                        <span className="text-muted-foreground">Under <strong className="text-foreground">Sign-In and Security</strong>, click <strong className="text-foreground">App-Specific Passwords</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
+                        <span className="text-muted-foreground">Click <strong className="text-foreground">+</strong> → enter <strong className="text-foreground">Aevoy</strong> as the label → click <strong className="text-foreground">Create</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
+                        <span className="text-muted-foreground">Copy the password shown (<strong className="text-foreground">xxxx-xxxx-xxxx-xxxx</strong>) → paste below</span>
+                      </li>
+                    </>)}
+                    {imapProvider === 'other' && (<>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
+                        <span className="text-muted-foreground">In your email provider's settings, find <strong className="text-foreground">Security</strong> or <strong className="text-foreground">Account</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
+                        <span className="text-muted-foreground">Enable <strong className="text-foreground">IMAP access</strong> and <strong className="text-foreground">App passwords</strong> or <strong className="text-foreground">2-factor auth</strong></span>
+                      </li>
+                      <li className="flex gap-3 text-xs">
+                        <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
+                        <span className="text-muted-foreground">Generate an app-specific password → copy it → paste below</span>
+                      </li>
+                    </>)}
+                  </ol>
+                </div>
+
+                {/* Credential inputs */}
+                <div className="space-y-2">
+                  <Input
+                    type="email"
+                    placeholder={`your@${imapProvider === 'gmail' ? 'gmail.com' : imapProvider === 'outlook' ? 'outlook.com' : imapProvider === 'yahoo' ? 'yahoo.com' : imapProvider === 'icloud' ? 'icloud.com' : 'email.com'}`}
+                    value={imapEmail}
+                    onChange={(e) => setImapEmail(e.target.value)}
+                    className="h-9 text-sm"
+                  />
+                  <Input
+                    type="password"
+                    placeholder="App password (from steps above)"
+                    value={imapPassword}
+                    onChange={(e) => setImapPassword(e.target.value)}
+                    className="h-9 text-sm"
+                  />
+                </div>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleConnectImap} disabled={connectingImap || !imapEmail || !imapPassword}>
                     {connectingImap ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
-                    Connect
+                    Connect Email
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setShowImapForm(false)}>Cancel</Button>
                 </div>

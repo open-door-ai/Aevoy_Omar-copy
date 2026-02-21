@@ -22,21 +22,22 @@ export async function GET() {
     if (!settings) {
       // Return default settings
       return NextResponse.json({
-        autonomyLevel: 0,
+        autonomy_level: 0,
         enabled: false,
-        monitorInbox: false,
-        deleteSpam: false,
-        respondToSimple: false,
-        scheduleMeetings: false,
-        callForComplex: false,
-        aiSignatureEnabled: true,
-        aiSignatureText: "Sent by your AI assistant",
-        userRules: [],
-        notifyDailyDigest: true,
-        notifyUrgentImmediately: true,
-        quietHoursStart: "22:00",
-        quietHoursEnd: "07:00",
-        maxEmailsPerDay: 50,
+        check_interval_minutes: 30,
+        monitor_inbox: false,
+        delete_spam: false,
+        respond_to_simple: false,
+        schedule_meetings: false,
+        call_for_complex: false,
+        ai_signature_enabled: true,
+        ai_signature_text: "Sent by your AI assistant",
+        user_rules: [],
+        notify_daily_digest: true,
+        notify_urgent_immediately: true,
+        quiet_hours_start: "22:00",
+        quiet_hours_end: "07:00",
+        max_emails_per_day: 50,
       });
     }
 
@@ -76,10 +77,17 @@ export async function PUT(request: Request) {
       callForComplex: autonomyLevel >= 75,
     };
 
+    // Validate check interval
+    const validIntervals = [15, 30, 60, 120];
+    const checkIntervalMinutes = validIntervals.includes(body.checkIntervalMinutes)
+      ? body.checkIntervalMinutes
+      : 30;
+
     const updateData = {
       user_id: user.id,
       autonomy_level: autonomyLevel,
       enabled: body.enabled ?? false,
+      check_interval_minutes: checkIntervalMinutes,
       ...derivedSettings,
       ai_signature_enabled: body.aiSignatureEnabled ?? true,
       ai_signature_text: body.aiSignatureText ?? "Sent by your AI assistant",

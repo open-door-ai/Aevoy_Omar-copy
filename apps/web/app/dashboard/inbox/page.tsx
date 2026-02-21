@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Mail, CheckCircle, XCircle, Loader2, Settings2, Inbox, RefreshCw, Trash2, Reply, Calendar } from "lucide-react";
+import { Mail, CheckCircle, XCircle, Loader2, Settings2, Inbox, RefreshCw, Trash2, Reply, Calendar, Clock } from "lucide-react";
 
 interface QueueItem {
   id: string;
@@ -28,7 +28,7 @@ interface LogItem {
 interface InboxSettings {
   enabled: boolean;
   autonomy_level: number;
-  signature?: string;
+  check_interval_minutes: number;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -48,6 +48,13 @@ const ACTION_ICON: Record<string, React.ReactNode> = {
   archive: <Inbox className="w-3.5 h-3.5" />,
 };
 
+const INTERVAL_OPTIONS = [
+  { value: 15, label: "15 min" },
+  { value: 30, label: "30 min" },
+  { value: 60, label: "1 hour" },
+  { value: 120, label: "2 hours" },
+];
+
 function timeAgo(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const min = Math.floor(ms / 60000);
@@ -66,6 +73,7 @@ export default function InboxPage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [autonomy, setAutonomy] = useState(25);
   const [enabled, setEnabled] = useState(false);
+  const [checkInterval, setCheckInterval] = useState(30);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -83,6 +91,7 @@ export default function InboxPage() {
         setSettings(s);
         setAutonomy(s.autonomy_level ?? 25);
         setEnabled(s.enabled ?? false);
+        setCheckInterval(s.check_interval_minutes ?? 30);
       }
     } catch (e) {
       console.error(e);
@@ -115,7 +124,7 @@ export default function InboxPage() {
       await fetch("/api/inbox/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled, autonomyLevel: autonomy }),
+        body: JSON.stringify({ enabled, autonomyLevel: autonomy, checkIntervalMinutes: checkInterval }),
       });
     } catch (e) {
       console.error(e);
@@ -131,6 +140,10 @@ export default function InboxPage() {
     : autonomy <= 50
     ? "Auto-reply to simple"
     : "Full auto";
+
+  const intervalLabel = checkInterval < 60
+    ? `${checkInterval} minutes`
+    : checkInterval === 60 ? "1 hour" : "2 hours";
 
   if (loading) {
     return (
@@ -188,7 +201,8 @@ export default function InboxPage() {
         </div>
 
         {enabled && (
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {/* Autonomy level */}
             <div>
               <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
                 <span>Autonomy level</span>
@@ -215,6 +229,32 @@ export default function InboxPage() {
               {autonomy === 25 && "AI automatically deletes spam and promotional emails. Everything else needs your approval."}
               {autonomy === 50 && "AI deletes spam and auto-replies to simple emails. Complex emails go to approval queue."}
               {autonomy === 75 && "AI manages your inbox fully — deletes spam, replies to simple emails, and schedules meetings automatically."}
+            </div>
+
+            {/* Check interval */}
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Check inbox every</span>
+              </div>
+              <div className="flex gap-2">
+                {INTERVAL_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setCheckInterval(opt.value)}
+                    className={`flex-1 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      checkInterval === opt.value
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-muted/30 text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1.5">
+                AI will check your connected email every {intervalLabel} quietly in the background.
+              </p>
             </div>
           </div>
         )}
@@ -299,7 +339,9 @@ export default function InboxPage() {
           <CheckCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
           <p className="text-sm font-medium text-foreground">No pending approvals</p>
           <p className="text-xs text-muted-foreground mt-1">
-            {enabled ? "Your inbox is up to date. AI will check again in 15 minutes." : "Enable AI email management above to get started."}
+            {enabled
+              ? `Your inbox is up to date. AI checks every ${intervalLabel}.`
+              : "Enable AI email management above to get started."}
           </p>
         </div>
       )}
