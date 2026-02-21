@@ -144,6 +144,7 @@ function ConsultationInner() {
   const [listening, setListening] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [cameraPermissionDenied, setCameraPermissionDenied] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
   const [uploadPreview, setUploadPreview] = useState<string | null>(null);
   const [uploadBase64, setUploadBase64] = useState<string | null>(null);
@@ -192,9 +193,17 @@ function ConsultationInner() {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
+        setCameraError(null);
+        setCameraPermissionDenied(false);
       })
-      .catch(() => {
-        setCameraError('Camera access denied. You can still use text and image upload.');
+      .catch((err: Error) => {
+        const isDenied = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
+        setCameraPermissionDenied(isDenied);
+        setCameraError(
+          isDenied
+            ? null // Show dedicated UI instead
+            : 'Camera not available. You can still use text and image upload.'
+        );
         setCameraEnabled(false);
       });
 
@@ -371,6 +380,12 @@ function ConsultationInner() {
 
   // ── Voice recognition ─────────────────────────────────────────────────────
 
+  const requestCameraAccess = useCallback(() => {
+    setCameraPermissionDenied(false);
+    setCameraError(null);
+    setCameraEnabled(true);
+  }, []);
+
   const startListening = useCallback(() => {
     if (typeof window === 'undefined') return;
     const w = window as unknown as {
@@ -496,7 +511,7 @@ function ConsultationInner() {
 
           {/* Camera feed */}
           <div className="relative rounded-xl overflow-hidden bg-muted border border-border aspect-video">
-            {cameraEnabled && !cameraError ? (
+            {cameraEnabled && !cameraError && !cameraPermissionDenied ? (
               <video
                 ref={videoRef}
                 autoPlay
@@ -505,6 +520,23 @@ function ConsultationInner() {
                 className="w-full h-full object-cover"
                 style={{ transform: 'scaleX(-1)' }} /* mirror mode */
               />
+            ) : cameraPermissionDenied ? (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-3 p-4">
+                <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                  <Camera className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-foreground">Camera access needed</p>
+                  <p className="text-xs text-muted-foreground mt-1">Click below and allow camera in your browser</p>
+                </div>
+                <button
+                  onClick={requestCameraAccess}
+                  className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors flex items-center gap-2"
+                >
+                  <Camera className="w-4 h-4" />
+                  Allow Camera
+                </button>
+              </div>
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <CameraOff className="w-8 h-8" />
@@ -514,14 +546,16 @@ function ConsultationInner() {
               </div>
             )}
 
-            {/* Camera toggle overlay */}
-            <button
-              onClick={() => setCameraEnabled((v) => !v)}
-              className="absolute bottom-2 right-2 p-2 rounded-lg bg-background/80 backdrop-blur text-foreground hover:bg-muted transition-colors"
-              title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
-            >
-              {cameraEnabled ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
-            </button>
+            {/* Camera toggle overlay — only show when camera is active */}
+            {!cameraPermissionDenied && (
+              <button
+                onClick={() => setCameraEnabled((v) => !v)}
+                className="absolute bottom-2 right-2 p-2 rounded-lg bg-background/80 backdrop-blur text-foreground hover:bg-muted transition-colors"
+                title={cameraEnabled ? 'Turn camera off' : 'Turn camera on'}
+              >
+                {cameraEnabled ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
+              </button>
+            )}
           </div>
 
           {/* Camera action buttons */}

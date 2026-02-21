@@ -21,6 +21,8 @@ import {
   Plug,
   Eye,
   EyeOff,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface IntegrationStatus {
@@ -58,6 +60,8 @@ function ConnectedAppsContent() {
   const [connectingWhatsapp, setConnectingWhatsapp] = useState(false);
   const [connectingFitbit, setConnectingFitbit] = useState(false);
   const [disconnectingFitbit, setDisconnectingFitbit] = useState(false);
+  const [appleHealthWebhookUrl, setAppleHealthWebhookUrl] = useState<string | null>(null);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [whatsappPolling, setWhatsappPolling] = useState(false);
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
@@ -80,13 +84,14 @@ function ConnectedAppsContent() {
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      const [googleRes, msRes, twitterRes, telegramRes, whatsappRes, fitbitRes] = await Promise.all([
+      const [googleRes, msRes, twitterRes, telegramRes, whatsappRes, fitbitRes, webhookRes] = await Promise.all([
         fetch('/api/integrations/gmail'),
         fetch('/api/integrations/microsoft'),
         fetch('/api/integrations/twitter'),
         fetch('/api/integrations/telegram'),
         fetch('/api/integrations/whatsapp'),
         fetch('/api/integrations/fitbit'),
+        fetch('/api/health/webhook-token'),
       ]);
       if (googleRes.ok) setGoogleStatus(await googleRes.json());
       if (msRes.ok) setMicrosoftStatus(await msRes.json());
@@ -100,6 +105,10 @@ function ConnectedAppsContent() {
         setWhatsappStatus({ connected: wd.connected || false, connectedAt: null, email: wd.phone || null });
       }
       if (fitbitRes.ok) setFitbitStatus(await fitbitRes.json());
+      if (webhookRes.ok) {
+        const wd = await webhookRes.json();
+        setAppleHealthWebhookUrl(wd.webhookUrl || null);
+      }
     } catch (err) {
       console.error('Error fetching integrations:', err);
     } finally {
@@ -414,6 +423,13 @@ function ConnectedAppsContent() {
     }, 3000);
     return () => clearInterval(interval);
   }, [telegramQrData, telegramStatus?.connected]);
+
+  const copyWebhookUrl = async () => {
+    if (!appleHealthWebhookUrl) return;
+    await navigator.clipboard.writeText(appleHealthWebhookUrl);
+    setCopiedWebhook(true);
+    setTimeout(() => setCopiedWebhook(false), 2000);
+  };
 
   const handleAddCredential = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -925,46 +941,128 @@ function ConnectedAppsContent() {
         </Card>
 
         {/* Apple Health (Shortcuts) */}
-        <Card>
+        <Card className="md:col-span-2 lg:col-span-1">
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#FF375F' }}>
-                  <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white" aria-label="Apple Health">
-                    <path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191 5.281-5.191 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447 5.726-4.447 2.54 0 5.274 1.621 5.274 5.181 0 4.069-5.136 8.625-11 14.402z"/>
-                  </svg>
-                </div>
-                <div>
-                  <CardTitle className="text-base">Apple Health</CardTitle>
-                  <CardDescription>Sync via Apple Shortcuts automation</CardDescription>
-                </div>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-sm" style={{ background: 'linear-gradient(135deg, #FF375F 0%, #FF6B6B 100%)' }}>
+                <svg viewBox="0 0 24 24" className="w-6 h-6 fill-white" aria-label="Apple Health">
+                  <path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191 5.281-5.191 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447 5.726-4.447 2.54 0 5.274 1.621 5.274 5.181 0 4.069-5.136 8.625-11 14.402z"/>
+                </svg>
+              </div>
+              <div>
+                <CardTitle className="text-base">Apple Health</CardTitle>
+                <CardDescription>Sync iPhone health data automatically</CardDescription>
               </div>
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Apple Health data syncs via an iOS Shortcut automation that runs daily. Install in one tap:
-              </p>
-              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                <li>Open this link on your iPhone</li>
-                <li>Tap <span className="font-semibold">Add Shortcut</span></li>
-                <li>Grant Apple Health permissions</li>
-              </ol>
-              <div className="flex flex-col gap-2">
-                <a
-                  href="/shortcuts/health-sync.shortcut"
-                  className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
-                  download
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  Download Apple Shortcut
-                </a>
-                <p className="text-xs text-muted-foreground">
-                  The shortcut sends: heart rate, steps, sleep, HRV, SpO₂ to your Aevoy account securely.
-                </p>
+          <CardContent className="space-y-4">
+            {/* Animated data flow visualization */}
+            <div className="relative rounded-xl bg-gradient-to-br from-red-50 to-pink-50 dark:from-red-950/20 dark:to-pink-950/20 border border-red-100 dark:border-red-900/30 p-4 overflow-hidden">
+              {/* Animated dots */}
+              <div className="flex items-center justify-between gap-3">
+                {/* iPhone icon */}
+                <div className="flex flex-col items-center gap-1.5 shrink-0">
+                  <div className="w-10 h-14 rounded-xl border-2 border-red-300 dark:border-red-700 bg-white dark:bg-red-950/40 flex items-center justify-center relative">
+                    <svg viewBox="0 0 24 24" className="w-5 h-5 fill-red-400" aria-hidden="true">
+                      <path d="M12 21.593c-5.63-5.539-11-10.297-11-14.402 0-3.791 3.068-5.191 5.281-5.191 1.312 0 4.151.501 5.719 4.457 1.59-3.968 4.464-4.447 5.726-4.447 2.54 0 5.274 1.621 5.274 5.181 0 4.069-5.136 8.625-11 14.402z"/>
+                    </svg>
+                    {/* Pulse ring */}
+                    <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-400 rounded-full animate-ping opacity-75" />
+                  </div>
+                  <span className="text-[10px] font-medium text-red-600 dark:text-red-400">iPhone</span>
+                </div>
+
+                {/* Animated data flow */}
+                <div className="flex-1 flex items-center justify-center gap-1">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="w-1.5 h-1.5 rounded-full bg-red-400"
+                      style={{
+                        animation: `bounce 1s ease-in-out ${i * 0.15}s infinite`,
+                        opacity: 0.3 + i * 0.2,
+                      }}
+                    />
+                  ))}
+                </div>
+
+                {/* Health metrics */}
+                <div className="flex flex-col gap-1 text-[10px] font-mono">
+                  <span className="px-1.5 py-0.5 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded animate-pulse">♥ 72 bpm</span>
+                  <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded animate-pulse" style={{ animationDelay: '0.3s' }}>💤 7.5h</span>
+                  <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 rounded animate-pulse" style={{ animationDelay: '0.6s' }}>👟 8,432</span>
+                </div>
+
+                {/* Arrow */}
+                <div className="flex items-center justify-center shrink-0">
+                  <svg className="w-5 h-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                  </svg>
+                </div>
+
+                {/* Aevoy */}
+                <div className="flex flex-col items-center gap-1.5 shrink-0">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 border-2 border-primary/30 flex items-center justify-center font-bold text-primary text-sm">
+                    A
+                  </div>
+                  <span className="text-[10px] font-medium text-primary">Aevoy</span>
+                </div>
+              </div>
+
+              {/* "Encrypted" badge */}
+              <div className="absolute top-2 right-2 flex items-center gap-1 text-[9px] text-muted-foreground">
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                Encrypted
               </div>
             </div>
+
+            {/* Webhook URL */}
+            {appleHealthWebhookUrl ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground font-medium">Your personal endpoint</p>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 bg-muted rounded-lg px-3 py-2 min-w-0">
+                    <p className="text-[11px] font-mono text-foreground truncate">{appleHealthWebhookUrl}</p>
+                  </div>
+                  <button
+                    onClick={copyWebhookUrl}
+                    className="shrink-0 p-2 rounded-lg bg-muted hover:bg-muted/80 transition-colors"
+                    title="Copy URL"
+                  >
+                    {copiedWebhook ? (
+                      <Check className="w-4 h-4 text-green-500" />
+                    ) : (
+                      <Copy className="w-4 h-4 text-muted-foreground" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="h-10 bg-muted/50 rounded-lg animate-pulse" />
+            )}
+
+            {/* Setup steps — clean, non-technical */}
+            <div className="space-y-2 pt-1">
+              <p className="text-xs font-semibold text-foreground">Set up in 3 steps on your iPhone</p>
+              <div className="space-y-1.5">
+                {[
+                  { step: '1', text: 'Open the Shortcuts app and create a new automation' },
+                  { step: '2', text: 'Add a "Get Contents of URL" action, paste your URL above' },
+                  { step: '3', text: 'Set it to run daily — your health data syncs automatically' },
+                ].map(({ step, text }) => (
+                  <div key={step} className="flex items-start gap-2.5">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 text-[10px] font-bold flex items-center justify-center">{step}</span>
+                    <p className="text-xs text-muted-foreground leading-snug pt-0.5">{text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p className="text-[10px] text-muted-foreground">
+              Sends: heart rate · steps · sleep · HRV · SpO₂ — end-to-end encrypted
+            </p>
           </CardContent>
         </Card>
       </div>
