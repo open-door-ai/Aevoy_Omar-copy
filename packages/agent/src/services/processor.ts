@@ -3084,6 +3084,22 @@ async function executeAction(
       if (!to || !emailRegex.test(to)) {
         return { action, success: false, error: "Invalid email address" };
       }
+      // Try sending from user's personal connected email first
+      try {
+        const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
+        const connected = await isEmailConnected(userId);
+        if (connected) {
+          const success = await sendViaUserEmail(userId, to, subject, body);
+          return {
+            action,
+            success,
+            result: success ? `Email sent to ${to}` : undefined,
+            error: success ? undefined : "Could not send via your connected email — trying fallback",
+          };
+        }
+      } catch {
+        // Fall through to @aevoy.com fallback
+      }
       const success = await sendResponse({
         to,
         from: `${username}@aevoy.com`,
@@ -3104,6 +3120,29 @@ async function executeAction(
         minutes_back?: number;
       };
       try {
+        // 1. Try user's personal connected email first (IMAP / Nylas / Gmail OAuth)
+        const { isEmailConnected, getUnreadMessages } = await import("./inbox.js");
+        const connected = await isEmailConnected(userId);
+        if (connected) {
+          const emails = await getUnreadMessages(userId, emailLimit || 5);
+          if (emails.length === 0) {
+            return {
+              action,
+              success: true,
+              result: `No unread emails in your inbox right now.`,
+            };
+          }
+          const summary = emails.map((e, i) =>
+            `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
+          ).join('\n---\n');
+          return {
+            action,
+            success: true,
+            result: `Found ${emails.length} unread email(s) in your inbox:\n${summary}`,
+          };
+        }
+
+        // 2. Fall back to central @aevoy.com inbox
         const { fetchRecentEmails } = await import("./inbox-poller.js");
         const emails = await fetchRecentEmails(
           `${username}@aevoy.com`,
@@ -3404,6 +3443,69 @@ async function executeAction(
       } catch (healthErr) {
         console.error("[HEALTH] Failed to analyze health data:", healthErr);
         return { action, success: false, error: "Could not retrieve health data right now" };
+      }
+    }
+
+    case "check_calendar": {
+      const { query = "next 7 days" } = action.params as { query?: string };
+      try {
+        console.log(`[CALENDAR] Fetching events for user ${userId}: "${query}"`);
+        const { getCalendarEvents, getConnectedCalendarProvider, formatEvents } = await import("./calendar.js");
+        const provider = await getConnectedCalendarProvider(userId);
+        if (!provider) {
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com";
+          return {
+            action,
+            success: true,
+            result: `No calendar connected yet. Connect Google or Microsoft at ${appUrl}/dashboard/apps to see your events.`,
+          };
+        }
+        // Parse daysAhead from query
+        const daysAhead = query.match(/(\d+)\s+day/)?.[1] ? parseInt(query.match(/(\d+)\s+day/)![1]) : 7;
+        const events = await getCalendarEvents(userId, Math.min(daysAhead, 30));
+        return {
+          action,
+          success: true,
+          result: formatEvents(events),
+        };
+      } catch (calErr) {
+        console.error("[CALENDAR] check_calendar failed:", calErr);
+        return { action, success: false, error: "Could not retrieve calendar events right now" };
+      }
+    }
+
+    case "create_event": {
+      const { title, start, end, attendees, description, location } = action.params as {
+        title: string;
+        start: string;
+        end: string;
+        attendees?: string[];
+        description?: string;
+        location?: string;
+      };
+      if (!title || !start || !end) {
+        return { action, success: false, error: "Event title, start, and end time are required" };
+      }
+      try {
+        console.log(`[CALENDAR] Creating event "${title}" for user ${userId}`);
+        const { createCalendarEvent } = await import("./calendar.js");
+        const result = await createCalendarEvent(userId, { title, start, end, attendees, description, location });
+        if (!result.success) {
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com";
+          return {
+            action,
+            success: false,
+            error: `Could not create event — please connect your calendar at ${appUrl}/dashboard/apps`,
+          };
+        }
+        return {
+          action,
+          success: true,
+          result: `Event "${title}" created on ${result.provider || "your calendar"}${result.link ? ` — ${result.link}` : ""}`,
+        };
+      } catch (calErr) {
+        console.error("[CALENDAR] create_event failed:", calErr);
+        return { action, success: false, error: "Could not create calendar event right now" };
       }
     }
 

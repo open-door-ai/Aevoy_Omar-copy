@@ -62,6 +62,14 @@ export function startScheduler(): void {
   }, 5 * 60 * 1000); // Every 5 minutes
 
   console.log('[SCHEDULER] Check-in engine started - checking every 5 minutes');
+
+  // Start autonomous inbox management (polls every 5 minutes internally)
+  import("./inbox-manager.js").then(({ startInboxManager }) => {
+    startInboxManager();
+    console.log('[SCHEDULER] Inbox management started');
+  }).catch((error: Error) => {
+    console.error('[SCHEDULER] Could not start inbox manager:', error);
+  });
 }
 
 /**

@@ -75,6 +75,12 @@ function ConnectedAppsContent() {
   const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
   const [disconnectingTelegram, setDisconnectingTelegram] = useState(false);
   const [disconnectingWhatsapp, setDisconnectingWhatsapp] = useState(false);
+  const [imapStatus, setImapStatus] = useState<{ connected: boolean; email?: string } | null>(null);
+  const [showImapForm, setShowImapForm] = useState(false);
+  const [imapEmail, setImapEmail] = useState('');
+  const [imapPassword, setImapPassword] = useState('');
+  const [connectingImap, setConnectingImap] = useState(false);
+  const [disconnectingImap, setDisconnectingImap] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCred, setNewCred] = useState({ site_domain: '', username: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
@@ -105,6 +111,14 @@ function ConnectedAppsContent() {
         setWhatsappStatus({ connected: wd.connected || false, connectedAt: null, email: wd.phone || null });
       }
       if (fitbitRes.ok) setFitbitStatus(await fitbitRes.json());
+      // Check IMAP email connection
+      try {
+        const imapRes = await fetch('/api/integrations/email');
+        if (imapRes.ok) {
+          const imap = await imapRes.json();
+          setImapStatus({ connected: imap.connected || false, email: imap.email });
+        }
+      } catch { /* non-critical */ }
       if (webhookRes.ok) {
         const wd = await webhookRes.json();
         setAppleHealthWebhookUrl(wd.webhookUrl || null);
@@ -251,6 +265,45 @@ function ConnectedAppsContent() {
       toast.error('Failed to disconnect Microsoft');
     } finally {
       setDisconnectingMicrosoft(false);
+    }
+  };
+
+  const handleConnectImap = async () => {
+    if (!imapEmail || !imapPassword) return;
+    setConnectingImap(true);
+    try {
+      const res = await fetch('/api/integrations/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: imapEmail, password: imapPassword }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setImapStatus({ connected: true, email: imapEmail });
+        setShowImapForm(false);
+        setImapEmail('');
+        setImapPassword('');
+        toast.success('Email connected');
+      } else {
+        toast.error(data.error || 'Could not connect email — check your app password');
+      }
+    } catch {
+      toast.error('Failed to connect email');
+    } finally {
+      setConnectingImap(false);
+    }
+  };
+
+  const handleDisconnectImap = async () => {
+    setDisconnectingImap(true);
+    try {
+      await fetch('/api/integrations/email', { method: 'DELETE' });
+      setImapStatus({ connected: false });
+      toast.success('Email disconnected');
+    } catch {
+      toast.error('Failed to disconnect email');
+    } finally {
+      setDisconnectingImap(false);
     }
   };
 
@@ -614,6 +667,86 @@ function ConnectedAppsContent() {
             )}
           </CardContent>
         </Card>
+        {/* Other Email (IMAP + App Password) */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-950/20 flex items-center justify-center">
+                  <svg viewBox="0 0 24 24" className="w-6 h-6" aria-label="Email" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+                  </svg>
+                </div>
+                <div>
+                  <CardTitle className="text-base">Other Email</CardTitle>
+                  <CardDescription>Yahoo, iCloud, corporate (IMAP)</CardDescription>
+                </div>
+              </div>
+              {imapStatus?.connected ? (
+                <CheckCircle2 className="w-5 h-5 text-green-500" />
+              ) : (
+                <XCircle className="w-5 h-5 text-muted-foreground" />
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {imapStatus?.connected ? (
+              <div className="space-y-3">
+                <div className="text-sm">
+                  <span className="text-muted-foreground">Connected as: </span>
+                  <span className="font-medium">{imapStatus.email}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">Email ✓ | Read &amp; send from your account</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDisconnectImap}
+                  disabled={disconnectingImap}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  {disconnectingImap ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+                  Disconnect
+                </Button>
+              </div>
+            ) : showImapForm ? (
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Use an <strong>app password</strong> — not your main password.{' '}
+                  <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" className="underline">Gmail</a>,{' '}
+                  <a href="https://account.live.com/proofs/AppPassword" target="_blank" rel="noopener" className="underline">Outlook</a>,{' '}
+                  <a href="https://help.yahoo.com/kb/SLN15241.html" target="_blank" rel="noopener" className="underline">Yahoo</a>
+                </p>
+                <Input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={imapEmail}
+                  onChange={(e) => setImapEmail(e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <Input
+                  type="password"
+                  placeholder="App password (16 chars)"
+                  value={imapPassword}
+                  onChange={(e) => setImapPassword(e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleConnectImap} disabled={connectingImap || !imapEmail || !imapPassword}>
+                    {connectingImap ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                    Connect
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setShowImapForm(false)}>Cancel</Button>
+                </div>
+              </div>
+            ) : (
+              <Button onClick={() => setShowImapForm(true)}>
+                <Key className="w-4 h-4 mr-1" />
+                Connect via App Password
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Twitter */}
         <Card>
           <CardHeader>

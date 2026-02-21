@@ -601,6 +601,8 @@ NON-BROWSER ACTIONS:
 [ACTION:create_campaign("Campaign Name", [{"task": "Post tweet about topic X", "days_from_now": 0, "hour": 9}, {"task": "Post tweet about topic Y", "days_from_now": 1, "hour": 9}, {"task": "Post tweet about topic Z", "days_from_now": 2, "hour": 9}])] — Create a multi-day campaign: schedules a sequence of one-time tasks to run at specific times over multiple days. Perfect for drip campaigns, tweet series, email sequences, or any multi-step marketing workflow. days_from_now=0 means today, hour is UTC hour (0-23).
 [ACTION:generate_video_call("topic")] — Instantly create a free Jitsi Meet video call room and share the join link. No account required, works in any browser. Use when the user wants to do a video call, show something live, join a meeting, or video chat. The link can be shared via any channel (email, WhatsApp, Telegram, SMS).
 [ACTION:analyze_health_data("query")] — Check the user's connected health data (Fitbit, Apple Health) and analyze trends, anomalies, and wellness metrics. Use when the user asks about their health stats, heart rate, sleep, steps, HRV, fitness progress, or anything health/wellness related.
+[ACTION:check_calendar("next 7 days")] — Read the user's calendar events (Google Calendar or Outlook). Use when asked about schedule, meetings, appointments, "what's on my calendar", "do I have anything this week", etc. Specify days: "next 3 days", "next 14 days", etc.
+[ACTION:create_event("Meeting title", "2026-02-25T14:00:00Z", "2026-02-25T15:00:00Z", ["attendee@email.com"], "Optional description")] — Create a calendar event on the user's Google Calendar or Outlook. Use when asked to schedule, book, add to calendar, set up a meeting, etc. Start and end must be ISO 8601 format.
 
 CRITICAL — NON-BROWSER ACTIONS MUST USE TAGS TOO:
 - "Schedule a daily weather check" → [ACTION:schedule("Check weather in Tokyo", "0 9 * * *")] [TASK_COMPLETE]
@@ -1497,6 +1499,29 @@ function parseAction(type: string, paramsStr: string): Action | null {
       // Parse: analyze_health_data("query or focus area")
       const query = paramsStr.replace(/^["']|["']$/g, "") || "general health summary";
       return { type: "analyze_health_data", params: { query } };
+    }
+
+    case "check_calendar": {
+      // Parse: check_calendar("next 7 days") or check_calendar("next week")
+      const query = paramsStr.replace(/^["']|["']$/g, "") || "next 7 days";
+      return { type: "check_calendar", params: { query } };
+    }
+
+    case "create_event": {
+      // Parse: create_event("title", "start", "end", ["attendee@email.com"], "description")
+      // Try to extract positional args from paramsStr
+      const parts = paramsStr.match(/["']([^"']+)["']/g)?.map((s) => s.replace(/^["']|["']$/g, "")) || [];
+      const [title, start, end, ...rest] = parts;
+      // attendees may be array notation: ["a@b.com", "c@d.com"]
+      const attendeesMatch = paramsStr.match(/\[([^\]]+)\]/);
+      const attendees = attendeesMatch
+        ? attendeesMatch[1].match(/["']([^"']+)["']/g)?.map((s) => s.replace(/^["']|["']$/g, "")) || []
+        : [];
+      const description = rest.length > 0 && !attendeesMatch ? rest[0] : undefined;
+      return {
+        type: "create_event",
+        params: { title: title || paramsStr, start: start || "", end: end || "", attendees, description },
+      };
     }
 
     default:
