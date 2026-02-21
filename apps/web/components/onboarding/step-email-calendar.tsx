@@ -22,8 +22,8 @@ const IMAP_GUIDES: Record<ImapProvider, { videoId?: string; videoDuration?: stri
     ],
   },
   outlook: {
-    videoId: "7yU97IFDWKw",
-    videoDuration: "1:34",
+    videoId: "nP1F5NEpuWQ",
+    videoDuration: "51s",
     steps: [
       { text: "Go to", url: "https://account.microsoft.com/security", urlLabel: "Microsoft Security" },
       { text: "Click Advanced security options → enable Two-step verification" },
@@ -32,8 +32,8 @@ const IMAP_GUIDES: Record<ImapProvider, { videoId?: string; videoDuration?: stri
     ],
   },
   yahoo: {
-    videoId: "ZNsQQT9KoIU",
-    videoDuration: "1:20",
+    videoId: "h_LrGeNV36g",
+    videoDuration: "48s",
     steps: [
       { text: "Go to", url: "https://login.yahoo.com/account/security", urlLabel: "Yahoo Account Security" },
       { text: "Enable Two-step verification" },
@@ -124,14 +124,16 @@ export default function StepEmailCalendar({ onNext, onBack }: StepEmailCalendarP
   const guide = IMAP_GUIDES[imapProvider];
 
   return (
-    <div className="max-w-2xl mx-auto px-6">
+    <div className={`max-w-2xl mx-auto px-6 w-full${showImapForm ? " max-h-[calc(100dvh-8rem)] overflow-y-auto" : ""}`}>
       {/* Header */}
-      <div className="text-center mb-10">
-        <div className="text-4xl mb-4">📬</div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Connect Email & Calendar</h1>
-        <p className="text-gray-500 text-lg">
-          Aevoy reads, prioritizes, and responds to your emails — quietly working in the background.
-        </p>
+      <div className={`text-center ${showImapForm ? "mb-5" : "mb-10"}`}>
+        {!showImapForm && <div className="text-4xl mb-4">📬</div>}
+        <h1 className={`font-bold text-gray-900 mb-2 ${showImapForm ? "text-xl" : "text-3xl"}`}>Connect Email & Calendar</h1>
+        {!showImapForm && (
+          <p className="text-gray-500 text-lg">
+            Aevoy reads, prioritizes, and responds to your emails — quietly working in the background.
+          </p>
+        )}
         <span className="inline-block mt-3 text-xs font-medium text-gray-400 bg-gray-100 px-3 py-1 rounded-full">
           Optional — you can do this later in Settings
         </span>
