@@ -2529,6 +2529,25 @@ export default function SettingsPage() {
         </Card>
       </div>
 
+      {/* Developer Portal */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Code2 className="h-5 w-5" /> Developer</CardTitle>
+          <CardDescription>Build and publish widgets on the Aevoy App Store</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="font-medium text-sm">Developer Portal</p>
+              <p className="text-sm text-muted-foreground">Create widgets, submit for review, and earn 70% of every sale</p>
+            </div>
+            <Link href="/developer" className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+              Open Portal <ExternalLink className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Danger Zone */}
       <Card className="border-red-200">
         <CardHeader>
