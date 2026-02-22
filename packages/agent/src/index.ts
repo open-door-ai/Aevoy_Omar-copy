@@ -957,8 +957,8 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     // ConversationRelay: real-time two-way voice conversation via WebSocket
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
-      // Use user's ElevenLabs voice if configured, otherwise fall back to env/default
-      const elevenlabsVoice = settings?.elevenlabs_voice_id || process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      // Use user's voice preference (stored as ElevenLabs voice ID), fall back to Rachel
+      const elevenlabsVoice = settings?.voice_preference && !settings.voice_preference.includes('.') ? settings.voice_preference : (process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM");
 
       // OPTIMIZATION: Use fast template greeting for TwiML (avoid blocking on AI API call)
       const userName = profile.display_name || profile.username || "there";
@@ -972,7 +972,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" ttsLanguage="en-US" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
@@ -1042,18 +1042,25 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
 
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
-      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
+      // Fetch user's voice preference (ElevenLabs voice ID) from DB
+      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
       let greeting: string;
       try {
         const { generatePersonalizedGreeting } = await import("./services/voice-prompts.js");
         const { data: profile } = await getSupabaseClient().from("profiles").select("display_name, username, bot_name, timezone").eq("id", userId).single();
+        // Read voice preference from user_settings (stored as ElevenLabs voice ID)
+        const { data: userSettings } = await getSupabaseClient().from("user_settings").select("voice_preference, greeting_style").eq("user_id", userId).single();
+        // Only use the preference if it looks like an ElevenLabs voice ID (no dots = not a legacy format)
+        if (userSettings?.voice_preference && !userSettings.voice_preference.includes('.')) {
+          elevenlabsVoice = userSettings.voice_preference;
+        }
         greeting = await generatePersonalizedGreeting({
           userId,
           userName: profile?.display_name || profile?.username || "there",
           botName: profile?.bot_name || "Dave",
           callType: "incoming",
-          greetingStyle: "casual",
+          greetingStyle: userSettings?.greeting_style || "casual",
           timezone: profile?.timezone || "America/Los_Angeles",
         });
       } catch { greeting = "Hey! What can I help with?"; }
@@ -1061,7 +1068,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" ttsLanguage="en-US" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
@@ -1536,12 +1543,17 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
 
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
-      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      // Read user's ElevenLabs voice preference
+      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      try {
+        const { data: vs } = await supabase.from("user_settings").select("voice_preference").eq("user_id", userId).single();
+        if (vs?.voice_preference && !vs.voice_preference.includes('.')) elevenlabsVoice = vs.voice_preference;
+      } catch {}
 
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" ttsLanguage="en-US" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
@@ -1843,7 +1855,13 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
 
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
-      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      // Read user's ElevenLabs voice preference
+      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      try {
+        const supabase = getSupabaseClient();
+        const { data: vs } = await supabase.from("user_settings").select("voice_preference").eq("user_id", userId).single();
+        if (vs?.voice_preference && !vs.voice_preference.includes('.')) elevenlabsVoice = vs.voice_preference;
+      } catch {}
       const checkinCallType = callType === "evening" ? "checkin_evening" : "checkin_morning";
 
       let greeting: string;
@@ -1864,7 +1882,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" ttsLanguage="en-US" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="${checkinCallType}" />
     </ConversationRelay>

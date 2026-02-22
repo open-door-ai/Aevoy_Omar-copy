@@ -2000,49 +2000,43 @@ export default function SettingsPage() {
             <Label className="mb-3 block">AI Voice</Label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {[
-                { id: "ElevenLabs.rachel", label: "Rachel", desc: "Natural, warm", tier: "premium" },
-                { id: "ElevenLabs.drew", label: "Drew", desc: "Confident, clear", tier: "premium" },
-                { id: "ElevenLabs.clyde", label: "Clyde", desc: "Deep, authoritative", tier: "premium" },
-                { id: "ElevenLabs.domi", label: "Domi", desc: "Bright, energetic", tier: "premium" },
-                { id: "Google.en-US-Neural2-H", label: "Neural H", desc: "Female, warm", tier: "standard" },
-                { id: "Google.en-US-Neural2-D", label: "Neural D", desc: "Male, authoritative", tier: "standard" },
-                { id: "Google.en-US-Neural2-F", label: "Neural F", desc: "Female, professional", tier: "standard" },
-                { id: "Google.en-US-Neural2-A", label: "Neural A", desc: "Male, casual", tier: "standard" },
-                { id: "Polly.Joanna-Neural", label: "Joanna", desc: "Female, natural", tier: "standard" },
-                { id: "Polly.Matthew-Neural", label: "Matthew", desc: "Male, natural", tier: "standard" },
+                { id: "21m00Tcm4TlvDq8ikWAM", label: "Rachel", desc: "Natural, warm (female)" },
+                { id: "EXAVITQu4vr4xnSDxMaL", label: "Sarah", desc: "Soft, warm (female)" },
+                { id: "XB0fDUnXU5powFXDhCwa", label: "Charlotte", desc: "Bright, professional (female)" },
+                { id: "XrExE9yKIg1WjnnlVkGX", label: "Matilda", desc: "Warm, engaging (female)" },
+                { id: "nPczCjzI2devNBz1zQrb", label: "Brian", desc: "Deep, authoritative (male)" },
+                { id: "29vD33N1CtxCmqQRPOHJ", label: "Drew", desc: "Confident, clear (male)" },
+                { id: "CYw3kZ02Hs0563khs1Fj", label: "Dave", desc: "Casual, friendly (male)" },
+                { id: "iP95p4xoKVk53GoZ742B", label: "Chris", desc: "Clean, professional (male)" },
               ].map((voice) => (
                 <button
                   key={voice.id}
                   type="button"
                   onClick={() => setSettings({ ...settings, voice_preference: voice.id } as UserSettings)}
                   className={`relative flex items-center gap-3 p-3 rounded-lg border text-left transition-all duration-200 ${
-                    (settings?.voice_preference || "Google.en-US-Neural2-H") === voice.id
+                    (settings?.voice_preference || "21m00Tcm4TlvDq8ikWAM") === voice.id
                       ? "border-primary bg-primary/5 ring-1 ring-primary/20"
                       : "border-input hover:border-primary/40 hover:bg-muted/50"
                   }`}
                 >
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                    voice.tier === "premium" ? "bg-gradient-to-br from-violet-500 to-purple-600" : "bg-muted"
-                  }`}>
-                    <Volume2 className={`w-4 h-4 ${voice.tier === "premium" ? "text-white" : "text-muted-foreground"}`} />
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-gradient-to-br from-violet-500 to-purple-600">
+                    <Volume2 className="w-4 h-4 text-white" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium">{voice.label}</span>
-                      {voice.tier === "premium" && (
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">ElevenLabs</span>
-                      )}
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-600 dark:text-violet-400">ElevenLabs</span>
                     </div>
                     <span className="text-xs text-muted-foreground">{voice.desc}</span>
                   </div>
-                  {(settings?.voice_preference || "Google.en-US-Neural2-H") === voice.id && (
+                  {(settings?.voice_preference || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
                     <Check className="w-4 h-4 text-primary flex-shrink-0" />
                   )}
                 </button>
               ))}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              ElevenLabs voices sound more natural and human-like. Standard voices work with all plans.
+              All voices powered by ElevenLabs — natural, human-like speech on every call.
             </p>
           </div>
 
