@@ -112,7 +112,17 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
     }
   });
 
+  // Keepalive ping every 25s — prevents proxies/load balancers from closing idle connections
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+    } else {
+      clearInterval(pingInterval);
+    }
+  }, 25_000);
+
   ws.on("close", () => {
+    clearInterval(pingInterval);
     const session = activeSessions.get(sessionId);
     if (session) {
       const duration = Math.round((Date.now() - session.startedAt) / 1000);
@@ -123,6 +133,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
   });
 
   ws.on("error", (err) => {
+    clearInterval(pingInterval);
     console.error(`[VOICE-WS] WebSocket error:`, err);
     cleanupSession(sessionId);
   });
