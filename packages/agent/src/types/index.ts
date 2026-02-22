@@ -97,7 +97,7 @@ export interface TaskResult {
 // ---- Actions ----
 
 export interface Action {
-  type: "browse" | "search" | "screenshot" | "fill_form" | "send_email" | "read_email" | "remember" | "schedule" | "click" | "fill" | "select" | "submit" | "login" | "scroll" | "wait" | "extract" | "create_excel" | "create_powerpoint" | "create_word" | "create_pdf" | "screenshot_ocr" | "generate_image" | "post_tweet" | "create_campaign" | "generate_video_call" | "analyze_health_data" | "check_calendar" | "create_event";
+  type: "browse" | "search" | "screenshot" | "fill_form" | "send_email" | "read_email" | "remember" | "schedule" | "click" | "fill" | "select" | "submit" | "login" | "scroll" | "wait" | "extract" | "create_excel" | "create_powerpoint" | "create_word" | "create_pdf" | "screenshot_ocr" | "generate_image" | "post_tweet" | "create_campaign" | "generate_video_call" | "analyze_health_data" | "check_calendar" | "create_event" | "send_sms" | "send_whatsapp" | "send_telegram" | "call_user";
   params: Record<string, unknown>;
 }
 

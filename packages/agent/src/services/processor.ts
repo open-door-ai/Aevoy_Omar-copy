@@ -3563,6 +3563,97 @@ async function executeAction(
       }
     }
 
+    case "send_sms": {
+      const { to, body: smsBody } = action.params as { to: string; body: string };
+      if (!to || !smsBody) {
+        return { action, success: false, error: "SMS requires 'to' phone number and 'body' text" };
+      }
+      try {
+        const result = await sendSms({ to, body: smsBody, userId });
+        return {
+          action,
+          success: result.success,
+          result: result.success ? `SMS sent to ${to}` : undefined,
+          error: result.error,
+        };
+      } catch (smsErr) {
+        console.error("[ACTION:send_sms] Failed:", smsErr);
+        return { action, success: false, error: "Could not send SMS right now" };
+      }
+    }
+
+    case "send_whatsapp": {
+      const { to: waTo, body: waBody } = action.params as { to: string; body: string };
+      if (!waTo || !waBody) {
+        return { action, success: false, error: "WhatsApp message requires 'to' phone number and 'body' text" };
+      }
+      try {
+        const { sendWhatsAppMessage } = await import("./whatsapp.js");
+        const success = await sendWhatsAppMessage(waTo, waBody);
+        return {
+          action,
+          success,
+          result: success ? `WhatsApp message sent to ${waTo}` : undefined,
+          error: success ? undefined : "Could not send WhatsApp message",
+        };
+      } catch (waErr) {
+        console.error("[ACTION:send_whatsapp] Failed:", waErr);
+        return { action, success: false, error: "Could not send WhatsApp message right now" };
+      }
+    }
+
+    case "send_telegram": {
+      const { to: tgTo, body: tgBody } = action.params as { to: string; body: string };
+      if (!tgTo || !tgBody) {
+        return { action, success: false, error: "Telegram message requires 'to' chat ID and 'body' text" };
+      }
+      try {
+        const { sendTelegramMessage } = await import("./telegram.js");
+        const success = await sendTelegramMessage(tgTo, tgBody);
+        return {
+          action,
+          success,
+          result: success ? `Telegram message sent` : undefined,
+          error: success ? undefined : "Could not send Telegram message",
+        };
+      } catch (tgErr) {
+        console.error("[ACTION:send_telegram] Failed:", tgErr);
+        return { action, success: false, error: "Could not send Telegram message right now" };
+      }
+    }
+
+    case "call_user": {
+      const { message: callMsg } = action.params as { message?: string };
+      try {
+        // Look up user's phone number
+        const { data: profile } = await getSupabaseClient()
+          .from("profiles")
+          .select("phone_number")
+          .eq("id", userId)
+          .single();
+
+        if (!profile?.phone_number) {
+          return { action, success: false, error: "No phone number on file — ask the user for their number first" };
+        }
+
+        const { callUser: makeCall } = await import("./twilio.js");
+        const result = await makeCall({
+          to: profile.phone_number,
+          userId,
+          message: callMsg || "Hey, your AI assistant is calling to follow up on your request.",
+        });
+        return {
+          action,
+          success: result.success,
+          result: result.success ? `Calling ${profile.phone_number} now` : undefined,
+          error: result.error,
+        };
+      } catch (callErr) {
+        console.error("[ACTION:call_user] Failed:", callErr);
+        return { action, success: false, error: "Could not place the call right now" };
+      }
+    }
+
     default:
       return {
         action,

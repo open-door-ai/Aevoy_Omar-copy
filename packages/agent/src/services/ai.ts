@@ -630,6 +630,10 @@ BROWSER ACTIONS (require a browser - I'll open one automatically):
 
 NON-BROWSER ACTIONS:
 [ACTION:send_email("to@email.com", "Subject", "Body text")] — Send an email from your @aevoy.com address
+[ACTION:send_sms("+1234567890", "Message text")] — Send an SMS text message to a phone number. Use the user's phone from their profile if they say "text me".
+[ACTION:send_whatsapp("+1234567890", "Message text")] — Send a WhatsApp message. Use the user's whatsapp_phone from their profile if available.
+[ACTION:send_telegram("chat_id", "Message text")] — Send a Telegram message. Use the user's telegram_chat_id from their profile if available.
+[ACTION:call_user("Optional message to say")] — Call the user on their registered phone number. Use when they say "call me" or you need to reach them by voice.
 [ACTION:read_email()] — Check your @aevoy.com inbox for recent emails (verification codes, replies, etc.)
 [ACTION:read_email(5, 60)] — Check last 5 emails from the past 60 minutes
 [ACTION:remember("important fact")] — Save information to long-term memory
@@ -1576,6 +1580,37 @@ function parseAction(type: string, paramsStr: string): Action | null {
         type: "create_event",
         params: { title: title || paramsStr, start: start || "", end: end || "", attendees, description },
       };
+    }
+
+    case "send_sms": {
+      const parts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!parts || parts.length < 2) return null;
+      const to = parts[0].replace(/^["']|["']$/g, "");
+      const body = parts[1].replace(/^["']|["']$/g, "");
+      return { type: "send_sms", params: { to, body } };
+    }
+
+    case "send_whatsapp": {
+      const parts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!parts || parts.length < 2) return null;
+      const to = parts[0].replace(/^["']|["']$/g, "");
+      const body = parts[1].replace(/^["']|["']$/g, "");
+      return { type: "send_whatsapp", params: { to, body } };
+    }
+
+    case "send_telegram": {
+      const parts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!parts || parts.length < 2) return null;
+      const to = parts[0].replace(/^["']|["']$/g, "");
+      const body = parts[1].replace(/^["']|["']$/g, "");
+      return { type: "send_telegram", params: { to, body } };
+    }
+
+    case "call_user": {
+      // [ACTION:call_user("Optional message")] or [ACTION:call_user()]
+      const parts = paramsStr.match(/["']([^"']+)["']/g);
+      const message = parts?.[0]?.replace(/^["']|["']$/g, "") || undefined;
+      return { type: "call_user", params: { message } };
     }
 
     default:
