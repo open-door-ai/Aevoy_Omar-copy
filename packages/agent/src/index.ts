@@ -334,7 +334,8 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v17",
+    version: "2.0.0-agi-v18",
+    gitSha: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local",
     timestamp: new Date().toISOString(),
     activeTasks,
     activeBrowserTasks: getActiveBrowserTasks(),
@@ -344,6 +345,24 @@ app.get("/health", async (_req, res) => {
     maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
     conversationRelay: USE_CONVERSATION_RELAY,
     database: supabaseStatus,
+  });
+});
+
+// ---- Voice diagnostic endpoint (for verifying TwiML generation) ----
+app.get("/debug/voice-twiml", (req, res) => {
+  const secret = req.query.secret;
+  if (secret !== process.env.AGENT_WEBHOOK_SECRET) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
+  const defaultVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
+  res.json({
+    conversationRelay: USE_CONVERSATION_RELAY,
+    wsUrl,
+    defaultVoice,
+    agentUrl: process.env.AGENT_URL || "not set",
+    elevenlabsKeySet: !!process.env.ELEVENLABS_API_KEY,
+    sampleTwiml: `<ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${defaultVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?" />`,
   });
 });
 
@@ -2267,7 +2286,7 @@ server.listen(PORT, async () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`WebSocket: ws://localhost:${PORT}/ws/voice`);
   console.log(`ConversationRelay: ${USE_CONVERSATION_RELAY ? "ENABLED" : "DISABLED (legacy TwiML)"}`);
-  console.log(`[DEPLOY-VERIFY] Wiring test deployment - commit d90c4af+`);
+  console.log(`[DEPLOY-VERIFY] Voice pipeline v18 — ElevenLabs Sarah, bare voice IDs, TwiML fallback`);
 
   // START HEALTH SYSTEM (The Final Boss - Never Fails)
   try {
