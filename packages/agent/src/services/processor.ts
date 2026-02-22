@@ -1154,6 +1154,62 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // 5g. PRE-AI FAST PATH: For simple data-retrieval tasks, skip the AI entirely.
+    // The AI wastes time generating narration ("I'll check your inbox...") and then the
+    // missing-action gate has to inject the correct action. Bypass all of that.
+    const taskTextForFastPath = `${subject} ${body}`.toLowerCase();
+    const EMAIL_READ_KEYWORDS = ['check email', 'check my email', 'read email', 'read my email',
+      'my inbox', 'any email', 'any new email', 'last email', 'unread email', 'gmail inbox',
+      'outlook inbox', 'what email', 'email i received', 'recent email', 'new email',
+      'check inbox', 'read inbox', 'open email', 'open inbox', 'show email', 'show inbox'];
+    const isEmailReadTask = EMAIL_READ_KEYWORDS.some(kw => taskTextForFastPath.includes(kw));
+
+    if (isEmailReadTask) {
+      console.log(`[FAST-PATH] Email read task detected — executing read_email directly (skipping AI)`);
+      const emailAction = { type: 'read_email' as import("../types/index.js").Action["type"], params: { limit: 5, minutes_back: 1440 } };
+      const emailResult = await executeAction(emailAction, userId, username, null);
+      console.log(`[FAST-PATH] read_email result: success=${emailResult.success}`);
+
+      // Record action in history
+      try {
+        await getSupabaseClient().from('action_history').insert({
+          task_id: taskId,
+          user_id: userId,
+          action_type: 'read_email',
+          action_data: emailResult.success ? { result: (emailResult.result as string)?.substring(0, 2000) } : { error: emailResult.error },
+        });
+      } catch { /* Non-critical */ }
+
+      // Build final response
+      let responseText: string;
+      if (emailResult.success && emailResult.result && typeof emailResult.result === 'string') {
+        responseText = emailResult.result;
+      } else {
+        responseText = emailResult.error || "You haven't connected your personal email yet. Set it up in Settings > Connected Apps, or ask me to check your @aevoy.com inbox.";
+      }
+
+      // Update task as completed
+      await getSupabaseClient().from("tasks").update({
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        execution_time_ms: Date.now() - startTime,
+        response_text: responseText.substring(0, 10000),
+        verification_status: "verified",
+        action_count: 1,
+        action_success_count: emailResult.success ? 1 : 0,
+      }).eq("id", taskId);
+
+      // Send response
+      await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+
+      return {
+        taskId,
+        success: emailResult.success,
+        response: responseText,
+        actions: [emailResult],
+      };
+    }
+
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
