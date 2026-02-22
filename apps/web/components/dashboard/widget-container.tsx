@@ -30,7 +30,12 @@ export function WidgetContainer({ item, onRemove, children, isEditing }: WidgetC
   return (
     <div ref={setNodeRef} style={style} className="relative group min-w-0">
       {isEditing && (
-        <div className="absolute inset-0 z-10 rounded-xl ring-2 ring-primary/30 pointer-events-none" />
+        <motion.div
+          initial={{ scale: 1 }}
+          animate={{ scale: [1, 1.005, 0.998, 1.002, 1] }}
+          transition={{ duration: 0.4, ease: "easeInOut" }}
+          className="absolute inset-0 z-10 rounded-xl ring-2 ring-primary/30 pointer-events-none"
+        />
       )}
 
       {isEditing && (

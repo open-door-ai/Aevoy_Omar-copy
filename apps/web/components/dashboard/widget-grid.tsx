@@ -31,6 +31,11 @@ import { AiContactWidget } from "@/components/widgets/ai-contact-widget";
 import { UsageWidget } from "@/components/widgets/usage-widget";
 import { HealthSummaryWidget } from "@/components/widgets/health-summary-widget";
 import { InboxPreviewWidget } from "@/components/widgets/inbox-preview-widget";
+import { QueueWidget } from "@/components/widgets/queue-widget";
+import { ConnectedAppsWidget } from "@/components/widgets/connected-apps-widget";
+import { SkillsWidget } from "@/components/widgets/skills-widget";
+import { CostChartWidget } from "@/components/widgets/cost-chart-widget";
+import { StoreWidget } from "@/components/widgets/store-widget";
 
 const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
   "quick-stats": QuickStatsWidget,
@@ -42,6 +47,11 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
   "usage": UsageWidget,
   "health-summary": HealthSummaryWidget,
   "inbox-preview": InboxPreviewWidget,
+  "queue": QueueWidget,
+  "connected-apps": ConnectedAppsWidget,
+  "skills": SkillsWidget,
+  "cost-chart": CostChartWidget,
+  "store": StoreWidget,
 };
 
 interface WidgetGridProps {
@@ -53,6 +63,7 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [justAdded, setJustAdded] = useState<Set<string>>(new Set());
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout>>(null);
 
   const sensors = useSensors(
@@ -100,6 +111,9 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
 
   const handleAdd = useCallback((item: Omit<WidgetLayoutItem, "id">) => {
     const newItem: WidgetLayoutItem = { id: crypto.randomUUID(), ...item };
+    setJustAdded(prev => new Set(prev).add(newItem.id));
+    // Clear the "just added" flag after the bounce animation finishes
+    setTimeout(() => setJustAdded(prev => { const next = new Set(prev); next.delete(newItem.id); return next; }), 800);
     setLayout(prev => {
       const newLayout = [...prev, newItem];
       saveLayout(newLayout);
@@ -134,14 +148,21 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
               {layout.map(item => {
                 const WidgetComponent = WIDGET_COMPONENTS[item.widgetId];
                 if (!WidgetComponent) return null;
+                const isNew = justAdded.has(item.id);
                 return (
                   <motion.div
                     key={item.id}
                     layout
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                    transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                    initial={isNew ? { opacity: 0, scale: 0.5, y: 30 } : { opacity: 0, scale: 0.95 }}
+                    animate={isNew
+                      ? { opacity: 1, scale: [0.5, 1.08, 0.96, 1.02, 1], y: 0 }
+                      : { opacity: 1, scale: 1 }
+                    }
+                    exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+                    transition={isNew
+                      ? { type: "spring", stiffness: 300, damping: 15, mass: 0.8 }
+                      : { type: "spring", stiffness: 400, damping: 30 }
+                    }
                     style={{ gridColumn: `span ${Math.min(item.w, 4)}` }}
                     className="min-w-0"
                   >
