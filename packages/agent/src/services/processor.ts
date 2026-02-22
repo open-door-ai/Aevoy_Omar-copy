@@ -1154,19 +1154,26 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // 5g. PRE-AI FAST PATH: For simple data-retrieval tasks, skip the AI entirely.
-    // The AI wastes time generating narration ("I'll check your inbox...") and then the
-    // missing-action gate has to inject the correct action. Bypass all of that.
+    // 5g. PRE-AI FAST PATH: For email reading tasks, fetch emails first, then use
+    // cheap AI to answer the user's specific question. Never let the main AI narrate.
     const taskTextForFastPath = `${subject} ${body}`.toLowerCase();
-    const EMAIL_READ_KEYWORDS = ['check email', 'check my email', 'read email', 'read my email',
-      'my inbox', 'any email', 'any new email', 'last email', 'unread email', 'gmail inbox',
-      'outlook inbox', 'what email', 'email i received', 'recent email', 'new email',
-      'check inbox', 'read inbox', 'open email', 'open inbox', 'show email', 'show inbox'];
+    const EMAIL_READ_KEYWORDS = [
+      'check email', 'check my email', 'read email', 'read my email',
+      'my inbox', 'any email', 'any new email', 'last email', 'unread email',
+      'gmail inbox', 'outlook inbox', 'what email', 'email i received',
+      'recent email', 'new email', 'check inbox', 'read inbox', 'open email',
+      'open inbox', 'show email', 'show inbox', 'my gmail', 'my outlook',
+      'last message', 'recent message', 'received email', 'got email',
+      'got any email', 'email from', 'message from', 'message i received',
+      'in my gmail', 'in my email', 'in my inbox', 'in my outlook',
+      'mail from', 'messages in', 'emails in', 'inbox for',
+    ];
     const isEmailReadTask = EMAIL_READ_KEYWORDS.some(kw => taskTextForFastPath.includes(kw));
 
     if (isEmailReadTask) {
       console.log(`[FAST-PATH] Email read task detected — executing read_email directly (skipping AI)`);
-      const emailAction = { type: 'read_email' as import("../types/index.js").Action["type"], params: { limit: 5, minutes_back: 1440 } };
+      // Fetch more emails (20) to have data for filtering
+      const emailAction = { type: 'read_email' as import("../types/index.js").Action["type"], params: { limit: 20, minutes_back: 10080 } };
       const emailResult = await executeAction(emailAction, userId, username, null);
       console.log(`[FAST-PATH] read_email result: success=${emailResult.success}`);
 
@@ -1176,14 +1183,58 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           task_id: taskId,
           user_id: userId,
           action_type: 'read_email',
-          action_data: emailResult.success ? { result: (emailResult.result as string)?.substring(0, 2000) } : { error: emailResult.error },
+          action_data: emailResult.success ? { result: (emailResult.result as string)?.substring(0, 5000) } : { error: emailResult.error },
         });
       } catch { /* Non-critical */ }
 
-      // Build final response
       let responseText: string;
       if (emailResult.success && emailResult.result && typeof emailResult.result === 'string') {
-        responseText = emailResult.result;
+        const rawEmails = emailResult.result;
+        const userQuery = `${subject} ${body}`.trim();
+
+        // Check if user has a specific question (filter/search) vs just "check my inbox"
+        const isSpecificQuery = /regarding|about|from|subject|mention|related to|contain|saying|with|where|which/i.test(userQuery);
+
+        if (isSpecificQuery) {
+          // Use cheap AI (Groq) to filter/answer the specific question from the email data
+          console.log(`[FAST-PATH] Specific email query detected — filtering with cheap AI`);
+          const groqKey = process.env.GROQ_API_KEY;
+          if (groqKey) {
+            try {
+              const filterRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+                method: "POST",
+                headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: "llama-3.1-8b-instant",
+                  messages: [{
+                    role: "user",
+                    content: `The user asked: "${userQuery}"\n\nHere are their emails:\n${rawEmails}\n\nAnswer the user's question directly using ONLY the email data above. If the answer isn't in the emails, say so. Be concise and specific. Include the full From, Subject, Date, and snippet for any matching emails.`,
+                  }],
+                  temperature: 0,
+                  max_tokens: 1500,
+                }),
+              });
+              if (filterRes.ok) {
+                const filterData = await filterRes.json();
+                const filtered = filterData.choices?.[0]?.message?.content;
+                if (filtered && filtered.length > 20) {
+                  responseText = filtered;
+                } else {
+                  responseText = rawEmails;
+                }
+              } else {
+                responseText = rawEmails;
+              }
+            } catch {
+              responseText = rawEmails;
+            }
+          } else {
+            responseText = rawEmails;
+          }
+        } else {
+          // Simple "check my inbox" — return all emails directly
+          responseText = rawEmails;
+        }
       } else {
         responseText = emailResult.error || "You haven't connected your personal email yet. Set it up in Settings > Connected Apps, or ask me to check your @aevoy.com inbox.";
       }
@@ -1193,7 +1244,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         status: "completed",
         completed_at: new Date().toISOString(),
         execution_time_ms: Date.now() - startTime,
-        response_text: responseText.substring(0, 10000),
+        response_text: responseText.substring(0, 50000),
         verification_status: "verified",
         action_count: 1,
         action_success_count: emailResult.success ? 1 : 0,
