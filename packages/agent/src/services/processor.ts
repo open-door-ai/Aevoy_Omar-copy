@@ -1190,6 +1190,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // but AI returned 0 matching actions, re-prompt or inject directly.
     const taskTextLower = `${subject} ${body}`.toLowerCase();
     const expectedActionPatterns: Array<{ keywords: string[]; actionType: string; example: string }> = [
+      { keywords: ['check email', 'check my email', 'read email', 'read my email', 'my inbox', 'any email', 'any new email', 'last email', 'unread email', 'gmail inbox', 'outlook inbox', 'what email'],
+        actionType: 'read_email', example: '[ACTION:read_email()]' },
       { keywords: ['schedule', 'recurring', 'every day', 'daily task', 'every morning', 'weekly', 'cron'],
         actionType: 'schedule', example: '[ACTION:schedule("task description", "0 9 * * *")]' },
       { keywords: ['campaign', 'multi-day', 'drip', 'tweet series'],
@@ -1227,7 +1229,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Direct injection fallback
       if (needsInjection) {
         console.log(`[MISSING-ACTION] Injecting ${pattern.actionType} directly from task text`);
-        if (pattern.actionType === 'schedule') {
+        if (pattern.actionType === 'read_email') {
+          // For email reading: clear any browser actions the AI generated, inject read_email directly
+          aiResponse.actions = aiResponse.actions.filter(a => !BROWSER_ACTION_TYPES.includes(a.type));
+          aiResponse.actions.push({ type: 'read_email' as any, params: { limit: 5, minutes_back: 60 } });
+          console.log(`[MISSING-ACTION] Injected read_email (cleared ${aiResponse.actions.length > 1 ? 'browser actions' : 'no other actions'})`);
+        } else if (pattern.actionType === 'schedule') {
           const cronGuess = taskTextLower.includes('every morning') || taskTextLower.includes('daily') || taskTextLower.includes('every day')
             ? '0 9 * * *'
             : taskTextLower.includes('weekly') || taskTextLower.includes('every week')

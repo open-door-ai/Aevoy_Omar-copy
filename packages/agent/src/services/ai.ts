@@ -1819,6 +1819,14 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "shopping";
   } else if (text.includes("email") || text.includes("send") || text.includes("write to")) {
     taskType = "email";
+    // Email READING doesn't need a browser — use [ACTION:read_email()] via IMAP
+    // Email SENDING also doesn't — use [ACTION:send_email()]
+    // Only keep browser for "forward email", "open gmail", etc.
+    const isEmailRead = /check.*email|read.*email|my email|my inbox|last email|new email|any email|unread|gmail inbox|outlook inbox/i.test(text);
+    const isEmailSend = /send.*email|email.*to|write.*email|draft.*email|compose.*email/i.test(text);
+    if (isEmailRead || isEmailSend) {
+      needsBrowser = false;
+    }
   } else if (text.includes("remind") || text.includes("alert") || text.includes("notify")) {
     taskType = "reminder";
     needsBrowser = false;
