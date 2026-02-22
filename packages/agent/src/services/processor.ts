@@ -1171,11 +1171,49 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const isEmailReadTask = EMAIL_READ_KEYWORDS.some(kw => taskTextForFastPath.includes(kw));
 
     if (isEmailReadTask) {
-      console.log(`[FAST-PATH] Email read task detected — executing read_email directly (skipping AI)`);
-      // Fetch more emails (20) to have data for filtering
-      const emailAction = { type: 'read_email' as import("../types/index.js").Action["type"], params: { limit: 20, minutes_back: 10080 } };
-      const emailResult = await executeAction(emailAction, userId, username, null);
-      console.log(`[FAST-PATH] read_email result: success=${emailResult.success}`);
+      const userQuery = `${subject} ${body}`.trim();
+      const isSpecificQuery = /regarding|about|from\s+\w|subject|mention|related to|contain|saying|with\s+\w|where|which|tks|cnbc/i.test(userQuery);
+
+      console.log(`[FAST-PATH] Email read task detected (specific=${isSpecificQuery}) — fetching directly`);
+
+      // For specific queries, fetch ALL recent emails (read + unread) so we don't miss
+      // emails that were auto-read or already opened. For simple "check inbox", just unread.
+      let emailResult: { success: boolean; result?: string; error?: string };
+      try {
+        const { isEmailConnected, getUnreadMessages, getRecentMessages } = await import("./inbox.js");
+        const connected = await isEmailConnected(userId);
+        if (!connected) {
+          emailResult = { success: false, error: "You haven't connected your personal email yet. Set it up in Settings > Connected Apps." };
+        } else if (isSpecificQuery) {
+          // Specific query — fetch ALL recent emails (read + unread, 7 days)
+          const emails = await getRecentMessages(userId, 30, 7);
+          const realEmails = emails.filter(e => !e.from.includes('@aevoy.com'));
+          if (realEmails.length === 0) {
+            emailResult = { success: true, result: "No emails found in the last 7 days." };
+          } else {
+            const summary = realEmails.map((e, i) =>
+              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}${e.isUnread ? '' : ' (read)'}\n${e.snippet.substring(0, 500)}`
+            ).join('\n---\n');
+            emailResult = { success: true, result: `Found ${realEmails.length} email(s) in your inbox (last 7 days):\n${summary}` };
+          }
+        } else {
+          // Simple inbox check — just unread
+          const emails = await getUnreadMessages(userId, 15);
+          const realEmails = emails.filter(e => !e.from.includes('@aevoy.com'));
+          if (realEmails.length === 0) {
+            emailResult = { success: true, result: "No unread emails in your inbox right now." };
+          } else {
+            const summary = realEmails.map((e, i) =>
+              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
+            ).join('\n---\n');
+            emailResult = { success: true, result: `Found ${realEmails.length} unread email(s) in your inbox:\n${summary}` };
+          }
+        }
+      } catch (err) {
+        console.error(`[FAST-PATH] Email fetch failed:`, err);
+        emailResult = { success: false, error: "Could not connect to your email right now. Try again in a moment, or check Settings > Connected Apps." };
+      }
+      console.log(`[FAST-PATH] email result: success=${emailResult.success}`);
 
       // Record action in history
       try {
@@ -1190,10 +1228,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       let responseText: string;
       if (emailResult.success && emailResult.result && typeof emailResult.result === 'string') {
         const rawEmails = emailResult.result;
-        const userQuery = `${subject} ${body}`.trim();
-
-        // Check if user has a specific question (filter/search) vs just "check my inbox"
-        const isSpecificQuery = /regarding|about|from|subject|mention|related to|contain|saying|with|where|which/i.test(userQuery);
 
         if (isSpecificQuery) {
           // Use cheap AI (Groq) to filter/answer the specific question from the email data
@@ -1257,7 +1291,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         taskId,
         success: emailResult.success,
         response: responseText,
-        actions: [emailResult],
+        actions: [{ action: { type: 'read_email' as any, params: {} }, success: emailResult.success, result: emailResult.result, error: emailResult.error }],
       };
     }
 

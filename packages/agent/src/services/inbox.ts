@@ -339,6 +339,108 @@ async function getUnreadViaImap(
   return messages;
 }
 
+/**
+ * Fetch ALL recent emails (read + unread) via IMAP.
+ * Used for search/filter queries where the target email might already be read.
+ */
+async function getRecentViaImap(
+  creds: ImapCredentials,
+  maxResults: number,
+  sinceDays: number = 7
+): Promise<EmailMessage[]> {
+  const { ImapFlow } = await import("imapflow");
+
+  const client = new ImapFlow({
+    host: creds.imap_host,
+    port: creds.imap_port,
+    secure: true,
+    auth: { user: creds.email, pass: creds.password },
+    logger: false,
+    connectionTimeout: 10_000,
+    greetingTimeout: 5_000,
+  });
+
+  const messages: EmailMessage[] = [];
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - sinceDays);
+
+  const timeoutMs = 15_000;
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`IMAP operation timed out after ${timeoutMs / 1000}s`)), timeoutMs)
+  );
+
+  try {
+    await Promise.race([client.connect(), timeoutPromise]);
+    const lock = await client.getMailboxLock("INBOX");
+
+    try {
+      // Search ALL emails since date (not just unseen)
+      const searchResult = await client.search({ since: sinceDate });
+      if (!searchResult || searchResult.length === 0) {
+        lock.release();
+        await client.logout();
+        return [];
+      }
+
+      // Take the most recent N
+      const seqNums = searchResult.slice(-maxResults);
+
+      for await (const msg of client.fetch(seqNums, {
+        envelope: true,
+        uid: true,
+        flags: true,
+        source: { maxLength: 4096 },
+      })) {
+        const env = msg.envelope;
+        if (!env) continue;
+
+        let snippet = "";
+        if (msg.source) {
+          try {
+            const rawText = msg.source.toString("utf-8");
+            const bodyStart = rawText.indexOf("\r\n\r\n");
+            if (bodyStart > -1) {
+              let bodyText = rawText.substring(bodyStart + 4);
+              bodyText = bodyText.replace(/<[^>]*>/g, " ");
+              bodyText = bodyText.replace(/=\r?\n/g, "");
+              bodyText = bodyText.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
+                String.fromCharCode(parseInt(hex, 16))
+              );
+              snippet = bodyText.replace(/\s+/g, " ").trim().substring(0, 500);
+            }
+          } catch { /* Non-critical */ }
+        }
+
+        const flags = msg.flags ? Array.from(msg.flags) : [];
+        messages.push({
+          id: String(msg.uid),
+          threadId: env.messageId || String(msg.uid),
+          from: env.from?.[0]
+            ? `${env.from[0].name || ""} <${env.from[0].address || ""}>`
+            : "Unknown",
+          to: env.to?.[0]
+            ? `${env.to[0].name || ""} <${env.to[0].address || ""}>`
+            : "",
+          subject: env.subject || "(no subject)",
+          snippet,
+          date: env.date?.toISOString() || new Date().toISOString(),
+          isUnread: !flags.includes("\\Seen"),
+        });
+      }
+    } finally {
+      lock.release();
+    }
+
+    await client.logout();
+  } catch (err) {
+    console.error(`[INBOX] IMAP recent-fetch error:`, err);
+    try { await client.logout(); } catch { /* ignore */ }
+    throw err;
+  }
+
+  return messages;
+}
+
 async function markAsReadViaImap(
   creds: ImapCredentials,
   messageUid: string
@@ -565,6 +667,30 @@ export async function getUnreadMessages(
 
   if (creds.type === "imap") {
     return getUnreadViaImap(creds.creds, maxResults);
+  }
+  return getUnreadViaGmailApi(creds.creds, userId, maxResults);
+}
+
+/**
+ * Get ALL recent emails (read + unread) for search/filter queries.
+ * Use this when the user asks about a specific email that might already be read.
+ */
+export async function getRecentMessages(
+  userId: string,
+  maxResults: number = 20,
+  sinceDays: number = 7
+): Promise<EmailMessage[]> {
+  const creds = await getEmailCredentials(userId);
+  if (!creds) return [];
+
+  if (creds.type === "imap") {
+    return getRecentViaImap(creds.creds, maxResults, sinceDays);
+  }
+
+  // For Nylas/Gmail OAuth, fall back to unread (TODO: add recent-all support)
+  if (creds.type === "nylas") {
+    const { getUnreadMessages: getNylasUnread } = await import("./nylas-email.js");
+    return getNylasUnread(userId, maxResults) as unknown as EmailMessage[];
   }
   return getUnreadViaGmailApi(creds.creds, userId, maxResults);
 }
