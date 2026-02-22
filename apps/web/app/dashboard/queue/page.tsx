@@ -257,13 +257,14 @@ export default function TaskQueuePage() {
                 className="pl-10"
               />
             </div>
-            <div className="flex gap-2 overflow-x-auto">
+            <div className="flex gap-2 overflow-x-auto pb-0.5 scrollbar-hide">
               {statusFilters.map((sf) => (
                 <Button
                   key={sf.value}
                   variant={filterStatus === sf.value ? 'default' : 'outline'}
                   size="sm"
                   onClick={() => setFilterStatus(sf.value)}
+                  className="shrink-0"
                 >
                   {sf.label}
                 </Button>

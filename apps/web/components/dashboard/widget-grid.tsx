@@ -58,6 +58,15 @@ interface WidgetGridProps {
   initialLayout: WidgetLayoutItem[];
 }
 
+// Enumerate all Tailwind col-span classes so JIT won't purge them
+const MD_SPAN: Record<number, string> = { 1: "md:col-span-1", 2: "md:col-span-2" };
+const LG_SPAN: Record<number, string> = { 1: "lg:col-span-1", 2: "lg:col-span-2", 3: "lg:col-span-3", 4: "lg:col-span-4" };
+function getSpanClass(w: number): string {
+  const md = Math.min(w, 2);
+  const lg = Math.min(w, 4);
+  return `col-span-1 ${MD_SPAN[md] ?? "md:col-span-2"} ${LG_SPAN[lg] ?? "lg:col-span-4"}`;
+}
+
 export function WidgetGrid({ initialLayout }: WidgetGridProps) {
   const [layout, setLayout] = useState<WidgetLayoutItem[]>(initialLayout);
   const [isEditing, setIsEditing] = useState(false);
@@ -126,7 +135,7 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
   return (
     <div className="relative">
       {/* Edit mode toolbar */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-3 sm:mb-6">
         <div className="flex items-center gap-2">
           {isSaving && <span className="text-xs text-muted-foreground animate-pulse">Saving...</span>}
         </div>
@@ -143,7 +152,7 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
       {/* Widget Grid */}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={layout.map(i => i.id)} strategy={rectSortingStrategy}>
-          <div className="grid grid-cols-4 gap-4 auto-rows-auto">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-auto">
             <AnimatePresence>
               {layout.map(item => {
                 const WidgetComponent = WIDGET_COMPONENTS[item.widgetId];
@@ -163,8 +172,7 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
                       ? { type: "spring", stiffness: 300, damping: 15, mass: 0.8 }
                       : { type: "spring", stiffness: 400, damping: 30 }
                     }
-                    style={{ gridColumn: `span ${Math.min(item.w, 4)}` }}
-                    className="min-w-0"
+                    className={`min-w-0 ${getSpanClass(item.w)}`}
                   >
                     <WidgetContainer item={item} onRemove={handleRemove} isEditing={isEditing}>
                       <WidgetComponent />

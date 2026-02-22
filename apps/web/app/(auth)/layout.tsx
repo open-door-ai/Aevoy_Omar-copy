@@ -52,14 +52,14 @@ export default function AuthLayout({
         <div className="absolute inset-0 lg:hidden overflow-hidden pointer-events-none">
           <div
             className="absolute w-[300px] h-[300px] rounded-full opacity-10 blur-[100px] animate-aurora"
-            style={{ background: "oklch(0.7 0.15 270)", top: "-5%", right: "-10%" }}
+            style={{ background: "oklch(0.7 0.15 270)", top: "-5%", right: "0" }}
           />
           <div
             className="absolute w-[250px] h-[250px] rounded-full opacity-8 blur-[100px] animate-aurora"
             style={{
               background: "oklch(0.65 0.18 300)",
               bottom: "10%",
-              left: "-10%",
+              left: "0",
               animationDelay: "-5s",
             }}
           />

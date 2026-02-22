@@ -166,18 +166,18 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
           <div>
             <CardTitle>Recent Activity</CardTitle>
             <CardDescription>
               Your latest tasks and their status
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <select
               value={channelFilter}
               onChange={(e) => setChannelFilter(e.target.value)}
-              className="text-xs border border-border rounded-md px-2 py-1 bg-background text-foreground"
+              className="text-xs border border-border rounded-md px-2 py-1.5 min-h-[36px] bg-background text-foreground"
             >
               <option value="all">All Channels</option>
               <option value="email">Email</option>
@@ -188,7 +188,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="text-xs border border-border rounded-md px-2 py-1 bg-background text-foreground"
+              className="text-xs border border-border rounded-md px-2 py-1.5 min-h-[36px] bg-background text-foreground"
             >
               <option value="all">All Status</option>
               <option value="completed">Completed</option>
@@ -209,17 +209,17 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
         {loading ? (
           <SkeletonList count={3} variant="task" />
         ) : filteredTasks.length > 0 ? (
-          <StaggerContainer className="space-y-3" staggerDelay={0.05}>
+          <StaggerContainer className="space-y-3 max-h-[500px] overflow-y-auto" staggerDelay={0.05}>
             {filteredTasks.map((task) => (
               <StaggerItem key={task.id}>
                 <Link href={`/dashboard/tasks/${task.id}`} className="block">
                 <div
-                  className={`flex items-center justify-between p-4 border rounded-lg transition-all hover:bg-muted/50 cursor-pointer ${
+                  className={`p-4 border rounded-lg transition-all hover:bg-muted/50 cursor-pointer ${
                     task.status === "processing" ? "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 animate-pulse" : ""
                   }`}
                 >
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm break-words">
                       {task.email_subject || "Task"}
                     </p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
@@ -243,6 +243,14 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                           ${task.cost_usd.toFixed(4)}
                         </span>
                       )}
+                      <span
+                        className={`px-2 py-0.5 text-xs rounded-full inline-flex items-center gap-1 ${getStatusColor(
+                          task.status
+                        )}`}
+                      >
+                        <span>{getStatusIcon(task.status)}</span>
+                        {task.status}
+                      </span>
                     </div>
                     {task.status === "processing" && task.progress_message && (
                       <div className="mt-1.5 space-y-1">
@@ -280,14 +288,6 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                       </p>
                     )}
                   </div>
-                  <span
-                    className={`px-3 py-1 text-xs rounded-full flex items-center gap-1 ${getStatusColor(
-                      task.status
-                    )}`}
-                  >
-                    <span>{getStatusIcon(task.status)}</span>
-                    {task.status}
-                  </span>
                 </div>
                 </Link>
               </StaggerItem>

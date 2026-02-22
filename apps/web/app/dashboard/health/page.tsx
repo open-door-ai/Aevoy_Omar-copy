@@ -327,7 +327,7 @@ export default function HealthPage() {
     <div className="space-y-6">
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Heart className="w-6 h-6 text-red-500" />
@@ -337,7 +337,7 @@ export default function HealthPage() {
             AI-powered health insights and consultation
           </p>
         </div>
-        <Button onClick={startConsultNow} disabled={bookingNow} className="shrink-0 gap-2">
+        <Button onClick={startConsultNow} disabled={bookingNow} className="self-start sm:self-auto shrink-0 gap-2">
           {bookingNow ? (
             <RefreshCw className="w-4 h-4 animate-spin" />
           ) : (

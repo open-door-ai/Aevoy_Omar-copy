@@ -43,7 +43,7 @@ export function QuickStatsWidget() {
               <s.icon className="h-3.5 w-3.5 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">{s.label}</p>
             </div>
-            <p className={`text-sm font-semibold mt-0.5 ${s.highlight ? "text-2xl text-blue-600 dark:text-blue-400" : ""} ${s.truncate ? "truncate" : ""}`}>
+            <p className={`font-semibold mt-0.5 ${s.highlight ? "text-xl sm:text-2xl text-blue-600 dark:text-blue-400" : "text-xs sm:text-sm"} ${s.truncate ? "truncate" : ""}`}>
               {!data ? <span className="animate-pulse bg-muted rounded h-4 w-20 inline-block" /> : s.value}
             </p>
           </CardContent>

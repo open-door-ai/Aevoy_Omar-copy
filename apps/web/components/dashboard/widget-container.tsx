@@ -23,7 +23,6 @@ export function WidgetContainer({ item, onRemove, children, isEditing }: WidgetC
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    gridColumn: `span ${item.w}`,
     opacity: isDragging ? 0.5 : 1,
   };
 
@@ -86,7 +85,7 @@ export function WidgetContainer({ item, onRemove, children, isEditing }: WidgetC
       <div className={isEditing ? "pt-8 pointer-events-none" : ""}>{children}</div>
 
       {!isEditing && def && (
-        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-2 right-2 z-10 hidden md:block opacity-0 group-hover:opacity-100 transition-opacity">
           <span className="text-[10px] text-muted-foreground/50 bg-background/50 px-1 rounded">{def.name}</span>
         </div>
       )}

@@ -40,17 +40,17 @@ export default async function DashboardPage() {
 
   return (
     <DashboardWithOnboarding username={username}>
-      <div className="space-y-6">
+      <div className="space-y-4 sm:space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-bold">{getGreeting()}, {username}</h1>
-            <p className="text-muted-foreground">
+            <h1 className="text-2xl sm:text-3xl font-bold">{getGreeting()}, {username}</h1>
+            <p className="text-muted-foreground text-sm">
               {botName ? `${botName} is at your service` : "Here's your AI assistant overview"}
             </p>
           </div>
           {isBetaUser && (
-            <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2">
+            <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2 shrink-0">
               <span>Beta User</span>
             </div>
           )}

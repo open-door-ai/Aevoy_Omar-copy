@@ -141,6 +141,19 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
         </div>
       </div>
       
+      {/* Skip button */}
+      <button
+        onClick={() => onComplete()}
+        className={`absolute bottom-6 right-6 z-40 text-stone-500 hover:text-stone-300 text-sm transition-all duration-300 flex items-center gap-1.5 ${
+          phase >= 5 ? 'opacity-0 pointer-events-none' : 'opacity-70 hover:opacity-100'
+        }`}
+      >
+        Skip
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+        </svg>
+      </button>
+
       {/* Reveal content (behind curtain) */}
       <div className={`absolute inset-0 flex flex-col items-center justify-center z-10 bg-stone-50 transition-opacity duration-500 ${
         phase >= 5 ? 'opacity-100' : 'opacity-0'
@@ -1666,9 +1679,13 @@ export default function AevoyLanding() {
   });
   const [scrollY, setScrollY] = useState(0);
   const [selectedDemo, setSelectedDemo] = useState('call');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const heroRef = useRef<HTMLElement>(null);
   
   const handleIntroComplete = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('agi_intro_shown', Date.now().toString());
+    }
     setShowIntro(false);
   }, []);
   
@@ -1915,16 +1932,44 @@ export default function AevoyLanding() {
             <Link href="/how-it-works" className="text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">Learn More</Link>
             <Link href="/hive" className="text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">The Social Network</Link>
           </div>
-          
-          <div className="flex items-center gap-4">
-            <Link href="/login" className="text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">
+
+          <div className="flex items-center gap-3">
+            <Link href="/login" className="hidden sm:block text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">
               Log in
             </Link>
-            <MagneticButton href="/signup" className="px-5 py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium hover:bg-stone-800 transition-colors inline-block">
+            <MagneticButton href="/signup" className="px-4 py-2 sm:px-5 sm:py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium hover:bg-stone-800 transition-colors inline-block">
               Get Started
             </MagneticButton>
+            {/* Mobile hamburger */}
+            <button
+              onClick={() => setMobileNavOpen(!mobileNavOpen)}
+              className="md:hidden p-2 rounded-lg text-stone-600 hover:bg-stone-100 transition-colors"
+              aria-label="Toggle menu"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {mobileNavOpen
+                  ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                }
+              </svg>
+            </button>
           </div>
         </div>
+
+        {/* Mobile nav dropdown */}
+        {mobileNavOpen && (
+          <div className="md:hidden border-t border-stone-200 bg-white/95 backdrop-blur-sm px-6 py-4 flex flex-col gap-4">
+            <a href="#how-it-works" onClick={() => setMobileNavOpen(false)} className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">How It Works</a>
+            <a href="#demo" onClick={() => setMobileNavOpen(false)} className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">Demo</a>
+            <a href="#security" onClick={() => setMobileNavOpen(false)} className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">Security</a>
+            <Link href="/how-it-works" onClick={() => setMobileNavOpen(false)} className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">Learn More</Link>
+            <Link href="/hive" onClick={() => setMobileNavOpen(false)} className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">The Social Network</Link>
+            <div className="pt-2 border-t border-stone-100 flex flex-col gap-3">
+              <Link href="/login" className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">Log in</Link>
+              <Link href="/signup" className="px-5 py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium text-center hover:bg-stone-800 transition-colors">Get Started</Link>
+            </div>
+          </div>
+        )}
       </nav>
       
       {/* Hero */}
@@ -1934,8 +1979,8 @@ export default function AevoyLanding() {
         <div className="relative max-w-6xl mx-auto px-6 py-24">
           <div className="max-w-3xl">
             <Parallax speed={-0.3}>
-              <h1 
-                className="text-6xl md:text-7xl lg:text-8xl font-bold tracking-tight leading-[0.95] mb-8"
+              <h1
+                className="text-4xl sm:text-5xl md:text-7xl lg:text-8xl font-bold tracking-tight leading-[0.95] mb-8"
                 style={{
                   opacity: Math.max(0, 1 - scrollY / 500),
                   transform: `translateY(${scrollY * 0.1}px)`

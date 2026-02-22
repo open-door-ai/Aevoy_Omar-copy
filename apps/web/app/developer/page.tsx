@@ -117,12 +117,12 @@ export default function DeveloperPortal() {
   return (
     <div className="min-h-screen bg-background">
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2"><Code2 className="h-6 w-6" /> Developer Portal</h1>
             <p className="text-sm text-muted-foreground">Manage your apps and submissions</p>
           </div>
-          <Link href="/developer/apps/new" className="flex items-center gap-1.5 bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors">
+          <Link href="/developer/apps/new" className="shrink-0 flex items-center gap-1.5 bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors">
             <Plus className="h-4 w-4" /> New App
           </Link>
         </div>

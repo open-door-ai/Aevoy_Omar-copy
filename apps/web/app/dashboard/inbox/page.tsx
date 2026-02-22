@@ -157,7 +157,7 @@ export default function InboxPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Mail className="w-6 h-6 text-primary" />
           <h1 className="text-2xl font-bold">Inbox</h1>

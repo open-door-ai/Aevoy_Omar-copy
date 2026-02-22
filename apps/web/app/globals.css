@@ -210,6 +210,15 @@
   animation: float 3s ease-in-out infinite;
 }
 
+/* Hide scrollbar while preserving scroll behaviour */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 /* Force light mode on standalone public pages (they have their own color scheme) */
 .force-light {
   color-scheme: light;

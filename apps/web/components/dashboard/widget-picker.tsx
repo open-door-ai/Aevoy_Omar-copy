@@ -39,11 +39,11 @@ export function WidgetPicker({ isOpen, onClose, onAdd, currentWidgetIds }: Widge
         <>
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40" onClick={onClose} />
           <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 40 }}
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
-            className="fixed inset-x-4 bottom-4 md:inset-auto md:right-6 md:bottom-24 md:w-[420px] bg-background border border-border rounded-2xl shadow-2xl z-50 overflow-hidden max-h-[70vh] flex flex-col"
+            className="fixed inset-x-3 bottom-3 md:inset-auto md:right-6 md:bottom-24 md:w-[420px] bg-background border border-border rounded-2xl shadow-2xl z-50 overflow-hidden max-h-[80vh] md:max-h-[70vh] flex flex-col"
           >
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-border">

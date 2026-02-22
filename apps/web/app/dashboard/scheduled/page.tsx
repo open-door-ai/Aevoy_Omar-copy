@@ -165,9 +165,9 @@ export default function ScheduledTasksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold">Scheduled Tasks</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold">Scheduled Tasks</h1>
           <p className="text-muted-foreground">
             Set up recurring tasks that your AI runs automatically. Perfect for daily email summaries, weekly reports, or any routine task.
           </p>
@@ -175,6 +175,7 @@ export default function ScheduledTasksPage() {
         <Button
           variant={showForm ? 'outline' : 'default'}
           onClick={() => setShowForm(!showForm)}
+          className="shrink-0"
         >
           {showForm ? (
             'Cancel'

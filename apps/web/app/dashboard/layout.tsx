@@ -130,7 +130,7 @@ export default function DashboardLayout({
           </Link>
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
-            className="p-2 rounded-lg hover:bg-accent transition-colors text-foreground"
+            className="p-2.5 rounded-lg hover:bg-accent transition-colors text-foreground"
           >
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
@@ -151,7 +151,7 @@ export default function DashboardLayout({
       )}
 
       {/* Main content */}
-      <main className="flex-1 p-6 md:p-8 pt-16 md:pt-8">
+      <main className="flex-1 min-w-0 p-6 md:p-8 pt-16 md:pt-8">
         {children}
       </main>
     </div>
