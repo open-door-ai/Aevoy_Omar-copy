@@ -376,6 +376,46 @@ async function markAsReadViaImap(
   }
 }
 
+async function deleteViaImap(
+  creds: ImapCredentials,
+  messageUid: string
+): Promise<boolean> {
+  const { ImapFlow } = await import("imapflow");
+
+  const client = new ImapFlow({
+    host: creds.imap_host,
+    port: creds.imap_port,
+    secure: true,
+    auth: { user: creds.email, pass: creds.password },
+    logger: false,
+    connectionTimeout: 10_000,
+  });
+
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock("INBOX");
+
+    try {
+      // Flag as Deleted, then expunge — standard IMAP delete
+      await client.messageFlagsAdd(messageUid, ["\\Deleted"], { uid: true });
+      await client.messageDelete(messageUid, { uid: true });
+    } finally {
+      lock.release();
+    }
+
+    await client.logout();
+    return true;
+  } catch (err) {
+    console.error("[INBOX] IMAP delete error:", err);
+    try {
+      await client.logout();
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+}
+
 async function sendViaSmtp(
   creds: ImapCredentials,
   to: string,
@@ -669,6 +709,41 @@ export async function markAsRead(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ removeLabelIds: ["UNREAD"] }),
+      }
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteMessage(
+  userId: string,
+  messageId: string
+): Promise<boolean> {
+  const creds = await getEmailCredentials(userId);
+  if (!creds) return false;
+
+  if (creds.type === "nylas") {
+    // Nylas delete not yet implemented — skip silently
+    console.log(`[INBOX] Nylas delete not implemented — skipping ${messageId}`);
+    return false;
+  }
+
+  if (creds.type === "imap") {
+    return deleteViaImap(creds.creds, messageId);
+  }
+
+  // Gmail OAuth — move to trash
+  const token = await ensureValidGmailToken(creds.creds, userId);
+  if (!token) return false;
+
+  try {
+    const res = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/trash`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
       }
     );
     return res.ok;

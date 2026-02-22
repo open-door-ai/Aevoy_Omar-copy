@@ -1230,10 +1230,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       if (needsInjection) {
         console.log(`[MISSING-ACTION] Injecting ${pattern.actionType} directly from task text`);
         if (pattern.actionType === 'read_email') {
-          // For email reading: clear any browser actions the AI generated, inject read_email directly
-          aiResponse.actions = aiResponse.actions.filter(a => !BROWSER_ACTION_TYPES.includes(a.type));
-          aiResponse.actions.push({ type: 'read_email' as any, params: { limit: 5, minutes_back: 60 } });
-          console.log(`[MISSING-ACTION] Injected read_email (cleared ${aiResponse.actions.length > 1 ? 'browser actions' : 'no other actions'})`);
+          // IMAP-first, browser-fallback:
+          // Prepend read_email so it runs FIRST. Keep browser actions as fallback
+          // — if IMAP fails, the iterate loop can still try browser.
+          aiResponse.actions.unshift({ type: 'read_email' as any, params: { limit: 5, minutes_back: 60 } });
+          console.log(`[MISSING-ACTION] Prepended read_email (${aiResponse.actions.length} total actions, browser fallback preserved)`);
         } else if (pattern.actionType === 'schedule') {
           const cronGuess = taskTextLower.includes('every morning') || taskTextLower.includes('daily') || taskTextLower.includes('every day')
             ? '0 9 * * *'

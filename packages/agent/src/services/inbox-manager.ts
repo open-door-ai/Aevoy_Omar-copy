@@ -8,7 +8,7 @@
  */
 
 import { getSupabaseClient } from "../utils/supabase.js";
-import { getUnreadMessages, sendViaUserEmail, isEmailConnected } from "./inbox.js";
+import { getUnreadMessages, sendViaUserEmail, isEmailConnected, deleteMessage } from "./inbox.js";
 import { isNylasConnected, getUnreadMessages as getNylasUnread, sendEmail as sendNylasEmail } from "./nylas-email.js";
 import { sendResponse } from "./email.js";
 import { processVoiceCall } from "./twilio.js";
@@ -475,11 +475,15 @@ Respond naturally and concisely.`;
 async function executeDelete(
   userId: string,
   messageId: string,
-  provider: string | null
+  _provider: string | null
 ): Promise<void> {
-  // Implementation depends on provider
   console.log(`[INBOX-MANAGER] Deleting email ${messageId} for user ${userId}`);
-  // TODO: Implement actual delete via provider APIs
+  const success = await deleteMessage(userId, messageId);
+  if (success) {
+    console.log(`[INBOX-MANAGER] Deleted email ${messageId} successfully`);
+  } else {
+    console.error(`[INBOX-MANAGER] Failed to delete email ${messageId} — will retry next cycle`);
+  }
 }
 
 /**
@@ -540,9 +544,56 @@ async function handleMeetingRequest(
   message: { id: string; from: string; subject: string; body: string },
   config: Omit<UserInboxConfig, "userId">
 ): Promise<void> {
-  // Extract calendar invite or propose times
   console.log(`[INBOX-MANAGER] Meeting request detected: ${message.subject}`);
-  // TODO: Implement calendar integration
+
+  // Use cheap AI to extract meeting details
+  let meetingDetails = "";
+  const groqKey = process.env.GROQ_API_KEY;
+  if (groqKey) {
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [
+            {
+              role: "user",
+              content: `Extract meeting details from this email. Return ONLY: date, time, location/link, attendees, and purpose. If any detail is missing, say "not specified".\n\nFrom: ${message.from}\nSubject: ${message.subject}\nBody: ${message.body.substring(0, 2000)}`,
+            },
+          ],
+          temperature: 0,
+          max_tokens: 300,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        meetingDetails = data.choices?.[0]?.message?.content || "";
+      }
+    } catch {
+      // Non-critical
+    }
+  }
+
+  // Generate a suggested response
+  const suggestedResponse = `Thank you for the meeting invitation regarding "${message.subject}". I'll check my calendar and confirm shortly.`;
+
+  // Queue for user approval with extracted details
+  await queueForApproval(
+    userId,
+    message,
+    "schedule",
+    suggestedResponse,
+    {
+      type: "meeting_request",
+      confidence: 0.8,
+      reasoning: meetingDetails || `Meeting request from ${message.from}: ${message.subject}`,
+    },
+    config
+  );
 }
 
 /**
