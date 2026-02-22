@@ -40,7 +40,7 @@ interface Credential {
 
 export default function ConnectedAppsPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<SkeletonList count={3} />}>
       <ConnectedAppsContent />
     </Suspense>
   );

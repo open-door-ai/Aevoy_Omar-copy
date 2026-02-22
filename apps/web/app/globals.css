@@ -228,6 +228,18 @@
   }
 }
 
+/* Marquee animation for landing page */
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: marquee 90s linear infinite;
+}
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
 /* Force light mode on standalone public pages (they have their own color scheme) */
 .force-light {
   color-scheme: light;

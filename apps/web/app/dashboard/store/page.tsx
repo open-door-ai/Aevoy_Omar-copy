@@ -30,7 +30,8 @@ export default function MyAppsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleUninstall = async (appId: string) => {
+  const handleUninstall = async (appId: string, appName: string) => {
+    if (!confirm(`Uninstall "${appName}"? This will remove it from your dashboard.`)) return;
     await fetch("/api/store/install", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appId }) });
     setApps(prev => prev.filter(a => a.app_id !== appId));
   };
@@ -77,7 +78,7 @@ export default function MyAppsPage() {
                     <span className="text-[10px] text-muted-foreground">Installed {new Date(installed_at).toLocaleDateString()}</span>
                   </div>
                 </div>
-                <button onClick={() => handleUninstall(app_id)} className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-all" title="Uninstall">
+                <button onClick={() => handleUninstall(app_id, app.name)} className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-all" title="Uninstall">
                   <Trash2 className="h-4 w-4 text-red-500" />
                 </button>
               </CardContent>

@@ -2640,18 +2640,6 @@ export default function AevoyLanding() {
 
       {/* Rolling Marquee Banner */}
       <section className="relative h-20 bg-stone-950 border-t border-stone-800 overflow-hidden">
-        <style dangerouslySetInnerHTML={{__html: `
-          @keyframes marquee {
-            0% { transform: translateX(0); }
-            100% { transform: translateX(-50%); }
-          }
-          .animate-marquee {
-            animation: marquee 90s linear infinite;
-          }
-          .animate-marquee:hover {
-            animation-play-state: paused;
-          }
-        `}} />
         <div className="absolute inset-0 flex items-center">
           <div className="flex gap-16 animate-marquee whitespace-nowrap">
             {(() => {
