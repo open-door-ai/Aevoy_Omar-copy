@@ -3278,21 +3278,25 @@ async function executeAction(
         console.log(`[READ-EMAIL] User ${userId.slice(0, 8)} — personal email connected: ${connected}`);
         if (connected) {
           try {
-            const emails = await getUnreadMessages(userId, emailLimit || 5);
-            if (emails.length === 0) {
+            const emails = await getUnreadMessages(userId, emailLimit || 10);
+            // Filter out @aevoy.com system emails (AI-generated subtask junk)
+            const realEmails = emails.filter(e =>
+              !e.from.includes('@aevoy.com') && !e.from.includes('aevoy.com>')
+            );
+            if (realEmails.length === 0) {
               return {
                 action,
                 success: true,
-                result: `No unread emails in your inbox right now.`,
+                result: `No unread emails in your inbox right now (${emails.length - realEmails.length} system emails filtered out).`,
               };
             }
-            const summary = emails.map((e, i) =>
+            const summary = realEmails.map((e, i) =>
               `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
             ).join('\n---\n');
             return {
               action,
               success: true,
-              result: `Found ${emails.length} unread email(s) in your inbox:\n${summary}`,
+              result: `Found ${realEmails.length} unread email(s) in your inbox:\n${summary}`,
             };
           } catch (imapErr) {
             console.error(`[READ-EMAIL] Personal email fetch failed for ${userId.slice(0, 8)}:`, imapErr);
