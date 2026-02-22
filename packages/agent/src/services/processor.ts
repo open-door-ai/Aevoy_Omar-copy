@@ -1641,15 +1641,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       if (isTaskComplete) break;
 
       // DIRECT RESULT INJECTION: For data-retrieval actions (read_email, check_calendar, analyze_health_data),
-      // inject the result directly into the response and skip the expensive re-prompt cycle.
-      // These actions return well-formatted data — no AI synthesis needed.
-      const directResultAction = iterationResults.find(r =>
-        r.success && r.result && typeof r.result === 'string' && r.result.length > 20 &&
-        ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type)
-      );
-      if (directResultAction) {
-        console.log(`[ITERATE] Direct result injection for ${directResultAction.action.type} — skipping re-prompt`);
-        aiResponse.content = directResultAction.result as string;
+      // inject the result directly — BOTH success AND failure. NEVER let AI narration survive.
+      // Success = show the data. Failure = show clear error. Either way, AI text like "I'll check your inbox" is killed.
+      const DATA_ACTION_TYPES = ['read_email', 'check_calendar', 'analyze_health_data'];
+      const dataAction = iterationResults.find(r => DATA_ACTION_TYPES.includes(r.action.type));
+      if (dataAction) {
+        if (dataAction.success && dataAction.result && typeof dataAction.result === 'string' && dataAction.result.length > 20) {
+          console.log(`[ITERATE] Direct result injection for ${dataAction.action.type} (success) — skipping re-prompt`);
+          aiResponse.content = dataAction.result as string;
+        } else {
+          // FAILURE: override AI narration with clear user-facing error
+          const errorMsg = dataAction.error || `Could not complete ${dataAction.action.type} right now.`;
+          console.log(`[ITERATE] Direct error injection for ${dataAction.action.type} — "${errorMsg}"`);
+          aiResponse.content = errorMsg;
+        }
         isTaskComplete = true;
         aiSignaledComplete = true;
         break;
@@ -1978,11 +1983,10 @@ OBSERVE the current page state above, then decide what to do next:
     // 7d. RESPONSE QUALITY GATE: Detect plan-like/narration responses and re-prompt for concrete answer
     // Examples of BAD final responses: "I'll search for...", "Let me try...", "What I can do next..."
     // These are plans/narrations, not answers. The user expects an actual result.
-    // SKIP quality gate for direct-injected results (read_email, check_calendar, etc.) — they're raw data, not AI narration
+    // SKIP quality gate for direct-injected results (read_email, check_calendar, etc.) — both success AND error are already user-facing
     const hasDirectResultData = actionResults.some(r =>
-      r.success && r.result && typeof r.result === 'string' &&
       ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
-      aiResponse.content === r.result
+      (aiResponse.content === r.result || aiResponse.content === r.error)
     );
     if (aiResponse.content && !hasDirectResultData) {
       const responseLC = aiResponse.content.toLowerCase();
