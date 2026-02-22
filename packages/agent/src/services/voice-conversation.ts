@@ -2,6 +2,8 @@
  * Voice Conversation Handler
  * Manages WebSocket connections for Twilio ConversationRelay
  * Real-time two-way voice conversations via ElevenLabs TTS + Deepgram STT
+ *
+ * Wired into the full memory pipeline — same context as email/task processing.
  */
 
 import { WebSocket } from "ws";
@@ -11,6 +13,7 @@ import { generatePersonalizedGreeting, generateVoiceResponse } from "./voice-pro
 import { verifyVoicePin } from "./twilio.js";
 import { trackServiceCost } from "./ai.js";
 import { calculateVoiceCost } from "../utils/cost-calculator.js";
+import { loadMemory, saveWorkingMemory, appendDailyLog } from "./memory.js";
 
 // ---- Types ----
 
@@ -19,6 +22,7 @@ interface VoiceSession {
   callSid: string;
   userId: string | null;
   userName: string;
+  userEmail: string;
   botName: string;
   greetingStyle: string;
   timezone: string;
@@ -30,6 +34,9 @@ interface VoiceSession {
   startedAt: number;
   lastActivityAt: number;
   callType: string;
+  // Memory context loaded at session start
+  memoryContext: string;
+  userProfile: string;
 }
 
 const activeSessions = new Map<string, VoiceSession>();
@@ -128,6 +135,8 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       const duration = Math.round((Date.now() - session.startedAt) / 1000);
       console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} closed after ${duration}s (${session.conversationHistory.length} exchanges)`);
       logCallHistory(session, duration);
+      // Save conversation to memory (async, non-blocking)
+      saveConversationToMemory(session).catch(() => {});
     }
     cleanupSession(sessionId);
   });
@@ -150,23 +159,48 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
 
   // Load user profile
   let userName = "there";
+  let userEmail = "";
   let botName = "Nova";
   let greetingStyle = "casual";
   let timezone = "America/Los_Angeles";
   let needsPin = false;
+  let userProfile = "";
+  let memoryContext = "";
 
   if (userId) {
-    const { data: profile } = await getSupabaseClient()
-      .from("profiles")
-      .select("display_name, username, bot_name, phone_number, greeting_style, timezone, voice_pin_hash, voice_pin, voice_pin_attempts, voice_pin_locked_until")
-      .eq("id", userId)
-      .single();
+    // Load profile, settings, and memory in parallel
+    const [profileResult, settingsResult, memoryResult] = await Promise.all([
+      getSupabaseClient()
+        .from("profiles")
+        .select("display_name, username, bot_name, phone_number, timezone, voice_pin_hash, voice_pin, voice_pin_attempts, voice_pin_locked_until, email")
+        .eq("id", userId)
+        .single(),
+      getSupabaseClient()
+        .from("user_settings")
+        .select("greeting_style")
+        .eq("user_id", userId)
+        .single(),
+      loadMemory(userId).catch(() => ({ facts: "", recentLogs: "", workingMemories: [], episodicMemories: [] })),
+    ]);
+
+    const profile = profileResult.data;
+    const settings = settingsResult.data;
 
     if (profile) {
       userName = profile.display_name || profile.username || "there";
+      userEmail = profile.email || "";
       botName = profile.bot_name || "Dave";
-      greetingStyle = profile.greeting_style || "casual";
+      greetingStyle = settings?.greeting_style || "casual";
       timezone = profile.timezone || "America/Los_Angeles";
+
+      // Build profile context string for the AI
+      userProfile = [
+        userName !== "there" ? `Name: ${userName}` : null,
+        userEmail ? `Email: ${userEmail}` : null,
+        profile.phone_number ? `Phone: ${profile.phone_number}` : null,
+        `Bot name: ${botName}`,
+        `Timezone: ${timezone}`,
+      ].filter(Boolean).join("\n");
 
       // Check if caller needs PIN (unknown number)
       const callerPhone = from?.replace(/\D/g, "");
@@ -187,6 +221,16 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
         needsPin = true;
       }
     }
+
+    // Format memory context
+    if (memoryResult.facts) {
+      memoryContext = memoryResult.facts;
+      if (memoryResult.recentLogs) {
+        memoryContext += `\n\nRecent activity:\n${memoryResult.recentLogs}`;
+      }
+    }
+
+    console.log(`[VOICE-WS] Loaded context for ${userId.slice(0, 8)}: profile=${userProfile.length}ch, memory=${memoryContext.length}ch`);
   }
 
   const session: VoiceSession = {
@@ -194,6 +238,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     callSid: callSid || "",
     userId,
     userName,
+    userEmail,
     botName,
     greetingStyle,
     timezone,
@@ -205,6 +250,8 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     startedAt: Date.now(),
     lastActivityAt: Date.now(),
     callType,
+    memoryContext,
+    userProfile,
   };
 
   activeSessions.set(sessionId, session);
@@ -246,12 +293,18 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} user: "${voicePrompt.slice(0, 80)}"`);
 
   try {
-    const response = await generateVoiceResponse(session.userId!, voicePrompt, session.conversationHistory, {
+    const rawResponse = await generateVoiceResponse(session.userId!, voicePrompt, session.conversationHistory, {
       userName: session.userName,
+      userEmail: session.userEmail,
       botName: session.botName,
       timezone: session.timezone,
       callType: session.callType,
+      userProfile: session.userProfile,
+      memoryContext: session.memoryContext,
     });
+
+    // Extract [REMEMBER:...] tags before sending to TTS
+    const { response, memories } = extractMemoryTags(rawResponse);
 
     session.conversationHistory.push({ role: "assistant", content: response });
 
@@ -263,6 +316,14 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     }));
 
     console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} assistant: "${response.slice(0, 80)}"`);
+
+    // Save any memories the AI decided to remember (async, non-blocking)
+    if (memories.length > 0 && session.userId) {
+      for (const mem of memories) {
+        saveWorkingMemory(session.userId, mem).catch(() => {});
+      }
+      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${memories.length} memories`);
+    }
 
     // Check if the AI wants to create a task from this conversation
     await maybeCreateTask(session, voicePrompt, response);
@@ -339,6 +400,45 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
         last: true,
       }));
     }
+  }
+}
+
+// ---- Memory Integration ----
+
+function extractMemoryTags(text: string): { response: string; memories: string[] } {
+  const memories: string[] = [];
+  const cleaned = text.replace(/\[REMEMBER:(.*?)\]/g, (_match, content) => {
+    memories.push(content.trim());
+    return "";
+  });
+  return { response: cleaned.trim(), memories };
+}
+
+async function saveConversationToMemory(session: VoiceSession): Promise<void> {
+  if (!session.userId || session.conversationHistory.length === 0) return;
+
+  try {
+    const duration = Math.round((Date.now() - session.startedAt) / 1000);
+    const exchangeCount = Math.floor(session.conversationHistory.length / 2);
+
+    // Summarize the conversation for daily log
+    const topics = session.conversationHistory
+      .filter(m => m.role === "user")
+      .map(m => m.content.slice(0, 60))
+      .join("; ");
+
+    const logEntry = `Voice call (${session.callType}, ${duration}s, ${exchangeCount} exchanges): ${topics}`;
+    await appendDailyLog(session.userId, logEntry);
+
+    // If substantive conversation (3+ exchanges), save to working memory
+    if (exchangeCount >= 3) {
+      const summary = `Voice conversation on ${new Date().toLocaleDateString()}: discussed ${topics.slice(0, 200)}`;
+      await saveWorkingMemory(session.userId, summary);
+    }
+
+    console.log(`[VOICE-WS] Saved conversation to memory for ${session.userId.slice(0, 8)}`);
+  } catch (err) {
+    console.error("[VOICE-WS] Failed to save conversation to memory:", err);
   }
 }
 
