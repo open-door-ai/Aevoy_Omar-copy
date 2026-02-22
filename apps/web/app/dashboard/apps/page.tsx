@@ -543,8 +543,8 @@ function ConnectedAppsContent() {
 
       {/* Integrations */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Google */}
-        <Card>
+        {/* Google (Coming Soon) */}
+        <Card className="opacity-60">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -561,24 +561,15 @@ function ConnectedAppsContent() {
                   <CardDescription>Gmail, Calendar, Drive</CardDescription>
                 </div>
               </div>
-              {loadingIntegrations ? null : googleStatus?.connected ? (
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-              ) : (
-                <XCircle className="w-5 h-5 text-muted-foreground" />
-              )}
+              <span className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-0.5 rounded-full">Coming soon</span>
             </div>
           </CardHeader>
           <CardContent>
-            {loadingIntegrations ? (
-              <SkeletonCard variant="stats" />
-            ) : googleStatus?.connected ? (
+            {googleStatus?.connected ? (
               <div className="space-y-3">
                 <div className="text-sm">
                   <span className="text-muted-foreground">Connected as: </span>
                   <span className="font-medium">{googleStatus.email}</span>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Since {new Date(googleStatus.connectedAt!).toLocaleDateString()}
                 </div>
                 <Button
                   variant="outline"
@@ -594,20 +585,13 @@ function ConnectedAppsContent() {
                 </Button>
               </div>
             ) : (
-              <Button onClick={handleConnectGoogle} disabled={connectingGoogle}>
-                {connectingGoogle ? (
-                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                ) : (
-                  <ExternalLink className="w-4 h-4 mr-1" />
-                )}
-                Connect Google
-              </Button>
+              <p className="text-xs text-muted-foreground">Use the Email (IMAP) card below to connect Gmail with an app password instead.</p>
             )}
           </CardContent>
         </Card>
 
-        {/* Microsoft */}
-        <Card>
+        {/* Microsoft (Coming Soon) */}
+        <Card className="opacity-60">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -624,24 +608,15 @@ function ConnectedAppsContent() {
                   <CardDescription>Outlook, Calendar, OneDrive</CardDescription>
                 </div>
               </div>
-              {loadingIntegrations ? null : microsoftStatus?.connected ? (
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-              ) : (
-                <XCircle className="w-5 h-5 text-muted-foreground" />
-              )}
+              <span className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-0.5 rounded-full">Coming soon</span>
             </div>
           </CardHeader>
           <CardContent>
-            {loadingIntegrations ? (
-              <SkeletonCard variant="stats" />
-            ) : microsoftStatus?.connected ? (
+            {microsoftStatus?.connected ? (
               <div className="space-y-3">
                 <div className="text-sm">
                   <span className="text-muted-foreground">Connected as: </span>
                   <span className="font-medium">{microsoftStatus.email}</span>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  Since {new Date(microsoftStatus.connectedAt!).toLocaleDateString()}
                 </div>
                 <Button
                   variant="outline"
@@ -657,14 +632,7 @@ function ConnectedAppsContent() {
                 </Button>
               </div>
             ) : (
-              <Button onClick={handleConnectMicrosoft} disabled={connectingMicrosoft}>
-                {connectingMicrosoft ? (
-                  <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                ) : (
-                  <ExternalLink className="w-4 h-4 mr-1" />
-                )}
-                Connect Microsoft
-              </Button>
+              <p className="text-xs text-muted-foreground">Use the Email (IMAP) card below to connect Outlook with an app password instead.</p>
             )}
           </CardContent>
         </Card>
@@ -679,8 +647,8 @@ function ConnectedAppsContent() {
                   </svg>
                 </div>
                 <div>
-                  <CardTitle className="text-base">Other Email</CardTitle>
-                  <CardDescription>Yahoo, iCloud, corporate (IMAP)</CardDescription>
+                  <CardTitle className="text-base">Email (IMAP)</CardTitle>
+                  <CardDescription>Gmail, Outlook, Yahoo, iCloud, corporate</CardDescription>
                 </div>
               </div>
               {imapStatus?.connected ? (

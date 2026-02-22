@@ -164,6 +164,7 @@ async function getEmailCredentials(
   userId: string
 ): Promise<EmailCredentials | null> {
   const supabase = getSupabaseClient();
+  const uid = userId.slice(0, 8);
 
   // Try Nylas first (one-click OAuth, no app passwords needed)
   const { data: nylasConn } = await supabase
@@ -175,7 +176,7 @@ async function getEmailCredentials(
     .single();
 
   if (nylasConn?.access_token_encrypted) {
-    // Return special type that indicates Nylas should be used
+    console.log(`[INBOX] ${uid} — found Nylas credentials (${nylasConn.account_email})`);
     return {
       type: "nylas",
       creds: {
@@ -198,10 +199,12 @@ async function getEmailCredentials(
     try {
       const parsed = JSON.parse(imapCred.encrypted_data);
       if (parsed.email && parsed.password) {
+        console.log(`[INBOX] ${uid} — found IMAP credentials (${parsed.email}, host: ${parsed.imap_host})`);
         return { type: "imap", creds: parsed as ImapCredentials };
       }
-    } catch {
-      /* fall through */
+      console.log(`[INBOX] ${uid} — IMAP credential found but missing email/password fields`);
+    } catch (e) {
+      console.error(`[INBOX] ${uid} — failed to parse IMAP encrypted_data:`, e);
     }
   }
 
@@ -217,13 +220,15 @@ async function getEmailCredentials(
     try {
       const parsed = JSON.parse(oauthCred.encrypted_data);
       if (parsed.access_token) {
+        console.log(`[INBOX] ${uid} — found Gmail OAuth credentials (${parsed.gmail_address})`);
         return { type: "gmail_oauth", creds: parsed as GmailOAuthTokens };
       }
-    } catch {
-      /* fall through */
+    } catch (e) {
+      console.error(`[INBOX] ${uid} — failed to parse Gmail OAuth encrypted_data:`, e);
     }
   }
 
+  console.log(`[INBOX] ${uid} — no email credentials found (checked Nylas, IMAP, Gmail OAuth)`);
   return null;
 }
 
@@ -241,17 +246,29 @@ async function getUnreadViaImap(
     secure: true,
     auth: { user: creds.email, pass: creds.password },
     logger: false,
+    connectionTimeout: 10_000,
+    greetingTimeout: 5_000,
   });
 
   const messages: EmailMessage[] = [];
 
+  // Wrap IMAP operations in a timeout to prevent hanging
+  const timeoutMs = 15_000;
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`IMAP operation timed out after ${timeoutMs / 1000}s`)), timeoutMs)
+  );
+
   try {
-    await client.connect();
+    await Promise.race([client.connect(), timeoutPromise]);
     const lock = await client.getMailboxLock("INBOX");
 
     try {
       const searchResult = await client.search({ seen: false });
-      if (!searchResult || searchResult.length === 0) return [];
+      if (!searchResult || searchResult.length === 0) {
+        lock.release();
+        await client.logout();
+        return [];
+      }
 
       const seqNums = searchResult.slice(-maxResults);
 
@@ -282,12 +299,14 @@ async function getUnreadViaImap(
 
     await client.logout();
   } catch (err) {
-    console.error("[INBOX] IMAP fetch error:", err);
+    console.error(`[INBOX] IMAP fetch error (host: ${creds.imap_host}, user: ${creds.email}):`, err);
     try {
       await client.logout();
     } catch {
       /* ignore */
     }
+    // Re-throw so callers get a proper error instead of empty results
+    throw err;
   }
 
   return messages;

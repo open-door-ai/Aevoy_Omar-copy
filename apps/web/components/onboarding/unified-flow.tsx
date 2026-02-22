@@ -12,6 +12,7 @@ import { StepTimezone } from "./step-timezone";
 import StepVerification from "./step-verification";
 import { StepLegal } from "./step-legal";
 import StepEmailCalendar from "./step-email-calendar";
+import StepInboxManager from "./step-inbox-manager";
 import StepInterview, { type InterviewData } from "./step-interview";
 import StepTour from "./step-tour";
 import StepMeetIntern from "./step-meet-intern";
@@ -21,7 +22,7 @@ interface UnifiedFlowProps {
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 13;
+const TOTAL_STEPS = 14;
 
 export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) {
   const [step, setStep] = useState(1);
@@ -320,12 +321,30 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepInterview
-                onNext={(interviewData) => {
-                  setData((d) => ({ ...d, interview: interviewData }));
+              <StepInboxManager
+                botName={data.bot_name || "your AI"}
+                onNext={async (inboxData) => {
+                  // Save inbox settings
+                  try {
+                    await fetch("/api/inbox/settings", {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        enabled: inboxData.enabled,
+                        autonomyLevel: inboxData.autonomyLevel,
+                        checkIntervalMinutes: 30,
+                        aiSignatureEnabled: inboxData.aiSignatureEnabled,
+                        aiSignatureText: inboxData.aiSignatureText,
+                        userRules: inboxData.userRules,
+                      }),
+                    });
+                  } catch {
+                    // Non-critical — user can configure later
+                  }
                   goTo(13);
                 }}
                 onBack={() => goTo(11)}
+                onSkip={() => goTo(13)}
               />
             </motion.div>
           )}
@@ -333,6 +352,27 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
           {step === 13 && (
             <motion.div
               key="step-13"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
+              <StepInterview
+                onNext={(interviewData) => {
+                  setData((d) => ({ ...d, interview: interviewData }));
+                  goTo(14);
+                }}
+                onBack={() => goTo(12)}
+              />
+            </motion.div>
+          )}
+
+          {step === 14 && (
+            <motion.div
+              key="step-14"
               custom={direction}
               variants={slideVariants}
               initial="enter"

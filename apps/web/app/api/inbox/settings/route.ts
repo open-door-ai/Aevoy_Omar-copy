@@ -70,11 +70,11 @@ export async function PUT(request: Request) {
     // Derive settings from autonomy level if provided
     const autonomyLevel = body.autonomyLevel ?? 0;
     const derivedSettings = {
-      monitorInbox: autonomyLevel >= 0,
-      deleteSpam: autonomyLevel >= 25,
-      respondToSimple: autonomyLevel >= 50,
-      scheduleMeetings: autonomyLevel >= 50,
-      callForComplex: autonomyLevel >= 75,
+      monitor_inbox: autonomyLevel >= 0,
+      delete_spam: autonomyLevel >= 25,
+      respond_to_simple: autonomyLevel >= 50,
+      schedule_meetings: autonomyLevel >= 50,
+      call_for_complex: autonomyLevel >= 75,
     };
 
     // Validate check interval

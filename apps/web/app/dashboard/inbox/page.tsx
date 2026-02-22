@@ -118,16 +118,30 @@ export default function InboxPage() {
     }
   };
 
+  const [saveError, setSaveError] = useState("");
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
   const saveSettings = async () => {
     setSavingSettings(true);
+    setSaveError("");
+    setSaveSuccess(false);
     try {
-      await fetch("/api/inbox/settings", {
+      const res = await fetch("/api/inbox/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled, autonomyLevel: autonomy, checkIntervalMinutes: checkInterval }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setSaveError(data.error || "Failed to save settings");
+        return;
+      }
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+      await fetchAll();
     } catch (e) {
       console.error(e);
+      setSaveError("Failed to save settings — please try again");
     } finally {
       setSavingSettings(false);
     }
@@ -259,13 +273,18 @@ export default function InboxPage() {
           </div>
         )}
 
-        <button
-          onClick={saveSettings}
-          disabled={savingSettings}
-          className="text-sm font-medium bg-primary text-primary-foreground px-4 py-1.5 rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          {savingSettings ? "Saving…" : "Save settings"}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={saveSettings}
+            disabled={savingSettings}
+            className="text-sm font-medium bg-primary text-primary-foreground px-4 py-1.5 rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {savingSettings ? "Saving…" : saveSuccess ? "✓ Saved" : "Save settings"}
+          </button>
+          {saveError && (
+            <span className="text-xs text-red-500">{saveError}</span>
+          )}
+        </div>
       </div>
 
       {/* Pending Approval Queue */}

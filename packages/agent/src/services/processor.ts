@@ -649,9 +649,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       };
     }
 
-    // 1b. Check credit balance
+    // 1b. Check credit balance (skip if Stripe not configured — users can't top up yet)
     let forceCheapModel = false;
-    if (!shouldSkipPayment() && !isBeta) {
+    const stripeConfigured = !!process.env.STRIPE_SECRET_KEY;
+    if (!shouldSkipPayment() && !isBeta && stripeConfigured) {
       const budget = await checkUserBudget(userId);
       if (budget.overBudget) {
         // Zero credits — block the task entirely
@@ -3134,50 +3135,70 @@ async function executeAction(
         // 1. Try user's personal connected email first (IMAP / Nylas / Gmail OAuth)
         const { isEmailConnected, getUnreadMessages } = await import("./inbox.js");
         const connected = await isEmailConnected(userId);
+        console.log(`[READ-EMAIL] User ${userId.slice(0, 8)} — personal email connected: ${connected}`);
         if (connected) {
-          const emails = await getUnreadMessages(userId, emailLimit || 5);
+          try {
+            const emails = await getUnreadMessages(userId, emailLimit || 5);
+            if (emails.length === 0) {
+              return {
+                action,
+                success: true,
+                result: `No unread emails in your inbox right now.`,
+              };
+            }
+            const summary = emails.map((e, i) =>
+              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
+            ).join('\n---\n');
+            return {
+              action,
+              success: true,
+              result: `Found ${emails.length} unread email(s) in your inbox:\n${summary}`,
+            };
+          } catch (imapErr) {
+            console.error(`[READ-EMAIL] Personal email fetch failed for ${userId.slice(0, 8)}:`, imapErr);
+            return {
+              action,
+              success: false,
+              error: "Could not connect to your email right now — the connection may have timed out. Try again in a moment, or check your email settings in Settings > Connected Apps.",
+            };
+          }
+        }
+
+        // No personal email connected — try @aevoy.com fallback
+        console.log(`[READ-EMAIL] No personal email for ${userId.slice(0, 8)}, trying @aevoy.com fallback`);
+        try {
+          const { fetchRecentEmails } = await import("./inbox-poller.js");
+          const emails = await fetchRecentEmails(
+            `${username}@aevoy.com`,
+            emailLimit || 5,
+            minutes_back || 30
+          );
           if (emails.length === 0) {
             return {
               action,
               success: true,
-              result: `No unread emails in your inbox right now.`,
+              result: `No recent emails found for ${username}@aevoy.com in the last ${minutes_back || 30} minutes. You haven't connected a personal email yet — set it up in Settings > Connected Apps to check Gmail, Outlook, etc.`,
             };
           }
           const summary = emails.map((e, i) =>
-            `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
+            `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.body.substring(0, 500)}`
           ).join('\n---\n');
           return {
             action,
             success: true,
-            result: `Found ${emails.length} unread email(s) in your inbox:\n${summary}`,
+            result: `Found ${emails.length} recent email(s) for ${username}@aevoy.com:\n${summary}`,
           };
-        }
-
-        // 2. Fall back to central @aevoy.com inbox
-        const { fetchRecentEmails } = await import("./inbox-poller.js");
-        const emails = await fetchRecentEmails(
-          `${username}@aevoy.com`,
-          emailLimit || 5,
-          minutes_back || 30
-        );
-        if (emails.length === 0) {
+        } catch (aevoyErr) {
+          console.error(`[READ-EMAIL] @aevoy.com fallback failed:`, aevoyErr);
           return {
             action,
             success: true,
-            result: `No recent emails found for ${username}@aevoy.com in the last ${minutes_back || 30} minutes.`,
+            result: `You haven't connected a personal email yet. Set it up in Settings > Connected Apps so I can check your Gmail, Outlook, Yahoo, or iCloud inbox. In the meantime, people can email you at ${username}@aevoy.com.`,
           };
         }
-        const summary = emails.map((e, i) =>
-          `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.body.substring(0, 500)}`
-        ).join('\n---\n');
-        return {
-          action,
-          success: true,
-          result: `Found ${emails.length} recent email(s) for ${username}@aevoy.com:\n${summary}`,
-        };
       } catch (readErr) {
         console.error(`[READ-EMAIL] Failed:`, readErr);
-        return { action, success: false, error: "Could not check emails right now" };
+        return { action, success: false, error: "Could not check emails right now — please try again" };
       }
     }
 
@@ -3662,6 +3683,30 @@ async function executeAction(
       } catch (callErr) {
         console.error("[ACTION:call_user] Failed:", callErr);
         return { action, success: false, error: "Could not place the call right now" };
+      }
+    }
+
+    case "create_excel":
+    case "create_powerpoint":
+    case "create_word":
+    case "create_pdf":
+    case "screenshot_ocr": {
+      if (!executionEngine) {
+        return { action, success: false, error: `${action.type} requires a browser session — try asking me to browse a website first` };
+      }
+      try {
+        const result = await executionEngine.executeStep({ action: action.type, params: action.params as Record<string, unknown> });
+        const resultData = result.data as Record<string, unknown> | undefined;
+        const fileUrl = resultData?.url as string | undefined;
+        return {
+          action,
+          success: result.success,
+          result: result.success ? (fileUrl || `${action.type} completed`) : undefined,
+          error: result.error,
+        };
+      } catch (docErr) {
+        console.error(`[ACTION:${action.type}] Failed:`, docErr);
+        return { action, success: false, error: `Could not complete ${action.type} right now` };
       }
     }
 
