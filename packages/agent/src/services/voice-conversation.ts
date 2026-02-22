@@ -14,6 +14,7 @@ import { verifyVoicePin } from "./twilio.js";
 import { trackServiceCost } from "./ai.js";
 import { calculateVoiceCost } from "../utils/cost-calculator.js";
 import { loadMemory, saveWorkingMemory, appendDailyLog } from "./memory.js";
+import { sanitizeTaskInput } from "../security/validator.js";
 
 // ---- Types ----
 
@@ -285,6 +286,18 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
         last: true,
       }));
     }
+    return;
+  }
+
+  // Sanitize voice input for prompt injection
+  const sanitized = sanitizeTaskInput("", voicePrompt);
+  if (sanitized.injectionDetected) {
+    console.warn(`[VOICE-WS] ${session.sessionId.slice(0, 8)} injection attempt blocked`);
+    session.ws.send(JSON.stringify({
+      type: "text",
+      token: "I didn't quite catch that. What can I help you with?",
+      last: true,
+    }));
     return;
   }
 

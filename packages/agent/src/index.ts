@@ -244,7 +244,7 @@ function verifyWebhookSecret(provided: string | null | undefined): boolean {
 
 // Twilio signature validation middleware (async for dynamic import)
 async function validateTwilioSignature(req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
-  if (process.env.TEST_MODE === "true") {
+  if (process.env.TEST_MODE === "true" && process.env.NODE_ENV !== "production") {
     next();
     return;
   }
@@ -351,17 +351,13 @@ app.get("/health", async (_req, res) => {
 // ---- Voice diagnostic endpoint (for verifying TwiML generation) ----
 app.get("/debug/voice-twiml", (req, res) => {
   const secret = req.query.secret;
-  if (secret !== process.env.AGENT_WEBHOOK_SECRET) {
+  if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized" });
   }
   const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
   const defaultVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
   res.json({
     conversationRelay: USE_CONVERSATION_RELAY,
-    wsUrl,
-    defaultVoice,
-    agentUrl: process.env.AGENT_URL || "not set",
-    elevenlabsKeySet: !!process.env.ELEVENLABS_API_KEY,
     sampleTwiml: `<ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${defaultVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?" />`,
   });
 });
@@ -373,26 +369,24 @@ app.post("/debug/email-test", async (req, res) => {
     return res.status(401).json({ error: "unauthorized" });
   }
 
-  const { to, from: fromAddr } = req.body;
   const diagnostics: Record<string, unknown> = {
-    resendKeyPresent: !!process.env.RESEND_API_KEY,
-    resendKeyPrefix: process.env.RESEND_API_KEY?.substring(0, 8) || "MISSING",
+    resendConfigured: !!process.env.RESEND_API_KEY,
     testModeEmail: process.env.TEST_MODE === 'true',
     nodeEnv: process.env.NODE_ENV,
   };
 
-  // Actually try to send a test email
+  // Actually try to send a test email (hardcoded recipient only)
   try {
     const { sendResponse: sr } = await import("./services/email.js");
     const sent = await sr({
-      to: to || "ebrahimo@mulgrave.com",
-      from: fromAddr || "sage@aevoy.com",
+      to: "ebrahimo@mulgrave.com",
+      from: "sage@aevoy.com",
       subject: "Railway Email Diagnostic",
       body: "This test email was sent directly from Railway to diagnose email delivery.",
     });
     diagnostics.emailSent = sent;
   } catch (err) {
-    diagnostics.emailError = String(err);
+    diagnostics.emailError = "send_failed";
   }
 
   res.json(diagnostics);
@@ -2099,7 +2093,7 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
     if (!response.ok) {
       const errorData = await response.text();
       console.error(`[PHONE-VERIFY] Twilio error: ${errorData}`);
-      return res.status(502).json({ error: "Failed to initiate call", details: errorData });
+      return res.status(502).json({ error: "Failed to initiate call" });
     }
 
     const callData = await response.json() as { sid: string };

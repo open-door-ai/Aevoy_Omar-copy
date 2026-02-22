@@ -82,7 +82,7 @@ export function sanitizeTaskInput(subject: string, body: string): SanitizeResult
   const combined = `${cleanSubject} ${cleanBody}`;
   for (const pattern of PROMPT_INJECTION_PATTERNS) {
     if (pattern.test(combined)) {
-      console.warn(`[SECURITY] Prompt injection pattern detected: ${pattern.source}`);
+      console.warn(`[SECURITY] Prompt injection pattern detected: pattern index ${PROMPT_INJECTION_PATTERNS.indexOf(pattern)}`);
       return {
         subject: cleanSubject,
         body: cleanBody,
@@ -95,7 +95,7 @@ export function sanitizeTaskInput(subject: string, body: string): SanitizeResult
   // Check for SSRF patterns
   for (const pattern of SSRF_PATTERNS) {
     if (pattern.test(cleanBody)) {
-      console.warn(`[SECURITY] SSRF pattern detected: ${pattern.source}`);
+      console.warn(`[SECURITY] SSRF pattern detected: pattern index ${SSRF_PATTERNS.indexOf(pattern)}`);
       return {
         subject: cleanSubject,
         body: cleanBody,

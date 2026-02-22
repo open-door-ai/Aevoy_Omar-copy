@@ -2,7 +2,8 @@
  * Autonomous Workflow Integration
  *
  * Detects complex tasks that require autonomous planning and execution.
- * Integrates AGI-level executor for never-fail, multi-threaded execution.
+ * Decomposes vague goals into concrete sub-tasks via Groq, then delegates
+ * each sub-task to the proven processTask() pipeline.
  */
 
 import {
@@ -12,8 +13,7 @@ import {
 } from "./autonomous-workflow.js";
 import { sendResponse } from "./email.js";
 import { getSupabaseClient } from "../utils/supabase.js";
-import { createRecursiveAGI } from "./agi-recursive.js";
-import { MultiUserBrowserService } from "./multi-user-browser.js";
+import { processTask } from "./processor.js";
 import type { TaskRequest, TaskResult } from "../types/index.js";
 
 /**
@@ -67,8 +67,83 @@ export async function requiresAutonomousPlanning(
 }
 
 /**
+ * Decompose a vague goal into 3-5 concrete, immediately actionable sub-tasks.
+ * Each sub-task has a specific subject + body that processTask() can execute.
+ */
+async function decomposeGoalIntoSubTasks(
+  subject: string,
+  body: string,
+  userId: string
+): Promise<Array<{ subject: string; body: string }>> {
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        max_tokens: 1000,
+        temperature: 0.3,
+        messages: [
+          {
+            role: "system",
+            content: `You decompose a high-level goal into 3-5 concrete, immediately actionable sub-tasks that an AI agent can execute sequentially.
+
+Each sub-task must be a SPECIFIC, SINGLE action — not another vague goal. Include exact search queries, URLs, email text, etc.
+
+Reply with ONLY a JSON array, no markdown, no explanation:
+[
+  {"subject": "Search for web design agencies in Vancouver", "body": "Search for 'web design agencies Vancouver hiring freelancers 2026' and extract company names, websites, and contact emails from the results."},
+  {"subject": "Research top 3 prospects", "body": "Visit the websites of the top 3 companies found and note what services they offer, recent projects, and any job/freelancer pages."},
+  {"subject": "Send outreach email to first prospect", "body": "Send a personalized cold email to the first prospect referencing their recent work. Keep it to 3 sentences with a clear ask."}
+]
+
+Rules:
+- Each task must be independently executable (search, browse, email, etc.)
+- Include specific search queries, not generic ones
+- If the goal involves outreach, the first tasks should be research, later tasks should be action
+- Never include tasks like "review results" or "analyze" — the agent does that automatically
+- Max 5 sub-tasks`,
+          },
+          {
+            role: "user",
+            content: `Goal: ${subject}\n${body || ""}`.trim().substring(0, 800),
+          },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      console.error(`[AGI] Groq decomposition failed: ${res.status}`);
+      // Fallback: treat the whole goal as a single task
+      return [{ subject, body: body || subject }];
+    }
+
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
+
+    // Parse JSON (handle potential markdown wrapping)
+    const jsonStr = content.replace(/^```json?\s*/i, "").replace(/\s*```$/, "").trim();
+    const tasks = JSON.parse(jsonStr) as Array<{ subject: string; body: string }>;
+
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      return [{ subject, body: body || subject }];
+    }
+
+    console.log(`[AGI] Decomposed goal into ${tasks.length} sub-tasks`);
+    return tasks.slice(0, 5); // Cap at 5
+  } catch (err) {
+    console.error("[AGI] Goal decomposition error:", err);
+    // Fallback: treat the whole goal as a single task
+    return [{ subject, body: body || subject }];
+  }
+}
+
+/**
  * Handle autonomous workflow execution from start to finish.
- * Routes to AGI executor for true AGI-level tasks, or standard workflow for complex multi-step tasks.
+ * Decomposes the goal into sub-tasks and delegates each to processTask().
  */
 export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskResult> {
   const { userId, username, from, subject, body } = task;
@@ -76,100 +151,129 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
 
   console.log(`[AGI] Starting autonomous workflow for user ${username}`);
 
-  // All tasks routed here use recursive AGI execution (multi-goal, self-reflective)
-  {
-    console.log('[RECURSIVE-AGI] Starting recursive execution');
-
-    try {
-      // Create or update task record
-      if (!taskId) {
-        const { data: taskRecord } = await getSupabaseClient()
-          .from("tasks")
-          .insert({
-            user_id: userId,
-            status: "processing",
-            email_subject: subject,
-            input_text: body,
-            type: "agi_recursive",
-            started_at: new Date().toISOString(),
-          })
-          .select()
-          .single();
-
-        taskId = taskRecord?.id;
-        if (!taskId) {
-          throw new Error("Failed to create task record");
-        }
-      }
-
-      // Get user's email for notifications
-      const { data: profile } = await getSupabaseClient()
-        .from("profiles")
-        .select("email")
-        .eq("id", userId)
+  try {
+    // Create task record if needed
+    if (!taskId) {
+      const { data: taskRecord } = await getSupabaseClient()
+        .from("tasks")
+        .insert({
+          user_id: userId,
+          status: "processing",
+          email_subject: subject,
+          input_text: body,
+          type: "agi_autonomous",
+          started_at: new Date().toISOString(),
+        })
+        .select()
         .single();
 
-      const userEmail = profile?.email || from;
-
-      // Initialize browser (may be VPS or local Playwright)
-      const browser = new MultiUserBrowserService(userId);
-      const page = await browser.init();
-
-      // Create RECURSIVE AGI executor (never stops, generates own resources)
-      const executor = createRecursiveAGI(userId, userEmail, browser);
-
-      // Execute the goal (will run until achieved, no matter how long)
-      const result = await executor.execute(`${subject} ${body}`);
-
-      // Update task record
-      await getSupabaseClient()
-        .from("tasks")
-        .update({
-          status: result.success ? "completed" : "failed",
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", taskId);
-
-      // Send results to user
-      const resultMessage = result.success
-        ? `Mission accomplished! 🎯\n\n${result.completed}/${result.totalTasks} tasks completed\n\n${result.results.map((r: any) => `✅ ${r.goal}\n   ${JSON.stringify(r.results)}`).join('\n\n')}`
-        : `I hit some challenges:\n\n${result.errors.map((e: any) => `❌ ${e.goal}: ${e.error}`).join('\n\n')}\n\nCompleted: ${result.completed}/${result.totalTasks} tasks`;
-
-      await sendResponse({
-        to: userEmail,
-        from: `${username}@aevoy.com`,
-        subject: `Re: ${subject}`,
-        body: resultMessage,
-      });
-
-      // Clean up browser
-      await browser.close();
-
-      return {
-        taskId: taskId || "",
-        success: result.success,
-        response: resultMessage,
-        actions: [],
-      };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error('[AGI] Executor error:', errorMsg);
-
-      await sendResponse({
-        to: from,
-        from: `${username}@aevoy.com`,
-        subject: `Re: ${subject}`,
-        body: "I ran into an issue, but I'm learning from it. Let me try a different approach — send your request again.",
-      });
-
-      return {
-        taskId: taskId || "",
-        success: false,
-        response: "",
-        actions: [],
-        error: errorMsg,
-      };
+      taskId = taskRecord?.id;
+      if (!taskId) {
+        throw new Error("Failed to create task record");
+      }
     }
+
+    // Get user's email for notifications
+    const { data: profile } = await getSupabaseClient()
+      .from("profiles")
+      .select("email")
+      .eq("id", userId)
+      .single();
+
+    const userEmail = profile?.email || from;
+
+    // Decompose the vague goal into concrete sub-tasks
+    const subTasks = await decomposeGoalIntoSubTasks(subject, body || "", userId);
+    console.log(`[AGI] Executing ${subTasks.length} sub-tasks for goal: "${subject.slice(0, 60)}"`);
+
+    // Execute each sub-task through the proven processTask pipeline
+    const results: Array<{ subject: string; success: boolean; response: string }> = [];
+
+    for (const [i, sub] of subTasks.entries()) {
+      console.log(`[AGI] Sub-task ${i + 1}/${subTasks.length}: ${sub.subject.slice(0, 60)}`);
+
+      try {
+        const result = await processTask({
+          userId,
+          username,
+          from,
+          subject: sub.subject,
+          body: sub.body,
+          inputChannel: task.inputChannel || "web",
+        });
+
+        results.push({
+          subject: sub.subject,
+          success: result.success,
+          response: result.response,
+        });
+
+        console.log(`[AGI] Sub-task ${i + 1} ${result.success ? "completed" : "failed"}`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[AGI] Sub-task ${i + 1} error:`, errMsg);
+        results.push({
+          subject: sub.subject,
+          success: false,
+          response: `Error: ${errMsg}`,
+        });
+      }
+    }
+
+    // Compile results
+    const successCount = results.filter(r => r.success).length;
+    const allSucceeded = successCount === results.length;
+
+    // Build a clean summary from all sub-task responses
+    const summaryParts = results.map((r, i) => {
+      const status = r.success ? "Done" : "Issue";
+      const responseSnippet = r.response.slice(0, 300);
+      return `${i + 1}. [${status}] ${r.subject}\n${responseSnippet}`;
+    });
+
+    const resultMessage = `Here's what I did for "${subject}":\n\n${summaryParts.join("\n\n")}\n\n${successCount}/${results.length} steps completed.`;
+
+    // Update task record
+    await getSupabaseClient()
+      .from("tasks")
+      .update({
+        status: allSucceeded ? "completed" : "failed",
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", taskId);
+
+    // Email results to user
+    await sendResponse({
+      to: userEmail,
+      from: `${username}@aevoy.com`,
+      subject: `Re: ${subject}`,
+      body: resultMessage,
+    });
+
+    return {
+      taskId: taskId || "",
+      success: allSucceeded,
+      response: resultMessage,
+      actions: [],
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('[AGI] Workflow error:', errorMsg);
+
+    await sendResponse({
+      to: from,
+      from: `${username}@aevoy.com`,
+      subject: `Re: ${subject}`,
+      body: "I ran into an issue, but I'm learning from it. Let me try a different approach — send your request again.",
+    });
+
+    return {
+      taskId: taskId || "",
+      success: false,
+      response: "",
+      actions: [],
+      error: errorMsg,
+    };
   }
 }
 
