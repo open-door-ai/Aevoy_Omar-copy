@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -12,7 +12,6 @@ import {
   Gift,
   RefreshCw,
   AlertCircle,
-  CreditCard,
   Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -45,6 +44,15 @@ interface BalanceData {
   stripe_configured: boolean;
 }
 
+interface MonthlySummary {
+  totalCalls: number;
+  totalCostUsd: number;
+}
+
+interface DailyCosts {
+  [date: string]: number;
+}
+
 const TOPUP_PRESETS = [
   { label: "$5", cents: 500 },
   { label: "$10", cents: 1000 },
@@ -52,13 +60,21 @@ const TOPUP_PRESETS = [
   { label: "$50", cents: 5000 },
 ];
 
+function formatCost(usd: number): string {
+  if (usd === 0) return "$0.00";
+  if (usd < 0.01) return "<$0.01";
+  return `$${usd.toFixed(2)}`;
+}
+
 export default function BillingPage() {
   const [data, setData] = useState<BalanceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [topupLoading, setTopupLoading] = useState(false);
   const [autoReloadEnabled, setAutoReloadEnabled] = useState(false);
+  const [monthlySummary, setMonthlySummary] = useState<MonthlySummary | null>(null);
+  const [dailyCosts, setDailyCosts] = useState<DailyCosts>({});
 
-  async function fetchBalance() {
+  const fetchBalance = useCallback(async () => {
     try {
       const res = await fetch("/api/billing/balance");
       if (res.ok) {
@@ -71,13 +87,28 @@ export default function BillingPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  const fetchSpending = useCallback(async () => {
+    try {
+      const month = new Date().toISOString().slice(0, 7);
+      const res = await fetch(`/api/cost-analytics?month=${month}`);
+      if (res.ok) {
+        const json = await res.json();
+        setMonthlySummary(json.summary);
+        setDailyCosts(json.dailyCosts || {});
+      }
+    } catch {
+      // Spending chart is optional — don't block the page
+    }
+  }, []);
 
   useEffect(() => {
     fetchBalance();
+    fetchSpending();
     const interval = setInterval(fetchBalance, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchBalance, fetchSpending]);
 
   async function handleTopup(amountCents: number) {
     setTopupLoading(true);
@@ -95,7 +126,6 @@ export default function BillingPage() {
       }
 
       if (json.client_secret) {
-        // Stripe checkout will be implemented when Stripe key arrives
         alert(`Stripe checkout ready. Client secret: ${json.client_secret.slice(0, 20)}...`);
       }
     } catch (error) {
@@ -141,14 +171,14 @@ export default function BillingPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="text-center py-12 text-gray-500">
+      <div className="text-center py-12 text-muted-foreground">
         Failed to load billing data.
       </div>
     );
@@ -162,76 +192,69 @@ export default function BillingPage() {
       ? "text-yellow-600 dark:text-yellow-400"
       : "text-red-600 dark:text-red-400";
 
+  // Daily spending chart data (last 14 days)
+  const dailyEntries = Object.entries(dailyCosts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-14);
+  const maxDaily = dailyEntries.length > 0
+    ? Math.max(...dailyEntries.map(([, v]) => v), 0.001)
+    : 0.001;
+
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold">Billing</h1>
 
       {/* Balance + Top Up */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Current Balance */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <DollarSign className="h-5 w-5" />
-              Credit Balance
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className={`text-4xl font-bold ${balanceColor}`}>
+          <CardContent className="pt-6 space-y-4">
+            <p className="text-sm text-muted-foreground">Credit Balance</p>
+            <div className={`text-4xl font-bold tracking-tight ${balanceColor}`}>
               ${data.balance_usd}
             </div>
 
             {balanceCents <= 0 && (
               <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-800">
-                <AlertCircle className="h-5 w-5 text-red-500" />
+                <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
                 <p className="text-sm text-red-600 dark:text-red-400">
-                  No credits remaining. Top up to continue using Aevoy.
+                  No credits remaining. Top up to continue.
                 </p>
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-gray-200 dark:border-gray-700">
+            <div className="flex gap-6 text-sm text-muted-foreground">
               <div>
-                <p className="text-xs text-gray-500">Lifetime top-ups</p>
-                <p className="text-sm font-medium">${data.lifetime_topup_usd}</p>
+                <span className="text-foreground font-medium">${data.lifetime_topup_usd}</span> added
               </div>
               <div>
-                <p className="text-xs text-gray-500">Lifetime spent</p>
-                <p className="text-sm font-medium">${data.lifetime_spent_usd}</p>
+                <span className="text-foreground font-medium">${data.lifetime_spent_usd}</span> spent
               </div>
             </div>
 
             {data.weekly_summary.task_count > 0 && (
-              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <p className="text-xs text-gray-500 mb-1">This week</p>
-                <p className="text-sm">
-                  {data.weekly_summary.task_count} tasks, ${data.weekly_summary.spent_usd} spent
-                </p>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                This week: {data.weekly_summary.task_count} tasks, ${data.weekly_summary.spent_usd} spent
+              </p>
             )}
           </CardContent>
         </Card>
 
         {/* Top Up */}
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Plus className="h-5 w-5" />
-              Top Up
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+          <CardContent className="pt-6 space-y-4">
+            <p className="text-sm text-muted-foreground">Add Credits</p>
+            <div className="grid grid-cols-2 gap-2">
               {TOPUP_PRESETS.map((preset) => (
                 <Button
                   key={preset.cents}
                   variant="outline"
-                  className="h-14 text-lg font-semibold"
+                  className="h-12 text-lg font-semibold"
                   onClick={() => handleTopup(preset.cents)}
                   disabled={topupLoading}
                 >
                   {topupLoading ? (
-                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     preset.label
                   )}
@@ -240,19 +263,16 @@ export default function BillingPage() {
             </div>
 
             {!data.stripe_configured && (
-              <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                <p className="text-sm text-blue-600 dark:text-blue-400">
-                  Payment processing coming soon. Your free credits are active.
-                </p>
-              </div>
+              <p className="text-xs text-muted-foreground text-center">
+                Payment processing coming soon. Free credits are active.
+              </p>
             )}
 
-            {/* Auto-Reload */}
-            <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+            <div className="flex items-center justify-between pt-2 border-t border-border">
               <div>
                 <p className="text-sm font-medium">Auto-Reload</p>
-                <p className="text-xs text-gray-500">
-                  Add ${(data.auto_reload.amount_cents / 100).toFixed(0)} when balance drops below ${(data.auto_reload.threshold_cents / 100).toFixed(0)}
+                <p className="text-xs text-muted-foreground">
+                  Add ${(data.auto_reload.amount_cents / 100).toFixed(0)} when below ${(data.auto_reload.threshold_cents / 100).toFixed(0)}
                 </p>
               </div>
               <Switch
@@ -265,73 +285,97 @@ export default function BillingPage() {
         </Card>
       </div>
 
-      {/* Pricing Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CreditCard className="h-5 w-5" />
-            Pricing
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-center">
-              <p className="text-lg font-bold">1-5c</p>
-              <p className="text-xs text-gray-500">AI tasks</p>
+      {/* Monthly Spending */}
+      {(dailyEntries.length > 0 || monthlySummary) && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">This Month</CardTitle>
+              {monthlySummary && (
+                <span className="text-sm text-muted-foreground">
+                  {formatCost(monthlySummary.totalCostUsd)} · {monthlySummary.totalCalls} tasks
+                </span>
+              )}
             </div>
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-center">
-              <p className="text-lg font-bold">~1c</p>
-              <p className="text-xs text-gray-500">Text messages</p>
-            </div>
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-center">
-              <p className="text-lg font-bold">~1c</p>
-              <p className="text-xs text-gray-500">Per minute (voice)</p>
-            </div>
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg text-center">
-              <p className="text-lg font-bold">3-10c</p>
-              <p className="text-xs text-gray-500">Web research</p>
-            </div>
-          </div>
-          <p className="text-xs text-gray-500 mt-3 text-center">
-            20% Aevoy platform fee included in all prices
-          </p>
-        </CardContent>
-      </Card>
+          </CardHeader>
+          {dailyEntries.length > 0 && (
+            <CardContent>
+              <div className="flex items-end gap-1 h-20">
+                {dailyEntries.map(([day, cost]) => {
+                  const heightPct = (cost / maxDaily) * 100;
+                  const dayNum = day.slice(8);
+                  return (
+                    <div
+                      key={day}
+                      className="flex-1 flex flex-col items-center gap-1 group relative"
+                    >
+                      <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-foreground text-background text-xs px-1.5 py-0.5 rounded whitespace-nowrap pointer-events-none z-10">
+                        {formatCost(cost)}
+                      </div>
+                      <div
+                        className="w-full bg-primary/70 hover:bg-primary rounded-t transition-colors"
+                        style={{ height: `${Math.max(heightPct, 3)}%` }}
+                      />
+                      <span className="text-[9px] text-muted-foreground">
+                        {dayNum}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
 
-      {/* Transaction History */}
+      {/* Recent Activity */}
       <Card>
-        <CardHeader>
-          <CardTitle>Transaction History</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Recent Activity</CardTitle>
         </CardHeader>
         <CardContent>
           {data.transactions.length === 0 ? (
-            <p className="text-center text-gray-500 py-8">
-              No transactions yet.
+            <p className="text-center text-muted-foreground py-6 text-sm">
+              No activity yet.
             </p>
           ) : (
-            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+            <div className="space-y-1 max-h-[400px] overflow-y-auto">
               {data.transactions.map((tx) => (
                 <div
                   key={tx.id}
-                  className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800"
+                  className="flex items-center justify-between py-2.5 px-2 rounded-lg hover:bg-muted/50 transition-colors"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
                     {getTransactionIcon(tx.type)}
-                    <div>
-                      <p className="text-sm">
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">
                         {tx.description || tx.type}
                       </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(tx.created_at).toLocaleDateString()} {new Date(tx.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(tx.created_at).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        })}{" "}
+                        {new Date(tx.created_at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
                       </p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className={`text-sm font-medium ${tx.amount_cents >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                      {tx.amount_cents >= 0 ? '+' : ''}${(tx.amount_cents / 100).toFixed(2)}
+                  <div className="text-right shrink-0 ml-3">
+                    <p
+                      className={`text-sm font-medium tabular-nums ${
+                        tx.amount_cents >= 0
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}
+                    >
+                      {tx.amount_cents >= 0 ? "+" : ""}
+                      ${(tx.amount_cents / 100).toFixed(2)}
                     </p>
-                    <p className="text-xs text-gray-500">
-                      ${(tx.balance_after_cents / 100).toFixed(2)}
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      bal ${(tx.balance_after_cents / 100).toFixed(2)}
                     </p>
                   </div>
                 </div>
@@ -340,6 +384,11 @@ export default function BillingPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Simple pricing note */}
+      <p className="text-xs text-center text-muted-foreground pb-4">
+        AI tasks 1-5¢ · Texts ~1¢ · Voice ~1¢/min · Web research 3-10¢ · 20% platform fee included
+      </p>
     </div>
   );
 }

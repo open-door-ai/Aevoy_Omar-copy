@@ -2509,10 +2509,10 @@ export default function SettingsPage() {
               {/* Cost Analytics link */}
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <BarChart2 className="w-4 h-4" />
-                <Link href="/dashboard/cost-analytics" className="text-primary hover:underline">
-                  View Cost Analytics →
+                <Link href="/dashboard/billing" className="text-primary hover:underline">
+                  View Billing →
                 </Link>
-                <span>to see per-model spend and exact token counts</span>
+                <span>to see spending and credit balance</span>
               </div>
 
               {/* Save */}

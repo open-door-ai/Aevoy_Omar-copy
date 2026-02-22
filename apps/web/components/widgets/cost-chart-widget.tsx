@@ -70,7 +70,7 @@ export function CostChartWidget() {
                 </div>
               ))}
             </div>
-            <Link href="/dashboard/cost-analytics" className="text-xs text-primary hover:underline block">Full breakdown →</Link>
+            <Link href="/dashboard/billing" className="text-xs text-primary hover:underline block">Full breakdown →</Link>
           </div>
         )}
       </CardContent>

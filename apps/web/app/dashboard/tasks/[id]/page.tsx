@@ -568,8 +568,8 @@ export default function TaskDetailPage() {
 
                     <p className="text-xs text-muted-foreground">
                       Token counts are exact values from API responses. Rates last verified Feb 2026.{' '}
-                      <a href="/dashboard/cost-analytics" className="text-primary hover:underline">
-                        View full cost analytics →
+                      <a href="/dashboard/billing" className="text-primary hover:underline">
+                        View billing →
                       </a>
                     </p>
                   </>

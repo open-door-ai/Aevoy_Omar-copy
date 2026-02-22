@@ -74,7 +74,7 @@ export function BudgetWidget() {
       : "";
 
   return (
-    <Link href="/billing">
+    <Link href="/dashboard/billing">
       <Card className={`cursor-pointer hover:shadow-md transition-shadow ${borderColor}`}>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between text-sm">
