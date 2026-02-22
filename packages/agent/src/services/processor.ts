@@ -1632,6 +1632,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
       if (isTaskComplete) break;
 
+      // DIRECT RESULT INJECTION: For data-retrieval actions (read_email, check_calendar, analyze_health_data),
+      // inject the result directly into the response and skip the expensive re-prompt cycle.
+      // These actions return well-formatted data — no AI synthesis needed.
+      const directResultAction = iterationResults.find(r =>
+        r.success && r.result && typeof r.result === 'string' && r.result.length > 20 &&
+        ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type)
+      );
+      if (directResultAction) {
+        console.log(`[ITERATE] Direct result injection for ${directResultAction.action.type} — skipping re-prompt`);
+        aiResponse.content = directResultAction.result as string;
+        isTaskComplete = true;
+        aiSignaledComplete = true;
+        break;
+      }
+
       // Build results summary for the next AI iteration
       const successfulActions = iterationResults.filter(r => r.success);
       const failedActions = iterationResults.filter(r => !r.success);
@@ -1672,8 +1687,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const resultsSummary = iterationResults.map((r, i) => {
         const actionDesc = `${r.action.type}(${Object.values(r.action.params).map(v => typeof v === 'string' ? v.substring(0, 60) : v).join(', ')})`;
         if (r.success) {
-          // Give search results much more space so AI can see actual content
-          const limit = r.action.type === 'search' ? 2500 : 400;
+          // Give search/email results much more space so AI can see actual content
+          const limit = ['search', 'read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) ? 3000 : 400;
           const resultStr = typeof r.result === 'string' ? r.result.substring(0, limit) : JSON.stringify(r.result).substring(0, limit);
           return `  ${i + 1}. ${actionDesc} → SUCCESS:\n${resultStr}`;
         } else {
@@ -1955,7 +1970,13 @@ OBSERVE the current page state above, then decide what to do next:
     // 7d. RESPONSE QUALITY GATE: Detect plan-like/narration responses and re-prompt for concrete answer
     // Examples of BAD final responses: "I'll search for...", "Let me try...", "What I can do next..."
     // These are plans/narrations, not answers. The user expects an actual result.
-    if (aiResponse.content) {
+    // SKIP quality gate for direct-injected results (read_email, check_calendar, etc.) — they're raw data, not AI narration
+    const hasDirectResultData = actionResults.some(r =>
+      r.success && r.result && typeof r.result === 'string' &&
+      ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
+      aiResponse.content === r.result
+    );
+    if (aiResponse.content && !hasDirectResultData) {
       const responseLC = aiResponse.content.toLowerCase();
       const isPlanLike = (
         // Future-tense promises at the end of the response (still planning to do something)
