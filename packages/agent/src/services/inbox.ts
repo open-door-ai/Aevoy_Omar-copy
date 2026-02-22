@@ -275,9 +275,36 @@ async function getUnreadViaImap(
       for await (const msg of client.fetch(seqNums, {
         envelope: true,
         uid: true,
+        bodyStructure: true,
+        source: { maxLength: 4096 }, // Fetch first 4KB of raw message for snippet extraction
       })) {
         const env = msg.envelope;
         if (!env) continue;
+
+        // Extract text snippet from raw message source
+        let snippet = "";
+        if (msg.source) {
+          try {
+            const rawText = msg.source.toString("utf-8");
+            // Find the plain text body after headers (double newline separates headers from body)
+            const bodyStart = rawText.indexOf("\r\n\r\n");
+            if (bodyStart > -1) {
+              let bodyText = rawText.substring(bodyStart + 4);
+              // Strip HTML tags if present
+              bodyText = bodyText.replace(/<[^>]*>/g, " ");
+              // Decode common MIME encoding artifacts
+              bodyText = bodyText.replace(/=\r?\n/g, ""); // quoted-printable soft line breaks
+              bodyText = bodyText.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) =>
+                String.fromCharCode(parseInt(hex, 16))
+              );
+              // Clean up whitespace
+              snippet = bodyText.replace(/\s+/g, " ").trim().substring(0, 500);
+            }
+          } catch {
+            // Non-critical — snippet stays empty
+          }
+        }
+
         messages.push({
           id: String(msg.uid),
           threadId: env.messageId || String(msg.uid),
@@ -288,7 +315,7 @@ async function getUnreadViaImap(
             ? `${env.to[0].name || ""} <${env.to[0].address || ""}>`
             : "",
           subject: env.subject || "(no subject)",
-          snippet: "",
+          snippet,
           date: env.date?.toISOString() || new Date().toISOString(),
           isUnread: true,
         });

@@ -248,6 +248,42 @@ export async function POST(request: Request) {
       provider: provider.name,
     };
 
+    // Test IMAP connection before saving — verify the app password actually works
+    try {
+      const { ImapFlow } = await import("imapflow");
+      const testClient = new ImapFlow({
+        host: provider.imap_host,
+        port: provider.imap_port,
+        secure: true,
+        auth: { user: email, pass: password },
+        logger: false,
+        connectionTimeout: 10_000,
+        greetingTimeout: 5_000,
+      });
+      await testClient.connect();
+      await testClient.logout();
+    } catch (imapErr: unknown) {
+      const errMsg = imapErr instanceof Error ? imapErr.message : String(imapErr);
+      console.error(`[EMAIL-CONNECT] IMAP test failed for ${email}:`, errMsg);
+      // Give specific error messages based on the failure type
+      if (errMsg.includes("AUTHENTICATIONFAILED") || errMsg.includes("Invalid credentials") || errMsg.includes("LOGIN")) {
+        return NextResponse.json(
+          { error: "Invalid app password. Make sure you're using an App Password (not your regular password). Check the steps above." },
+          { status: 400 }
+        );
+      }
+      if (errMsg.includes("timeout") || errMsg.includes("ETIMEDOUT") || errMsg.includes("ECONNREFUSED")) {
+        return NextResponse.json(
+          { error: "Could not reach email server. Please check your internet connection and try again." },
+          { status: 400 }
+        );
+      }
+      return NextResponse.json(
+        { error: `Could not connect to ${provider.name}: ${errMsg.substring(0, 100)}` },
+        { status: 400 }
+      );
+    }
+
     // Delete existing then insert (avoids upsert constraint issues)
     await supabase
       .from("user_credentials")
