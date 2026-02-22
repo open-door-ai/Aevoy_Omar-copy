@@ -143,7 +143,6 @@ export default function SkillsMarketplacePage() {
   };
 
   const installSkill = async (skillId: string) => {
-    console.log('[SKILLS-UI] Installing skill:', skillId);
     setInstalling((prev) => new Set(prev).add(skillId));
 
     try {
@@ -161,7 +160,6 @@ export default function SkillsMarketplacePage() {
       }
 
       const result = await response.json();
-      console.log('[SKILLS-UI] Skill installed:', result);
 
       setSkills((prevSkills) =>
         prevSkills.map((skill) =>

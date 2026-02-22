@@ -65,16 +65,26 @@ export default function TaskQueuePage() {
 
   useEffect(() => {
     fetchTasks();
-    // Poll every 5 seconds for active queue
-    const interval = setInterval(fetchTasks, 5000);
+    // Poll every 5 seconds for active queue, but only when tab is visible
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchTasks();
+      }
+    }, 5000);
     return () => clearInterval(interval);
   }, [fetchTasks]);
 
   const handleCancel = async (taskId: string) => {
     setCancellingId(taskId);
+    // Optimistic update
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
     try {
-      // Optimistic update
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'cancelled' }),
+      });
+      if (!response.ok) throw new Error('Cancel failed');
       toast.success('Task cancelled');
     } catch {
       toast.error('Failed to cancel task');

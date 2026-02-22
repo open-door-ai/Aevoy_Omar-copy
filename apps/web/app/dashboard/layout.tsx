@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -49,6 +49,14 @@ export default function DashboardLayout({
   const [signingOut, setSigningOut] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { theme, setTheme, resolvedTheme } = useTheme();
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && mobileOpen) setMobileOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [mobileOpen]);
 
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -144,8 +152,14 @@ export default function DashboardLayout({
           <div
             className="absolute inset-0 bg-black/20 backdrop-blur-sm"
             onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
           />
-          <div className="absolute left-0 top-0 bottom-0 w-64 bg-card shadow-xl flex flex-col animate-in slide-in-from-left duration-200">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation menu"
+            className="absolute left-0 top-0 bottom-0 w-64 bg-card shadow-xl flex flex-col animate-in slide-in-from-left duration-200"
+          >
             <NavContent />
           </div>
         </div>

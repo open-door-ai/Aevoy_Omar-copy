@@ -770,7 +770,7 @@ function ConnectedAppsContent() {
                     {imapProvider === 'gmail' && (<>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
-                        <span className="text-muted-foreground">Sign in to your Google Account → go to <a href="https://myaccount.google.com/security" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Security settings</a></span>
+                        <span className="text-muted-foreground">Sign in to your Google Account → go to <a href="https://myaccount.google.com/security" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Security settings</a></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
@@ -778,7 +778,7 @@ function ConnectedAppsContent() {
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
-                        <span className="text-muted-foreground">Go to <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">App Passwords</a> (search "App Passwords" in your account)</span>
+                        <span className="text-muted-foreground">Go to <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">App Passwords</a> (search "App Passwords" in your account)</span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
@@ -792,7 +792,7 @@ function ConnectedAppsContent() {
                     {imapProvider === 'outlook' && (<>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
-                        <span className="text-muted-foreground">Sign in at <a href="https://account.microsoft.com/security" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">account.microsoft.com/security</a></span>
+                        <span className="text-muted-foreground">Sign in at <a href="https://account.microsoft.com/security" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">account.microsoft.com/security</a></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
@@ -800,7 +800,7 @@ function ConnectedAppsContent() {
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
-                        <span className="text-muted-foreground">Scroll to <strong className="text-foreground">App passwords</strong> → click <a href="https://account.live.com/proofs/AppPassword" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Create a new app password</a></span>
+                        <span className="text-muted-foreground">Scroll to <strong className="text-foreground">App passwords</strong> → click <a href="https://account.live.com/proofs/AppPassword" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Create a new app password</a></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
@@ -810,11 +810,11 @@ function ConnectedAppsContent() {
                     {imapProvider === 'yahoo' && (<>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
-                        <span className="text-muted-foreground">Sign in at <a href="https://login.yahoo.com" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Yahoo Mail</a> → click your name → <strong className="text-foreground">Account Info</strong></span>
+                        <span className="text-muted-foreground">Sign in at <a href="https://login.yahoo.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Yahoo Mail</a> → click your name → <strong className="text-foreground">Account Info</strong></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
-                        <span className="text-muted-foreground">Go to <a href="https://login.yahoo.com/account/security" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">Account Security</a> → turn on <strong className="text-foreground">Two-step verification</strong></span>
+                        <span className="text-muted-foreground">Go to <a href="https://login.yahoo.com/account/security" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Account Security</a> → turn on <strong className="text-foreground">Two-step verification</strong></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
@@ -828,7 +828,7 @@ function ConnectedAppsContent() {
                     {imapProvider === 'icloud' && (<>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
-                        <span className="text-muted-foreground">Sign in at <a href="https://appleid.apple.com" target="_blank" rel="noopener" className="text-primary underline underline-offset-2">appleid.apple.com</a></span>
+                        <span className="text-muted-foreground">Sign in at <a href="https://appleid.apple.com" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">appleid.apple.com</a></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
