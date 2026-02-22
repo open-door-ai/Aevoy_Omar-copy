@@ -8,6 +8,13 @@ import { useRouter } from 'next/navigation';
 // INTRO SEQUENCE COMPONENT
 // ============================================
 const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
+  // Respect prefers-reduced-motion — skip intro entirely
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      onComplete();
+    }
+  }, [onComplete]);
+
   const [phase, setPhase] = useState(0);
   // Phase 0: Black screen
   // Phase 1: Typing "Introducing"
@@ -3043,9 +3050,9 @@ export default function AevoyLanding() {
               <div>
                 <h4 className="text-white font-medium mb-4 text-sm">Company</h4>
                 <ul className="space-y-3 text-sm">
-                  <li><a href="#" className="hover:text-white transition-colors">About</a></li>
-                  <li><a href="#" className="hover:text-white transition-colors">Privacy</a></li>
-                  <li><a href="#" className="hover:text-white transition-colors">Terms</a></li>
+                  <li><a href="/how-it-works" className="hover:text-white transition-colors">About</a></li>
+                  <li><Link href="/legal/privacy" className="hover:text-white transition-colors">Privacy</Link></li>
+                  <li><Link href="/legal/terms" className="hover:text-white transition-colors">Terms</Link></li>
                 </ul>
               </div>
             </div>

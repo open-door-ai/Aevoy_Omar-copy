@@ -131,6 +131,7 @@ export default function DashboardLayout({
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
             className="p-2.5 rounded-lg hover:bg-accent transition-colors text-foreground"
+            aria-label={mobileOpen ? "Close menu" : "Open menu"}
           >
             {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>

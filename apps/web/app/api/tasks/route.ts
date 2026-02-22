@@ -24,6 +24,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (subject.length > 500 || taskBody.length > 50000) {
+      return NextResponse.json(
+        { error: "bad_request", message: "Input too long" },
+        { status: 400 }
+      );
+    }
+
     // Look up user profile for username
     const { data: profile } = await supabase
       .from("profiles")

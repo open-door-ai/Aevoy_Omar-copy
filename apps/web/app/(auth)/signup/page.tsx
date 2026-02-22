@@ -110,6 +110,7 @@ export default function SignupPage() {
                 <Input
                   id="email"
                   type="email"
+                  autoComplete="email"
                   placeholder="you@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -125,6 +126,7 @@ export default function SignupPage() {
                 <Input
                   id="password"
                   type="password"
+                  autoComplete="new-password"
                   placeholder="At least 6 characters"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -159,6 +161,7 @@ export default function SignupPage() {
                   <Input
                     id="confirmPassword"
                     type="password"
+                    autoComplete="new-password"
                     placeholder="Confirm your password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
