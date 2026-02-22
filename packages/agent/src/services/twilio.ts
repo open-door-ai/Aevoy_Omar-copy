@@ -13,6 +13,8 @@
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData } from "../types/index.js";
 import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
+import { trackServiceCost } from "./ai.js";
+import { calculateSMSCost } from "../utils/cost-calculator.js";
 
 // ---- Configuration ----
 
@@ -337,8 +339,10 @@ export async function sendSms(request: SmsRequest): Promise<{
 
     const data = await response.json() as { sid: string };
 
-    // Track usage
+    // Track usage count + dollar cost
     await trackSmsUsage(request.userId, 1);
+    const smsCost = calculateSMSCost(request.to, request.body?.length || 160);
+    trackServiceCost(request.userId, "twilio", "sms", smsCost, "sms").catch(() => {});
 
     console.log(`[TWILIO] SMS sent: ${data.sid}`);
     return { success: true, messageSid: data.sid };

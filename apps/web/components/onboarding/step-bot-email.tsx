@@ -14,16 +14,16 @@ interface StepBotEmailProps {
 }
 
 const CURATED_NAMES = [
-  "Aria", "Nova", "Atlas", "Sage", "Echo", "Orion",
-  "Milo", "Luna", "Kai", "Zara", "Finn", "Iris",
-  "Rex", "Nyx", "Sol", "Dash", "Lux", "Pax",
-  "Rio", "Vex", "Juno", "Bolt", "Cleo", "Dex",
-  "Eve", "Flux", "Halo", "Jade", "Knox", "Link",
-  "Mars", "Neo", "Onyx", "Pike", "Quip", "Rune",
-  "Tao", "Uma", "Vale", "Wren", "Xion", "Zeno",
+  "Dave", "Aria", "Nova", "Atlas", "Sage", "Echo",
+  "Orion", "Milo", "Luna", "Kai", "Zara", "Finn",
+  "Iris", "Rex", "Nyx", "Sol", "Dash", "Lux",
+  "Pax", "Rio", "Vex", "Juno", "Bolt", "Cleo",
+  "Dex", "Eve", "Flux", "Halo", "Jade", "Knox",
+  "Link", "Mars", "Neo", "Onyx", "Pike", "Quip",
+  "Rune", "Tao", "Uma", "Vale", "Wren", "Xion", "Zeno",
 ];
 
-const QUICK_PICKS = ["Aria", "Nova", "Atlas", "Sage", "Echo", "Orion"];
+const QUICK_PICKS = ["Dave", "Aria", "Nova", "Atlas", "Sage", "Echo"];
 
 const SUFFIXES = ["ai", "bot", "hq", "go", "run", "do", "pro"];
 const PREFIXES = ["ask", "hey", "my", "the"];

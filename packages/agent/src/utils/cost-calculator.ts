@@ -2,7 +2,11 @@
  * Cost Calculator
  *
  * Centralized cost calculation for all billable services.
+ * All costs include a 20% platform markup applied at log time.
  */
+
+// Platform billing markup (cost + 20%)
+export const BILLING_MARKUP = 1.20;
 
 // AI Model Costs (per 1M tokens) — verified Feb 2026
 // Token counts are EXACT values from API responses. Rates are maintained constants.
@@ -65,6 +69,21 @@ export const BROWSER_SESSION_COSTS = {
 } as const;
 
 export type BrowserProvider = keyof typeof BROWSER_SESSION_COSTS;
+
+// Image Generation Costs (per image)
+export const IMAGE_GENERATION_COSTS = {
+  'dall-e-3': {
+    '1024x1024': 0.04,
+    '1024x1792': 0.08,
+    '1792x1024': 0.08,
+  },
+} as const;
+
+export function calculateImageCost(model: string, size: string): number {
+  const costs = IMAGE_GENERATION_COSTS[model as keyof typeof IMAGE_GENERATION_COSTS];
+  if (!costs) return 0.04; // default DALL-E 3 standard
+  return (costs as Record<string, number>)[size] || 0.04;
+}
 
 export function calculateEmailCost(): number {
   return 0;

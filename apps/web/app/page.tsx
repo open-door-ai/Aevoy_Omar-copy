@@ -27,7 +27,7 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
   
   useEffect(() => {
     // Start typing after brief pause
-    const startDelay = setTimeout(() => setPhase(1), 800);
+    const startDelay = setTimeout(() => setPhase(1), 400);
     return () => clearTimeout(startDelay);
   }, []);
   
@@ -42,9 +42,9 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
         i++;
       } else {
         clearInterval(typeInterval);
-        setTimeout(() => setPhase(2), 300);
+        setTimeout(() => setPhase(2), 150);
       }
-    }, 80);
+    }, 45);
     
     return () => clearInterval(typeInterval);
   }, [phase]);
@@ -60,9 +60,9 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
         i++;
       } else {
         clearInterval(typeInterval);
-        setTimeout(() => setPhase(3), 400);
+        setTimeout(() => setPhase(3), 200);
       }
-    }, 50);
+    }, 30);
     
     return () => clearInterval(typeInterval);
   }, [phase]);
@@ -71,28 +71,28 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
   useEffect(() => {
     if (phase !== 3) return;
     setShowAGI(true);
-    setTimeout(() => setPhase(4), 800);
+    setTimeout(() => setPhase(4), 500);
   }, [phase]);
   
   // Phase 4: Pause then curtain
   useEffect(() => {
     if (phase !== 4) return;
     setCursorVisible(false);
-    const curtainDelay = setTimeout(() => setPhase(5), 600);
+    const curtainDelay = setTimeout(() => setPhase(5), 300);
     return () => clearTimeout(curtainDelay);
   }, [phase]);
   
   // Phase 5: After curtain animation, fade out
   useEffect(() => {
     if (phase !== 5) return;
-    const fadeDelay = setTimeout(() => setPhase(6), 2000);
+    const fadeDelay = setTimeout(() => setPhase(6), 1200);
     return () => clearTimeout(fadeDelay);
   }, [phase]);
   
   // Phase 6: Complete
   useEffect(() => {
     if (phase !== 6) return;
-    const completeDelay = setTimeout(() => onComplete(), 800);
+    const completeDelay = setTimeout(() => onComplete(), 500);
     return () => clearTimeout(completeDelay);
   }, [phase, onComplete]);
   
@@ -1347,7 +1347,7 @@ const AnimatedCounter = ({ value, suffix = '' }: { value: number; suffix?: strin
 // WORD SCRAMBLE ANIMATION
 // ============================================
 const SCRAMBLE_WORDS = [
-  'Employee', 'Butler', 'Assistant', 'Researcher',
+  'Employee', 'Intern', 'Butler', 'Assistant', 'Researcher',
   'Concierge', 'Analyst', 'Secretary', 'Scheduler',
   'Planner', 'Advisor', 'Strategist', 'Associate',
 ];
@@ -1670,12 +1670,9 @@ const FeatureCard = ({ feature, index }: { feature: { title: string; description
 
 export default function AevoyLanding() {
   const [showIntro, setShowIntro] = useState(() => {
-    // Check if AGI intro was shown in last 48 hours
-    if (typeof window === 'undefined') return true;
-    const lastShown = localStorage.getItem('agi_intro_shown');
-    if (!lastShown) return true;
-    const fortyEightHours = 48 * 60 * 60 * 1000;
-    return (Date.now() - parseInt(lastShown)) > fortyEightHours;
+    // Show AGI intro only on the very first visit ever
+    if (typeof window === 'undefined') return false;
+    return !localStorage.getItem('agi_intro_shown');
   });
   const [scrollY, setScrollY] = useState(0);
   const [selectedDemo, setSelectedDemo] = useState('call');

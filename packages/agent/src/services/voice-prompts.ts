@@ -105,7 +105,7 @@ export async function generateVoiceResponse(
           temperature: 0.7,
           max_tokens: 200,
         }),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(4000),
       });
 
       if (res.ok) {
@@ -134,7 +134,7 @@ export async function generateVoiceResponse(
           temperature: 0.7,
           max_tokens: 200,
         }),
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(5000),
       });
 
       if (res.ok) {
@@ -208,7 +208,7 @@ async function callFastModel(prompt: string, maxTokens: number): Promise<string 
           temperature: 0.8,
           max_tokens: maxTokens,
         }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(2000),
       });
 
       if (res.ok) {

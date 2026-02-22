@@ -13,6 +13,7 @@ function validateEnv(): void {
     { key: "AGENT_WEBHOOK_SECRET", label: "Agent webhook secret" },
     { key: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL" },
     { key: "SUPABASE_SERVICE_ROLE_KEY", label: "Supabase service role key" },
+    { key: "AGENT_URL", label: "Agent public URL (e.g. https://agent-production-1339.up.railway.app)" },
   ];
 
   const missing = required.filter(({ key }) => !process.env[key]);
@@ -830,19 +831,8 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   try {
     const supabase = getSupabaseClient();
 
-    // OPTIMIZATION: Resolve user AND load profile in parallel (saves ~400ms)
-    const [resolved, profileResult] = await Promise.all([
-      resolveUser(callerNumber),
-      (async () => {
-        const tempResolved = await resolveUser(callerNumber);
-        if (!tempResolved) return null;
-        return supabase
-          .from("profiles")
-          .select("id, username, display_name, bot_name, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until, timezone")
-          .eq("id", tempResolved.userId)
-          .single();
-      })()
-    ]);
+    // OPTIMIZATION: Resolve user once, then load profile (eliminates duplicate resolveUser call)
+    const resolved = await resolveUser(callerNumber);
 
     if (!resolved) {
       console.log(`[VOICE] Unknown caller: ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
@@ -867,6 +857,16 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     }
 
     const userId = resolved.userId;
+
+    // Load profile + check call limit in parallel (saves ~200-400ms)
+    const [profileResult, withinLimit] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, username, display_name, bot_name, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until, timezone")
+        .eq("id", userId)
+        .single(),
+      checkDailyCallLimit(userId),
+    ]);
     const profile = profileResult?.data;
 
     if (!profile) {
@@ -879,11 +879,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 </Response>`);
     }
 
-    // OPTIMIZATION: Check call limit in parallel with PIN check (both are fast checks)
-    const [withinLimit, isPinLocked] = await Promise.all([
-      checkDailyCallLimit(userId),
-      Promise.resolve(profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date())
-    ]);
+    const isPinLocked = profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date();
 
     if (!withinLimit) {
       console.log(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit (${Date.now() - startTime}ms)`);
@@ -931,11 +927,18 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 </Response>`);
     }
 
-    // Verified caller - route to task handler
-    voice = await getUserVoice(userId);
+    // Verified caller — route to task handler
     console.log(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
 
-    await supabase.from("call_history").insert({
+    // OPTIMIZATION: Fire call_history insert + settings fetch in parallel (non-blocking)
+    const settingsPromise = supabase
+      .from('user_settings')
+      .select('greeting_style, voice_preference, elevenlabs_voice_id')
+      .eq('user_id', userId)
+      .single();
+
+    // Fire-and-forget call history (don't block TwiML response)
+    supabase.from("call_history").insert({
       user_id: userId,
       call_sid: callSid,
       direction: "inbound",
@@ -944,40 +947,27 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       call_type: "task",
       pin_required: false,
       pin_success: null
-    });
+    }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
 
-    // Get user's greeting style and voice preference
-    const { data: settings } = await supabase
-      .from('user_settings')
-      .select('greeting_style, voice_preference')
-      .eq('user_id', userId)
-      .single();
-
+    const { data: settings } = await settingsPromise;
     const greetingStyle = settings?.greeting_style || 'casual';
-    const voicePref = settings?.voice_preference || '';
 
     res.type("text/xml");
 
     // ConversationRelay: real-time two-way voice conversation via WebSocket
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
-      const elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      // Use user's ElevenLabs voice if configured, otherwise fall back to env/default
+      const elevenlabsVoice = settings?.elevenlabs_voice_id || process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
 
-      // Generate AI greeting
-      let greeting: string;
-      try {
-        const { generatePersonalizedGreeting } = await import("./services/voice-prompts.js");
-        greeting = await generatePersonalizedGreeting({
-          userId,
-          userName: profile.display_name || profile.username || "there",
-          botName: profile.bot_name || "Nova",
-          callType: "incoming",
-          greetingStyle,
-          timezone: profile.timezone || "America/Los_Angeles",
-        });
-      } catch {
-        greeting = `Hey ${profile.username}! What's up?`;
-      }
+      // OPTIMIZATION: Use fast template greeting for TwiML (avoid blocking on AI API call)
+      const userName = profile.display_name || profile.username || "there";
+      const botName = profile.bot_name || "Dave";
+      const hour = new Date().getHours();
+      const timeGreeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+      const greeting = greetingStyle === 'jarvis'
+        ? `${timeGreeting}, ${userName}. How may I assist you?`
+        : `Hey ${userName}! What can I help you with?`;
 
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1061,7 +1051,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
         greeting = await generatePersonalizedGreeting({
           userId,
           userName: profile?.display_name || profile?.username || "there",
-          botName: profile?.bot_name || "Nova",
+          botName: profile?.bot_name || "Dave",
           callType: "incoming",
           greetingStyle: "casual",
           timezone: profile?.timezone || "America/Los_Angeles",

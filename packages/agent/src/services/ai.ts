@@ -18,6 +18,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { getCompiledPrompt } from "./personality.js";
+import { BILLING_MARKUP } from "../utils/cost-calculator.js";
 import type { Memory, Action, AIResponse, TaskType, ModelProvider } from "../types/index.js";
 import { withTimeout } from "../utils/timeout.js";
 import { CircuitBreaker } from "../execution/retry.js";
@@ -485,7 +486,9 @@ async function trackApiCall(
 ): Promise<void> {
   if (!userId) return;
   try {
-    const costCents = Math.round(costUsd * 100);
+    // Apply 20% platform markup
+    const billedCost = costUsd * BILLING_MARKUP;
+    const costCents = Math.round(billedCost * 100);
 
     // Track usage via RPC (handles upsert + increment atomically)
     await getSupabaseClient().rpc("track_usage", {
@@ -494,7 +497,7 @@ async function trackApiCall(
       p_ai_cost_cents: costCents,
     });
 
-    // Per-call cost logging for granular tracking
+    // Per-call cost logging for granular tracking (stores billed cost incl. markup)
     await getSupabaseClient().from("ai_cost_log").insert({
       user_id: userId,
       task_id: taskId || null,
@@ -502,12 +505,52 @@ async function trackApiCall(
       model,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
-      cost_usd: costUsd,
+      cost_usd: billedCost,
       purpose: purpose || null,
       cached: false,
     });
   } catch {
     // Non-critical — don't fail the task over tracking
+  }
+}
+
+/**
+ * Track non-AI service costs (voice, SMS, images, browser sessions).
+ * Applies 20% platform markup and logs to ai_cost_log.
+ */
+export async function trackServiceCost(
+  userId: string,
+  provider: string,
+  model: string,
+  rawCostUsd: number,
+  purpose: string,
+  taskId?: string
+): Promise<void> {
+  if (!userId || rawCostUsd <= 0) return;
+  try {
+    const billedCost = rawCostUsd * BILLING_MARKUP;
+    const costCents = Math.round(billedCost * 100);
+
+    await Promise.all([
+      getSupabaseClient().rpc("track_usage", {
+        p_user_id: userId,
+        p_task_type: "ai_call",
+        p_ai_cost_cents: costCents,
+      }),
+      getSupabaseClient().from("ai_cost_log").insert({
+        user_id: userId,
+        task_id: taskId || null,
+        provider,
+        model,
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_usd: billedCost,
+        purpose,
+        cached: false,
+      }),
+    ]);
+  } catch {
+    // Non-critical
   }
 }
 
@@ -943,7 +986,9 @@ export async function generateResponse(
 export async function generateForcedDirectAnswer(
   userRequest: string,
   context: string,
-  username: string
+  username: string,
+  userId?: string,
+  taskId?: string
 ): Promise<{ content: string; cost: number; tokensUsed: number }> {
   const hasContext = context && context !== 'No actions completed with results.';
 
@@ -990,6 +1035,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
         const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
         const clean = stripNarration(content);
         if (clean && clean.length > 20) {
+          trackApiCall(userId, "claude-3-5-haiku-latest", inputTokens, outputTokens, cost, "anthropic", taskId, "fallback_direct_answer").catch(() => {});
           console.log(`[FALLBACK-HAIKU] Direct answer via Haiku attempt ${attempt+1} (${clean.length} chars, $${cost.toFixed(5)})`);
           return { content: clean, cost, tokensUsed: inputTokens + outputTokens };
         }
@@ -1018,8 +1064,12 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       const content = res.choices[0]?.message?.content || '';
       const clean = stripNarration(content);
       if (clean && clean.length > 20) {
-        console.log(`[FALLBACK-GROQ] Direct answer via Groq (${clean.length} chars)`);
-        return { content: clean, cost: 0.0001, tokensUsed: 200 };
+        const groqInputTokens = res.usage?.prompt_tokens || 100;
+        const groqOutputTokens = res.usage?.completion_tokens || 100;
+        const groqCost = (groqInputTokens * 0.59 + groqOutputTokens * 0.79) / 1_000_000;
+        trackApiCall(userId, "llama-3.3-70b-versatile", groqInputTokens, groqOutputTokens, groqCost, "groq", taskId, "fallback_direct_answer").catch(() => {});
+        console.log(`[FALLBACK-GROQ] Direct answer via Groq (${clean.length} chars, $${groqCost.toFixed(5)})`);
+        return { content: clean, cost: groqCost, tokensUsed: groqInputTokens + groqOutputTokens };
       }
     } catch (groqErr) {
       console.warn(`[FALLBACK-GROQ] Groq fallback failed: ${groqErr instanceof Error ? groqErr.message : String(groqErr)}`);
@@ -1043,8 +1093,12 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       const content = res.choices[0]?.message?.content || "";
       const clean = stripNarration(content);
       if (clean && clean.length > 20) {
-        console.log(`[FALLBACK-DEEPSEEK] Direct answer (${clean.length} chars)`);
-        return { content: clean, cost: 0.0001, tokensUsed: 200 };
+        const dsInputTokens = res.usage?.prompt_tokens || 100;
+        const dsOutputTokens = res.usage?.completion_tokens || 100;
+        const dsCost = (dsInputTokens * 0.27 + dsOutputTokens * 1.10) / 1_000_000;
+        trackApiCall(userId, "deepseek-chat", dsInputTokens, dsOutputTokens, dsCost, "deepseek", taskId, "fallback_direct_answer").catch(() => {});
+        console.log(`[FALLBACK-DEEPSEEK] Direct answer (${clean.length} chars, $${dsCost.toFixed(5)})`);
+        return { content: clean, cost: dsCost, tokensUsed: dsInputTokens + dsOutputTokens };
       }
     } catch (dsErr) {
       console.warn(`[FALLBACK-DEEPSEEK] DeepSeek fallback failed: ${dsErr instanceof Error ? dsErr.message : String(dsErr)}`);

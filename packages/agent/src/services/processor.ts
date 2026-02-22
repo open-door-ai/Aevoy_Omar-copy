@@ -7,7 +7,7 @@
 
 import crypto from "crypto";
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
-import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate } from "./ai.js";
+import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate, trackServiceCost } from "./ai.js";
 import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
 import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
@@ -3358,7 +3358,10 @@ async function executeAction(
         if (!imageUrl) {
           return { action, success: false, error: "No image returned from DALL-E" };
         }
-        console.log(`[GENERATE_IMAGE] Created: ${imageUrl.substring(0, 80)}...`);
+        // Track DALL-E cost (standard: $0.04 for 1024x1024, $0.08 for larger)
+        const imgCost = size === "1024x1024" ? 0.04 : 0.08;
+        trackServiceCost(userId, "openai", "dall-e-3", imgCost, "image_generation").catch(() => {});
+        console.log(`[GENERATE_IMAGE] Created: ${imageUrl.substring(0, 80)}... (cost: $${imgCost})`);
         return {
           action,
           success: true,

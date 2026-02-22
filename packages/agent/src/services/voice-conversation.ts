@@ -9,6 +9,8 @@ import { IncomingMessage } from "http";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { generatePersonalizedGreeting, generateVoiceResponse } from "./voice-prompts.js";
 import { verifyVoicePin } from "./twilio.js";
+import { trackServiceCost } from "./ai.js";
+import { calculateVoiceCost } from "../utils/cost-calculator.js";
 
 // ---- Types ----
 
@@ -151,7 +153,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
 
     if (profile) {
       userName = profile.display_name || profile.username || "there";
-      botName = profile.bot_name || "Nova";
+      botName = profile.bot_name || "Dave";
       greetingStyle = profile.greeting_style || "casual";
       timezone = profile.timezone || "America/Los_Angeles";
 
@@ -361,7 +363,8 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
   if (!session.userId) return;
 
   try {
-    await getSupabaseClient()
+    // Log call history
+    getSupabaseClient()
       .from("call_history")
       .insert({
         user_id: session.userId,
@@ -373,6 +376,12 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
         pin_success: session.state !== "awaiting_pin",
       })
       .then(() => {}, (e: any) => console.error("[VOICE-WS] Call history insert failed:", e));
+
+    // Track voice call cost (Twilio + ElevenLabs TTS + Deepgram STT bundled)
+    if (durationSeconds > 0) {
+      const voiceCost = calculateVoiceCost(durationSeconds, false);
+      trackServiceCost(session.userId, "twilio", "voice_call", voiceCost, "voice_call").catch(() => {});
+    }
   } catch { /* non-critical */ }
 }
 
