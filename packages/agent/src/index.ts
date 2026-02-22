@@ -958,7 +958,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
       // Use user's voice preference (stored as ElevenLabs voice ID), fall back to Rachel
-      const elevenlabsVoice = settings?.voice_preference && !settings.voice_preference.includes('.') ? settings.voice_preference : (process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM");
+      const elevenlabsVoice = settings?.voice_preference && !settings.voice_preference.includes('.') ? settings.voice_preference : (process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL");
 
       // OPTIMIZATION: Use fast template greeting for TwiML (avoid blocking on AI API call)
       const userName = profile.display_name || profile.username || "there";
@@ -969,14 +969,19 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         ? `${timeGreeting}, ${userName}. How may I assist you?`
         : `Hey ${userName}! What can I help you with?`;
 
+      console.log(`[VOICE-INCOMING] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}-flash_v2_5" elevenlabsTextNormalization="on" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
   </Connect>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(greeting)}</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
+  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
 </Response>`);
     }
 
@@ -1044,7 +1049,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
 
       // Fetch user's voice preference (ElevenLabs voice ID) from DB
-      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
       let greeting: string;
       try {
         const { data: profile } = await getSupabaseClient().from("profiles").select("display_name, username, bot_name, timezone").eq("id", userId).single();
@@ -1063,14 +1068,19 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
           : `Hey ${userName}! It's ${botName}. What can I help you with?`;
       } catch { greeting = "Hey! What can I help with?"; }
 
+      console.log(`[VOICE] ConversationRelay TwiML for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}, wsUrl=${wsUrl}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}-flash_v2_5" elevenlabsTextNormalization="on" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
   </Connect>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(greeting)}</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
+  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
 </Response>`);
     }
 
@@ -1542,20 +1552,25 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
       // Read user's ElevenLabs voice preference
-      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
       try {
         const { data: vs } = await supabase.from("user_settings").select("voice_preference").eq("user_id", userId).single();
         if (vs?.voice_preference && !vs.voice_preference.includes('.')) elevenlabsVoice = vs.voice_preference;
       } catch {}
 
+      console.log(`[VOICE-PREMIUM] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}-flash_v2_5" elevenlabsTextNormalization="on" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
   </Connect>
+  <Say voice="Polly.Joanna-Neural">Hey! What can I help you with?</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
+  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
 </Response>`);
     }
 
@@ -1854,7 +1869,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
       // Read user's ElevenLabs voice preference
-      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+      let elevenlabsVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
       try {
         const supabase = getSupabaseClient();
         const { data: vs } = await supabase.from("user_settings").select("voice_preference").eq("user_id", userId).single();
@@ -1877,14 +1892,19 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
           : `Hey ${userName}! How did today go?`;
       }
 
+      console.log(`[VOICE-CHECKIN] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}-flash_v2_5" elevenlabsTextNormalization="on" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="${checkinCallType}" />
     </ConversationRelay>
   </Connect>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(greeting)}</Say>
+  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
+    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
+  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
 </Response>`);
     }
 

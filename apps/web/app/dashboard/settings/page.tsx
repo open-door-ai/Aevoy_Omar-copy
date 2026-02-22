@@ -2012,9 +2012,19 @@ export default function SettingsPage() {
                 <button
                   key={voice.id}
                   type="button"
-                  onClick={() => setSettings({ ...settings, voice_preference: voice.id } as UserSettings)}
+                  onClick={async () => {
+                    setSettings({ ...settings, voice_preference: voice.id } as UserSettings);
+                    // Auto-save voice preference immediately on click
+                    try {
+                      await fetch("/api/settings", {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ ...settings, voice_preference: voice.id }),
+                      });
+                    } catch {}
+                  }}
                   className={`relative flex items-center gap-3 p-3 rounded-lg border text-left transition-all duration-200 ${
-                    (settings?.voice_preference || "21m00Tcm4TlvDq8ikWAM") === voice.id
+                    (settings?.voice_preference || "EXAVITQu4vr4xnSDxMaL") === voice.id
                       ? "border-primary bg-primary/5 ring-1 ring-primary/20"
                       : "border-input hover:border-primary/40 hover:bg-muted/50"
                   }`}
@@ -2029,7 +2039,7 @@ export default function SettingsPage() {
                     </div>
                     <span className="text-xs text-muted-foreground">{voice.desc}</span>
                   </div>
-                  {(settings?.voice_preference || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
+                  {(settings?.voice_preference || "EXAVITQu4vr4xnSDxMaL") === voice.id && (
                     <Check className="w-4 h-4 text-primary flex-shrink-0" />
                   )}
                 </button>
