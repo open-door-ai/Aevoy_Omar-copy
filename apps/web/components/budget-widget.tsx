@@ -2,190 +2,115 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { AlertCircle, DollarSign, TrendingUp } from "lucide-react";
+import { AlertCircle, DollarSign, Plus } from "lucide-react";
+import Link from "next/link";
 
-interface BudgetStatus {
-  billing_enabled: boolean;
-  tier: string;
-  used_usd: number;
-  limit_usd: number | null;
-  remaining_usd: number | null;
-  percentage_used: number;
-  is_over_budget: boolean;
-  warning_threshold_reached: boolean;
+interface BalanceData {
+  balance_cents: number;
+  balance_usd: string;
+  weekly_summary: {
+    spent_usd: string;
+    task_count: number;
+    remaining_usd: string;
+  };
+  stripe_configured: boolean;
 }
 
 export function BudgetWidget() {
-  const [budget, setBudget] = useState<BudgetStatus | null>(null);
+  const [data, setData] = useState<BalanceData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function fetchBudget() {
+    async function fetchBalance() {
       try {
-        const res = await fetch("/api/budget");
+        const res = await fetch("/api/billing/balance");
         if (res.ok) {
-          const data = await res.json();
-          setBudget(data);
+          const json = await res.json();
+          setData(json);
         }
       } catch (error) {
-        console.error("Failed to fetch budget:", error);
+        console.error("Failed to fetch balance:", error);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchBudget();
-
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchBudget, 30000);
+    fetchBalance();
+    const interval = setInterval(fetchBalance, 30000);
     return () => clearInterval(interval);
   }, []);
 
   if (loading) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <DollarSign className="h-5 w-5" />
-            Budget
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <DollarSign className="h-4 w-4" />
+            Credits
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="h-20 animate-pulse bg-gray-200 dark:bg-gray-700 rounded"></div>
+          <div className="h-8 animate-pulse bg-gray-200 dark:bg-gray-700 rounded" />
         </CardContent>
       </Card>
     );
   }
 
-  if (!budget) {
-    return null;
-  }
+  if (!data) return null;
 
-  // Beta mode (billing disabled)
-  if (!budget.billing_enabled) {
-    return (
-      <Card className="border-blue-200 dark:border-blue-800">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
-            <DollarSign className="h-5 w-5" />
-            Beta Mode
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            You're in beta! Unlimited usage while we test the platform.
-          </p>
-          <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
-            Current usage: ${budget.used_usd.toFixed(2)} (tracking only)
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
+  const balanceCents = data.balance_cents;
+  const balanceColor =
+    balanceCents > 500
+      ? "text-green-600 dark:text-green-400"
+      : balanceCents > 100
+      ? "text-yellow-600 dark:text-yellow-400"
+      : "text-red-600 dark:text-red-400";
 
-  // Production mode (billing enabled)
-  const isUnlimited = budget.limit_usd === null || budget.tier === "paid";
-  const warningColor = budget.is_over_budget
-    ? "text-red-600 dark:text-red-400"
-    : budget.warning_threshold_reached
-    ? "text-yellow-600 dark:text-yellow-400"
-    : "text-green-600 dark:text-green-400";
-
-  const progressColor = budget.is_over_budget
-    ? "bg-red-500"
-    : budget.warning_threshold_reached
-    ? "bg-yellow-500"
-    : "bg-green-500";
+  const borderColor =
+    balanceCents <= 0
+      ? "border-red-200 dark:border-red-800"
+      : balanceCents <= 100
+      ? "border-yellow-200 dark:border-yellow-800"
+      : "";
 
   return (
-    <Card className={
-      budget.is_over_budget
-        ? "border-red-200 dark:border-red-800"
-        : budget.warning_threshold_reached
-        ? "border-yellow-200 dark:border-yellow-800"
-        : ""
-    }>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <DollarSign className="h-5 w-5" />
-          Monthly Budget
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {budget.is_over_budget && (
-          <div className="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-800">
-            <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5" />
-            <div>
-              <p className="font-medium text-red-600 dark:text-red-400 text-sm">
-                Budget Exceeded
-              </p>
-              <p className="text-xs text-red-600 dark:text-red-400 mt-1">
-                Tasks are currently blocked. <a href="/billing" className="underline">Upgrade your plan</a>
-              </p>
-            </div>
+    <Link href="/billing">
+      <Card className={`cursor-pointer hover:shadow-md transition-shadow ${borderColor}`}>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Credits
+            </span>
+            <Plus className="h-4 w-4 text-gray-400" />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className={`text-2xl font-bold ${balanceColor}`}>
+            ${data.balance_usd}
           </div>
-        )}
 
-        {!budget.is_over_budget && budget.warning_threshold_reached && (
-          <div className="flex items-start gap-2 p-3 bg-yellow-50 dark:bg-yellow-950/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
-            <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 mt-0.5" />
-            <div>
-              <p className="font-medium text-yellow-600 dark:text-yellow-400 text-sm">
-                Budget Warning
-              </p>
-              <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
-                You've used 80% of your monthly budget
-              </p>
+          {balanceCents <= 0 && (
+            <div className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+              <AlertCircle className="h-3.5 w-3.5" />
+              <span>No credits — top up to continue</span>
             </div>
-          </div>
-        )}
+          )}
 
-        {!isUnlimited && (
-          <>
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600 dark:text-gray-400">Used</span>
-                <span className={warningColor}>
-                  ${budget.used_usd.toFixed(2)} / ${budget.limit_usd?.toFixed(2) || "∞"}
-                </span>
-              </div>
-              <Progress value={Math.min(100, budget.percentage_used)} className="h-2">
-                <div
-                  className={`h-full ${progressColor} transition-all`}
-                  style={{ width: `${Math.min(100, budget.percentage_used)}%` }}
-                />
-              </Progress>
-              <p className="text-xs text-gray-500 dark:text-gray-500">
-                {budget.percentage_used}% used
-              </p>
+          {balanceCents > 0 && balanceCents <= 100 && (
+            <div className="flex items-center gap-1.5 text-xs text-yellow-600 dark:text-yellow-400">
+              <AlertCircle className="h-3.5 w-3.5" />
+              <span>Low balance</span>
             </div>
+          )}
 
-            <div className="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
-              <span className="text-sm text-gray-600 dark:text-gray-400">Remaining</span>
-              <span className="text-lg font-semibold">
-                ${budget.remaining_usd?.toFixed(2) || "0.00"}
-              </span>
-            </div>
-          </>
-        )}
-
-        {isUnlimited && (
-          <div className="text-center py-4">
-            <TrendingUp className="h-8 w-8 mx-auto text-green-500 mb-2" />
-            <p className="font-medium text-green-600 dark:text-green-400">
-              Unlimited Usage
+          {data.weekly_summary.task_count > 0 && (
+            <p className="text-xs text-gray-500 dark:text-gray-500">
+              This week: {data.weekly_summary.task_count} tasks, ${data.weekly_summary.spent_usd} spent
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-              {budget.tier === "paid" ? "Paid Plan" : "Beta Access"}
-            </p>
-          </div>
-        )}
-
-        <div className="text-xs text-gray-500 dark:text-gray-500 text-center">
-          Resets on {new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1).toLocaleDateString()}
-        </div>
-      </CardContent>
-    </Card>
+          )}
+        </CardContent>
+      </Card>
+    </Link>
   );
 }

@@ -488,7 +488,7 @@ async function trackApiCall(
   try {
     // Apply 20% platform markup
     const billedCost = costUsd * BILLING_MARKUP;
-    const costCents = Math.round(billedCost * 100);
+    const costCents = Math.max(1, Math.round(billedCost * 100)); // minimum 1 cent
 
     // Track usage via RPC (handles upsert + increment atomically)
     await getSupabaseClient().rpc("track_usage", {
@@ -508,6 +508,15 @@ async function trackApiCall(
       cost_usd: billedCost,
       purpose: purpose || null,
       cached: false,
+    });
+
+    // Deduct from credit wallet (atomic, race-safe)
+    const description = `AI: ${model} (${inputTokens + outputTokens} tokens)`;
+    await getSupabaseClient().rpc("deduct_credits", {
+      p_user_id: userId,
+      p_amount_cents: costCents,
+      p_description: description,
+      p_task_id: taskId || null,
     });
   } catch {
     // Non-critical — don't fail the task over tracking
@@ -529,7 +538,7 @@ export async function trackServiceCost(
   if (!userId || rawCostUsd <= 0) return;
   try {
     const billedCost = rawCostUsd * BILLING_MARKUP;
-    const costCents = Math.round(billedCost * 100);
+    const costCents = Math.max(1, Math.round(billedCost * 100));
 
     await Promise.all([
       getSupabaseClient().rpc("track_usage", {
@@ -549,53 +558,45 @@ export async function trackServiceCost(
         cached: false,
       }),
     ]);
+
+    // Deduct from credit wallet
+    await getSupabaseClient().rpc("deduct_credits", {
+      p_user_id: userId,
+      p_amount_cents: costCents,
+      p_description: `${purpose} (${provider})`,
+      p_task_id: taskId || null,
+    });
   } catch {
     // Non-critical
   }
 }
 
-// ---- Budget enforcement ----
-
-const MONTHLY_BUDGET_USD = 15;
+// ---- Budget enforcement (credit wallet) ----
 
 /**
- * Check remaining monthly budget for a user.
- * Returns remaining budget in USD. If over budget, returns 0.
+ * Check user's credit balance.
+ * Returns remaining balance in USD. If empty, overBudget = true.
  */
 export async function checkUserBudget(userId: string): Promise<{ remaining: number; overBudget: boolean }> {
   try {
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
     const { data, error } = await getSupabaseClient()
-      .from("tasks")
-      .select("cost_usd")
+      .from("credit_wallets")
+      .select("balance_cents")
       .eq("user_id", userId)
-      .gte("created_at", startOfMonth.toISOString());
+      .single();
 
     if (error || !data) {
-      return { remaining: MONTHLY_BUDGET_USD, overBudget: false };
+      // No wallet = no credits = blocked (wallet auto-created with $1 at signup)
+      return { remaining: 0, overBudget: true };
     }
 
-    const totalSpent = data.reduce((sum, row) => sum + (row.cost_usd || 0), 0);
+    const balanceCents = data.balance_cents || 0;
+    const remaining = balanceCents / 100; // convert to USD
 
-    // Also include estimated cost for in-progress tasks
-    const { data: inProgress } = await getSupabaseClient()
-      .from("tasks")
-      .select("cost_usd")
-      .eq("user_id", userId)
-      .eq("status", "processing")
-      .gte("created_at", startOfMonth.toISOString());
-
-    const inProgressCost = (inProgress || []).reduce((sum, row) => sum + (row.cost_usd || 0), 0);
-    const totalWithInProgress = totalSpent + inProgressCost;
-    const remaining = Math.max(0, MONTHLY_BUDGET_USD - totalWithInProgress);
-
-    return { remaining, overBudget: totalWithInProgress >= MONTHLY_BUDGET_USD };
+    return { remaining, overBudget: balanceCents <= 0 };
   } catch {
     // If we can't check budget, don't block the task
-    return { remaining: MONTHLY_BUDGET_USD, overBudget: false };
+    return { remaining: 1, overBudget: false };
   }
 }
 
@@ -915,8 +916,8 @@ export async function generateResponse(
       const orConfig: ModelConfig = {
         provider: 'openrouter',
         model: orModel,
-        costPerMInput: 0, // actual cost tracked via response tokens × dynamic rate
-        costPerMOutput: 0,
+        costPerMInput: 1.00, // conservative fallback — real cost borne by user's OR key
+        costPerMOutput: 3.00, // but Aevoy still tracks for platform fee
         extra: { apiKey: orSettings.apiKey },
       };
       chain = [orConfig, ...chain];

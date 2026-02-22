@@ -724,15 +724,35 @@ async function trackCaptchaCost(
 ): Promise<void> {
   try {
     const { getSupabaseClient } = await import('../utils/supabase.js');
+    const { BILLING_MARKUP } = await import('../utils/cost-calculator.js');
+
+    // Apply 20% platform markup (was missing before)
+    const billedCost = cost * BILLING_MARKUP;
+    const costCents = Math.max(1, Math.round(billedCost * 100));
 
     await getSupabaseClient().from('ai_cost_log').insert({
       user_id: userId,
       task_id: taskId,
       model: `captcha_${service}`,
       tokens_used: 0,
-      cost_usd: cost,
+      cost_usd: billedCost,
       task_type: `captcha_${captchaType}`,
       created_at: new Date().toISOString(),
+    });
+
+    // Track usage via RPC (was skipped before)
+    await getSupabaseClient().rpc("track_usage", {
+      p_user_id: userId,
+      p_task_type: "ai_call",
+      p_ai_cost_cents: costCents,
+    });
+
+    // Deduct from credit wallet
+    await getSupabaseClient().rpc("deduct_credits", {
+      p_user_id: userId,
+      p_amount_cents: costCents,
+      p_description: `CAPTCHA solve: ${captchaType} (${service})`,
+      p_task_id: taskId,
     });
 
     // Check daily CAPTCHA cost and alert if >$5

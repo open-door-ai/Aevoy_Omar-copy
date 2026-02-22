@@ -95,6 +95,34 @@ export async function POST(request: NextRequest) {
         await getSupabase().from("profiles").update({ subscription_status: "active", messages_used: 0 }).eq("stripe_customer_id", customerId);
         break;
       }
+      case "payment_intent.succeeded": {
+        // Credit top-up completed
+        const metadata = obj.metadata as Record<string, string> | undefined;
+        if (metadata?.type === "credit_topup" && metadata?.user_id) {
+          const userId = metadata.user_id;
+          const amountCents = parseInt(metadata.amount_cents || "0", 10);
+          const piId = obj.id as string;
+
+          if (amountCents > 0) {
+            await getSupabase().rpc("add_credits", {
+              p_user_id: userId,
+              p_amount_cents: amountCents,
+              p_description: `Top-up: $${(amountCents / 100).toFixed(2)} via Stripe`,
+              p_type: "topup",
+              p_stripe_pi: piId,
+            });
+            console.log(`[STRIPE] Credit top-up: $${(amountCents / 100).toFixed(2)} for user ${userId.slice(0, 8)}`);
+          }
+        }
+        break;
+      }
+      case "payment_intent.payment_failed": {
+        const metadata = obj.metadata as Record<string, string> | undefined;
+        if (metadata?.type === "credit_topup" && metadata?.user_id) {
+          console.warn(`[STRIPE] Credit top-up payment failed for user ${metadata.user_id.slice(0, 8)}`);
+        }
+        break;
+      }
     }
     return NextResponse.json({ received: true });
   } catch (error) {

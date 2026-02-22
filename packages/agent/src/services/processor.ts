@@ -649,21 +649,33 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       };
     }
 
-    // 1b. Check monthly budget ($15/month per user)
+    // 1b. Check credit balance
     let forceCheapModel = false;
     if (!shouldSkipPayment() && !isBeta) {
       const budget = await checkUserBudget(userId);
       if (budget.overBudget) {
-        // Budget exceeded — force free-tier model (Gemini Flash) or notify
-        console.log(`[BUDGET] User ${userId.slice(0, 8)} over monthly budget, forcing cheap model`);
+        // Zero credits — block the task entirely
+        console.log(`[BILLING] User ${userId.slice(0, 8)} has no credits, blocking task`);
+        await sendResponse({
+          to: from,
+          from: `${username}@aevoy.com`,
+          subject: `Re: ${subject}`,
+          body: "Your credit balance is empty. Top up at aevoy.com/billing to keep going.",
+        });
+        return {
+          taskId: "",
+          success: false,
+          response: "Your credit balance is empty. Top up at aevoy.com/billing to keep going.",
+          actions: [],
+          error: "blocked_no_credits",
+        };
+      } else if (budget.remaining < 0.50) {
+        // Low balance — force cheap model + send alert
+        console.log(`[BILLING] User ${userId.slice(0, 8)} low credits ($${budget.remaining.toFixed(2)})`);
         forceCheapModel = true;
-      } else if (budget.remaining < 3 && !budget.overBudget) {
-        // Running low — send alert (once per day, tracked on usage table)
-        console.log(`[BUDGET] User ${userId.slice(0, 8)} budget low ($${budget.remaining.toFixed(2)} remaining)`);
-        forceCheapModel = budget.remaining < 1;
         try {
           const today = new Date().toISOString().split("T")[0];
-          const currentMonth = today.slice(0, 7); // YYYY-MM
+          const currentMonth = today.slice(0, 7);
           const { data: usageRow } = await getSupabaseClient()
             .from("usage")
             .select("budget_alert_date")
@@ -677,15 +689,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             await sendResponse({
               to: from,
               from: `${username}@aevoy.com`,
-              subject: "[Aevoy] Budget Running Low",
-              body: `You have $${budget.remaining.toFixed(2)} remaining in your monthly budget. Tasks will continue using cost-optimized models to stretch your budget.`,
+              subject: "[Aevoy] Credits Running Low",
+              body: `You have $${budget.remaining.toFixed(2)} in credits remaining. Top up at aevoy.com/billing to avoid interruptions.`,
             });
             await getSupabaseClient()
               .from("usage")
               .update({ budget_alert_date: today })
               .eq("user_id", userId)
               .eq("month", currentMonth);
-            console.log(`[BUDGET] Alert sent to ${username}`);
           }
         } catch {
           // Non-critical
