@@ -3382,6 +3382,11 @@ async function executeAction(
 
     case "schedule": {
       const { description, cron } = action.params as { description: string; cron: string };
+      const lower = (cron || '').toLowerCase().trim();
+
+      // Detect one-time relative schedules ("in 2 minutes", "5m", "once", etc.)
+      const isOneTime = /^(?:in\s+)?\d+\s*(?:s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)$/i.test(lower)
+        || lower === 'once' || lower === 'now';
 
       // Calculate next run time
       const nextRun = calculateNextRun(cron);
@@ -3392,7 +3397,7 @@ async function executeAction(
           user_id: userId,
           description,
           task_template: description,
-          cron_expression: cron,
+          cron_expression: isOneTime ? 'once' : cron,
           next_run_at: nextRun,
           is_active: true,
         });
@@ -3400,10 +3405,14 @@ async function executeAction(
       if (error) {
         console.error(`[SCHEDULE] Failed to create scheduled task:`, error.message);
       }
+
+      const humanTime = new Date(nextRun).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       return {
         action,
         success: !error,
-        result: error ? "Could not schedule this task right now" : `Scheduled: ${description} (next: ${nextRun})`,
+        result: error ? "Could not schedule this task right now"
+          : isOneTime ? `Got it — I'll do that at ${humanTime}`
+          : `Scheduled: ${description} (next: ${nextRun})`,
       };
     }
 
@@ -3899,26 +3908,57 @@ async function executeAction(
 
 function calculateNextRun(cron: string): string {
   const now = new Date();
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = cron.split(' ');
-  
-  // Simple cron calculation for common patterns
-  if (cron === '0 8 * * 1') { // Weekly Monday 8am
-    const next = new Date(now);
-    next.setDate(next.getDate() + ((1 + 7 - next.getDay()) % 7 || 7));
-    next.setHours(8, 0, 0, 0);
-    return next.toISOString();
+  const lower = cron.toLowerCase().trim();
+
+  // ---- Relative time support ----
+  // "in 2 minutes", "in 30 seconds", "in 1 hour", "5 minutes", "2m", "1h", etc.
+  const relativeMatch = lower.match(/^(?:in\s+)?(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)$/);
+  if (relativeMatch) {
+    const amount = parseInt(relativeMatch[1]);
+    const unit = relativeMatch[2].charAt(0); // s, m, h, d
+    const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const ms = amount * (multipliers[unit] || 60_000);
+    return new Date(now.getTime() + ms).toISOString();
   }
-  
-  if (hour && hour !== '*') {
-    const next = new Date(now);
-    next.setHours(parseInt(hour), parseInt(minute) || 0, 0, 0);
-    if (next <= now) {
-      next.setDate(next.getDate() + 1);
+
+  // "once" — one-time, run immediately
+  if (lower === 'once' || lower === 'now') {
+    return now.toISOString();
+  }
+
+  // ---- Standard cron ----
+  const parts = cron.split(' ');
+  if (parts.length === 5) {
+    const [minute, hour] = parts;
+
+    // Weekly Monday 8am
+    if (cron === '0 8 * * 1') {
+      const next = new Date(now);
+      next.setDate(next.getDate() + ((1 + 7 - next.getDay()) % 7 || 7));
+      next.setHours(8, 0, 0, 0);
+      return next.toISOString();
     }
-    return next.toISOString();
+
+    if (hour && hour !== '*') {
+      const next = new Date(now);
+      next.setHours(parseInt(hour), parseInt(minute) || 0, 0, 0);
+      if (next <= now) {
+        next.setDate(next.getDate() + 1);
+      }
+      return next.toISOString();
+    }
   }
-  
+
+  // ---- Named intervals ----
+  const named: Record<string, number> = {
+    'hourly': 3_600_000,
+    'daily': 86_400_000,
+    'weekly': 604_800_000,
+  };
+  if (named[lower]) {
+    return new Date(now.getTime() + named[lower]).toISOString();
+  }
+
   // Default: 1 day from now
-  const next = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  return next.toISOString();
+  return new Date(now.getTime() + 86_400_000).toISOString();
 }

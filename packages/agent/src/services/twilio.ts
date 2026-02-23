@@ -123,10 +123,33 @@ export async function twilioRequest(
   return fetch(url, options);
 }
 
+// ---- User Number Lookup ----
+
+/**
+ * Get the user's dedicated Twilio number (if they purchased one).
+ * Falls back to the shared number if no dedicated number exists.
+ */
+async function getUserFromNumber(userId: string): Promise<string> {
+  try {
+    const { data } = await getSupabaseClient()
+      .from('user_twilio_numbers')
+      .select('phone_number')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .limit(1)
+      .single();
+    if (data?.phone_number) return data.phone_number;
+  } catch { /* fall through to default */ }
+
+  const config = getTwilioConfig();
+  return config?.phoneNumber || '';
+}
+
 // ---- Outbound Voice Calls ----
 
 /**
  * AI calls the user (for updates, questions, alerts).
+ * Uses the user's dedicated number as caller ID if they have one.
  */
 export async function callUser(request: VoiceCallRequest): Promise<{
   success: boolean;
@@ -137,9 +160,12 @@ export async function callUser(request: VoiceCallRequest): Promise<{
   if (!config) return { success: false, error: "Twilio not configured" };
 
   try {
+    // Use user's dedicated number if available, otherwise shared number
+    const fromNumber = await getUserFromNumber(request.userId);
+
     const params = new URLSearchParams({
       To: request.to,
-      From: config.phoneNumber,
+      From: fromNumber || config.phoneNumber,
       Twiml: generateSpeechTwiml(request.message, request.voice),
     });
 
@@ -176,6 +202,7 @@ export async function callExternal(
   const config = getTwilioConfig();
   if (!config) return { success: false, error: "Twilio not configured" };
   const voice = await getUserVoice(userId);
+  const fromNumber = await getUserFromNumber(userId);
 
   try {
     // Build TwiML that speaks then optionally gathers response
@@ -194,7 +221,7 @@ export async function callExternal(
 
     const params = new URLSearchParams({
       To: to,
-      From: config.phoneNumber,
+      From: fromNumber || config.phoneNumber,
       Twiml: twiml,
     });
 
@@ -324,9 +351,12 @@ export async function sendSms(request: SmsRequest): Promise<{
   if (!config) return { success: false, error: "Twilio not configured" };
 
   try {
+    // Use user's dedicated number if available
+    const fromNumber = await getUserFromNumber(request.userId);
+
     const params = new URLSearchParams({
       To: request.to,
-      From: config.phoneNumber,
+      From: fromNumber || config.phoneNumber,
       Body: request.body,
     });
 

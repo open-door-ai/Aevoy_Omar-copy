@@ -638,6 +638,7 @@ NON-BROWSER ACTIONS:
 [ACTION:read_email()] — Check your @aevoy.com inbox for recent emails (verification codes, replies, etc.)
 [ACTION:read_email(5, 60)] — Check last 5 emails from the past 60 minutes
 [ACTION:remember("important fact")] — Save information to long-term memory
+[ACTION:schedule("task description", "in 2 minutes")] — Schedule a one-time task with relative time (e.g., "in 5 minutes", "in 1 hour", "in 30 seconds")
 [ACTION:schedule("task description", "0 9 * * 1")] — Schedule a recurring task (cron format)
 [ACTION:create_excel("filename", [{"name":"Sheet1", "headers":["Col1","Col2"], "data":[["A",1],["B",2]]}])] — Create Excel spreadsheet with data, styling, formulas
 [ACTION:create_powerpoint("filename", [{"title":"Slide 1", "bullets":["Point 1","Point 2"]}, {"title":"Slide 2", "content":"Text"}])] — Create PowerPoint presentation with slides, themes, layouts
@@ -658,6 +659,9 @@ CRITICAL — NON-BROWSER ACTIONS MUST USE TAGS TOO:
 - "Email John about the meeting" → [ACTION:send_email("john@example.com", "Meeting Update", "Hi John, ...")] [TASK_COMPLETE]
 - "Check my email" → [ACTION:read_email()] [TASK_COMPLETE]
 - If you write "I've scheduled it" or "I'll remember that" WITHOUT the [ACTION:...] tag, NOTHING HAPPENS. The tag IS the execution.
+- Relative times: "in 2 minutes", "in 1 hour", "in 30 seconds", "5m", "1h" — for one-time delayed tasks
+- "Call me back in 2 minutes" → [ACTION:schedule("call_user", "in 2 minutes")] [TASK_COMPLETE]
+- "Remind me in 30 minutes" → [ACTION:schedule("Reminder: your 30-minute timer is up", "in 30 minutes")] [TASK_COMPLETE]
 - Cron format: "0 9 * * *" = daily at 9 AM UTC, "0 9 * * 1" = every Monday at 9 AM, "0 */6 * * *" = every 6 hours
 
 CRITICAL — NEVER NARRATE. JUST ACT.
