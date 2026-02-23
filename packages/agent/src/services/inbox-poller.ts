@@ -282,6 +282,12 @@ function detectEmailType(
   subject: string,
   body: string
 ): { type: EmailType; taskId: string | null } {
+  // Plan approval reply (must check BEFORE confirmation)
+  if (subject.toLowerCase().includes("plan approval:")) {
+    const taskIdMatch = body.match(/Task ID:\s*([a-f0-9-]+)/i);
+    return { type: "confirmation_reply", taskId: taskIdMatch?.[1] ?? null };
+  }
+
   // Confirmation reply
   if (subject.toLowerCase().includes("confirm:")) {
     const taskIdMatch = body.match(/Task ID:\s*([a-f0-9-]+)/i);
@@ -337,7 +343,8 @@ function extractReplyText(body: string): string {
       line.includes("-----Original Message-----") ||
       line.includes("_______________") ||
       /^From:\s+/i.test(line) ||
-      line.includes("Task ID:")
+      line.includes("Task ID:") ||
+      /^--\s*$/.test(line)  // Email signature delimiter (RFC 3676)
     ) {
       break;
     }
@@ -539,7 +546,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
         username: user.username,
         from: user.email,
         subject: email.subject,
-        body: email.body,
+        body: extractReplyText(email.body),
         inputChannel: "email",
       });
       return;

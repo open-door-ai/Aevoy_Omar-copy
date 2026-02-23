@@ -658,7 +658,7 @@ export async function handleConfirmationReply(
     };
   }
 
-  if (task.status !== "awaiting_confirmation") {
+  if (task.status !== "awaiting_confirmation" && task.status !== "pending_approval") {
     return {
       taskId,
       success: false,
@@ -1346,7 +1346,16 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const userSettings = await getUserSettings(userId);
       let approved = true;
 
-      if (userSettings.confirmationMode === 'always') {
+      // Auto-approve trivial tasks (greetings, simple questions, weather, etc.)
+      // These should NEVER require plan approval regardless of confirmation_mode
+      const taskText = (subject + ' ' + body).toLowerCase();
+      const isTrivialTask = /^(hi|hello|hey|greetings|good morning|good afternoon|good evening|thanks|thank you|ok|test)\b/i.test(taskText.trim())
+        || (classification.taskType === 'research' && plan.steps.length <= 2 && plan.estimatedCost < 0.05)
+        || (plan.steps.length <= 1);
+
+      if (isTrivialTask) {
+        approved = true; // Skip approval for simple tasks
+      } else if (userSettings.confirmationMode === 'always') {
         // Send plan summary and pause for approval
         approved = false;
       } else if (userSettings.confirmationMode === 'risky') {
