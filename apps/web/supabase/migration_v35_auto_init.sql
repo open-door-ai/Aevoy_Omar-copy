@@ -8,10 +8,14 @@
 -- =====================================================
 -- 1. Auto-create user_settings with defaults on signup
 -- =====================================================
-CREATE OR REPLACE FUNCTION auto_create_user_settings()
-RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION public.auto_create_user_settings()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
-  INSERT INTO user_settings (
+  INSERT INTO public.user_settings (
     user_id,
     confirmation_mode,
     verification_method,
@@ -27,7 +31,7 @@ BEGIN
   ON CONFLICT (user_id) DO NOTHING;  -- Idempotent
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 DROP TRIGGER IF EXISTS trg_auto_create_user_settings ON profiles;
 CREATE TRIGGER trg_auto_create_user_settings
@@ -38,10 +42,14 @@ CREATE TRIGGER trg_auto_create_user_settings
 -- =====================================================
 -- 2. Auto-create inbox_settings with safe defaults
 -- =====================================================
-CREATE OR REPLACE FUNCTION auto_create_inbox_settings()
-RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION public.auto_create_inbox_settings()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
-  INSERT INTO inbox_settings (
+  INSERT INTO public.inbox_settings (
     user_id,
     autonomy_level,
     enabled,
@@ -65,7 +73,7 @@ BEGIN
   ON CONFLICT (user_id) DO NOTHING;  -- Idempotent
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 -- inbox_settings uses auth.users(id), not profiles(id)
 -- So we trigger off profiles insert (which happens after auth.users insert)
