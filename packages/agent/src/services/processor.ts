@@ -1682,7 +1682,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         actionType: 'create_campaign', example: '[ACTION:create_campaign("name", [{"task":"...", "days_from_now":0, "hour":9}])]' },
       { keywords: ['remember that', 'remember my', 'don\'t forget', 'save that', 'note that'],
         actionType: 'remember', example: '[ACTION:remember("fact to save")]' },
-      { keywords: ['generate image', 'create image', 'make an image', 'dall-e', 'generate a picture'],
+      { keywords: ['generate image', 'create image', 'make an image', 'generate a picture', 'ai image'],
         actionType: 'generate_image', example: '[ACTION:generate_image("prompt", "1024x1024")]' },
       { keywords: ['post tweet', 'tweet about', 'post on twitter'],
         actionType: 'post_tweet', example: '[ACTION:post_tweet("tweet text")]' },
@@ -3914,31 +3914,86 @@ async function executeAction(
         size?: string;
       };
       try {
-        const openaiKey = process.env.OPENAI_API_KEY;
-        if (!openaiKey) {
-          return { action, success: false, error: "Image generation not available — OPENAI_API_KEY not set" };
+        const googleKey = process.env.GOOGLE_API_KEY;
+        if (!googleKey) {
+          return { action, success: false, error: "Image generation not available — GOOGLE_API_KEY not set" };
         }
-        const { default: OpenAI } = await import("openai");
-        const openaiClient = new OpenAI({ apiKey: openaiKey });
-        const response = await openaiClient.images.generate({
-          model: "dall-e-3",
-          prompt,
-          n: 1,
-          size: (size as "1024x1024" | "1792x1024" | "1024x1792") || "1024x1024",
-          quality: "standard",
+
+        // Map DALL-E sizes to Gemini aspect ratios
+        const aspectMap: Record<string, string> = {
+          "1024x1024": "1:1",
+          "1792x1024": "16:9",
+          "1024x1792": "9:16",
+        };
+        const aspectRatio = aspectMap[size] || "1:1";
+
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent`;
+        const geminiResponse = await fetch(geminiUrl, {
+          method: "POST",
+          headers: {
+            "x-goog-api-key": googleKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
+            generationConfig: {
+              responseModalities: ["TEXT", "IMAGE"],
+              imageConfig: { aspectRatio },
+            },
+          }),
         });
-        const imageUrl = response.data?.[0]?.url;
-        if (!imageUrl) {
-          return { action, success: false, error: "No image returned from DALL-E" };
+
+        if (!geminiResponse.ok) {
+          const errText = await geminiResponse.text();
+          console.error(`[GENERATE_IMAGE] Gemini API error ${geminiResponse.status}: ${errText.substring(0, 200)}`);
+          return { action, success: false, error: "Image generation API returned an error" };
         }
-        // Track DALL-E cost (standard: $0.04 for 1024x1024, $0.08 for larger)
-        const imgCost = size === "1024x1024" ? 0.04 : 0.08;
-        trackServiceCost(userId, "openai", "dall-e-3", imgCost, "image_generation").catch(() => {});
-        console.log(`[GENERATE_IMAGE] Created: ${imageUrl.substring(0, 80)}... (cost: $${imgCost})`);
+
+        const geminiData = await geminiResponse.json() as {
+          candidates?: Array<{
+            content?: {
+              parts?: Array<{
+                text?: string;
+                inlineData?: { mimeType: string; data: string };
+              }>;
+            };
+          }>;
+        };
+
+        // Find the image part in the response
+        const parts = geminiData.candidates?.[0]?.content?.parts || [];
+        const imagePart = parts.find((p: { inlineData?: { data: string; mimeType: string } }) => p.inlineData?.data);
+
+        if (!imagePart?.inlineData) {
+          console.error("[GENERATE_IMAGE] No image data in Gemini response");
+          return { action, success: false, error: "No image returned from generation" };
+        }
+
+        const { data: base64Data, mimeType } = imagePart.inlineData;
+
+        // Save to /tmp/aevoy-images/ and return the path
+        const fs = await import("fs");
+        const path = await import("path");
+        const imgDir = "/tmp/aevoy-images";
+        if (!fs.existsSync(imgDir)) {
+          fs.mkdirSync(imgDir, { recursive: true });
+        }
+        const ext = mimeType === "image/png" ? "png" : "jpg";
+        const filename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const filePath = path.join(imgDir, filename);
+        fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
+
+        // Also create a data URL for inline sharing
+        const dataUrl = `data:${mimeType};base64,${base64Data.substring(0, 100)}...`;
+
+        // Track Gemini image cost ($0.039/image)
+        const imgCost = 0.039;
+        trackServiceCost(userId, "google", "gemini-2.0-flash-exp-image-generation", imgCost, "image_generation").catch(() => {});
+        console.log(`[GENERATE_IMAGE] Gemini image saved: ${filePath} (cost: $${imgCost})`);
         return {
           action,
           success: true,
-          result: `Image generated: ${imageUrl}`,
+          result: `Image generated and saved: ${filePath}`,
         };
       } catch (imgErr) {
         console.error("[GENERATE_IMAGE] Failed:", imgErr);

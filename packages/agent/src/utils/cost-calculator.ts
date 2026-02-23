@@ -86,12 +86,17 @@ export const IMAGE_GENERATION_COSTS = {
     '1024x1792': 0.08,
     '1792x1024': 0.08,
   },
+  'gemini-2.0-flash-exp-image-generation': {
+    '1024x1024': 0.039,
+    '1024x1792': 0.039,
+    '1792x1024': 0.039,
+  },
 } as const;
 
 export function calculateImageCost(model: string, size: string): number {
   const costs = IMAGE_GENERATION_COSTS[model as keyof typeof IMAGE_GENERATION_COSTS];
-  if (!costs) return 0.04; // default DALL-E 3 standard
-  return (costs as Record<string, number>)[size] || 0.04;
+  if (!costs) return 0.039; // default Gemini image generation
+  return (costs as Record<string, number>)[size] || 0.039;
 }
 
 export function calculateEmailCost(): number {

@@ -646,7 +646,7 @@ NON-BROWSER ACTIONS:
 [ACTION:create_word("filename", [{"type":"heading", "text":"Title", "level":1}, {"type":"paragraph", "text":"Content"}])] — Create Word document with headings, paragraphs, tables, lists
 [ACTION:create_pdf("filename", [{"type":"title", "text":"Document Title"}, {"type":"paragraph", "text":"Content"}, {"type":"table", "tableData":{"headers":["H1","H2"], "rows":[["A","B"]]}}])] — Create PDF document with text, images, tables, professional formatting
 [ACTION:screenshot_ocr({"fullPage": true, "engine": "auto", "languages": ["eng"], "detectTables": true, "detectForms": true, "format": "structured"})] — Capture screenshot and extract text using OCR (Tesseract offline + AI vision fallback). Supports table/form detection, multi-language, region-specific extraction
-[ACTION:generate_image("detailed image prompt", "1024x1024")] — Generate an image using DALL-E 3. Returns a URL to the generated image. Use for creating marketing graphics, logos, social media images, illustrations, etc. Sizes: "1024x1024" (square), "1792x1024" (landscape), "1024x1792" (portrait)
+[ACTION:generate_image("detailed image prompt", "1024x1024")] — Generate an image using AI image generation. Returns a file path to the generated image. Use for creating marketing graphics, logos, social media images, illustrations, etc. Sizes: "1024x1024" (square), "1792x1024" (landscape), "1024x1792" (portrait)
 [ACTION:post_tweet("Your tweet text here (max 280 chars)")] — Post a tweet to Twitter/X via API (fast). If this fails because Twitter isn't connected, FALL BACK to browser: browse to x.com, login with saved credentials, compose and post the tweet via the UI.
 [ACTION:create_campaign("Campaign Name", [{"task": "Post tweet about topic X", "days_from_now": 0, "hour": 9}, {"task": "Post tweet about topic Y", "days_from_now": 1, "hour": 9}, {"task": "Post tweet about topic Z", "days_from_now": 2, "hour": 9}])] — Create a multi-day campaign: schedules a sequence of one-time tasks to run at specific times over multiple days. Perfect for drip campaigns, tweet series, email sequences, or any multi-step marketing workflow. days_from_now=0 means today, hour is UTC hour (0-23).
 [ACTION:generate_video_call("topic")] — Instantly create a free Jitsi Meet video call room and share the join link. No account required, works in any browser. Use when the user wants to do a video call, show something live, join a meeting, or video chat. The link can be shared via any channel (email, WhatsApp, Telegram, SMS).
@@ -696,7 +696,7 @@ SOCIAL MEDIA & MARKETING STRATEGY:
 - For "make me money online" → use search to find opportunities, generate_image to create marketing content, post_tweet to announce/promote
 - For "grow my Twitter" → research trending topics with search, write engaging tweets, post_tweet them
 - For "market my product" → generate_image (logo/banner), post_tweet (announcement), send_email (outreach)
-- DALL-E image URL from generate_image() can be shared in tweet text or remembered for later use
+- Generated image from generate_image() can be shared in tweet text or remembered for later use
 - Always post actionable, engaging content — not generic filler
 - If post_tweet fails (no API), use browser to go to twitter.com/x.com, login, and post manually via the UI
 

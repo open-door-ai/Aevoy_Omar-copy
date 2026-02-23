@@ -4,7 +4,7 @@
  * Features:
  * - Multi-threaded parallel execution (work on 5 things at once)
  * - Creative problem-solving (vague task → break down → try everything)
- * - Service discovery (need image? auto-find Gemini, DALL-E, Midjourney, etc.)
+ * - Service discovery (need image? auto-find Gemini, Midjourney, etc.)
  * - Account creation when needed
  * - Access request handling (denied? ask for access, continue on other tasks)
  * - Resource pooling (waiting for approval? work on other revenue streams)
@@ -348,7 +348,7 @@ export class AGIExecutor {
 
   /**
    * Handle image generation task.
-   * Strategy: Try Gemini → DALL-E → Midjourney → Local Stable Diffusion → Web search for free tools
+   * Strategy: Try Gemini → Midjourney → Local Stable Diffusion → Web search for free tools
    */
   private async handleImageGeneration(task: AGITask, page: Page): Promise<void> {
     console.log('[AGI] Image generation task detected');
