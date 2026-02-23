@@ -1295,6 +1295,145 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       };
     }
 
+    // 5h. PRE-AI FAST PATH: For email SENDING tasks, extract recipient/subject/body
+    // and send directly. Never let the AI narrate about "how email works".
+    const EMAIL_SEND_PATTERNS = [
+      /send\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i,
+      /email\s+([^\s,]+@[^\s,]+)\s+(?:about|with|saying|regarding)/i,
+      /send\s+(?:a\s+)?(?:message|mail)\s+to\s+([^\s,]+@[^\s,]+)/i,
+      /write\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i,
+      /(?:compose|draft)\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i,
+    ];
+    const taskTextForSend = `${subject} ${body}`.trim();
+    let sendEmailMatch: RegExpMatchArray | null = null;
+    for (const pattern of EMAIL_SEND_PATTERNS) {
+      sendEmailMatch = taskTextForSend.match(pattern);
+      if (sendEmailMatch) break;
+    }
+
+    // Also detect multiple recipients: "send email to X and Y"
+    const multiRecipientMatch = taskTextForSend.match(/(?:send|email|write|compose).*?to\s+([^\s,]+@[^\s,]+)(?:\s+and\s+|\s*,\s*)([^\s,]+@[^\s,]+)/i);
+
+    if (sendEmailMatch || multiRecipientMatch) {
+      const recipients: string[] = [];
+      if (multiRecipientMatch) {
+        recipients.push(multiRecipientMatch[1].replace(/[.,;]+$/, ''));
+        recipients.push(multiRecipientMatch[2].replace(/[.,;]+$/, ''));
+      } else if (sendEmailMatch) {
+        recipients.push(sendEmailMatch[1].replace(/[.,;]+$/, ''));
+      }
+
+      // Also scan for additional email addresses in the text
+      const allEmails = taskTextForSend.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+      for (const email of allEmails) {
+        if (!recipients.includes(email) && !email.includes('@aevoy.com')) {
+          recipients.push(email);
+        }
+      }
+
+      if (recipients.length > 0) {
+        console.log(`[FAST-PATH] Email send task detected — ${recipients.length} recipient(s): ${recipients.join(', ')}`);
+
+        // Extract subject/body from the task text using Groq (cheap AI)
+        let emailSubject = "Message from Aevoy";
+        let emailBody = "";
+        const groqKey = process.env.GROQ_API_KEY;
+        if (groqKey) {
+          try {
+            const composeRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "llama-3.1-8b-instant",
+                messages: [{
+                  role: "user",
+                  content: `The user wants to send an email. Extract the email subject and body from their request. If no specific content is mentioned, write a brief professional message.
+
+User request: "${taskTextForSend}"
+Recipients: ${recipients.join(', ')}
+
+Respond in EXACTLY this format (no other text):
+SUBJECT: <the email subject>
+BODY: <the email body>`,
+                }],
+                temperature: 0.3,
+                max_tokens: 500,
+              }),
+              signal: AbortSignal.timeout(5000),
+            });
+            if (composeRes.ok) {
+              const composeData = await composeRes.json();
+              const composed = composeData.choices?.[0]?.message?.content || "";
+              const subjectMatch = composed.match(/SUBJECT:\s*(.+)/i);
+              const bodyMatch = composed.match(/BODY:\s*([\s\S]+)/i);
+              if (subjectMatch) emailSubject = subjectMatch[1].trim();
+              if (bodyMatch) emailBody = bodyMatch[1].trim();
+            }
+          } catch (err) {
+            console.warn("[FAST-PATH] Groq compose failed:", err);
+          }
+        }
+        if (!emailBody) {
+          emailBody = `Hello,\n\nThis is a message sent on behalf of ${username} via Aevoy.\n\nBest regards`;
+        }
+
+        // Send to all recipients
+        const results: string[] = [];
+        for (const recipient of recipients) {
+          try {
+            // Try user's connected email first
+            const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
+            const connected = await isEmailConnected(userId);
+            let sent = false;
+            if (connected) {
+              sent = await sendViaUserEmail(userId, recipient, emailSubject, emailBody);
+            }
+            if (!sent) {
+              // Fallback: send from @aevoy.com via Resend
+              sent = await sendResponse({ to: recipient, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
+            }
+            results.push(sent ? `Sent to ${recipient}` : `Failed to send to ${recipient}`);
+          } catch (err) {
+            results.push(`Failed to send to ${recipient}: ${err}`);
+          }
+        }
+
+        const responseText = results.join('\n');
+        const allSent = results.every(r => r.startsWith('Sent'));
+
+        // Record action
+        try {
+          await getSupabaseClient().from('action_history').insert({
+            task_id: taskId,
+            user_id: userId,
+            action_type: 'send_email',
+            action_data: { recipients, subject: emailSubject, results },
+          });
+        } catch { /* Non-critical */ }
+
+        // Update task as completed
+        await getSupabaseClient().from("tasks").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime,
+          response_text: responseText,
+          verification_status: "verified",
+          action_count: recipients.length,
+          action_success_count: results.filter(r => r.startsWith('Sent')).length,
+        }).eq("id", taskId);
+
+        // Notify user via their input channel
+        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+
+        return {
+          taskId,
+          success: allSent,
+          response: responseText,
+          actions: recipients.map(r => ({ action: { type: 'send_email' as any, params: { to: r } }, success: results.some(res => res.includes(r) && res.startsWith('Sent')), result: responseText })),
+        };
+      }
+    }
+
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
@@ -1781,10 +1920,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
       if (isTaskComplete) break;
 
-      // DIRECT RESULT INJECTION: For data-retrieval actions (read_email, check_calendar, analyze_health_data),
-      // inject the result directly — BOTH success AND failure. NEVER let AI narration survive.
-      // Success = show the data. Failure = show clear error. Either way, AI text like "I'll check your inbox" is killed.
-      const DATA_ACTION_TYPES = ['read_email', 'check_calendar', 'analyze_health_data'];
+      // DIRECT RESULT INJECTION: For completed actions, inject the result directly —
+      // BOTH success AND failure. NEVER let AI narration survive.
+      // Success = show the data/confirmation. Failure = show clear error.
+      const DATA_ACTION_TYPES = ['read_email', 'check_calendar', 'analyze_health_data',
+        'send_email', 'send_sms', 'send_whatsapp', 'send_telegram', 'call_user', 'schedule'];
       const dataAction = iterationResults.find(r => DATA_ACTION_TYPES.includes(r.action.type));
       if (dataAction) {
         if (dataAction.success && dataAction.result && typeof dataAction.result === 'string' && dataAction.result.length > 20) {
@@ -3384,9 +3524,11 @@ async function executeAction(
       const { description, cron } = action.params as { description: string; cron: string };
       const lower = (cron || '').toLowerCase().trim();
 
-      // Detect one-time relative schedules ("in 2 minutes", "5m", "once", etc.)
+      // Detect one-time schedules: relative ("in 2 minutes"), absolute ("at 5:10 PM"), or keywords
       const isOneTime = /^(?:in\s+)?\d+\s*(?:s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)$/i.test(lower)
-        || lower === 'once' || lower === 'now';
+        || /^(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?$/i.test(lower)
+        || lower === 'once' || lower === 'now' || lower === 'at noon' || lower === 'noon'
+        || lower === 'at midnight' || lower === 'midnight';
 
       // Calculate next run time
       const nextRun = calculateNextRun(cron);
@@ -3921,6 +4063,61 @@ function calculateNextRun(cron: string): string {
     return new Date(now.getTime() + ms).toISOString();
   }
 
+  // ---- Absolute time support ----
+  // "at 5:10", "5:10 PM", "at 5:10pm", "at 17:00", "3:30 am", "at noon", "at midnight"
+  if (lower === 'at noon' || lower === 'noon') {
+    const next = new Date(now);
+    next.setHours(12, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    return next.toISOString();
+  }
+  if (lower === 'at midnight' || lower === 'midnight') {
+    const next = new Date(now);
+    next.setDate(next.getDate() + 1); // always next midnight
+    next.setHours(0, 0, 0, 0);
+    return next.toISOString();
+  }
+  const absoluteMatch = lower.match(/^(?:at\s+)?(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?$/);
+  if (absoluteMatch) {
+    let hour = parseInt(absoluteMatch[1]);
+    const minute = parseInt(absoluteMatch[2]);
+    const ampm = (absoluteMatch[3] || '').replace(/\./g, '').toLowerCase();
+    // Convert 12-hour to 24-hour
+    if (ampm === 'pm' && hour !== 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+    // If no am/pm specified and hour <= 12, infer from context (assume PM if it would be in the past for AM)
+    if (!ampm && hour <= 12 && hour > 0) {
+      const testNext = new Date(now);
+      testNext.setHours(hour, minute, 0, 0);
+      if (testNext <= now && hour + 12 < 24) {
+        hour += 12; // e.g. "at 5:10" at 5:13 PM → interpret as 5:10 PM tomorrow, not 5:10 AM
+      }
+    }
+    const next = new Date(now);
+    next.setHours(hour, minute, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    console.log(`[SCHEDULE] Absolute time parsed: "${cron}" → ${next.toISOString()}`);
+    return next.toISOString();
+  }
+  // Also handle "at 5" or "at 17" (hour only, no minutes)
+  const hourOnlyMatch = lower.match(/^(?:at\s+)?(\d{1,2})\s*([ap]\.?m\.?)?$/);
+  if (hourOnlyMatch) {
+    let hour = parseInt(hourOnlyMatch[1]);
+    const ampm = (hourOnlyMatch[2] || '').replace(/\./g, '').toLowerCase();
+    if (ampm === 'pm' && hour !== 12) hour += 12;
+    if (ampm === 'am' && hour === 12) hour = 0;
+    if (!ampm && hour <= 12 && hour > 0) {
+      const testNext = new Date(now);
+      testNext.setHours(hour, 0, 0, 0);
+      if (testNext <= now && hour + 12 < 24) hour += 12;
+    }
+    const next = new Date(now);
+    next.setHours(hour, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    console.log(`[SCHEDULE] Absolute hour parsed: "${cron}" → ${next.toISOString()}`);
+    return next.toISOString();
+  }
+
   // "once" — one-time, run immediately
   if (lower === 'once' || lower === 'now') {
     return now.toISOString();
@@ -3960,5 +4157,6 @@ function calculateNextRun(cron: string): string {
   }
 
   // Default: 1 day from now
+  console.warn(`[SCHEDULE] Unrecognized schedule format: "${cron}" — defaulting to 24h`);
   return new Date(now.getTime() + 86_400_000).toISOString();
 }

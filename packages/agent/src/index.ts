@@ -837,7 +837,7 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+17789008951";
 const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an account (set on Railway)
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
-const DEMO_GREETING = "Hi there! Welcome to Aevoy. I'm your AI personal assistant. You can ask me anything — I can help with emails, scheduling, research, creating documents, making phone calls, and so much more. What would you like to try?";
+const DEMO_GREETING = "Hey there! I'm your Aevoy AI assistant. Imagine having a brilliant employee who never sleeps, handles your emails, schedules your calls, does research, creates documents, and manages your entire digital life. That's me. Go ahead, ask me anything, and I'll show you what I can do.";
 
 // ---- Incoming Voice Calls (Caller Identification) ----
 
@@ -853,35 +853,33 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   try {
     const supabase = getSupabaseClient();
 
-    // OPTIMIZATION: Resolve user once, then load profile (eliminates duplicate resolveUser call)
-    const resolved = await resolveUser(callerNumber);
+    // ---- DEMO NUMBER: ANY call to the demo number gets the demo experience ----
+    // This check runs BEFORE user resolution — even registered users calling the demo
+    // number get the demo, because the demo number is for the website "Call Me Now" button.
+    const normalizedTo = twilioNumber.replace(/\D/g, "").slice(-10);
+    const normalizedDemo = DEMO_PHONE_NUMBER.replace(/\D/g, "").slice(-10);
+    const isDemoCall = normalizedTo === normalizedDemo;
 
-    if (!resolved) {
-      // ---- DEMO NUMBER: Allow any caller to experience Aevoy ----
-      const normalizedTo = twilioNumber.replace(/\D/g, "").slice(-10);
-      const normalizedDemo = DEMO_PHONE_NUMBER.replace(/\D/g, "").slice(-10);
-      const isDemoCall = normalizedTo === normalizedDemo;
+    if (isDemoCall) {
+      console.log(`[VOICE-DEMO] Demo call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 
-      if (isDemoCall) {
-        console.log(`[VOICE-DEMO] Demo call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
+      // Log demo call (fire-and-forget)
+      supabase.from("call_history").insert({
+        call_sid: callSid,
+        direction: "inbound",
+        from_number: callerNumber,
+        to_number: twilioNumber,
+        call_type: "demo",
+        pin_required: false,
+        pin_success: null
+      }).then(() => {}, (e: any) => console.error("[VOICE] Demo call history insert failed:", e));
 
-        // Log demo call (fire-and-forget)
-        supabase.from("call_history").insert({
-          call_sid: callSid,
-          direction: "inbound",
-          from_number: callerNumber,
-          to_number: twilioNumber,
-          call_type: "demo",
-          pin_required: false,
-          pin_success: null
-        }).then(() => {}, (e: any) => console.error("[VOICE] Demo call history insert failed:", e));
+      res.type("text/xml");
 
-        res.type("text/xml");
-
-        if (USE_CONVERSATION_RELAY) {
-          const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
-          console.log(`[VOICE-DEMO] ConversationRelay demo: voice=${DEMO_VOICE}`);
-          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+      if (USE_CONVERSATION_RELAY) {
+        const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
+        console.log(`[VOICE-DEMO] ConversationRelay demo: voice=${DEMO_VOICE}`);
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(DEMO_GREETING)}">
@@ -892,18 +890,22 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   </Connect>
   <Say voice="Polly.Joanna-Neural">${escapeXml(DEMO_GREETING)}</Say>
 </Response>`);
-        }
+      }
 
-        // Legacy fallback for demo
-        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+      // Legacy fallback for demo
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">${escapeXml(DEMO_GREETING)}</Say>
   <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app'}/webhook/voice/demo" method="POST" />
   <Say voice="${voice}">I didn't catch that. Feel free to call back anytime!</Say>
 </Response>`);
-      }
+    }
 
+    // OPTIMIZATION: Resolve user once, then load profile (eliminates duplicate resolveUser call)
+    const resolved = await resolveUser(callerNumber);
+
+    if (!resolved) {
       // ---- Not demo, not recognized — reject ----
       console.log(`[VOICE] Unknown caller: ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 

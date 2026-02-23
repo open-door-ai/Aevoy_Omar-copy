@@ -51,7 +51,16 @@ export const CAPTCHA_COSTS = {
 
 export function calculateVoiceCost(durationSeconds: number, isInternational: boolean = false): number {
   const minutes = Math.ceil(durationSeconds / 60);
-  const ratePerMinute = isInternational ? 0.014 : 0.0085;
+  // Full cost stack per minute (ConversationRelay with ElevenLabs + Deepgram):
+  // - Twilio carrier: $0.0085 inbound / $0.014 international
+  // - ConversationRelay orchestration: $0.01/min
+  // - ElevenLabs TTS (via Twilio): ~$0.024/min
+  // - Deepgram STT (via Twilio): ~$0.01/min
+  const carrierRate = isInternational ? 0.014 : 0.0085;
+  const conversationRelayRate = 0.01;  // Twilio ConversationRelay
+  const ttsRate = 0.024;               // ElevenLabs via Twilio
+  const sttRate = 0.01;                // Deepgram via Twilio
+  const ratePerMinute = carrierRate + conversationRelayRate + ttsRate + sttRate;
   return minutes * ratePerMinute;
 }
 

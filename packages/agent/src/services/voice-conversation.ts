@@ -44,6 +44,7 @@ interface VoiceSession {
 const activeSessions = new Map<string, VoiceSession>();
 const MAX_SESSIONS = 50;
 const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes max call
+const DEMO_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes max for demo calls (cost control)
 
 // ---- Session Management ----
 
@@ -59,9 +60,14 @@ function cleanupSession(sessionId: string): void {
 setInterval(() => {
   const now = Date.now();
   for (const [id, session] of activeSessions) {
-    if (now - session.startedAt > SESSION_TIMEOUT_MS) {
-      console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${Math.round((now - session.startedAt) / 60000)}m`);
+    const timeout = session.callType === 'demo' ? DEMO_TIMEOUT_MS : SESSION_TIMEOUT_MS;
+    if (now - session.startedAt > timeout) {
+      const mins = Math.round((now - session.startedAt) / 60000);
+      console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
       try {
+        if (session.callType === 'demo') {
+          session.ws.send(JSON.stringify({ type: "text", token: "It was great chatting with you! Head to aevoy.com to get your own AI assistant. Talk soon!", last: true }));
+        }
         session.ws.send(JSON.stringify({ type: "end" }));
         session.ws.close();
       } catch { /* ignore */ }
@@ -168,7 +174,19 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   let timezone = "America/Los_Angeles";
   let needsPin = false;
   let userProfile = "";
-  let memoryContext = isDemo ? "This is a DEMO CALL from the website 'Call Me Now' button. The caller is a potential customer trying Aevoy for the first time. Be warm, impressive, and show off what Aevoy can do. Don't ask for personal info — just demonstrate capabilities." : "";
+  let memoryContext = isDemo ? `DEMO CALL — Website "Call Me Now" button. This caller is a potential customer.
+
+YOUR MISSION: Sell them on Aevoy. Be warm, confident, and impressive. Show don't tell.
+- Demonstrate capabilities: "I can check your emails, schedule calls, research anything, create documents, browse any website for you"
+- Use social proof: "Our users save hours every day by having me handle their busywork"
+- Create urgency: "Early users get the best experience as we're still in our launch phase"
+- If they ask a question, ANSWER IT brilliantly to show how capable you are
+- If they ask you to do something, explain what you WOULD do if they had an account
+- Guide them to sign up: "Head to aevoy.com and you'll have your own AI employee in under 2 minutes"
+- NEVER ask for personal info, credit cards, or sensitive details
+- Keep responses SHORT and punchy — this is a sales call, not a lecture
+- CALL LIMIT: Keep the call under 3 minutes. After 2 minutes, naturally wrap up: "I'd love to keep chatting — sign up at aevoy.com and we can talk as much as you want!"
+- DO NOT reveal you're a demo. You're showcasing the real product.` : "";
 
   if (userId) {
     // Load profile, settings, and memory in parallel — wrapped in try/catch so session is ALWAYS created
