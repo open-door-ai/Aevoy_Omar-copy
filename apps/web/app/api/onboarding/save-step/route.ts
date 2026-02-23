@@ -23,8 +23,82 @@ export async function POST(request: Request) {
     }
 
     // Save data based on step number
+    // Step 2 (new flow) = consolidated quick setup (use cases + timezone + autonomy + checkin)
+    // Step 3 (new flow) = security & legal (PIN + legal checkboxes)
+    // Steps 4-8 = legacy flow (kept for backwards compatibility)
     switch (step) {
-      case 4: // Use cases
+      case 2: // Quick setup (new consolidated flow)
+        {
+          const profileUpdates: Record<string, any> = {};
+
+          if (data.main_uses && Array.isArray(data.main_uses)) {
+            profileUpdates.main_uses = data.main_uses;
+          }
+          if (data.timezone) {
+            profileUpdates.timezone = data.timezone;
+          }
+          if (data.daily_checkin_enabled !== undefined) {
+            profileUpdates.daily_checkin_enabled = data.daily_checkin_enabled;
+          }
+          if (data.daily_checkin_time) {
+            profileUpdates.daily_checkin_time = data.daily_checkin_time;
+          }
+
+          if (Object.keys(profileUpdates).length > 0) {
+            const { error } = await supabase
+              .from("profiles")
+              .update(profileUpdates)
+              .eq("id", user.id);
+            if (error) throw error;
+          }
+
+          // Map autonomy to confirmation_mode
+          if (data.autonomy_level !== undefined) {
+            let confirmation_mode = "unclear";
+            if (data.autonomy_level <= 30) confirmation_mode = "always";
+            else if (data.autonomy_level <= 60) confirmation_mode = "unclear";
+            else if (data.autonomy_level <= 85) confirmation_mode = "risky";
+            else confirmation_mode = "never";
+
+            const { error: settingsError } = await supabase
+              .from("user_settings")
+              .upsert({
+                user_id: user.id,
+                confirmation_mode,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: "user_id" });
+            if (settingsError) throw settingsError;
+          }
+        }
+        break;
+
+      case 3: // Security & legal (new consolidated flow)
+        {
+          const profileUpdates: Record<string, any> = {
+            legal_accepted_at: new Date().toISOString(),
+          };
+
+          if (data.voice_pin) {
+            const pin = data.voice_pin.toString().slice(0, 6);
+            if (!/^\d{4,6}$/.test(pin)) {
+              return NextResponse.json({ error: "PIN must be 4-6 digits" }, { status: 400 });
+            }
+            profileUpdates.unified_pin_hash = await bcrypt.hash(pin, 12);
+          }
+
+          if (data.allow_agent_venting !== undefined) {
+            profileUpdates.allow_agent_venting = data.allow_agent_venting;
+          }
+
+          const { error } = await supabase
+            .from("profiles")
+            .update(profileUpdates)
+            .eq("id", user.id);
+          if (error) throw error;
+        }
+        break;
+
+      case 4: // Use cases (legacy)
         if (data.main_uses && Array.isArray(data.main_uses)) {
           const { error } = await supabase
             .from("profiles")
