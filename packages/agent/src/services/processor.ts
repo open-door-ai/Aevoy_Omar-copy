@@ -190,7 +190,7 @@ async function tryEmailSendFastPath(
   userId: string, username: string, from: string, subject: string, body: string,
   inputChannel?: string, existingTaskId?: string
 ): Promise<TaskResult | null> {
-  const taskText = `${subject} ${body}`.trim();
+  const taskText = (subject.trim().toLowerCase() === body.trim().toLowerCase() ? subject : `${subject} ${body}`).trim();
 
   // Flexible patterns for detecting email send requests
   const EMAIL_SEND_PATTERNS = [
@@ -363,14 +363,14 @@ async function tryScheduleFastPath(
   userId: string, username: string, from: string, subject: string, body: string,
   inputChannel?: string, existingTaskId?: string
 ): Promise<TaskResult | null> {
-  const taskText = `${subject} ${body}`.trim();
+  // Deduplicate subject+body when identical (prevents regex over-capture from doubled text)
+  const taskText = (subject.trim().toLowerCase() === body.trim().toLowerCase() ? subject : `${subject} ${body}`).trim();
   const lower = taskText.toLowerCase();
 
-  // Pattern 1: "call me back at/in <time>" — extract time, stop at natural boundaries
-  // Supports digits (5:10 PM, 2 minutes, 1h) and named times (noon, midnight)
-  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at\s+|in\s+)((?:\d[\d:.\s]*(?:am|pm|a\.m\.|p\.m\.)?|\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|noon|midnight)\b.*?(?:$|(?=\s+(?:to|about|regarding|and|then))))/i);
+  // Pattern 1: "call me back at/in <time>" — capture ONLY the time expression (no trailing .*)
+  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at|in)\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)/i);
   // Pattern 2: "remind me in <time> to <task>" or "remind me at <time>"
-  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+((?:\d[\d:.\s]*(?:am|pm|a\.m\.|p\.m\.)?|\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|noon|midnight)\b[^a-z]*?)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
+  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
   // Pattern 3: "schedule <task> at/in <time>"
   const scheduleMatch = lower.match(/schedule\s+(.+?)\s+(?:at|in)\s+(.+)/i);
 
