@@ -758,6 +758,40 @@ SELF-CRITIQUE (between rounds):
 - If you see a success confirmation, the task may be done — include [TASK_COMPLETE].
 - If you see a login wall, try [ACTION:login(...)]. If you see a CAPTCHA, try waiting or a different URL.
 
+AUTONOMOUS MULTI-STEP PLANNING:
+You have up to 15 rounds of actions. Use them wisely for complex tasks.
+
+When given a complex goal (set up an account, apply to jobs, create a campaign, make money, book travel):
+1. THINK first: What's the end state? What are the concrete steps to get there?
+2. START with information gathering: search, browse to understand what's needed
+3. ADAPT after each round: based on what you see on the page, decide the next step
+4. CHAIN actions logically: each round builds on the previous round's results
+5. VERIFY your work: after key steps, check if they actually succeeded (look at page state)
+6. If a step fails, don't repeat it — try an alternative approach immediately
+
+ACCOUNT CREATION PATTERN (for any service):
+Round 1: [ACTION:browse("service-url.com")] — see the page, find signup link
+Round 2: [ACTION:click("Sign up")] or [ACTION:browse("service-url.com/signup")] — navigate to signup
+Round 3: [ACTION:fill("email", "your-aevoy-email")] [ACTION:fill("password", "{primary_password}")] — fill form fields
+Round 4: [ACTION:submit("form")] or [ACTION:click("Create account")] — submit the form
+Round 5: [ACTION:wait(15000)] [ACTION:read_email(3, 5)] — wait for verification email
+Round 6: Extract the code from email results, then [ACTION:fill("code", "123456")] [ACTION:submit("form")]
+- Adapt this pattern to whatever you see on screen. Forms differ. Follow what the page shows you.
+
+BOOKING/PURCHASE PATTERN (flights, hotels, reservations):
+Round 1: [ACTION:search("best flights from X to Y on DATE")] — research options
+Round 2: Browse the best option's booking page
+Round 3-5: Fill in details step by step (dates, passengers, preferences)
+Round 6: Stop before payment — report options and prices to user, ask them to confirm
+
+FAILURE RECOVERY:
+- Bot blocked? Try mobile site (m.site.com), different URL, or search instead of browse
+- Form field not found? Try different selectors — text label, placeholder, aria-label, CSS class
+- Login required? Check credential vault: [ACTION:login("site-url.com")]
+- CAPTCHA? The system handles it automatically. If still blocked, try a different service.
+- Timeout? Reduce actions per round. 2-3 focused actions beats 10 scattered ones.
+- IMPORTANT: You have 15 rounds. Don't rush. Do 2-3 actions per round, observe results, then plan more.
+
 IMPORTANT:
 - CONVERSATIONAL MESSAGES (greetings, thanks, casual chat): If the user says "hi", "hello", "how are you", "thanks", "ok", or any other conversational message — respond naturally and include [TASK_COMPLETE] immediately. Do NOT search, browse, or use any actions. Just reply.
 - DATE/TIME QUESTIONS: The current date and time is always provided at the top of each request as "CURRENT DATE & TIME". If the user asks what day it is, what the date is, what time it is, etc. — answer DIRECTLY from that provided date, include [TASK_COMPLETE], and do NOT search or browse. Never search for information you already have.
@@ -1384,12 +1418,44 @@ I'm working on this for you. I'll get back to you with results shortly.
 export function parseActions(response: string): Action[] {
   const actions: Action[] = [];
 
-  const actionRegex = /\[ACTION:(\w+)\((.*?)\)\]/g;
-  let match;
+  // Use balanced-parentheses extraction instead of simple regex
+  // This handles nested parens like fill("field", "John (CEO)")
+  const TAG_START = "[ACTION:";
+  let pos = 0;
 
-  while ((match = actionRegex.exec(response)) !== null) {
-    const actionType = match[1];
-    const paramsStr = match[2];
+  while (pos < response.length) {
+    const tagStart = response.indexOf(TAG_START, pos);
+    if (tagStart === -1) break;
+
+    // Extract action type
+    const typeStart = tagStart + TAG_START.length;
+    const parenStart = response.indexOf("(", typeStart);
+    if (parenStart === -1) { pos = typeStart; continue; }
+
+    const actionType = response.substring(typeStart, parenStart).trim();
+    if (!/^\w+$/.test(actionType)) { pos = parenStart; continue; }
+
+    // Find matching closing paren using depth counting
+    let depth = 1;
+    let i = parenStart + 1;
+    while (i < response.length && depth > 0) {
+      if (response[i] === "(") depth++;
+      else if (response[i] === ")") depth--;
+      if (depth > 0) i++;
+    }
+
+    if (depth !== 0) { pos = parenStart + 1; continue; }
+
+    // Verify closing bracket
+    const afterParen = i + 1;
+    if (afterParen >= response.length || response[afterParen] !== "]") {
+      // Try to be lenient — accept with or without ]
+      pos = afterParen;
+    } else {
+      pos = afterParen + 1;
+    }
+
+    const paramsStr = response.substring(parenStart + 1, i);
 
     try {
       const action = parseAction(actionType, paramsStr);
@@ -1397,7 +1463,7 @@ export function parseActions(response: string): Action[] {
         actions.push(action);
       }
     } catch (error) {
-      console.error(`Failed to parse action: ${match[0]}`, error);
+      console.error(`Failed to parse action: [ACTION:${actionType}(${paramsStr.slice(0, 50)}...)]`, error);
     }
   }
 

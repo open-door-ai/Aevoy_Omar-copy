@@ -938,7 +938,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const senderName = task.senderName || (from.includes('@') ? from.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : undefined);
   let taskId = task.taskId || "";
   const startTime = Date.now();
-  const MASTER_TIMEOUT_MS = 1200000; // 20 minutes
+  const MASTER_TIMEOUT_MS = 2400000; // 40 minutes — complex autonomous tasks need room
 
   // Master timeout: abort if the entire task exceeds 20 minutes
   const timeoutController = new AbortController();
@@ -1838,7 +1838,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // CRITICAL: Reduced from 30 to 5 to prevent resource hogging
     // With 10 concurrent tasks, 30 iterations = 300 total, causing deadlock
     // 5 iterations = 50 total, more manageable for concurrency
-    const MAX_ITERATIONS = 5;
+    const MAX_ITERATIONS = 15;
     let currentIteration = 0;
     let isTaskComplete = false;
     let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
@@ -2316,7 +2316,7 @@ Be creative. Think outside the box. What would a human do differently?`;
 
       const iterativePrompt = `Original request: ${subject} ${body}
 
-ROUND ${currentIteration} RESULTS:
+ROUND ${currentIteration}/${MAX_ITERATIONS} RESULTS:
 ${resultsSummary}
 ${pageStateSection}
 ${strategyEnforcement}
@@ -2325,10 +2325,12 @@ ${retryEnforcement}
 ${searchCompletionHint}
 ${domainWarning}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
+${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Wrap up: give your best answer from what you have and signal [TASK_COMPLETE].\n` : ''}
 OBSERVE the current page state above, then decide what to do next:
 - If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
 - If the page shows an error or unexpected state, adapt your approach.
-- If more steps are needed, include the next actions.
+- If more steps are needed, include the next 2-3 actions (focused, not scattered).
+- Build on what worked in prior rounds. Don't start over.
 - NEVER give up. Always find a way.`;
 
       console.log(`[ITERATE] Re-prompting AI with page observation for round ${currentIteration + 1}...`);
