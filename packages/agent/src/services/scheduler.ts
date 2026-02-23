@@ -799,18 +799,69 @@ async function runDueScheduledTasksInner(): Promise<void> {
         console.log(`[SCHEDULER] Pre-updated task ${scheduled.id}: is_active=${!isOneTime}, next_run=${nextRun}`);
       }
 
-      // FAST PATH: Direct action execution for known action names
+      // FAST PATH: Direct action execution for known action names (INLINE)
       // When the AI schedules call_user/send_sms/etc., the description IS the action name.
       // Executing these directly avoids the slow AI loop that doesn't understand raw action names.
+      const lowerTask = taskText.toLowerCase().trim();
       let directActionHandled = false;
-      try {
-        directActionHandled = await tryDirectActionExecution(
-          taskText, scheduled.user_id, profile.username, profile.email, profile.phone_number
-        );
-      } catch (directErr) {
-        console.error(`[SCHEDULER] tryDirectActionExecution threw:`, directErr);
+
+      if (lowerTask === 'call_user' || lowerTask === 'call user' || lowerTask.startsWith('call_user:')) {
+        // INLINE call_user — call the user's phone directly
+        const callMsg = lowerTask.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
+        try {
+          const { callUser } = await import('./twilio.js');
+          let phone = profile.phone_number;
+          if (!phone) {
+            const { data: p } = await getSupabaseClient().from('profiles').select('phone_number').eq('id', scheduled.user_id).single();
+            phone = p?.phone_number;
+          }
+          if (phone) {
+            const result = await callUser({ to: phone, userId: scheduled.user_id, message: callMsg || 'Hey, your AI assistant is calling to follow up on your request.' });
+            console.log(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone}`);
+          } else {
+            console.error(`[SCHEDULER-DIRECT] call_user: no phone for user ${scheduled.user_id.slice(0, 8)}`);
+          }
+          directActionHandled = true;
+        } catch (err) {
+          console.error('[SCHEDULER-DIRECT] call_user error:', err);
+          directActionHandled = true; // Don't retry via AI
+        }
+      } else if (lowerTask === 'send_sms' || lowerTask.startsWith('send_sms:')) {
+        // INLINE send_sms — text the user directly
+        const smsBody = lowerTask.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Reminder from your AI assistant';
+        try {
+          const { sendSms } = await import('./twilio.js');
+          let phone = profile.phone_number;
+          if (!phone) {
+            const { data: p } = await getSupabaseClient().from('profiles').select('phone_number').eq('id', scheduled.user_id).single();
+            phone = p?.phone_number;
+          }
+          if (phone) {
+            await sendSms({ userId: scheduled.user_id, to: phone, body: smsBody });
+            console.log(`[SCHEDULER-DIRECT] send_sms: sent to ${phone}`);
+          } else {
+            console.error(`[SCHEDULER-DIRECT] send_sms: no phone for user ${scheduled.user_id.slice(0, 8)}`);
+          }
+          directActionHandled = true;
+        } catch (err) {
+          console.error('[SCHEDULER-DIRECT] send_sms error:', err);
+          directActionHandled = true;
+        }
+      } else if (lowerTask === 'send_email' || lowerTask.startsWith('send_email:')) {
+        // INLINE send_email — email the user directly
+        const emailBody = lowerTask.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Scheduled reminder from your AI assistant';
+        try {
+          const { sendResponse } = await import('./email.js');
+          await sendResponse({ to: profile.email, from: `${profile.username}@aevoy.com`, subject: 'Scheduled Reminder', body: emailBody });
+          console.log(`[SCHEDULER-DIRECT] send_email: sent to ${profile.email}`);
+          directActionHandled = true;
+        } catch (err) {
+          console.error('[SCHEDULER-DIRECT] send_email error:', err);
+          directActionHandled = true;
+        }
       }
-      console.log(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}"`);
+
+      console.log(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}" (lower="${lowerTask}")`);
 
       if (!directActionHandled) {
         // Fall back to full AI processing for complex/natural-language tasks
