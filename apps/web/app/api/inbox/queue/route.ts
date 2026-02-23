@@ -109,7 +109,7 @@ export async function POST(request: Request) {
     // Trigger execution via webhook to agent
     if (decision === "approved" || decision === "modified") {
       try {
-        await fetch(`${process.env.AGENT_URL || "http://localhost:3001"}/webhooks/inbox-action`, {
+        await fetch(`${process.env.AGENT_URL || "https://agent-production-1339.up.railway.app"}/webhooks/inbox-action`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

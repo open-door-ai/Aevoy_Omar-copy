@@ -2287,6 +2287,8 @@ server.listen(PORT, async () => {
   // START HEALTH SYSTEM (The Final Boss - Never Fails)
   try {
     const { healthSystem } = await import("./services/health-system.js");
+    // Run startup validation FIRST — logs all issues loudly
+    await healthSystem.runStartupValidation();
     healthSystem.startMonitoring();
     console.log(`[HEALTH] ✅ Never-fail health system started (30s monitoring)`);
   } catch (e) {
@@ -2324,6 +2326,74 @@ server.listen(PORT, async () => {
     }
   }, 5 * 60 * 1000); // Every 5 minutes
   console.log('[WATCHDOG] ✅ Task timeout watchdog started (5min interval, 20min timeout)');
+
+  // WEBHOOK SELF-HEALER — auto-repair phone numbers pointing to wrong URL
+  const validateAndRepairWebhooks = async () => {
+    try {
+      const agentUrl = process.env.AGENT_URL;
+      const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+      if (!agentUrl || !twilioSid || !twilioToken) return;
+
+      // Get all user phone numbers from DB
+      const { data: userNumbers } = await getSupabaseClient()
+        .from('user_twilio_numbers')
+        .select('user_id, phone_number, twilio_sid')
+        .eq('is_active', true);
+
+      if (!userNumbers || userNumbers.length === 0) return;
+
+      // Check each number's webhook via Twilio API
+      const auth = Buffer.from(`${twilioSid}:${twilioToken}`).toString('base64');
+
+      for (const num of userNumbers) {
+        if (!num.twilio_sid) continue;
+        try {
+          const res = await fetch(
+            `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/IncomingPhoneNumbers/${num.twilio_sid}.json`,
+            { headers: { Authorization: `Basic ${auth}` } }
+          );
+          if (!res.ok) continue;
+
+          const data = await res.json();
+          const expectedVoice = `${agentUrl}/webhook/voice/premium/${num.user_id}`;
+          const expectedSms = `${agentUrl}/webhook/sms/premium/${num.user_id}`;
+
+          // If webhook is wrong (localhost, dead IP, different host), repair it
+          if (data.voice_url !== expectedVoice || data.sms_url !== expectedSms) {
+            console.log(`[WEBHOOK-HEALER] Repairing ${num.phone_number}: ${data.voice_url} → ${expectedVoice}`);
+
+            await fetch(
+              `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/IncomingPhoneNumbers/${num.twilio_sid}.json`,
+              {
+                method: 'POST',
+                headers: {
+                  Authorization: `Basic ${auth}`,
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                  VoiceUrl: expectedVoice,
+                  VoiceMethod: 'POST',
+                  SmsUrl: expectedSms,
+                  SmsMethod: 'POST',
+                }).toString(),
+              }
+            );
+            console.log(`[WEBHOOK-HEALER] ✅ Fixed ${num.phone_number}`);
+          }
+        } catch (err) {
+          console.error(`[WEBHOOK-HEALER] Error checking ${num.phone_number}:`, err);
+        }
+      }
+    } catch (e) {
+      console.error('[WEBHOOK-HEALER] Error:', e);
+    }
+  };
+
+  // Run on startup + every 30 minutes
+  validateAndRepairWebhooks();
+  setInterval(validateAndRepairWebhooks, 30 * 60 * 1000);
+  console.log('[WEBHOOK-HEALER] ✅ Webhook self-healer started (30min interval)');
 
   startScheduler();
   startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)

@@ -220,30 +220,27 @@ class HealthSystem {
   }
 
   /**
-   * Check AI provider health
+   * Check AI provider health (no expensive API calls — just verify keys exist)
    */
   private async checkAI(): Promise<SubsystemHealth> {
     try {
-      // Test basic AI call with minimal cost
-      const result = await generateResponse(
-        { facts: '', recentLogs: '' },
-        'health check',
-        'Respond with OK',
-        'system',
-        'understand'
-      );
+      // Check that at least one AI provider key is configured
+      const hasGroq = !!process.env.GROQ_API_KEY;
+      const hasDeepseek = !!process.env.DEEPSEEK_API_KEY;
+      const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
+      const hasGemini = !!process.env.GEMINI_API_KEY;
 
-      if (result.content.toLowerCase().includes('ok') || result.content.trim().length > 0) {
-        return {
-          name: 'ai',
-          status: 'ok',
-          lastSuccessful: new Date(),
-          failureCount: 0,
-          autoRepairAttempted: false
-        };
+      if (!hasGroq && !hasDeepseek && !hasAnthropic && !hasGemini) {
+        throw new Error('No AI provider API keys configured');
       }
 
-      throw new Error('Invalid AI response');
+      return {
+        name: 'ai',
+        status: 'ok',
+        lastSuccessful: new Date(),
+        failureCount: 0,
+        autoRepairAttempted: false
+      };
     } catch (error) {
       return {
         name: 'ai',
@@ -648,6 +645,94 @@ Respond with JSON:
    */
   getStatus(): HealthStatus {
     return this.healthStatus;
+  }
+
+  /**
+   * Startup validation — run ONCE on boot, log all issues loudly
+   */
+  async runStartupValidation(): Promise<void> {
+    console.log('[HEALTH] ========== STARTUP VALIDATION ==========');
+    const issues: string[] = [];
+
+    // 1. Critical env vars
+    const criticalVars = [
+      'SUPABASE_URL', 'SUPABASE_SERVICE_KEY',
+      'AGENT_URL', 'AGENT_WEBHOOK_SECRET',
+    ];
+    for (const v of criticalVars) {
+      if (!process.env[v]) issues.push(`MISSING: ${v} (CRITICAL)`);
+    }
+
+    // 2. AI providers (at least one required)
+    const hasAnyAI = process.env.GROQ_API_KEY || process.env.DEEPSEEK_API_KEY
+      || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY;
+    if (!hasAnyAI) {
+      issues.push('MISSING: No AI provider keys (need at least one of GROQ/DEEPSEEK/ANTHROPIC/GEMINI)');
+    }
+
+    // 3. Communication services
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+      issues.push('MISSING: Twilio credentials (voice/SMS will not work)');
+    }
+    if (!process.env.RESEND_API_KEY) {
+      issues.push('WARNING: RESEND_API_KEY not set (email sending will fail)');
+    }
+
+    // 4. Browser
+    if (!process.env.CAPSOLVER_API_KEY) {
+      issues.push('WARNING: CAPSOLVER_API_KEY not set (CAPTCHA solving will fail)');
+    }
+
+    // 5. AGENT_URL should not be localhost in production
+    if (process.env.NODE_ENV === 'production' && process.env.AGENT_URL?.includes('localhost')) {
+      issues.push('CRITICAL: AGENT_URL is set to localhost in production!');
+    }
+
+    // 6. Test Supabase connectivity
+    try {
+      const sb = getSupabaseClient();
+      const { error } = await sb.from('profiles').select('id').limit(1);
+      if (error) issues.push(`Database error: ${error.message}`);
+    } catch (e) {
+      issues.push(`Database unreachable: ${e instanceof Error ? e.message : 'unknown'}`);
+    }
+
+    // 7. Test Groq API (cheapest AI call)
+    if (process.env.GROQ_API_KEY) {
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/models', {
+          headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+        });
+        if (!res.ok) issues.push(`Groq API key invalid (${res.status})`);
+      } catch (e) {
+        issues.push('Groq API unreachable');
+      }
+    }
+
+    // 8. Test Twilio API
+    if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+      try {
+        const auth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
+        const res = await fetch(
+          `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}.json`,
+          { headers: { Authorization: `Basic ${auth}` } }
+        );
+        if (!res.ok) issues.push(`Twilio API key invalid (${res.status})`);
+      } catch (e) {
+        issues.push('Twilio API unreachable');
+      }
+    }
+
+    // Report
+    if (issues.length === 0) {
+      console.log('[HEALTH] ✅ All startup checks passed');
+    } else {
+      console.error(`[HEALTH] ⚠️ ${issues.length} startup issue(s):`);
+      for (const issue of issues) {
+        console.error(`[HEALTH]   - ${issue}`);
+      }
+    }
+    console.log('[HEALTH] ========================================');
   }
 }
 

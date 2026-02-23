@@ -112,7 +112,7 @@ export async function POST(request: Request) {
     }
 
     // Call agent webhook to initiate verification call
-    const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
+    const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
     const webhookSecret = process.env.AGENT_WEBHOOK_SECRET;
 
     if (!webhookSecret) {

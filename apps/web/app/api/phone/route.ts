@@ -172,7 +172,7 @@ export async function POST(request: Request) {
     const phoneNumber = searchData.available_phone_numbers[0].phone_number;
 
     // 2. Purchase the number and set webhook URLs
-    const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
+    const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
     const purchaseBody = new URLSearchParams({
       PhoneNumber: phoneNumber,
       SmsUrl: `${agentUrl}/webhook/sms/${user.id}`,

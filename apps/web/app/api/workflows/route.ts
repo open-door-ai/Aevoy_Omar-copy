@@ -80,7 +80,7 @@ export async function POST(request: Request) {
     }
 
     // Forward to agent server
-    const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
+    const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
     const res = await fetch(`${agentUrl}/task/incoming`, {
       method: "POST",
       headers: {
