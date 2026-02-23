@@ -11,7 +11,7 @@
  * ENDLESS LOOP: Keeps trying until goal achieved, no matter how long it takes.
  */
 
-import { Page } from 'playwright';
+import { Page } from 'patchright';
 import { MultiUserBrowserService } from './multi-user-browser.js';
 import { handleCaptchaIfPresent } from '../execution/captcha.js';
 import { getSupabaseClient } from '../utils/supabase.js';

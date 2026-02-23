@@ -5,7 +5,7 @@
  * Never makes the same mistake twice - learns from every failure.
  */
 
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, Browser, BrowserContext, Page } from 'patchright';
 import { LockedIntent } from '../security/intent-lock.js';
 import { ActionValidator } from '../security/validator.js';
 import { executeClick } from './actions/click.js';

@@ -3,7 +3,7 @@
  * Each call creates its own browser instance to avoid concurrency hazards.
  */
 
-import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { chromium, Browser, BrowserContext, Page } from "patchright";
 import Anthropic from "@anthropic-ai/sdk";
 
 let anthropic: Anthropic | null = null;

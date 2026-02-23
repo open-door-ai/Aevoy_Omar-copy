@@ -5,7 +5,7 @@
  * anti-bot measures. Provides strategies to handle each.
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 import { delay } from '../utils/timeout.js';
 
 export type AntiBotType = 'cloudflare' | 'aws_waf' | 'rate_limit' | 'generic_block' | 'unknown' | 'none';

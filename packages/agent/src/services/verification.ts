@@ -5,7 +5,7 @@
  * and handles the flow of requesting codes from users.
  */
 
-import type { Page } from "playwright";
+import type { Page } from "patchright";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { sendVerificationCodeRequest } from "./email.js";
 

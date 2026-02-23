@@ -7,7 +7,7 @@
  * 20-min timeout, then continue
  */
 
-import { Page } from "playwright";
+import { Page } from "patchright";
 import { MultiUserBrowserService } from "./multi-user-browser.js";
 import { captchaSolver } from "./captcha-solver.js";
 import { qualityChecker } from "./quality-checker.js";

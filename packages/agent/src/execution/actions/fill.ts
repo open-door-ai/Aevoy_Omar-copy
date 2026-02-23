@@ -4,7 +4,7 @@
  * If one method doesn't work, try the next. Never give up.
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 
 interface FillTarget {
   selector?: string;

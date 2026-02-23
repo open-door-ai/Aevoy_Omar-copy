@@ -10,7 +10,7 @@
  * Fallback: Browserbase only if VPS fails
  */
 
-import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { chromium, Browser, BrowserContext, Page } from "patchright";
 import { WebSocketServer, WebSocket } from "ws";
 import { getCredential } from "./credential-vault.js";
 import { encryptWithServerKey, decryptWithServerKey } from "../security/encryption.js";

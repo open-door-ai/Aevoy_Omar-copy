@@ -1,5 +1,5 @@
 declare module "@browserbasehq/stagehand" {
-  import { Page, BrowserContext } from "playwright";
+  import { Page, BrowserContext } from "patchright";
 
   interface StagehandOptions {
     env?: "BROWSERBASE" | "LOCAL";

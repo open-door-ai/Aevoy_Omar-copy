@@ -13,7 +13,7 @@
  * 8. Claude Vision-guided navigation
  */
 
-import type { Page } from "playwright";
+import type { Page } from "patchright";
 import { getFailureMemory, learnSolution } from "../../memory/failure-db.js";
 import { generateVisionResponse } from "../../services/ai.js";
 

@@ -12,7 +12,7 @@
  * - Zero limitations - ALWAYS finds a way
  */
 
-import { Page } from 'playwright';
+import { Page } from 'patchright';
 import { MultiUserBrowserService } from './multi-user-browser.js';
 import { generateResponse } from './ai.js';
 import { handleCaptchaIfPresent } from '../execution/captcha.js';

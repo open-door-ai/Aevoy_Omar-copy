@@ -6,7 +6,7 @@
  * WebRTC leak prevention, realistic timing, and human-like interaction.
  */
 
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page } from 'patchright';
 
 // ---------------------------------------------------------------------------
 // 1. USER-AGENT ROTATION — Current Chrome 131+ (Jan 2026)

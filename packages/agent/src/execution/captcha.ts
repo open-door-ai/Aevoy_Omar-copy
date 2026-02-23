@@ -13,7 +13,7 @@
  * - Screenshot evidence for all attempts
  */
 
-import type { Page } from 'playwright';
+import type { Page } from 'patchright';
 
 export type CaptchaType = 'recaptcha_v2' | 'recaptcha_v3' | 'hcaptcha' | 'turnstile' | 'image' | 'funcaptcha' | 'geetest' | 'datadome' | 'none';
 

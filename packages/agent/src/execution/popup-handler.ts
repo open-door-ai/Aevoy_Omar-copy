@@ -5,7 +5,7 @@
  * that block page interaction. Also blocks ad networks.
  */
 
-import type { Page, BrowserContext } from 'playwright';
+import type { Page, BrowserContext } from 'patchright';
 
 // Common cookie banner selectors
 const COOKIE_BANNER_SELECTORS = [

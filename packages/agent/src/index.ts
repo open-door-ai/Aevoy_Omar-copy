@@ -345,6 +345,8 @@ app.get("/health", async (_req, res) => {
     maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
     conversationRelay: USE_CONVERSATION_RELAY,
     database: supabaseStatus,
+    capsolver: !!process.env.CAPSOLVER_API_KEY,
+    agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
   });
 });
 

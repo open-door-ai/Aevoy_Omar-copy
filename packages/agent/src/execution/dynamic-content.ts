@@ -4,7 +4,7 @@
  * Handles SPAs, Shadow DOM, iframes, and dynamic content loading.
  */
 
-import type { Page, Frame } from 'playwright';
+import type { Page, Frame } from 'patchright';
 
 /**
  * Wait for a SPA to be fully ready:

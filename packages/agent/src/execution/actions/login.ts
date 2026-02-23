@@ -5,7 +5,7 @@
  * Includes OAuth, magic link, API+CSRF, and vision-guided methods.
  */
 
-import type { Page } from "playwright";
+import type { Page } from "patchright";
 import { generateVisionResponse } from "../../services/ai.js";
 
 export interface LoginParams {

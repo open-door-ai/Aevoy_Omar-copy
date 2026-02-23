@@ -8,7 +8,7 @@
  * Step 3: Smart Review — Claude Sonnet reviews if confidence < 90%
  */
 
-import type { Page } from "playwright";
+import type { Page } from "patchright";
 import { quickValidate, generateVisionResponse } from "./ai.js";
 import type { VerificationResult, QualityTier } from "../types/index.js";
 

@@ -10,7 +10,7 @@
  * This is what separates task execution from true AGI.
  */
 
-import { Page } from 'playwright';
+import { Page } from 'patchright';
 import { getSupabaseClient } from '../utils/supabase.js';
 import { generateResponse } from './ai.js';
 

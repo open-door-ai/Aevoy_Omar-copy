@@ -7,7 +7,7 @@
  */
 
 import { generateResponse, generateVisionResponse } from "./ai.js";
-import { Page } from "playwright";
+import { Page } from "patchright";
 
 interface QualityCheck {
   passed: boolean;

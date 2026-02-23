@@ -7,7 +7,7 @@
  */
 
 import axios from "axios";
-import { Page } from "playwright";
+import { Page } from "patchright";
 import { generateVisionResponse } from "./ai.js";
 
 type CaptchaType = "recaptcha_v2" | "recaptcha_v3" | "hcaptcha" | "turnstile" | "image" | "geetest" | "unknown";

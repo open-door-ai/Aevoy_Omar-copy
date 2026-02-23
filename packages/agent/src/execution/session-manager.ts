@@ -6,7 +6,7 @@
  * 1-year expiry with background refresh
  */
 
-import type { BrowserContext, Page } from 'playwright';
+import type { BrowserContext, Page } from 'patchright';
 import { getSupabaseClient } from '../utils/supabase.js';
 import { encryptWithServerKey, decryptWithServerKey } from '../security/encryption.js';
 

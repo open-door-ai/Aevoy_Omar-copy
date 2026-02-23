@@ -4,7 +4,7 @@
  * Beats GenSpark with multi-engine OCR, table detection, and region-specific extraction
  */
 
-import type { Page } from "playwright";
+import type { Page } from "patchright";
 import { createWorker, type Worker } from "tesseract.js";
 import { generateVisionResponse } from "../../services/ai.js";
 import fs from "fs/promises";

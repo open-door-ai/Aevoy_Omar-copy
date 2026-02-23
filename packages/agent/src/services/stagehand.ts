@@ -14,7 +14,7 @@
  * - Built-in CAPTCHA solving
  */
 
-import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { chromium, Browser, BrowserContext, Page } from "patchright";
 import { z, ZodType } from "zod";
 
 // ---- Types ----
