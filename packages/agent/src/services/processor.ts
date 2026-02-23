@@ -3089,18 +3089,40 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     } else if (actionResults.length > 0 && actionResults.some(r => r.success)) {
       // Actions succeeded but AI response was only action tags — build user-friendly summary
       const successActions = actionResults.filter(r => r.success);
-      const summaries = successActions.map(r => {
-        if (r.action.type === 'remember') return `Remembered: ${r.action.params.fact || r.action.params.text || 'your preference'}`;
-        if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
-        if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
-        if (r.action.type === 'generate_image') return `Image generated`;
-        if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
-        if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
-        if (r.action.type === 'post_tweet') return `Tweet posted`;
-        if (r.action.type === 'send_email') return `Email sent`;
-        return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
-      });
-      cleanResponse = `Done!\n\n${summaries.join('\n')}`;
+      const hasBrowserActions = successActions.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form'].includes(r.action.type));
+
+      if (hasBrowserActions) {
+        // For browser tasks: generate AI summary instead of dumping raw HTML/JS
+        try {
+          const actionSummary = successActions.map(r => {
+            const params = Object.values(r.action.params || {}).map(v => String(v).substring(0, 50)).join(', ');
+            return `${r.action.type}(${params}): ${r.success ? 'OK' : 'FAIL'}`;
+          }).join('\n');
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const summary = await generateForcedDirectAnswer(
+            `${subject} ${body || ''}`,
+            `Actions taken:\n${actionSummary}\n\nSummarize what was accomplished in 2-3 sentences for the user.`,
+            username
+          );
+          cleanResponse = summary.content || `I worked on your request. ${successActions.length} actions completed.`;
+        } catch {
+          cleanResponse = `I worked on your request "${subject}". ${successActions.length} actions completed successfully.`;
+        }
+      } else {
+        const summaries = successActions.map(r => {
+          if (r.action.type === 'remember') return `Remembered: ${r.action.params.fact || r.action.params.text || 'your preference'}`;
+          if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
+          if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
+          if (r.action.type === 'generate_image') return `Image generated`;
+          if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
+          if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
+          if (r.action.type === 'post_tweet') return `Tweet posted`;
+          if (r.action.type === 'send_email') return `Email sent`;
+          if (r.action.type === 'search' && r.result) return String(r.result).substring(0, 300);
+          return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
+        });
+        cleanResponse = `Done!\n\n${summaries.join('\n')}`;
+      }
     } else {
       cleanResponse = `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
     }
