@@ -3738,10 +3738,6 @@ async function executeAction(
     }
 
     case "search": {
-      if (!executionEngine) {
-        return { action, success: false, error: "Browser not available" };
-      }
-
       const query = action.params.query as string;
 
       // Helper: detect if extracted text is garbage (JS errors, framework noise, error pages)
@@ -3764,7 +3760,89 @@ async function executeAction(
         return isErrorPage || jsHits >= 3 || (text.length > 200 && text.replace(/\s+/g, ' ').split(' ').filter(w => w.length > 3).length < 20);
       };
 
-      // Strategy 1: DuckDuckGo Lite (lighter, less rate-limited than html endpoint)
+      // Strategy 0: API-based search using fetch (no browser needed, avoids bot detection)
+      // DuckDuckGo Lite works without JS and returns HTML that's easy to parse
+      let apiSearchResult = '';
+      try {
+        console.log(`[SEARCH] Strategy 0: Fetch-based DuckDuckGo Lite for "${query}"`);
+        const ddgApiUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+        const fetchResponse = await fetch(ddgApiUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (fetchResponse.ok) {
+          const html = await fetchResponse.text();
+          // Extract text from DDG Lite HTML (simple structure: <a> links + text snippets)
+          const textContent = html
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (textContent.length > 200 && !isGarbageText(textContent)) {
+            apiSearchResult = textContent.substring(0, 3000);
+            console.log(`[SEARCH] Fetch-based DDG succeeded: ${apiSearchResult.length} chars`);
+          } else {
+            console.log(`[SEARCH] Fetch-based DDG returned ${textContent.length} chars (${isGarbageText(textContent) ? 'garbage' : 'too short'})`);
+          }
+        }
+      } catch (fetchErr) {
+        console.log(`[SEARCH] Fetch-based DDG failed: ${fetchErr}`);
+      }
+
+      // Also try DuckDuckGo Instant Answer API (returns structured JSON)
+      if (!apiSearchResult) {
+        try {
+          console.log(`[SEARCH] Strategy 0b: DuckDuckGo Instant Answer API`);
+          const instantUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`;
+          const instantResponse = await fetch(instantUrl, {
+            headers: { 'User-Agent': 'AevoyAgent/1.0' },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (instantResponse.ok) {
+            const data = await instantResponse.json() as Record<string, unknown>;
+            const parts: string[] = [];
+            if (data.AbstractText) parts.push(`Summary: ${data.AbstractText}`);
+            if (data.Answer) parts.push(`Answer: ${data.Answer}`);
+            if (Array.isArray(data.RelatedTopics)) {
+              for (const topic of (data.RelatedTopics as Array<Record<string, unknown>>).slice(0, 5)) {
+                if (topic.Text) parts.push(`- ${topic.Text}`);
+              }
+            }
+            if (parts.length > 0) {
+              apiSearchResult = parts.join('\n');
+              console.log(`[SEARCH] DDG Instant Answer succeeded: ${apiSearchResult.length} chars`);
+            }
+          }
+        } catch (instantErr) {
+          console.log(`[SEARCH] DDG Instant Answer failed: ${instantErr}`);
+        }
+      }
+
+      // If API-based search worked, return immediately (no browser needed)
+      if (apiSearchResult && apiSearchResult.length > 100) {
+        return {
+          action,
+          success: true,
+          result: `Search results for "${query}":\n${apiSearchResult}`,
+        };
+      }
+
+      // Fall through to browser-based search if API failed
+      if (!executionEngine) {
+        // No browser and API search failed — return what we have or fail gracefully
+        if (apiSearchResult) {
+          return { action, success: true, result: `Search results for "${query}":\n${apiSearchResult}` };
+        }
+        return { action, success: false, error: "Search failed: no browser available and API search returned no results" };
+      }
+
+      // Strategy 1: DuckDuckGo Lite via browser (lighter, less rate-limited than html endpoint)
       const ddgUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
       const ddgResult = await executionEngine.executeSteps([
         { action: 'navigate', params: { url: ddgUrl } },
