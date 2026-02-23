@@ -1927,10 +1927,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
 
-        // ADVICE-DETECTION QUALITY GATE: If AI completed with 0 actions on round 1,
+        // ADVICE-DETECTION QUALITY GATE: If AI completed with no REAL actions on round 1,
         // check if the response is advice (lists of suggestions) instead of results.
-        // This catches "here are some websites you could try" non-answers.
-        if (aiResponse.actions.length === 0 && currentIteration === 1) {
+        // Treat wait-only or scroll-only as "no real actions" — the AI is being lazy.
+        const TRIVIAL_ACTIONS = ['wait', 'scroll'];
+        const hasRealActions = aiResponse.actions.some(a => !TRIVIAL_ACTIONS.includes(a.type));
+        if (!hasRealActions && currentIteration <= 2) {
           const lowerContent = aiResponse.content.toLowerCase();
           const isConversational = ['hi', 'hello', 'thanks', 'thank you', 'ok', 'hey', 'good morning', 'good evening'].some(
             g => subject.toLowerCase().trim().startsWith(g) || (body || '').toLowerCase().trim().startsWith(g)
@@ -1991,7 +1993,7 @@ For "${subject}":
             aiSignaledComplete = true;
             break;
           }
-        } else if (aiResponse.actions.length === 0) {
+        } else if (!hasRealActions) {
           isTaskComplete = true;
           aiSignaledComplete = true;
           break;
