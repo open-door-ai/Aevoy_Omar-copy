@@ -266,6 +266,7 @@ Rules:
         subject: task.goal.substring(0, 100),
         body,
         inputChannel: (inputChannel || 'web') as any,
+        suppressEmail: true, // Sub-tasks don't send individual emails
       });
 
       if (result.success) {

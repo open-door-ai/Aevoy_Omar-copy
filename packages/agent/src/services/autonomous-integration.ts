@@ -356,6 +356,7 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
             subject: sub.subject,
             body: enrichedBody,
             inputChannel: task.inputChannel || "web",
+            suppressEmail: true, // Sub-tasks don't send individual emails — one summary at the end
           });
 
           roundResults.push({

@@ -602,10 +602,8 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
         actions: [],
       };
     } else {
-      // Execute immediately
-      await sendTaskAccepted(from, `${username}@aevoy.com`, clarified.structuredIntent.goal, taskId);
-      
-      // Process the task in full (this handles the actual execution)
+      // Execute immediately — skip "task accepted" email to reduce inbox noise.
+      // The user will get the final result email when the task completes.
       return processTask({ ...task, taskId });
     }
   } catch (error) {
@@ -1083,8 +1081,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       taskType,
       goal: classification.goal,
       allowedDomains: classification.domains,
-      maxDuration: 300, // 5 minutes max
-      maxActions: 100
+      // Let intent-lock's per-taskType limits apply (1200s/500 for browser, 300/100 for email/writing)
     });
 
     console.log(`[SECURITY] Intent locked: ${taskType}`);
@@ -1319,7 +1316,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
               : `Here's what I was able to complete:\n\n${aggregatedResponse}`)
             : "I had trouble completing your request. Let me try a different approach — feel free to send it again.";
 
-          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseBody);
+          if (!task.suppressEmail) {
+            await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseBody);
+          }
 
           return {
             taskId,
@@ -1392,7 +1391,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           status: "pending_approval",
         }).eq("id", taskId);
 
-        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Plan Approval: ${subject}`, approvalMessage);
+        if (!task.suppressEmail) {
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Plan Approval: ${subject}`, approvalMessage);
+        }
 
         return {
           taskId,
@@ -1457,7 +1458,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             : "I had trouble completing this via API. Let me try a different approach — feel free to resend your request.";
         }
 
-        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+        if (!task.suppressEmail) {
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+        }
         return { taskId, success: allSuccess, response: responseText, actions: [] };
       }
     } catch (planError) {
@@ -1622,8 +1625,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         action_success_count: emailResult.success ? 1 : 0,
       }).eq("id", taskId);
 
-      // Send response
-      await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+      // Send response (skip for autonomous sub-tasks)
+      if (!task.suppressEmail) {
+        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+      }
 
       return {
         taskId,
@@ -1820,14 +1825,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // Send progress update for long tasks (include Live View link if available)
-    if (aiResponse.actions.length > 3 || (needsBrowser && classification.needsBrowser)) {
-      const liveViewUrl = executionEngine ? await executionEngine.getLiveViewUrl() : null; // must await — async method
-      let progressMsg = `Working on your request...`;
+    // Send progress update ONLY for browser tasks with a live view URL (useful info).
+    // Skip for non-browser tasks to avoid inbox spam — user just gets the final result.
+    if (executionEngine && !task.suppressEmail) {
+      const liveViewUrl = await executionEngine.getLiveViewUrl();
       if (liveViewUrl) {
-        progressMsg += `\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`;
+        await sendProgressEmail(from, `${username}@aevoy.com`, subject,
+          `Working on your request...\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`, taskId);
       }
-      await sendProgressEmail(from, `${username}@aevoy.com`, subject, progressMsg, taskId);
     }
 
     // ============================================================
@@ -1912,10 +1917,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const iterationResults: ActionResult[] = [];
 
       for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
-        // Per-task budget check: stop if accumulated cost exceeds $2
+        // Per-task budget check: $5 cap gives headroom for multi-step autonomous tasks
         const taskCostSoFar = totalAiCost + (executionEngine?.getTotalCost() || 0);
-        if (taskCostSoFar > 2.0) {
-          console.warn(`[BUDGET] Task cost exceeded $2 (${taskCostSoFar.toFixed(4)}), stopping execution`);
+        if (taskCostSoFar > 5.0) {
+          console.warn(`[BUDGET] Task cost exceeded $5 (${taskCostSoFar.toFixed(4)}), stopping execution`);
           isTaskComplete = true;
           break;
         }
@@ -2744,9 +2749,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             break;
           }
 
-          // Budget check — stop if accumulated cost > $2
+          // Budget check — stop if accumulated cost > $5
           const currentTaskCost = (aiResponse.cost || 0) + (executionEngine.getTotalCost() || 0) + strikeCtx.totalVerificationCost;
-          if (currentTaskCost > 2.0) {
+          if (currentTaskCost > 5.0) {
             console.log(`[STRIKE] Budget cap reached ($${currentTaskCost.toFixed(2)}), stopping strikes`);
             verificationResult = strikeCtx.bestResult;
             break;
@@ -2899,45 +2904,50 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       emailBody += `\n\nNote: I'd recommend double-checking these results as I wasn't fully able to verify them.`;
     }
 
+    // Skip email sending for autonomous sub-tasks (they send one summary at the end)
+    if (task.suppressEmail) {
+      console.log(`[TASK] suppressEmail=true, skipping result email`);
+    } else {
     // Resolve correct recipient based on channel
     const channel = task.inputChannel || "email";
     const { email, phone } = await resolveRecipient(channel, from, userId);
 
     if (channel === "sms") {
-      // SMS: short summary, truncated to 1600 chars
-      const smsBody = cleanResponse.length > 1500
-        ? cleanResponse.substring(0, 1500) + "... (full results emailed)"
-        : cleanResponse;
-
-      // Always try to send SMS if we have a phone number
+      // SMS: send SMS to phone. Only fall back to email if no phone OR response too long.
       if (phone) {
+        const smsBody = cleanResponse.length > 1500
+          ? cleanResponse.substring(0, 1500) + "... (full results emailed)"
+          : cleanResponse;
         await sendSms({ userId, to: phone, body: smsBody });
+        // Only send email if response was truncated (user needs full text)
+        if (cleanResponse.length > 1500) {
+          await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+        }
       } else {
-        // No phone on file, send email
-        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
-      }
-
-      // Send full email if response is long
-      if (cleanResponse.length > 1500) {
+        // No phone on file — single email only
         await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
       }
     } else if (channel === "voice") {
-      // Voice: send SMS summary to phone + email full results to email
+      // Voice: SMS summary to phone, email only if response was long
       if (phone) {
         const smsSummary = cleanResponse.length > 300
           ? cleanResponse.substring(0, 300) + "... (check email for full results)"
           : cleanResponse;
         await sendSms({ userId, to: phone, body: `[Aevoy] ${smsSummary}` });
+        // Only email if SMS was truncated
+        if (cleanResponse.length > 300) {
+          await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+        }
+      } else {
+        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
       }
-
-      // Always send full results to email
-      await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
     } else {
       // Default: email
       console.log(`[TASK] Sending reply email: to=${email}, from=${username}@aevoy.com, subject="${subject}"`);
       const emailSent = await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
       console.log(`[TASK] Reply email result: sent=${emailSent}`);
     }
+    } // end suppressEmail else
 
     // 12. Update task as completed with cost tracking + verification
     const elapsedMs = Date.now() - startTime;
@@ -3209,14 +3219,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // Send friendly response — never expose internal error details to users
-    await sendResponse({
-      to: from,
-      from: `${username}@aevoy.com`,
-      subject,
-      body: isTimeout
-        ? "This task took longer than expected. I've saved my progress — send it again and I'll pick up where I left off."
-        : "I ran into a snag while working on your request. I'm going to try a different approach — feel free to send it again and I'll get right on it.",
-    });
+    if (!task.suppressEmail) {
+      await sendResponse({
+        to: from,
+        from: `${username}@aevoy.com`,
+        subject,
+        body: isTimeout
+          ? "This task took longer than expected. I've saved my progress — send it again and I'll pick up where I left off."
+          : "I ran into a snag while working on your request. I'm going to try a different approach — feel free to send it again and I'll get right on it.",
+      });
+    }
 
     return {
       taskId,

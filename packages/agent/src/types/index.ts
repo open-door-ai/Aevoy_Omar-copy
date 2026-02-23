@@ -78,6 +78,8 @@ export interface TaskRequest {
   attachments?: Attachment[];
   taskId?: string;
   inputChannel?: InputChannel;
+  /** When true, processTask skips sending result emails (used by autonomous sub-tasks) */
+  suppressEmail?: boolean;
 }
 
 export interface Attachment {
