@@ -293,16 +293,33 @@ BODY: <the complete email body>`,
     emailBody = `Hello,\n\nThis is a message sent on behalf of ${username} via Aevoy.\n\nBest regards,\n${username}`;
   }
 
-  // Send to all recipients
+  // Send to all recipients — use Resend directly for speed (IMAP can hang)
+  // The fast path prioritizes delivery speed over using the user's personal SMTP
   const results: string[] = [];
   for (const recipient of recipients) {
     try {
-      const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
-      const connected = await isEmailConnected(userId);
       let sent = false;
-      if (connected) {
-        sent = await sendViaUserEmail(userId, recipient, emailSubject, emailBody);
+
+      // Try user's IMAP/SMTP with a strict 3-second timeout
+      try {
+        const imapResult = await Promise.race([
+          (async () => {
+            const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
+            const connected = await isEmailConnected(userId);
+            if (connected) {
+              return await sendViaUserEmail(userId, recipient, emailSubject, emailBody);
+            }
+            return false;
+          })(),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 3000)),
+        ]);
+        sent = !!imapResult;
+        if (!sent) console.log(`[FAST-PATH-SEND] IMAP timeout/unavailable, using Resend fallback`);
+      } catch {
+        console.log(`[FAST-PATH-SEND] IMAP error, using Resend fallback`);
       }
+
+      // Fallback to Resend (fast, reliable, sends from username@aevoy.com)
       if (!sent) {
         sent = await sendResponse({ to: recipient, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
       }
