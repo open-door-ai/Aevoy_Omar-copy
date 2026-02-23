@@ -162,18 +162,36 @@ export async function callUser(request: VoiceCallRequest): Promise<{
   try {
     // Use user's dedicated number if available, otherwise shared number
     const fromNumber = await getUserFromNumber(request.userId);
+    const agentUrl = process.env.AGENT_URL || '';
+    const wsUrl = agentUrl.replace('http', 'ws') + '/ws/voice';
+    const voiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+
+    // Use ConversationRelay for callbacks so the user gets a full conversational experience
+    // (not just a one-way <Say> which can fail with certain voice names)
+    const greeting = escapeXml(request.message || 'Hey! Your AI assistant is calling back. What can I help you with?');
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}?userId=${request.userId}&callType=callback"
+      ttsProvider="ElevenLabs" voice="${voiceId}"
+      transcriptionProvider="Deepgram" dtmfDetection="true"
+      interruptible="true" welcomeGreeting="${greeting}" />
+  </Connect>
+</Response>`;
 
     const params = new URLSearchParams({
       To: request.to,
       From: fromNumber || config.phoneNumber,
-      Twiml: generateSpeechTwiml(request.message, request.voice),
+      Twiml: twiml,
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
 
     if (!response.ok) {
       const errorData = await response.text();
-      return { success: false, error: `Twilio API error: ${response.status} ${errorData}` };
+      console.error(`[TWILIO] callUser API error: ${response.status} ${errorData}`);
+      // Fallback to simple <Say> with a reliable voice
+      return await callUserFallback(request, fromNumber || config.phoneNumber);
     }
 
     const data = await response.json() as { sid: string };
@@ -181,11 +199,50 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // Track usage
     await trackVoiceUsage(request.userId, 1);
 
-    console.log(`[TWILIO] Call initiated: ${data.sid}`);
+    console.log(`[TWILIO] Callback initiated via ConversationRelay: ${data.sid}`);
     return { success: true, callSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("[TWILIO] Call error:", msg);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Fallback: simple TwiML <Say> with a safe voice when ConversationRelay fails.
+ */
+async function callUserFallback(request: VoiceCallRequest, fromNumber: string): Promise<{
+  success: boolean;
+  callSid?: string;
+  error?: string;
+}> {
+  try {
+    // Use Polly.Joanna-Neural — always works on Twilio, no special requirements
+    const safeTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(request.message || 'Hello! Your AI assistant is calling back.')}</Say>
+  <Pause length="2"/>
+  <Say voice="Polly.Joanna-Neural">If you need anything, just call me back. Goodbye!</Say>
+</Response>`;
+
+    const params = new URLSearchParams({
+      To: request.to,
+      From: fromNumber,
+      Twiml: safeTwiml,
+    });
+
+    const response = await twilioRequest("/Calls.json", "POST", params);
+    if (!response.ok) {
+      const errorData = await response.text();
+      return { success: false, error: `Twilio fallback error: ${response.status} ${errorData}` };
+    }
+
+    const data = await response.json() as { sid: string };
+    await trackVoiceUsage(request.userId, 1);
+    console.log(`[TWILIO] Callback initiated via fallback <Say>: ${data.sid}`);
+    return { success: true, callSid: data.sid };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: msg };
   }
 }
@@ -205,15 +262,18 @@ export async function callExternal(
   const fromNumber = await getUserFromNumber(userId);
 
   try {
+    // Use a safe voice for <Say> — Polly.Joanna-Neural is always reliable
+    const safeVoice = 'Polly.Joanna-Neural';
     // Build TwiML that speaks then optionally gathers response
-    let twiml = `<Response>
-  <Say voice="${voice}">${escapeXml(message)}</Say>`;
+    let twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${safeVoice}">${escapeXml(message)}</Say>`;
 
     if (gatherAfter) {
       twiml += `
   <Gather input="speech" timeout="10" speechTimeout="auto"
           action="${config.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="${voice}">I'm listening for your response.</Say>
+    <Say voice="${safeVoice}">I'm listening for your response.</Say>
   </Gather>`;
     }
 
@@ -321,10 +381,13 @@ export async function generateResponseTwiml(message: string, voiceOverride?: str
 
 /**
  * Generate TwiML for speech synthesis.
+ * Uses Polly.Joanna-Neural as safe default — always works on Twilio.
  */
 function generateSpeechTwiml(text: string, voice?: string): string {
-  return `<Response>
-  <Say voice="${voice || DEFAULT_VOICE}">${escapeXml(text)}</Say>
+  const safeVoice = voice || 'Polly.Joanna-Neural';
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${safeVoice}">${escapeXml(text)}</Say>
 </Response>`;
 }
 
