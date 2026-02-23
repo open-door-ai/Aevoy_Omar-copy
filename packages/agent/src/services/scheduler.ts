@@ -692,7 +692,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
       const isOneTime = isOnce || (maxRuns !== null && newRunCount >= maxRuns);
       const nextRun = isOneTime ? null : calculateNextRun(scheduled.cron_expression, scheduled.timezone);
 
-      await getSupabaseClient()
+      const { error: updateError } = await getSupabaseClient()
         .from('scheduled_tasks')
         .update({
           last_run_at: now,
@@ -701,8 +701,18 @@ async function runDueScheduledTasksInner(): Promise<void> {
           is_active: !isOneTime,
         })
         .eq('id', scheduled.id);
-      
-      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description}`);
+
+      if (updateError) {
+        console.error(`[SCHEDULER] Failed to update scheduled task ${scheduled.id}:`, updateError);
+        // Fallback: try raw SQL for one-time tasks
+        if (isOneTime) {
+          try {
+            await getSupabaseClient().rpc('deactivate_scheduled_task', { task_id: scheduled.id });
+          } catch { /* last resort */ }
+        }
+      }
+
+      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${!isOneTime})`);
     } catch (error) {
       console.error(`[SCHEDULER] Error processing scheduled task ${scheduled.id}:`, error);
     }

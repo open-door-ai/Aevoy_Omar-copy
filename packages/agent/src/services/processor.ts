@@ -183,6 +183,159 @@ function shouldSkipPayment(): boolean {
 }
 
 /**
+ * Fast path for email sending — intercepts before any AI/classifier runs.
+ * Returns null if not an email send task, returns TaskResult if handled.
+ */
+async function tryEmailSendFastPath(
+  userId: string, username: string, from: string, subject: string, body: string,
+  inputChannel?: string
+): Promise<TaskResult | null> {
+  const taskText = `${subject} ${body}`.trim();
+
+  // Flexible patterns for detecting email send requests
+  const EMAIL_SEND_PATTERNS = [
+    /send\s+.*?email\s+to\s+([^\s,]+@[^\s,]+)/i,                    // "send [any words] email to X"
+    /email\s+([^\s,]+@[^\s,]+)\s+(?:about|with|saying|regarding)/i,  // "email X about..."
+    /send\s+.*?(?:message|mail)\s+to\s+([^\s,]+@[^\s,]+)/i,         // "send [any] message to X"
+    /write\s+.*?email\s+to\s+([^\s,]+@[^\s,]+)/i,                   // "write [any] email to X"
+    /(?:compose|draft)\s+.*?email\s+to\s+([^\s,]+@[^\s,]+)/i,       // "compose email to X"
+    /(?:send|forward|reply)\s+to\s+([^\s,]+@[^\s,]+)/i,             // "send to X@Y"
+  ];
+
+  let matched = false;
+  const recipients: string[] = [];
+
+  for (const pattern of EMAIL_SEND_PATTERNS) {
+    const m = taskText.match(pattern);
+    if (m) {
+      matched = true;
+      const addr = m[1].replace(/[.,;]+$/, '');
+      if (!recipients.includes(addr)) recipients.push(addr);
+      break;
+    }
+  }
+
+  if (!matched) return null;
+
+  // Scan for ALL email addresses in the text (multi-recipient support)
+  const allEmails = taskText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+  for (const email of allEmails) {
+    const clean = email.replace(/[.,;]+$/, '');
+    if (!recipients.includes(clean) && !clean.includes('@aevoy.com')) {
+      recipients.push(clean);
+    }
+  }
+
+  if (recipients.length === 0) return null;
+
+  const startTime = Date.now();
+  console.log(`[FAST-PATH-SEND] Email send detected — ${recipients.length} recipient(s): ${recipients.join(', ')}`);
+
+  // Create task record first
+  const { data: taskRecord } = await getSupabaseClient()
+    .from("tasks")
+    .insert({
+      user_id: userId,
+      status: "processing",
+      email_subject: subject,
+      input_text: body,
+      started_at: new Date().toISOString(),
+      input_channel: inputChannel || "email",
+    })
+    .select()
+    .single();
+  const taskId = taskRecord?.id || "";
+
+  // Use cheap AI (Groq) to compose the email subject/body from the user's request
+  let emailSubject = "Message from Aevoy";
+  let emailBody = "";
+  const groqKey = process.env.GROQ_API_KEY;
+  if (groqKey) {
+    try {
+      const composeRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "llama-3.1-8b-instant",
+          messages: [{
+            role: "user",
+            content: `The user wants to send an email. Extract the email subject and body from their request. If they specified content, use it exactly. If no specific content is mentioned, write a brief professional message based on context.
+
+User request: "${taskText}"
+Sender name: ${username}
+Recipients: ${recipients.join(', ')}
+
+Respond in EXACTLY this format (no other text):
+SUBJECT: <the email subject line>
+BODY: <the complete email body>`,
+          }],
+          temperature: 0.3,
+          max_tokens: 500,
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (composeRes.ok) {
+        const composeData = await composeRes.json();
+        const composed = composeData.choices?.[0]?.message?.content || "";
+        const subjMatch = composed.match(/SUBJECT:\s*(.+)/i);
+        const bodyMatch = composed.match(/BODY:\s*([\s\S]+)/i);
+        if (subjMatch) emailSubject = subjMatch[1].trim();
+        if (bodyMatch) emailBody = bodyMatch[1].trim();
+      }
+    } catch (err) {
+      console.warn("[FAST-PATH-SEND] Groq compose failed:", err);
+    }
+  }
+  if (!emailBody) {
+    emailBody = `Hello,\n\nThis is a message sent on behalf of ${username} via Aevoy.\n\nBest regards,\n${username}`;
+  }
+
+  // Send to all recipients
+  const results: string[] = [];
+  for (const recipient of recipients) {
+    try {
+      const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
+      const connected = await isEmailConnected(userId);
+      let sent = false;
+      if (connected) {
+        sent = await sendViaUserEmail(userId, recipient, emailSubject, emailBody);
+      }
+      if (!sent) {
+        sent = await sendResponse({ to: recipient, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
+      }
+      results.push(sent ? `Email sent to ${recipient}` : `Failed to send to ${recipient}`);
+      console.log(`[FAST-PATH-SEND] ${sent ? 'Sent' : 'FAILED'} to ${recipient}`);
+    } catch (err) {
+      results.push(`Failed to send to ${recipient}`);
+      console.error(`[FAST-PATH-SEND] Error sending to ${recipient}:`, err);
+    }
+  }
+
+  const responseText = results.join('\n');
+  const allSent = results.every(r => r.startsWith('Email sent'));
+
+  // Update task as completed
+  if (taskId) {
+    await getSupabaseClient().from("tasks").update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      execution_time_ms: Date.now() - startTime,
+      verification_status: "verified",
+    }).eq("id", taskId);
+  }
+
+  // Notify user via their input channel
+  await sendViaChannel(inputChannel as any, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+
+  return {
+    taskId,
+    success: allSent,
+    response: responseText,
+    actions: recipients.map(r => ({ action: { type: 'send_email' as any, params: { to: r } }, success: results.some(res => res.includes(r) && res.startsWith('Email sent')), result: responseText })),
+  };
+}
+
+/**
  * Process incoming email - handles clarification and confirmation flow
  */
 export async function processIncomingTask(task: TaskRequest): Promise<TaskResult> {
@@ -213,6 +366,12 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     if (cardCommand) {
       return handleCardCommand(cardCommand, userId, from, username);
     }
+
+    // ---- PRE-CLASSIFIER FAST PATH: Email sending ----
+    // Detect "send email to X" BEFORE the autonomous planner so simple email sends
+    // don't get routed through multi-step workflow planning.
+    const emailSendResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel);
+    if (emailSendResult) return emailSendResult;
 
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
     if (await requiresAutonomousPlanning(subject, body)) {
@@ -1295,143 +1454,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       };
     }
 
-    // 5h. PRE-AI FAST PATH: For email SENDING tasks, extract recipient/subject/body
-    // and send directly. Never let the AI narrate about "how email works".
-    const EMAIL_SEND_PATTERNS = [
-      /send\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i,
-      /email\s+([^\s,]+@[^\s,]+)\s+(?:about|with|saying|regarding)/i,
-      /send\s+(?:a\s+)?(?:message|mail)\s+to\s+([^\s,]+@[^\s,]+)/i,
-      /write\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i,
-      /(?:compose|draft)\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i,
-    ];
-    const taskTextForSend = `${subject} ${body}`.trim();
-    let sendEmailMatch: RegExpMatchArray | null = null;
-    for (const pattern of EMAIL_SEND_PATTERNS) {
-      sendEmailMatch = taskTextForSend.match(pattern);
-      if (sendEmailMatch) break;
-    }
-
-    // Also detect multiple recipients: "send email to X and Y"
-    const multiRecipientMatch = taskTextForSend.match(/(?:send|email|write|compose).*?to\s+([^\s,]+@[^\s,]+)(?:\s+and\s+|\s*,\s*)([^\s,]+@[^\s,]+)/i);
-
-    if (sendEmailMatch || multiRecipientMatch) {
-      const recipients: string[] = [];
-      if (multiRecipientMatch) {
-        recipients.push(multiRecipientMatch[1].replace(/[.,;]+$/, ''));
-        recipients.push(multiRecipientMatch[2].replace(/[.,;]+$/, ''));
-      } else if (sendEmailMatch) {
-        recipients.push(sendEmailMatch[1].replace(/[.,;]+$/, ''));
-      }
-
-      // Also scan for additional email addresses in the text
-      const allEmails = taskTextForSend.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
-      for (const email of allEmails) {
-        if (!recipients.includes(email) && !email.includes('@aevoy.com')) {
-          recipients.push(email);
-        }
-      }
-
-      if (recipients.length > 0) {
-        console.log(`[FAST-PATH] Email send task detected — ${recipients.length} recipient(s): ${recipients.join(', ')}`);
-
-        // Extract subject/body from the task text using Groq (cheap AI)
-        let emailSubject = "Message from Aevoy";
-        let emailBody = "";
-        const groqKey = process.env.GROQ_API_KEY;
-        if (groqKey) {
-          try {
-            const composeRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${groqKey}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: "llama-3.1-8b-instant",
-                messages: [{
-                  role: "user",
-                  content: `The user wants to send an email. Extract the email subject and body from their request. If no specific content is mentioned, write a brief professional message.
-
-User request: "${taskTextForSend}"
-Recipients: ${recipients.join(', ')}
-
-Respond in EXACTLY this format (no other text):
-SUBJECT: <the email subject>
-BODY: <the email body>`,
-                }],
-                temperature: 0.3,
-                max_tokens: 500,
-              }),
-              signal: AbortSignal.timeout(5000),
-            });
-            if (composeRes.ok) {
-              const composeData = await composeRes.json();
-              const composed = composeData.choices?.[0]?.message?.content || "";
-              const subjectMatch = composed.match(/SUBJECT:\s*(.+)/i);
-              const bodyMatch = composed.match(/BODY:\s*([\s\S]+)/i);
-              if (subjectMatch) emailSubject = subjectMatch[1].trim();
-              if (bodyMatch) emailBody = bodyMatch[1].trim();
-            }
-          } catch (err) {
-            console.warn("[FAST-PATH] Groq compose failed:", err);
-          }
-        }
-        if (!emailBody) {
-          emailBody = `Hello,\n\nThis is a message sent on behalf of ${username} via Aevoy.\n\nBest regards`;
-        }
-
-        // Send to all recipients
-        const results: string[] = [];
-        for (const recipient of recipients) {
-          try {
-            // Try user's connected email first
-            const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
-            const connected = await isEmailConnected(userId);
-            let sent = false;
-            if (connected) {
-              sent = await sendViaUserEmail(userId, recipient, emailSubject, emailBody);
-            }
-            if (!sent) {
-              // Fallback: send from @aevoy.com via Resend
-              sent = await sendResponse({ to: recipient, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
-            }
-            results.push(sent ? `Sent to ${recipient}` : `Failed to send to ${recipient}`);
-          } catch (err) {
-            results.push(`Failed to send to ${recipient}: ${err}`);
-          }
-        }
-
-        const responseText = results.join('\n');
-        const allSent = results.every(r => r.startsWith('Sent'));
-
-        // Record action
-        try {
-          await getSupabaseClient().from('action_history').insert({
-            task_id: taskId,
-            user_id: userId,
-            action_type: 'send_email',
-            action_data: { recipients, subject: emailSubject, results },
-          });
-        } catch { /* Non-critical */ }
-
-        // Update task as completed
+    // 5h. PRE-AI FAST PATH: Email SENDING (also handled in processIncomingTask,
+    // but needed here too for subtask execution and direct processTask calls)
+    const sendFastPathResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel);
+    if (sendFastPathResult) {
+      // If task record already existed, update it
+      if (taskId && sendFastPathResult.taskId !== taskId) {
         await getSupabaseClient().from("tasks").update({
           status: "completed",
           completed_at: new Date().toISOString(),
           execution_time_ms: Date.now() - startTime,
-          response_text: responseText,
           verification_status: "verified",
-          action_count: recipients.length,
-          action_success_count: results.filter(r => r.startsWith('Sent')).length,
         }).eq("id", taskId);
-
-        // Notify user via their input channel
-        await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
-
-        return {
-          taskId,
-          success: allSent,
-          response: responseText,
-          actions: recipients.map(r => ({ action: { type: 'send_email' as any, params: { to: r } }, success: results.some(res => res.includes(r) && res.startsWith('Sent')), result: responseText })),
-        };
       }
+      return sendFastPathResult;
     }
 
     // 6. Generate AI response (use cheapest model if over budget)
