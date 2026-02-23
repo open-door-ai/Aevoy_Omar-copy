@@ -1262,6 +1262,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
                   body: subtask.description,
                   taskId: subtaskId,
                   inputChannel: task.inputChannel,
+                  suppressEmail: true, // Subtasks don't send individual emails
                 });
 
                 subtaskResults.push({

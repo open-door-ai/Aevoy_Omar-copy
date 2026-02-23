@@ -829,6 +829,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
           from: profile.email,
           subject: `[Scheduled] ${taskText}`,
           body: taskText,
+          suppressEmail: true, // Scheduled tasks run silently — no result emails
         });
       }
 

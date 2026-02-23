@@ -348,6 +348,7 @@ export async function executeNextStep(
       subject: `[Workflow Step ${nextStep.step_number + 1}] ${nextStep.title}`,
       body: taskBody,
       inputChannel: "workflow",
+      suppressEmail: true, // Workflow steps don't send individual emails — one summary at the end
     };
 
     // Dynamic import to avoid circular dependency with processor.ts
@@ -371,20 +372,11 @@ export async function executeNextStep(
       })
       .eq("id", nextStep.id);
 
-    // Send progress update
+    // Log progress (no per-step emails — user gets one summary when workflow completes)
     const completedCount = steps.filter(
       (s) => s.status === "completed"
     ).length + (result.success ? 1 : 0);
-
-    await sendProgressEmail(
-      userEmail,
-      `${username}@aevoy.com`,
-      `[Workflow] ${workflow.title}`,
-      `Step ${nextStep.step_number + 1}/${steps.length}: ${nextStep.title}\n` +
-        `Status: ${result.success ? "Completed" : "Failed"}\n` +
-        `Progress: ${completedCount}/${steps.length} steps done\n\n` +
-        (result.response ? `Result: ${result.response.substring(0, 500)}` : "")
-    );
+    console.log(`[WORKFLOW] Step ${nextStep.step_number + 1}/${steps.length} ${result.success ? "completed" : "failed"} (${completedCount}/${steps.length} done)`);
 
     // If step failed and has retries left, retry
     if (!result.success && nextStep.retry_count < (nextStep.max_retries || 3)) {
