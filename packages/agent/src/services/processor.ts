@@ -2042,6 +2042,19 @@ For "${subject}":
 
         const action = aiResponse.actions[actionIndex];
 
+        // SELF-DOMAIN BLOCKER: AI sometimes navigates to aevoy.com (its own platform)
+        // instead of real target websites. This is always wrong during task execution.
+        const actionUrl = String(action.params?.url || '');
+        if (actionUrl && /aevoy\.com/i.test(actionUrl) && !subject.toLowerCase().includes('aevoy')) {
+          console.warn(`[REJECT] BLOCKED: AI tried to browse its own domain (${actionUrl}) — redirecting to real task`);
+          iterationResults.push({
+            action,
+            success: false,
+            error: `BLOCKED: You navigated to aevoy.com which is YOUR OWN PLATFORM, not the target website. You must navigate to a REAL external website to complete the task "${subject}". Use [ACTION:search("${subject}")] to find the right website first.`
+          });
+          continue;
+        }
+
         // HARD ACTION REJECTION: Physically block repeated failing strategies
         // This is the difference between "please try something different" and FORCING it
         const actionStrategyKey = `${action.type}:${action.params?.url || action.params?.selector || action.params?.text || ''}`;
@@ -2547,8 +2560,24 @@ MANDATORY THINKING STEP — You MUST reason before acting:
 5. What are my next 2-3 actions and WHY will they work?
 [/THINKING]
 
-Then include your actions. OBSERVE → THINK → ACT. Never act without thinking first.
+Then include your actions using the EXACT format below. OBSERVE → THINK → ACT.
+
+ACTION FORMAT REMINDER (you MUST use these exact tags — describing actions does NOT execute them):
+[ACTION:browse("https://example.com")] — Navigate to a URL
+[ACTION:search("your query")] — Web search
+[ACTION:click("button text or CSS selector")] — Click an element
+[ACTION:fill("field name or CSS selector", "value to type")] — Type into a form field
+[ACTION:select("selector", "option value")] — Select dropdown option
+[ACTION:submit("form selector or button text")] — Submit a form
+[ACTION:read_email(5, 5)] — Check email (last N emails, past N minutes)
+[ACTION:wait(5000)] — Wait milliseconds
+
+CRITICAL: You must OUTPUT the [ACTION:...] tags in your response. Saying "I should fill the email field" does NOTHING.
+WRONG: "The next step would be to fill in the email field with tess@aevoy.com"
+RIGHT: [ACTION:fill("email", "tess@aevoy.com")]
+
 - If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
+- If the page shows a FORM → output [ACTION:fill(...)] for each field, then [ACTION:click("Submit")] or [ACTION:submit("form")].
 - If the page shows an error or unexpected state, adapt your approach.
 - If more steps are needed, include the next 2-3 actions (focused, not scattered).
 - NEVER give up. Always find a way.`;
@@ -2589,20 +2618,24 @@ Then include your actions. OBSERVE → THINK → ACT. Never act without thinking
     aiResponse.tokensUsed = totalTokens;
 
     // 7b. Beyond-browser cascade if browser success rate is low
+    // Skip cascade for vague/general tasks — email drafts and manual instructions are useless noise
+    // Only cascade for specific-service tasks where the user wants to interact with ONE site
     let cascadeLevel = 1;
-    if (classification.needsBrowser && actionResults.length > 0) {
+    const isSpecificServiceTask = classification.domains?.length > 0 &&
+      classification.domains[0] !== 'the service' &&
+      !['general', 'research'].includes(taskType);
+    if (classification.needsBrowser && actionResults.length > 0 && isSpecificServiceTask) {
       const successCount = actionResults.filter(r => r.success).length;
       const successRate = successCount / actionResults.length;
 
-      if (successRate < 0.7) {
-        console.log(`[CASCADE] Browser success rate ${(successRate * 100).toFixed(0)}%, trying fallbacks`);
+      if (successRate < 0.5) {
+        console.log(`[CASCADE] Browser success rate ${(successRate * 100).toFixed(0)}%, trying fallbacks (domain: ${classification.domains[0]})`);
 
         // If Live View URL is available, request user takeover before cascade fallbacks
         const takeoverUrl = executionEngine?.getLiveViewUrl();
         // Only request takeover if: live view available, low success, AND many actions tried
-        // Never takeover for research/general tasks — they have AI fallback
         const isTakeoverEligible = taskType !== 'general' && taskType !== 'research';
-        if (takeoverUrl && taskId && successRate < 0.4 && actionResults.length >= 3 && isTakeoverEligible) {
+        if (takeoverUrl && taskId && successRate < 0.3 && actionResults.length >= 4 && isTakeoverEligible) {
           // Update cost before takeover (otherwise cost data is lost)
           const aiCost = aiResponse.cost || 0;
           const browserCost = executionEngine?.getTotalCost() || 0;
@@ -2625,27 +2658,15 @@ Then include your actions. OBSERVE → THINK → ACT. Never act without thinking
         }
 
         try {
-          // Level 2: API fallback
+          // Level 2: API fallback (only for specific-domain tasks)
           const { tryApiApproach } = await import("./tasks/api-fallback.js");
           const apiResult = await tryApiApproach(classification.taskType, classification.goal, classification.domains);
           if (apiResult.success && apiResult.result) {
             cascadeLevel = apiResult.level;
             aiResponse.content += `\n\n${apiResult.result}`;
-          } else {
-            // Level 3-4: Email fallback
-            const { tryEmailApproach } = await import("./tasks/email-fallback.js");
-            const emailResult = await tryEmailApproach(userId, username, classification.goal, classification.domains[0] || "the service");
-            if (emailResult.success && emailResult.result) {
-              cascadeLevel = emailResult.level;
-              aiResponse.content += `\n\n${emailResult.result}`;
-            } else {
-              // Level 6: Manual instructions
-              const { generateManualInstructions } = await import("./tasks/manual-fallback.js");
-              const manualResult = await generateManualInstructions(classification.goal, classification.domains[0] || "the service");
-              cascadeLevel = manualResult.level;
-              aiResponse.content += `\n\n${manualResult.result}`;
-            }
           }
+          // Skip email/manual fallbacks — they generate useless "draft email" noise
+          // The AI response from iteration loop is always better than a template
         } catch (cascadeErr) {
           console.error("[CASCADE] Fallback error:", cascadeErr);
         }
