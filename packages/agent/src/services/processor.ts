@@ -1666,14 +1666,18 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       aiResponse.actions = templateActions;
     }
 
-    // 6a2. Strip browser actions when classifier says no browser needed.
-    // Must happen BEFORE missing-action gate so the gate can inject correct actions
-    // after browser actions are removed. Prevents browser init timeout on Railway.
+    // 6a2. BROWSER ACTION HANDLING: Trust the AI over the classifier.
+    // The classifier is often wrong for ambiguous queries ("make money", "find jobs", "sign up").
+    // If the AI generated search/browse actions, KEEP THEM — the AI knows the task better.
+    // Only strip heavy browser actions (click/fill/login/submit) when classifier says no browser,
+    // but ALWAYS keep search actions since they're lightweight and essential.
     const BROWSER_ACTION_TYPES = ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
-    if (!classification.needsBrowser && aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type))) {
+    const HEAVY_BROWSER_TYPES = ['fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'];
+    if (!classification.needsBrowser && aiResponse.actions.some(a => HEAVY_BROWSER_TYPES.includes(a.type))) {
       const before = aiResponse.actions.length;
-      aiResponse.actions = aiResponse.actions.filter(a => !BROWSER_ACTION_TYPES.includes(a.type));
-      console.log(`[BROWSER-STRIP] Classifier says no browser needed — removed ${before - aiResponse.actions.length} browser actions, ${aiResponse.actions.length} remaining`);
+      // Keep search and browse actions — they're lightweight and critical for quality
+      aiResponse.actions = aiResponse.actions.filter(a => !HEAVY_BROWSER_TYPES.includes(a.type));
+      console.log(`[BROWSER-STRIP] Classifier says no browser needed — removed ${before - aiResponse.actions.length} heavy browser actions, kept ${aiResponse.actions.filter(a => ['search', 'browse', 'screenshot', 'extract'].includes(a.type)).length} search/browse actions`);
     }
 
     // 6a3. FACTUAL SEARCH INJECTION: If the task asks about current prices, facts, or data
@@ -1933,7 +1937,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           );
           const isAdviceResponse = (
             !isConversational &&
-            classification.needsBrowser &&
             (
               // Detect advice patterns: "you can", "you should", "here are", bullet lists
               (lowerContent.includes('you can ') && lowerContent.includes('you can ') ) ||
