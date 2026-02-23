@@ -743,125 +743,83 @@ async function runDueScheduledTasks(): Promise<void> {
 async function runDueScheduledTasksInner(): Promise<void> {
   const now = new Date().toISOString();
 
-  // Get all active tasks that are due
+  // Fetch scheduled tasks WITHOUT joins to avoid any PostgREST data shape issues.
+  // Profile data is fetched separately per task.
   const { data: dueTasks, error } = await getSupabaseClient()
     .from('scheduled_tasks')
-    .select('*, profiles!user_id(*)')
+    .select('*')
     .eq('is_active', true)
     .lte('next_run_at', now);
-  
+
   if (error) {
     console.error('[SCHEDULER] Error fetching due tasks:', error);
     return;
   }
-  
+
   if (!dueTasks || dueTasks.length === 0) {
     return; // No tasks due
   }
-  
+
   console.log(`[SCHEDULER] Found ${dueTasks.length} due tasks`);
-  
+
   for (const scheduled of dueTasks) {
     try {
-      // Create a task from the scheduled template
-      const profile = scheduled.profiles;
+      // Fetch profile separately (avoids join issues)
+      const { data: profile } = await getSupabaseClient()
+        .from('profiles')
+        .select('id, username, email, phone_number')
+        .eq('id', scheduled.user_id)
+        .single();
+
       if (!profile) {
-        console.error(`[SCHEDULER] No profile found for scheduled task ${scheduled.id}`);
+        console.error(`[SCHEDULER] No profile found for scheduled task ${scheduled.id} user=${scheduled.user_id}`);
         continue;
       }
 
       // Process the scheduled task (task_template is canonical, description is legacy fallback)
-      const taskText = scheduled.task_template || scheduled.description || "scheduled task";
-      const isOnce = scheduled.cron_expression === "once";
+      const taskText = String(scheduled.task_template || scheduled.description || "scheduled task").trim();
+      const cronExpr = String(scheduled.cron_expression || "").trim();
+      const isOnce = cronExpr === "once";
       const newRunCount = (scheduled.run_count || 0) + 1;
       const maxRuns = scheduled.max_runs ?? null;
       const isOneTime = isOnce || (maxRuns !== null && newRunCount >= maxRuns);
 
-      console.log(`[SCHEDULER] Processing task ${scheduled.id}: taskText="${taskText}", cron="${scheduled.cron_expression}", isOneTime=${isOneTime}, profile=${profile.username}, phone=${profile.phone_number}`);
+      // DEBUG: Log raw values and types to diagnose comparison failures
+      console.log(`[SCHEDULER] Task ${scheduled.id} RAW: cron_expression=${JSON.stringify(scheduled.cron_expression)} (type=${typeof scheduled.cron_expression}), task_template=${JSON.stringify(scheduled.task_template)} (type=${typeof scheduled.task_template}), isOnce=${isOnce}, isOneTime=${isOneTime}`);
+      console.log(`[SCHEDULER] Processing task ${scheduled.id}: taskText="${taskText}", cron="${cronExpr}", isOneTime=${isOneTime}, profile=${profile.username}, phone=${profile.phone_number}`);
 
       // PREVENT DOUBLE-FIRING: Update metadata BEFORE processing.
-      // If the task takes a long time (AI loop), the lock may expire and another
-      // scheduler run could pick up the same task. By marking it now, we prevent that.
-      const nextRun = isOneTime ? null : calculateNextRun(scheduled.cron_expression, scheduled.timezone);
+      // For one-time tasks: deactivate immediately. For recurring: calculate next run.
+      const nextRun = isOneTime ? null : calculateNextRun(cronExpr, scheduled.timezone);
+      const newIsActive = isOneTime ? false : true;
+
       const { error: preUpdateError } = await getSupabaseClient()
         .from('scheduled_tasks')
         .update({
           last_run_at: now,
           next_run_at: nextRun,
           run_count: newRunCount,
-          is_active: !isOneTime,
+          is_active: newIsActive,
         })
         .eq('id', scheduled.id);
 
       if (preUpdateError) {
         console.error(`[SCHEDULER] Failed to pre-update scheduled task ${scheduled.id}:`, preUpdateError);
       } else {
-        console.log(`[SCHEDULER] Pre-updated task ${scheduled.id}: is_active=${!isOneTime}, next_run=${nextRun}`);
+        console.log(`[SCHEDULER] Pre-updated task ${scheduled.id}: is_active=${newIsActive}, next_run=${nextRun}`);
       }
 
-      // FAST PATH: Direct action execution for known action names (INLINE)
-      // When the AI schedules call_user/send_sms/etc., the description IS the action name.
-      // Executing these directly avoids the slow AI loop that doesn't understand raw action names.
-      const lowerTask = taskText.toLowerCase().trim();
-      let directActionHandled = false;
+      // FAST PATH: Direct action execution for known action names.
+      // Delegates to tryDirectActionExecution() which handles call_user/send_sms/send_email.
+      const directActionHandled = await tryDirectActionExecution(
+        taskText,
+        scheduled.user_id,
+        profile.username,
+        profile.email,
+        profile.phone_number
+      );
 
-      if (lowerTask === 'call_user' || lowerTask === 'call user' || lowerTask.startsWith('call_user:')) {
-        // INLINE call_user — call the user's phone directly
-        const callMsg = lowerTask.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
-        try {
-          const { callUser } = await import('./twilio.js');
-          let phone = profile.phone_number;
-          if (!phone) {
-            const { data: p } = await getSupabaseClient().from('profiles').select('phone_number').eq('id', scheduled.user_id).single();
-            phone = p?.phone_number;
-          }
-          if (phone) {
-            const result = await callUser({ to: phone, userId: scheduled.user_id, message: callMsg || 'Hey, your AI assistant is calling to follow up on your request.' });
-            console.log(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone}`);
-          } else {
-            console.error(`[SCHEDULER-DIRECT] call_user: no phone for user ${scheduled.user_id.slice(0, 8)}`);
-          }
-          directActionHandled = true;
-        } catch (err) {
-          console.error('[SCHEDULER-DIRECT] call_user error:', err);
-          directActionHandled = true; // Don't retry via AI
-        }
-      } else if (lowerTask === 'send_sms' || lowerTask.startsWith('send_sms:')) {
-        // INLINE send_sms — text the user directly
-        const smsBody = lowerTask.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Reminder from your AI assistant';
-        try {
-          const { sendSms } = await import('./twilio.js');
-          let phone = profile.phone_number;
-          if (!phone) {
-            const { data: p } = await getSupabaseClient().from('profiles').select('phone_number').eq('id', scheduled.user_id).single();
-            phone = p?.phone_number;
-          }
-          if (phone) {
-            await sendSms({ userId: scheduled.user_id, to: phone, body: smsBody });
-            console.log(`[SCHEDULER-DIRECT] send_sms: sent to ${phone}`);
-          } else {
-            console.error(`[SCHEDULER-DIRECT] send_sms: no phone for user ${scheduled.user_id.slice(0, 8)}`);
-          }
-          directActionHandled = true;
-        } catch (err) {
-          console.error('[SCHEDULER-DIRECT] send_sms error:', err);
-          directActionHandled = true;
-        }
-      } else if (lowerTask === 'send_email' || lowerTask.startsWith('send_email:')) {
-        // INLINE send_email — email the user directly
-        const emailBody = lowerTask.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Scheduled reminder from your AI assistant';
-        try {
-          const { sendResponse } = await import('./email.js');
-          await sendResponse({ to: profile.email, from: `${profile.username}@aevoy.com`, subject: 'Scheduled Reminder', body: emailBody });
-          console.log(`[SCHEDULER-DIRECT] send_email: sent to ${profile.email}`);
-          directActionHandled = true;
-        } catch (err) {
-          console.error('[SCHEDULER-DIRECT] send_email error:', err);
-          directActionHandled = true;
-        }
-      }
-
-      console.log(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}" (lower="${lowerTask}")`);
+      console.log(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}"`);
 
       if (!directActionHandled) {
         // Fall back to full AI processing for complex/natural-language tasks
@@ -874,7 +832,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
         });
       }
 
-      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${!isOneTime}, directAction=${directActionHandled})`);
+      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${newIsActive}, directAction=${directActionHandled})`);
     } catch (error) {
       console.error(`[SCHEDULER] Error processing scheduled task ${scheduled.id}:`, error);
     }

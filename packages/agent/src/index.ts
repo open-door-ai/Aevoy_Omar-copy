@@ -334,7 +334,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v19",
+    version: "2.0.0-agi-v20",
     gitSha: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local",
     timestamp: new Date().toISOString(),
     activeTasks,
@@ -362,63 +362,6 @@ app.get("/debug/voice-twiml", (req, res) => {
     conversationRelay: USE_CONVERSATION_RELAY,
     sampleTwiml: `<ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${defaultVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?" />`,
   });
-});
-
-// ---- Scheduler matching debug endpoint ----
-app.get("/debug/scheduler-match", (req, res) => {
-  const secret = req.query.secret;
-  if (!verifyWebhookSecret(secret as string)) {
-    return res.status(401).json({ error: "unauthorized" });
-  }
-  const testText = (req.query.text as string) || "call_user";
-  const lower = testText.toLowerCase().trim();
-  const isCallUser = lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:');
-  const isSendSms = lower === 'send_sms' || lower.startsWith('send_sms:');
-  const isSendEmail = lower === 'send_email' || lower.startsWith('send_email:');
-  res.json({
-    testText,
-    lower,
-    isCallUser,
-    isSendSms,
-    isSendEmail,
-    directMatch: isCallUser || isSendSms || isSendEmail,
-    lowerLength: lower.length,
-    charCodes: Array.from(lower).map(c => c.charCodeAt(0)),
-  });
-});
-
-// ---- Scheduler query debug endpoint ----
-app.get("/debug/scheduler-query", async (req, res) => {
-  const secret = req.query.secret;
-  if (!verifyWebhookSecret(secret as string)) {
-    return res.status(401).json({ error: "unauthorized" });
-  }
-  try {
-    const now = new Date().toISOString();
-    // Test the exact same query the scheduler uses
-    const { data: dueTasks, error } = await getSupabaseClient()
-      .from('scheduled_tasks')
-      .select('*, profiles!user_id(*)')
-      .eq('is_active', true)
-      .lte('next_run_at', now);
-
-    if (error) {
-      return res.json({ error: error.message, code: error.code, details: error.details, hint: error.hint });
-    }
-
-    const summary = (dueTasks || []).map((t: any) => ({
-      id: t.id?.slice(0, 8),
-      description: t.description,
-      task_template: t.task_template,
-      cron: t.cron_expression,
-      hasProfile: !!t.profiles,
-      profileUsername: t.profiles?.username,
-      profilePhone: t.profiles?.phone_number,
-    }));
-    res.json({ count: summary.length, now, tasks: summary });
-  } catch (err: any) {
-    res.json({ thrown: err.message });
-  }
 });
 
 // ---- Email diagnostic endpoint (protected by webhook secret) ----
