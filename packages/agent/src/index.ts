@@ -684,82 +684,28 @@ app.post("/task/verification", taskLimiter, async (req, res) => {
 });
 
 // POST /task/email-pin - Direct PIN verification (web dashboard submission)
-app.post("/task/email-pin", taskLimiter, async (req, res) => {
-  const { userId, pinCode } = req.body;
+// Unified PIN verification endpoint — called by email router, SMS handler, etc.
+// Uses bcrypt so it MUST run on the agent (not in Cloudflare Workers)
+app.post("/api/verify-pin", taskLimiter, async (req, res) => {
+  const { userId, pin } = req.body;
+  const secret = req.headers["x-webhook-secret"];
 
-  if (!userId || !pinCode) {
-    return res.status(400).json({ error: "userId and pinCode required" });
+  if (secret !== process.env.AGENT_WEBHOOK_SECRET) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  if (!userId || !pin) {
+    return res.status(400).json({ error: "userId and pin required" });
   }
 
   try {
-    const supabase = getSupabaseClient();
+    const { verifyUnifiedPin, getRemainingAttempts } = await import("./utils/pin-auth.js");
+    const result = await verifyUnifiedPin(userId, pin);
+    const remaining = result === "invalid" ? await getRemainingAttempts(userId) : undefined;
 
-    // Find matching non-verified session
-    const { data: sessions, error } = await supabase
-      .from("email_pin_sessions")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("pin_code", pinCode)
-      .eq("verified", false)
-      .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    const session = sessions && sessions.length > 0 ? sessions[0] : null;
-
-    if (error || !session) {
-      console.log(`[EMAIL-PIN] Invalid PIN: ${pinCode.slice(0, 2)}****`);
-
-      // Increment attempts
-      await supabase.rpc("increment_email_pin_attempts", { p_user_id: userId });
-
-      return res.status(401).json({
-        error: "Invalid or expired PIN",
-        message: "The PIN you entered is invalid or has expired. Please check your email.",
-      });
-    }
-
-    // Mark verified
-    await supabase
-      .from("email_pin_sessions")
-      .update({ verified: true })
-      .eq("id", session.id);
-
-    // Reset attempts
-    await supabase.rpc("reset_email_pin_attempts", { p_user_id: userId });
-
-    // Get user profile for username
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("username")
-      .eq("id", userId)
-      .single();
-
-    // Process original task
-    const taskToProcess: TaskRequest = {
-      userId: session.user_id,
-      username: profile?.username || "user",
-      from: session.sender_email,
-      subject: session.email_subject || "",
-      body: session.email_body || "",
-      bodyHtml: session.email_body_html,
-      attachments: session.attachments ? JSON.parse(session.attachments as string) : undefined,
-      inputChannel: "email",
-    };
-
-    // Process task asynchronously
-    activeTasks++;
-    processIncomingTask(taskToProcess)
-      .then((result) => console.log(`Email PIN verified task processed: ${result.taskId}`))
-      .catch((error) => console.error("Email PIN task processing failed:", error))
-      .finally(() => { activeTasks--; });
-
-    res.json({
-      success: true,
-      message: "PIN verified successfully. Task is being processed.",
-    });
+    res.json({ result, remaining });
   } catch (error) {
-    console.error("[EMAIL-PIN] Error:", error);
+    console.error("[VERIFY-PIN] Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1481,7 +1427,62 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     const username = resolved.username;
     console.log(`[SMS] Recognized user: ${username} (${userId.slice(0, 8)})`);
 
-    // Process SMS as task
+    // Check if sender is the registered phone number or needs PIN
+    const { isRegisteredPhone, hasPin: userHasPin, verifyUnifiedPin } = await import("./utils/pin-auth.js");
+    const isSenderOwner = await isRegisteredPhone(userId, senderNumber);
+
+    if (!isSenderOwner && await userHasPin(userId)) {
+      // Unrecognized number — look for 4-6 digit PIN in message body
+      const pinMatch = message.match(/\b(\d{4,6})\b/);
+
+      if (!pinMatch) {
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>I don't recognize this number. Include your 4-6 digit security PIN in the message to verify your identity.</Message>
+</Response>`);
+      }
+
+      const enteredPin = pinMatch[1];
+      const pinResult = await verifyUnifiedPin(userId, enteredPin);
+
+      if (pinResult === "locked") {
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Too many incorrect PIN attempts. Please try again in about an hour.</Message>
+</Response>`);
+      }
+
+      if (pinResult !== "valid") {
+        const { getRemainingAttempts } = await import("./utils/pin-auth.js");
+        const remaining = await getRemainingAttempts(userId);
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Incorrect PIN. ${remaining} attempts remaining. Include your correct PIN and resend.</Message>
+</Response>`);
+      }
+
+      // PIN verified — strip PIN from message before processing
+      const cleanMessage = message.replace(new RegExp(`\\b${enteredPin}\\b`), "").trim();
+      console.log(`[SMS] PIN verified for unrecognized number ${maskPhone(senderNumber)}`);
+
+      const { processTask } = await import("./services/processor.js");
+      await processTask({
+        userId,
+        username,
+        from: senderNumber,
+        subject: "[SMS]",
+        body: cleanMessage || message,
+        inputChannel: "sms"
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+    }
+
+    // Process SMS as task (sender is the account owner or no PIN set)
     const { processTask } = await import("./services/processor.js");
     await processTask({
       userId,
@@ -1533,69 +1534,37 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     const userId = resolved.userId;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("id, username, voice_pin, voice_pin_hash, voice_pin_attempts, voice_pin_locked_until")
+      .select("id, username, unified_pin_hash, voice_pin_hash, voice_pin")
       .eq("id", userId)
       .single();
 
-    if (!profile || (!profile.voice_pin && !profile.voice_pin_hash)) {
+    if (!profile || (!profile.unified_pin_hash && !profile.voice_pin_hash && !profile.voice_pin)) {
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">No PIN set. Please set your voice PIN at aevoy dot com slash dashboard slash settings.</Say>
+  <Say voice="${voice}">No PIN set. Please set your security PIN at aevoy dot com slash dashboard slash settings.</Say>
   <Hangup/>
 </Response>`);
     }
 
     voice = await getUserVoice(profile.id);
 
-    // SECURITY: PIN verification with bcrypt (new) + backward compat (legacy SHA-256/plaintext)
-    let pinMatch = false;
+    // Unified PIN verification (handles all hash formats + auto-migration)
+    const { verifyUnifiedPin } = await import("./utils/pin-auth.js");
+    const pinResult = await verifyUnifiedPin(userId, enteredPin);
 
-    // Priority 1: Check new bcrypt hash (most secure)
-    if (profile.voice_pin_hash && isBcryptHash(profile.voice_pin_hash)) {
-      pinMatch = await verifyPinHash(enteredPin, profile.voice_pin_hash);
-    }
-    // Priority 2: Check legacy SHA-256 hash + auto-migrate
-    else if (profile.voice_pin) {
-      const storedPin = profile.voice_pin;
-      const isHashed = storedPin.length === 64 && /^[0-9a-f]{64}$/.test(storedPin);
-
-      if (isHashed) {
-        // Legacy SHA-256 hash
-        const enteredHash = crypto.createHash('sha256').update(`${profile.id}:${enteredPin}`).digest('hex');
-        const hashBuffer = Buffer.from(enteredHash);
-        const storedHashBuffer = Buffer.from(storedPin);
-        pinMatch = hashBuffer.length === storedHashBuffer.length &&
-          crypto.timingSafeEqual(hashBuffer, storedHashBuffer);
-      } else {
-        // Legacy plaintext
-        const pinBuffer = Buffer.from(enteredPin);
-        const storedPinBuffer = Buffer.from(storedPin);
-        pinMatch = pinBuffer.length === storedPinBuffer.length &&
-          crypto.timingSafeEqual(pinBuffer, storedPinBuffer);
-      }
-
-      // Auto-migrate to bcrypt on successful login
-      if (pinMatch) {
-        const bcryptHash = await hashPin(enteredPin);
-        await supabase.from("profiles").update({
-          voice_pin_hash: bcryptHash,
-          voice_pin: null // Clear legacy PIN
-        }).eq("id", profile.id);
-        console.log(`[PIN] Auto-migrated PIN to bcrypt for user ${maskUserId(profile.id)}`);
-      }
+    if (pinResult === "locked") {
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Too many incorrect attempts. Your account is locked for 1 hour. Goodbye.</Say>
+  <Hangup/>
+</Response>`);
     }
 
-    if (!pinMatch) {
-      // Failed PIN attempt — increment attempts
-      const attempts = (profile.voice_pin_attempts || 0) + 1;
-      const updateData: Record<string, unknown> = { voice_pin_attempts: attempts };
-      if (attempts >= 3) {
-        updateData.voice_pin_locked_until = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-      }
-      await supabase.from("profiles").update(updateData).eq("id", profile.id);
-
-      const remaining = Math.max(0, 3 - attempts);
+    if (pinResult !== "valid") {
+      const { getRemainingAttempts } = await import("./utils/pin-auth.js");
+      const remaining = await getRemainingAttempts(userId);
       console.log(`[PIN] Invalid PIN from ${maskPhone(callerNumber)}, ${remaining} attempts remaining`);
 
       res.type("text/xml");
@@ -1610,12 +1579,6 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     }
 
     console.log(`[PIN] Successful verification for ${profile.username} (${userId.slice(0, 8)})`);
-
-    // Reset PIN attempts
-    await supabase
-      .from("profiles")
-      .update({ voice_pin_attempts: 0, voice_pin_locked_until: null })
-      .eq("id", userId);
 
     // Log successful PIN auth
     await supabase.from("call_history").insert({

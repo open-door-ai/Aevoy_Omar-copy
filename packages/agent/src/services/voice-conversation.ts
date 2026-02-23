@@ -230,7 +230,7 @@ RULES:
       const [profileResult, settingsResult, memoryResult] = await Promise.all([
         getSupabaseClient()
           .from("profiles")
-          .select("display_name, username, bot_name, phone_number, timezone, voice_pin_hash, voice_pin, voice_pin_attempts, voice_pin_locked_until, email")
+          .select("display_name, username, bot_name, phone_number, timezone, unified_pin_hash, voice_pin_hash, voice_pin, pin_attempts, pin_locked_until, email")
           .eq("id", userId)
           .single()
           .then(r => r, (e: any) => { console.error("[VOICE-WS] Profile load failed:", e); return { data: null }; }),
@@ -265,14 +265,14 @@ RULES:
         // Check if caller needs PIN (unknown number)
         const callerPhone = from?.replace(/\D/g, "");
         const userPhone = profile.phone_number?.replace(/\D/g, "");
-        const hasPinSet = profile.voice_pin_hash || profile.voice_pin;
+        const hasPinSet = profile.unified_pin_hash || profile.voice_pin_hash || profile.voice_pin;
 
         if (hasPinSet && callerPhone !== userPhone) {
-          // Check lockout
-          if (profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date()) {
+          // Check lockout (unified: 5 attempts, 1 hour)
+          if (profile.pin_locked_until && new Date(profile.pin_locked_until) > new Date()) {
             ws.send(JSON.stringify({
               type: "text",
-              token: "This number is temporarily locked due to too many incorrect PIN attempts. Please try again later.",
+              token: "This number is temporarily locked due to too many incorrect PIN attempts. Please try again in about an hour.",
               last: true,
             }));
             ws.send(JSON.stringify({ type: "end" }));
@@ -472,26 +472,26 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
     console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} PIN verified, entering conversation`);
   } else {
     session.pinAttempts++;
-    if (session.pinAttempts >= 3) {
-      // Lock the account
+    if (session.pinAttempts >= 5) {
+      // Lock the account (unified: 1 hour lockout)
       await getSupabaseClient()
         .from("profiles")
         .update({
-          voice_pin_locked_until: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-          voice_pin_attempts: session.pinAttempts,
+          pin_locked_until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          pin_attempts: session.pinAttempts,
         })
         .eq("id", session.userId);
 
       session.ws.send(JSON.stringify({
         type: "text",
-        token: "Too many incorrect attempts. Your account has been locked for 15 minutes. Goodbye.",
+        token: "Too many incorrect attempts. Your account has been locked for 1 hour. Goodbye.",
         last: true,
       }));
       session.ws.send(JSON.stringify({ type: "end" }));
     } else {
       session.ws.send(JSON.stringify({
         type: "text",
-        token: `Incorrect PIN. You have ${3 - session.pinAttempts} attempts remaining. Please try again.`,
+        token: `Incorrect PIN. You have ${5 - session.pinAttempts} attempts remaining. Please try again.`,
         last: true,
       }));
     }

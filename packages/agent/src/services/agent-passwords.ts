@@ -1,0 +1,84 @@
+/**
+ * Agent Passwords Service
+ *
+ * Decrypts stored passwords for use during browser automation (account creation, logins).
+ * Passwords are encrypted with AES-256-GCM using ENCRYPTION_KEY env var.
+ */
+
+import { getSupabaseClient } from "../utils/supabase.js";
+import crypto from "crypto";
+
+interface AgentPasswords {
+  primary?: string;
+  secondary?: string;
+  tertiary?: string;
+}
+
+function getEncryptionKey(): Buffer {
+  const key = process.env.ENCRYPTION_KEY;
+  if (!key || key.length !== 64) {
+    throw new Error("ENCRYPTION_KEY not configured");
+  }
+  return Buffer.from(key, "hex");
+}
+
+function decrypt(encryptedData: string): string {
+  const key = getEncryptionKey();
+  const [ivB64, authTagB64, dataB64] = encryptedData.split(":");
+  if (!ivB64 || !authTagB64 || !dataB64) throw new Error("Invalid encrypted data");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivB64, "base64"));
+  decipher.setAuthTag(Buffer.from(authTagB64, "base64"));
+  return Buffer.concat([decipher.update(Buffer.from(dataB64, "base64")), decipher.final()]).toString("utf8");
+}
+
+/**
+ * Get decrypted agent passwords for a user.
+ * Returns null if no passwords are stored.
+ */
+export async function getAgentPasswords(userId: string): Promise<AgentPasswords | null> {
+  const { data: profile } = await getSupabaseClient()
+    .from("profiles")
+    .select("agent_passwords_encrypted")
+    .eq("id", userId)
+    .single();
+
+  if (!profile?.agent_passwords_encrypted) return null;
+
+  try {
+    return JSON.parse(decrypt(profile.agent_passwords_encrypted));
+  } catch (err) {
+    console.error(`[AGENT-PWD] Decryption failed for ${userId.slice(0, 8)}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Get a specific password by slot priority (primary → secondary → tertiary).
+ * Used when the agent needs "a password" without specifying which one.
+ */
+export async function getNextPassword(userId: string, preferredSlot?: "primary" | "secondary" | "tertiary"): Promise<string | null> {
+  const passwords = await getAgentPasswords(userId);
+  if (!passwords) return null;
+
+  if (preferredSlot && passwords[preferredSlot]) {
+    return passwords[preferredSlot]!;
+  }
+
+  return passwords.primary || passwords.secondary || passwords.tertiary || null;
+}
+
+/**
+ * Get password slots info (which are filled) for system prompt context.
+ */
+export async function getPasswordSlotInfo(userId: string): Promise<string> {
+  const passwords = await getAgentPasswords(userId);
+  if (!passwords) return "No stored passwords.";
+
+  const slots: string[] = [];
+  if (passwords.primary) slots.push("primary");
+  if (passwords.secondary) slots.push("secondary");
+  if (passwords.tertiary) slots.push("tertiary");
+
+  if (slots.length === 0) return "No stored passwords.";
+  return `Stored passwords: ${slots.join(", ")}. Use {primary_password}, {secondary_password}, or {tertiary_password} when filling forms.`;
+}

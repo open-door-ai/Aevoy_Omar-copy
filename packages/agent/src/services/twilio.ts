@@ -1067,54 +1067,10 @@ export async function processVoiceCall(
  * Auto-migrates to bcrypt on successful verification.
  */
 export async function verifyVoicePin(userId: string, pin: string): Promise<boolean> {
-  const { hashPin, verifyPinHash, isBcryptHash } = await import("../utils/hashing.js");
-  const crypto = await import("crypto");
-
-  const { data: profile } = await getSupabaseClient()
-    .from("profiles")
-    .select("id, voice_pin, voice_pin_hash")
-    .eq("id", userId)
-    .single();
-
-  if (!profile || (!profile.voice_pin && !profile.voice_pin_hash)) {
-    return false;
-  }
-
-  let pinMatch = false;
-
-  // Priority 1: bcrypt hash (most secure)
-  if (profile.voice_pin_hash && isBcryptHash(profile.voice_pin_hash)) {
-    pinMatch = await verifyPinHash(pin, profile.voice_pin_hash);
-  }
-  // Priority 2: legacy SHA-256 or plaintext
-  else if (profile.voice_pin) {
-    const storedPin = profile.voice_pin;
-    const isHashed = storedPin.length === 64 && /^[0-9a-f]{64}$/.test(storedPin);
-
-    if (isHashed) {
-      const enteredHash = crypto.createHash("sha256").update(`${profile.id}:${pin}`).digest("hex");
-      const hashBuffer = Buffer.from(enteredHash);
-      const storedHashBuffer = Buffer.from(storedPin);
-      pinMatch = hashBuffer.length === storedHashBuffer.length &&
-        crypto.timingSafeEqual(hashBuffer, storedHashBuffer);
-    } else {
-      const pinBuffer = Buffer.from(pin);
-      const storedPinBuffer = Buffer.from(storedPin);
-      pinMatch = pinBuffer.length === storedPinBuffer.length &&
-        crypto.timingSafeEqual(pinBuffer, storedPinBuffer);
-    }
-
-    // Auto-migrate to bcrypt on success
-    if (pinMatch) {
-      const bcryptHash = await hashPin(pin);
-      await getSupabaseClient().from("profiles").update({
-        voice_pin_hash: bcryptHash,
-        voice_pin: null,
-      }).eq("id", profile.id);
-    }
-  }
-
-  return pinMatch;
+  // Delegate to unified PIN system — handles all hash formats + auto-migration
+  const { verifyUnifiedPin } = await import("../utils/pin-auth.js");
+  const result = await verifyUnifiedPin(userId, pin);
+  return result === "valid";
 }
 
 // ---- Helpers ----

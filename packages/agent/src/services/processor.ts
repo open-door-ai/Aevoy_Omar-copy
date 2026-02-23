@@ -3670,13 +3670,23 @@ async function executeAction(
                 result: `No unread emails in your inbox right now (${emails.length - realEmails.length} system emails filtered out).`,
               };
             }
+            const { extractVerificationCode, sanitizeEmailContent } = await import("../utils/email-code-extractor.js");
             const summary = realEmails.map((e, i) =>
-              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
+              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${sanitizeEmailContent(e.snippet).substring(0, 500)}`
             ).join('\n---\n');
+            // Auto-detect verification codes across all emails
+            const detectedCodes = realEmails
+              .map(e => ({ from: e.from, subject: e.subject, ...extractVerificationCode(e.snippet) }))
+              .filter(c => c.code || c.verifyLink);
+            const codeSection = detectedCodes.length > 0
+              ? `\n\nAUTO-DETECTED VERIFICATION CODES:\n${detectedCodes.map(c =>
+                  c.code ? `- Code: ${c.code} (from: ${c.from})` : `- Verify link: ${c.verifyLink} (from: ${c.from})`
+                ).join('\n')}`
+              : '';
             return {
               action,
               success: true,
-              result: `Found ${realEmails.length} unread email(s) in your inbox:\n${summary}`,
+              result: `Found ${realEmails.length} unread email(s) in your inbox:\n${summary}${codeSection}`,
             };
           } catch (imapErr) {
             console.error(`[READ-EMAIL] Personal email fetch failed for ${userId.slice(0, 8)}:`, imapErr);
@@ -3704,13 +3714,22 @@ async function executeAction(
               result: `No recent emails found for ${username}@aevoy.com in the last ${minutes_back || 30} minutes. You haven't connected a personal email yet — set it up in Settings > Connected Apps to check Gmail, Outlook, etc.`,
             };
           }
+          const { extractVerificationCode: extractCode, sanitizeEmailContent: sanitizeContent } = await import("../utils/email-code-extractor.js");
           const summary = emails.map((e, i) =>
-            `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.body.substring(0, 500)}`
+            `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${sanitizeContent(e.body).substring(0, 500)}`
           ).join('\n---\n');
+          const codes = emails
+            .map(e => ({ from: e.from, subject: e.subject, ...extractCode(e.body) }))
+            .filter(c => c.code || c.verifyLink);
+          const codePart = codes.length > 0
+            ? `\n\nAUTO-DETECTED VERIFICATION CODES:\n${codes.map(c =>
+                c.code ? `- Code: ${c.code} (from: ${c.from})` : `- Verify link: ${c.verifyLink} (from: ${c.from})`
+              ).join('\n')}`
+            : '';
           return {
             action,
             success: true,
-            result: `Found ${emails.length} recent email(s) for ${username}@aevoy.com:\n${summary}`,
+            result: `Found ${emails.length} recent email(s) for ${username}@aevoy.com:\n${summary}${codePart}`,
           };
         } catch (aevoyErr) {
           console.error(`[READ-EMAIL] @aevoy.com fallback failed:`, aevoyErr);
@@ -3782,7 +3801,22 @@ async function executeAction(
     case "fill": {
       if (!executionEngine) return { action, success: false, error: "Browser not available" };
       const fillSelector = (action.params.selector || action.params.label) as string;
-      const fillValue = action.params.value as string;
+      let fillValue = action.params.value as string;
+
+      // Resolve password placeholders ({primary_password}, {secondary_password}, {tertiary_password})
+      if (fillValue && /\{(primary|secondary|tertiary)_password\}/.test(fillValue) && userId) {
+        try {
+          const { getAgentPasswords } = await import("./agent-passwords.js");
+          const passwords = await getAgentPasswords(userId);
+          if (passwords) {
+            fillValue = fillValue
+              .replace(/\{primary_password\}/g, passwords.primary || "")
+              .replace(/\{secondary_password\}/g, passwords.secondary || "")
+              .replace(/\{tertiary_password\}/g, passwords.tertiary || "");
+          }
+        } catch { /* passwords not available */ }
+      }
+
       const fillResult = await executionEngine.executeSteps([
         { action: 'fill', params: { selector: fillSelector, label: fillSelector, placeholder: fillSelector, value: fillValue } }
       ]);

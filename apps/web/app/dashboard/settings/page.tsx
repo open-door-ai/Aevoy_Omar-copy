@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Select } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
 import { Switch } from "@/components/ui/switch";
-import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox, Copy, Check, Mic, Upload, Play, Pause, Trash2, Volume2, Code2, ChevronDown, ChevronRight, AlertTriangle, Eye, EyeOff, ExternalLink, BarChart2 } from "lucide-react";
+import { Phone, Mail, Cloud, Zap, RotateCcw, Inbox, Copy, Check, Mic, Upload, Play, Pause, Trash2, Volume2, Code2, ChevronDown, ChevronRight, AlertTriangle, Eye, EyeOff, ExternalLink, BarChart2, Key } from "lucide-react";
 import Link from "next/link";
 import { PurchaseNumberModal } from "@/components/modals/purchase-number-modal";
 import InboxManagementSettings from "@/components/settings/inbox-management";
@@ -143,6 +143,9 @@ export default function SettingsPage() {
 
   // OpenRouter Developer Mode state
   const [devModeOpen, setDevModeOpen] = useState(false);
+  const [agentPasswordSlots, setAgentPasswordSlots] = useState({ primary: false, secondary: false, tertiary: false });
+  const [agentPasswordInputs, setAgentPasswordInputs] = useState({ primary: "", secondary: "", tertiary: "" });
+  const [savingAgentPasswords, setSavingAgentPasswords] = useState(false);
   const [orHasKey, setOrHasKey] = useState(false);
   const [orMaskedKey, setOrMaskedKey] = useState<string | null>(null);
   const [orEnabled, setOrEnabled] = useState(false);
@@ -293,6 +296,8 @@ export default function SettingsPage() {
     loadCredentials();
     loadVoicemail();
     loadOpenRouter();
+    // Load agent password slots
+    fetch("/api/settings/agent-passwords").then(r => r.ok ? r.json() : null).then(d => { if (d) setAgentPasswordSlots(d); }).catch(() => {});
   }, []);
 
   const handleSave = async () => {
@@ -2324,6 +2329,82 @@ export default function SettingsPage() {
             )}
           </Button>
         </CardFooter>
+      </Card>
+
+      {/* Agent Passwords */}
+      <Card className="border-border">
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Key className="w-5 h-5 text-muted-foreground" />
+            <div>
+              <CardTitle>Agent Passwords</CardTitle>
+              <CardDescription>Passwords your AI can use when creating accounts on websites</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Store up to 3 passwords. Your AI uses the primary password first, then secondary, then tertiary.
+            Encrypted with AES-256-GCM — never visible in plaintext after saving.
+          </p>
+          {(["primary", "secondary", "tertiary"] as const).map((slot) => (
+            <div key={slot} className="space-y-1">
+              <Label htmlFor={`pwd-${slot}`} className="capitalize text-sm">{slot} Password</Label>
+              <div className="flex gap-2">
+                <Input
+                  id={`pwd-${slot}`}
+                  type="password"
+                  placeholder={agentPasswordSlots[slot] ? "••••••••" : `Enter ${slot} password`}
+                  value={agentPasswordInputs[slot]}
+                  onChange={(e) => setAgentPasswordInputs(prev => ({ ...prev, [slot]: e.target.value }))}
+                  className="flex-1"
+                />
+                {agentPasswordSlots[slot] && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      await fetch("/api/settings/agent-passwords", {
+                        method: "DELETE",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ slot }),
+                      });
+                      setAgentPasswordSlots(prev => ({ ...prev, [slot]: false }));
+                    }}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+          <Button
+            onClick={async () => {
+              setSavingAgentPasswords(true);
+              const body: Record<string, string> = {};
+              if (agentPasswordInputs.primary) body.primary = agentPasswordInputs.primary;
+              if (agentPasswordInputs.secondary) body.secondary = agentPasswordInputs.secondary;
+              if (agentPasswordInputs.tertiary) body.tertiary = agentPasswordInputs.tertiary;
+              if (Object.keys(body).length === 0) { setSavingAgentPasswords(false); return; }
+              await fetch("/api/settings/agent-passwords", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              });
+              setAgentPasswordInputs({ primary: "", secondary: "", tertiary: "" });
+              // Refresh slots
+              const res = await fetch("/api/settings/agent-passwords");
+              if (res.ok) setAgentPasswordSlots(await res.json());
+              setSavingAgentPasswords(false);
+              setMessage({ type: "success", text: "Agent passwords saved" });
+            }}
+            disabled={savingAgentPasswords || (!agentPasswordInputs.primary && !agentPasswordInputs.secondary && !agentPasswordInputs.tertiary)}
+            size="sm"
+          >
+            {savingAgentPasswords ? "Saving..." : "Save Passwords"}
+          </Button>
+        </CardContent>
       </Card>
 
       {/* Developer Mode */}

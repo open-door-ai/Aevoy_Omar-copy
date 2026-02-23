@@ -229,26 +229,24 @@ export default function StepVerification({ onNext, onBack }: StepVerificationPro
             </div>
           )}
 
-          {/* PIN Setup */}
-          {phoneNumber.trim() && (
-            <div>
-              <Label htmlFor="pin" className="text-gray-700">Security PIN (4-6 digits)</Label>
-              <Input
-                id="pin"
-                type="password"
-                inputMode="numeric"
-                pattern="\d{4,6}"
-                placeholder="1234"
-                value={voicePin}
-                onChange={(e) => setVoicePin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                maxLength={6}
-                className="mt-2"
-              />
-              <p className="text-xs text-gray-600 mt-1">
-                Used to verify your identity when calling from unknown numbers
-              </p>
-            </div>
-          )}
+          {/* PIN Setup — always shown, protects all channels */}
+          <div>
+            <Label htmlFor="pin" className="text-gray-700">Security PIN (4-6 digits)</Label>
+            <Input
+              id="pin"
+              type="password"
+              inputMode="numeric"
+              pattern="\d{4,6}"
+              placeholder="1234"
+              value={voicePin}
+              onChange={(e) => setVoicePin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              maxLength={6}
+              className="mt-2"
+            />
+            <p className="text-xs text-gray-600 mt-1">
+              Used across phone, email, SMS, Telegram, and WhatsApp to verify your identity
+            </p>
+          </div>
 
           {/* Premium Number Upsell */}
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">

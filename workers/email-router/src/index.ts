@@ -42,11 +42,9 @@ interface Profile {
   email: string;
   messages_used: number;
   messages_limit: number;
-  email_pin?: string | null;
-  email_pin_hash?: string | null;
-  email_pin_attempts?: number;
-  email_pin_locked_until?: string | null;
-  unified_pin_hash?: string | null; // Unified PIN (replaces separate voice/email PINs)
+  unified_pin_hash?: string | null;
+  pin_attempts?: number;
+  pin_locked_until?: string | null;
 }
 
 type EmailType = 'confirmation_reply' | 'verification_reply' | 'magic_link' | 'new_task';
@@ -547,239 +545,140 @@ export default {
       const senderEmail = message.from.toLowerCase().trim();
       const registeredEmail = user.email?.toLowerCase().trim() || "";
 
-      // EMAIL PIN VERIFICATION FLOW
+      // UNIFIED PIN VERIFICATION FLOW
+      // Unrecognized sender? Check for user's PIN in email subject or body.
+      // No random codes — the user's own PIN (set during onboarding/settings) authenticates.
       if (registeredEmail && senderEmail !== registeredEmail) {
         console.log(`[EMAIL] Unregistered sender ${maskEmail(senderEmail)} for user ${username}`);
 
-        const supabase = getSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
-
-        // Check if user has a PIN configured (unified PIN, or legacy email PIN)
-        if (!user.unified_pin_hash && !user.email_pin && !user.email_pin_hash) {
-          // No PIN - send setup instructions to registered email
+        // Check if user has a PIN configured
+        if (!user.unified_pin_hash) {
+          // No PIN - send setup instructions
           await sendEmailViaAgent({
             to: registeredEmail,
             from: "security@aevoy.com",
-            subject: "🔒 Security Alert: Email from Unregistered Sender",
+            subject: "Security Alert: Email from Unregistered Sender",
             html: `
               <p>Someone tried to email your AI from <strong>${senderEmail}</strong>.</p>
-              <p>To allow emails from other addresses, set up an <strong>Email PIN</strong> in Settings → Security.</p>
-              <p>Subject: ${(await parseEmail(message.raw)).subject}</p>
+              <p>To allow emails from other addresses, set up a <strong>Security PIN</strong> in Settings.</p>
             `,
             agentUrl: env.AGENT_URL,
             webhookSecret: env.AGENT_WEBHOOK_SECRET,
           });
 
-          message.setReject("Email PIN not configured for this account");
+          message.setReject("No PIN configured");
           return;
         }
 
-        // Check if PIN locked (3 failed attempts)
-        if (user.email_pin_locked_until && new Date(user.email_pin_locked_until) > new Date()) {
-          console.log(`[EMAIL] User ${maskUserId(user.id)} email PIN locked until ${user.email_pin_locked_until}`);
-
-          await sendEmailViaAgent({
-            to: registeredEmail,
-            from: "security@aevoy.com",
-            subject: "🔒 Email PIN Locked",
-            html: `
-              <p>Too many failed PIN attempts from <strong>${senderEmail}</strong>.</p>
-              <p>Email verification is locked for 15 minutes.</p>
-            `,
-            agentUrl: env.AGENT_URL,
-            webhookSecret: env.AGENT_WEBHOOK_SECRET,
-          });
-
-          message.setReject("Email PIN temporarily locked");
-          return;
-        }
-
-        // Parse email early for PIN check
+        // Parse email to look for PIN in subject or body
         const { subject, body, bodyHtml, senderName, attachments } = await parseEmail(message.raw);
 
-        // Check if this is a PIN verification reply
-        const pinMatch = body?.match(/\b\d{6}\b/); // Extract 6-digit PIN
-        const isReplyToPinRequest = subject?.toLowerCase().includes("email pin required");
+        // Extract 4-6 digit PIN from subject or body
+        const subjectPinMatch = subject?.match(/\b(\d{4,6})\b/);
+        const bodyPinMatch = body?.match(/\b(\d{4,6})\b/);
+        const enteredPin = subjectPinMatch?.[1] || bodyPinMatch?.[1];
 
-        if (pinMatch && isReplyToPinRequest) {
-          const enteredPin = pinMatch[0];
-          console.log(`[EMAIL] PIN verification attempt: ${maskPin(enteredPin)}`);
+        if (!enteredPin) {
+          // No PIN found in the email — tell the sender to include it
+          await sendEmailViaAgent({
+            to: senderEmail,
+            from: `${username}@aevoy.com`,
+            subject: `Re: ${subject || "Your message"}`,
+            html: `
+              <p>Your email was received but could not be verified.</p>
+              <p>Please include your <strong>security PIN</strong> (4-6 digits) in the subject line or body of your email, then resend.</p>
+              <p>If you don't have a PIN, ask the account owner to add your email address in their settings.</p>
+            `,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
 
-          // Find matching session
-          const { data: session, error: sessionError } = await supabase
-            .from("email_pin_sessions")
-            .select("*")
-            .eq("user_id", user.id)
-            .eq("pin_code", enteredPin)
-            .gt("expires_at", new Date().toISOString())
-            .order("created_at", { desc: true })
-            .limit(1)
-            .single();
+          message.setReject("No PIN in email");
+          return;
+        }
 
-          if (!sessionError && session) {
-            // PIN VERIFIED! Process original email
-            console.log(`[EMAIL] PIN verified for ${maskEmail(session.sender_email)}`);
+        // Verify PIN via agent (bcrypt runs on agent, not in CF Worker)
+        console.log(`[EMAIL] PIN verification attempt from ${maskEmail(senderEmail)}: ${maskPin(enteredPin)}`);
+        try {
+          const pinResponse = await fetchWithRetry(`${env.AGENT_URL}/api/verify-pin`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
+            },
+            body: JSON.stringify({ userId: user.id, pin: enteredPin }),
+          });
+          const pinResult = await pinResponse.json() as { result: string; remaining?: number };
 
-            // Mark session as verified
-            await supabase
-              .from("email_pin_sessions")
-              .update({ verified: true })
-              .eq("id", session.id)
-              .execute();
-
-            // Reset PIN attempts
-            await supabase.rpc("reset_email_pin_attempts", { p_user_id: user.id }).execute();
-
-            // Forward original task to agent
-            await fetchWithRetry(`${env.AGENT_URL}/task/incoming`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
-              },
-              body: JSON.stringify({
-                userId: user.id,
-                username: user.username,
-                from: session.sender_email,
-                senderName,
-                subject: session.email_subject,
-                body: session.email_body,
-                bodyHtml: session.email_body_html,
-                attachments: session.attachments,
-                inputChannel: "email",
-              }),
-            });
-
-            // Confirm to user
+          if (pinResult.result === "locked") {
             await sendEmailViaAgent({
-              to: registeredEmail,
-              from: "security@aevoy.com",
-              subject: "✅ Email Verified",
+              to: senderEmail,
+              from: `${username}@aevoy.com`,
+              subject: `Re: ${subject || "Your message"}`,
+              html: `<p>Too many failed PIN attempts. Please try again in about an hour.</p>`,
+              agentUrl: env.AGENT_URL,
+              webhookSecret: env.AGENT_WEBHOOK_SECRET,
+            });
+            message.setReject("PIN locked");
+            return;
+          }
+
+          if (pinResult.result === "invalid") {
+            const remaining = pinResult.remaining ?? "?";
+            await sendEmailViaAgent({
+              to: senderEmail,
+              from: `${username}@aevoy.com`,
+              subject: `Re: ${subject || "Your message"}`,
               html: `
-                <p>PIN verified successfully!</p>
-                <p>Your AI is now processing the task from <strong>${session.sender_email}</strong>.</p>
-                <p><em>Original subject: ${session.email_subject}</em></p>
+                <p>Incorrect PIN. Attempts remaining: <strong>${remaining}</strong>.</p>
+                <p>Include your correct 4-6 digit PIN in the subject or body and resend.</p>
               `,
               agentUrl: env.AGENT_URL,
               webhookSecret: env.AGENT_WEBHOOK_SECRET,
             });
-
-            message.setReject("PIN verified - task forwarded to agent");
-            return;
-          } else {
-            // Invalid or expired PIN
-            console.log(`[EMAIL] Invalid PIN attempt from ${maskEmail(senderEmail)}`);
-
-            // Increment attempts
-            await supabase.rpc("increment_email_pin_attempts", { p_user_id: user.id }).execute();
-
-            // Check if should lock
-            const { data: profile } = await supabase
-              .from("profiles")
-              .select("email_pin_attempts")
-              .eq("id", user.id)
-              .single();
-
-            if (profile && profile.email_pin_attempts >= 3) {
-              // Lock for 15 minutes
-              const lockUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-              await supabase
-                .from("profiles")
-                .update({ email_pin_locked_until: lockUntil })
-                .eq("id", user.id)
-                .execute();
-
-              await sendEmailViaAgent({
-                to: registeredEmail,
-                from: "security@aevoy.com",
-                subject: "🔒 Email PIN Locked",
-                html: `
-                  <p>Too many failed PIN attempts.</p>
-                  <p>Email verification locked for 15 minutes.</p>
-                `,
-                agentUrl: env.AGENT_URL,
-                webhookSecret: env.AGENT_WEBHOOK_SECRET,
-              });
-            } else {
-              const remaining = 3 - (profile?.email_pin_attempts || 0);
-              await sendEmailViaAgent({
-                to: registeredEmail,
-                from: "security@aevoy.com",
-                subject: "❌ Invalid PIN",
-                html: `
-                  <p>The PIN you entered was invalid or expired.</p>
-                  <p>Attempts remaining: <strong>${remaining}</strong></p>
-                `,
-                agentUrl: env.AGENT_URL,
-                webhookSecret: env.AGENT_WEBHOOK_SECRET,
-              });
-            }
-
-            message.setReject("Invalid PIN");
+            message.setReject("Wrong PIN");
             return;
           }
-        }
 
-        // Generate new PIN and create session
-        const pinCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit PIN
-
-        const { error: sessionInsertError } = await supabase
-          .from("email_pin_sessions")
-          .insert({
-            user_id: user.id,
-            sender_email: senderEmail,
-            pin_code: pinCode,
-            email_subject: subject,
-            email_body: body,
-            email_body_html: bodyHtml,
-            attachments: attachments ? JSON.stringify(attachments) : null,
-            expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 min
-          })
-          .select()
-          .single();
-
-        if (sessionInsertError) {
-          console.error("[EMAIL] Failed to create PIN session:", sessionInsertError);
-          message.setReject("Internal error creating PIN session");
+          if (pinResult.result !== "valid") {
+            message.setReject(`PIN verification failed: ${pinResult.result}`);
+            return;
+          }
+        } catch (pinError) {
+          console.error("[EMAIL] PIN verification request failed:", pinError);
+          message.setReject("PIN verification service unavailable");
           return;
         }
 
-        // Send PIN to registered email
-        await sendEmailViaAgent({
-          to: registeredEmail,
-          from: "security@aevoy.com",
-          subject: `🔐 Email PIN Required: ${senderEmail}`,
-          html: `
-            <h3>Someone from ${senderEmail} sent you a task:</h3>
-            <p><strong>Subject:</strong> ${subject}</p>
-            <p><strong>Preview:</strong> ${body?.substring(0, 200)}...</p>
-            <hr>
-            <h2 style="color: #0066ff; font-size: 32px; letter-spacing: 4px;">${pinCode}</h2>
-            <p>To process this task, <strong>reply to this email with the PIN above</strong>.</p>
-            <p><em>This PIN expires in 10 minutes.</em></p>
-            <p><small>If you didn't expect this, ignore this email. The task will not be processed.</small></p>
-          `,
-          agentUrl: env.AGENT_URL,
-          webhookSecret: env.AGENT_WEBHOOK_SECRET,
+        // PIN VERIFIED — strip the PIN digits from the body before forwarding to agent
+        const cleanBody = body?.replace(new RegExp(`\\b${enteredPin}\\b`), "").trim() || "";
+        const cleanSubject = subject?.replace(new RegExp(`\\b${enteredPin}\\b`), "").trim() || "";
+
+        console.log(`[EMAIL] PIN verified for ${maskEmail(senderEmail)} → forwarding to agent`);
+
+        await fetchWithRetry(`${env.AGENT_URL}/task/incoming`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
+          },
+          body: JSON.stringify({
+            userId: user.id,
+            username: user.username,
+            from: senderEmail,
+            senderName,
+            subject: cleanSubject,
+            body: cleanBody,
+            bodyHtml,
+            attachments,
+            inputChannel: "email",
+          }),
         });
 
-        // Send auto-reply to sender
-        await sendEmailViaAgent({
-          to: senderEmail,
-          from: `${username}@aevoy.com`,
-          subject: `Re: ${subject}`,
-          html: `
-            <p>Your message has been received and is awaiting verification.</p>
-            <p>A PIN has been sent to the account owner for approval.</p>
-            <p>You'll be notified once your request is processed.</p>
-          `,
-          agentUrl: env.AGENT_URL,
-          webhookSecret: env.AGENT_WEBHOOK_SECRET,
-        });
-
-        message.setReject("Awaiting PIN verification");
+        message.setReject("PIN verified - task forwarded");
         return;
       }
-      // END EMAIL PIN VERIFICATION FLOW
+      // END UNIFIED PIN VERIFICATION FLOW
 
       // Check quota
       if (user.messages_used >= user.messages_limit) {

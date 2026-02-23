@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -122,7 +123,7 @@ export async function POST(request: Request) {
             if (!/^\d{4,6}$/.test(pin)) {
               return NextResponse.json({ error: "PIN must be 4-6 digits" }, { status: 400 });
             }
-            profileUpdates.voice_pin = pin;
+            profileUpdates.unified_pin_hash = await bcrypt.hash(pin, 12);
           }
 
           if (typeof data.daily_checkin_enabled === "boolean") {
