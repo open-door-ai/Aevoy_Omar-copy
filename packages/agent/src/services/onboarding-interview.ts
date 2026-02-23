@@ -63,7 +63,7 @@ export async function handleInterviewCall({ userId, from, to, callSid }: { userI
   console.log(`[ONBOARDING] Starting interview call for user ${userId?.slice(0, 8)}`);
 
   const firstQuestion = INTERVIEW_QUESTIONS[0];
-  const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
+  const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -112,7 +112,7 @@ export async function processInterviewResponse(userId: string, questionIndex: nu
   }
 
   // Next question
-  const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
+  const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Google.en-US-Neural2-F">Got it!</Say>

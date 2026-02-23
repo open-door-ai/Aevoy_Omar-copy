@@ -16,13 +16,14 @@ import StepInboxManager from "./step-inbox-manager";
 import StepInterview, { type InterviewData } from "./step-interview";
 import StepTour from "./step-tour";
 import StepMeetIntern from "./step-meet-intern";
+import StepPhoneSetup from "./step-phone-setup";
 
 interface UnifiedFlowProps {
   username: string;
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 14;
+const TOTAL_STEPS = 15;
 
 export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) {
   const [step, setStep] = useState(1);
@@ -267,9 +268,10 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepVerification
+              <StepPhoneSetup
                 onNext={() => goTo(10)}
                 onBack={() => goTo(8)}
+                onSkip={() => goTo(10)}
               />
             </motion.div>
           )}
@@ -285,7 +287,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepLegal
+              <StepVerification
                 onNext={() => goTo(11)}
                 onBack={() => goTo(9)}
               />
@@ -303,7 +305,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepEmailCalendar
+              <StepLegal
                 onNext={() => goTo(12)}
                 onBack={() => goTo(10)}
               />
@@ -313,6 +315,24 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
           {step === 12 && (
             <motion.div
               key="step-12"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
+              <StepEmailCalendar
+                onNext={() => goTo(13)}
+                onBack={() => goTo(11)}
+              />
+            </motion.div>
+          )}
+
+          {step === 13 && (
+            <motion.div
+              key="step-13"
               custom={direction}
               variants={slideVariants}
               initial="enter"
@@ -341,17 +361,17 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
                   } catch {
                     // Non-critical — user can configure later
                   }
-                  goTo(13);
+                  goTo(14);
                 }}
-                onBack={() => goTo(11)}
-                onSkip={() => goTo(13)}
+                onBack={() => goTo(12)}
+                onSkip={() => goTo(14)}
               />
             </motion.div>
           )}
 
-          {step === 13 && (
+          {step === 14 && (
             <motion.div
-              key="step-13"
+              key="step-14"
               custom={direction}
               variants={slideVariants}
               initial="enter"
@@ -363,16 +383,16 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               <StepInterview
                 onNext={(interviewData) => {
                   setData((d) => ({ ...d, interview: interviewData }));
-                  goTo(14);
+                  goTo(15);
                 }}
-                onBack={() => goTo(12)}
+                onBack={() => goTo(13)}
               />
             </motion.div>
           )}
 
-          {step === 14 && (
+          {step === 15 && (
             <motion.div
-              key="step-14"
+              key="step-15"
               custom={direction}
               variants={slideVariants}
               initial="enter"
