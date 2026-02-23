@@ -45,6 +45,7 @@ const activeSessions = new Map<string, VoiceSession>();
 const MAX_SESSIONS = 50;
 const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes max call
 const DEMO_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes max for demo calls (cost control)
+const INTERVIEW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes for demo interview calls
 
 // ---- Session Management ----
 
@@ -60,12 +61,18 @@ function cleanupSession(sessionId: string): void {
 setInterval(() => {
   const now = Date.now();
   for (const [id, session] of activeSessions) {
-    const timeout = session.callType === 'demo' ? DEMO_TIMEOUT_MS : SESSION_TIMEOUT_MS;
+    const timeout = session.callType === 'demo' ? DEMO_TIMEOUT_MS
+      : session.callType === 'demo_interview' ? INTERVIEW_TIMEOUT_MS
+      : SESSION_TIMEOUT_MS;
     if (now - session.startedAt > timeout) {
       const mins = Math.round((now - session.startedAt) / 60000);
       console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
       try {
-        if (session.callType === 'demo') {
+        if (session.callType === 'demo_interview') {
+          // Save interview data before closing
+          saveInterviewFromConversation(session).catch(() => {});
+          session.ws.send(JSON.stringify({ type: "text", token: "Thanks for chatting with me! I've saved everything. You're all set — talk to you soon!", last: true }));
+        } else if (session.callType === 'demo') {
           session.ws.send(JSON.stringify({ type: "text", token: "It was great chatting with you! Head to aevoy.com to get your own AI assistant. Talk soon!", last: true }));
         }
         session.ws.send(JSON.stringify({ type: "end" }));
@@ -145,6 +152,10 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       logCallHistory(session, duration);
       // Save conversation to memory (async, non-blocking)
       saveConversationToMemory(session).catch(() => {});
+      // Mark interview complete if this was an interview call
+      if (session.callType === "demo_interview") {
+        saveInterviewFromConversation(session).catch(() => {});
+      }
     }
     cleanupSession(sessionId);
   });
@@ -164,17 +175,21 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   const callType = customParameters.callType || "task";
 
   const isDemo = callType === "demo";
-  console.log(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}${isDemo ? " (DEMO)" : ""}`);
+  const isInterview = callType === "demo_interview";
+  console.log(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}${isDemo ? " (DEMO)" : ""}${isInterview ? " (INTERVIEW)" : ""}`);
 
   // Load user profile
-  let userName = isDemo ? "there" : "there";
+  let userName = (isDemo || isInterview) ? "there" : "there";
   let userEmail = "";
-  let botName = isDemo ? "Aevoy" : "Nova";
+  let botName = (isDemo || isInterview) ? "Aevoy" : "Nova";
   let greetingStyle = "casual";
   let timezone = "America/Los_Angeles";
   let needsPin = false;
   let userProfile = "";
-  let memoryContext = isDemo ? `DEMO CALL — Website "Call Me Now" button. This caller is a potential customer.
+  let memoryContext = "";
+
+  if (isDemo) {
+    memoryContext = `DEMO CALL — Website "Call Me Now" button. This caller is a potential customer.
 
 YOUR MISSION: Sell them on Aevoy. Be warm, confident, and impressive. Show don't tell.
 - Demonstrate capabilities: "I can check your emails, schedule calls, research anything, create documents, browse any website for you"
@@ -186,7 +201,28 @@ YOUR MISSION: Sell them on Aevoy. Be warm, confident, and impressive. Show don't
 - NEVER ask for personal info, credit cards, or sensitive details
 - Keep responses SHORT and punchy — this is a sales call, not a lecture
 - CALL LIMIT: Keep the call under 3 minutes. After 2 minutes, naturally wrap up: "I'd love to keep chatting — sign up at aevoy.com and we can talk as much as you want!"
-- DO NOT reveal you're a demo. You're showcasing the real product.` : "";
+- DO NOT reveal you're a demo. You're showcasing the real product.`;
+  } else if (isInterview) {
+    memoryContext = `ONBOARDING INTERVIEW — This is a registered user calling the demo number. Your job is to get to know them through a casual, friendly conversation.
+
+ASK THESE QUESTIONS (one at a time, naturally — don't list them all at once):
+1. "What should I call you?" → save as [SAVE:preferred_name=their answer]
+2. "What are the top 3 things you'll use me for? Like emails, scheduling, research, shopping..." → save as [SAVE:main_uses=comma separated list]
+3. "When are you usually most busy? Like, what hours should I avoid interrupting you?" → save as [SAVE:busy_hours=their answer]
+4. "Do you prefer I ask before taking actions, or should I just go ahead and do things?" → save as [SAVE:autonomy_preference=ask_first or just_do_it]
+5. "What websites or services do you use most? Like Gmail, Amazon, LinkedIn..." → save as [SAVE:favorite_services=comma separated list]
+6. "Last one — would you like a daily morning check-in where I brief you on your day?" → save as [SAVE:daily_checkin=yes or no]
+
+RULES:
+- Ask ONE question at a time. Wait for their answer before asking the next.
+- Be conversational and warm. React to their answers naturally ("Oh nice!", "Got it!", "Good choice!") before moving on.
+- After each answer, include the [SAVE:field=value] tag at the END of your response (the user won't hear it).
+- If they give a vague answer, that's fine — save what you got and move on. Don't interrogate.
+- If they want to skip a question, respect that and move on.
+- After all 6 questions (or if they want to stop early), wrap up warmly: "Awesome, I've got everything I need! You're all set up. Talk to you soon!"
+- Keep the whole interview under 5 minutes — be efficient but friendly.
+- You can also use [REMEMBER:...] tags for anything interesting they mention.`;
+  }
 
   if (userId) {
     // Load profile, settings, and memory in parallel — wrapped in try/catch so session is ALWAYS created
@@ -354,8 +390,8 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       memoryContext: session.memoryContext,
     });
 
-    // Extract [REMEMBER:...] tags before sending to TTS
-    const { response, memories } = extractMemoryTags(rawResponse);
+    // Extract [REMEMBER:...] and [SAVE:...] tags before sending to TTS
+    const { response, memories, saves } = extractMemoryTags(rawResponse);
 
     session.conversationHistory.push({ role: "assistant", content: response });
 
@@ -374,6 +410,14 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
         saveWorkingMemory(session.userId, mem).catch(() => {});
       }
       console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${memories.length} memories`);
+    }
+
+    // Save structured interview data from [SAVE:] tags (async, non-blocking)
+    if (saves.length > 0 && session.userId) {
+      for (const save of saves) {
+        saveInterviewField(session.userId, save.field, save.value).catch(() => {});
+      }
+      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${saves.length} interview fields`);
     }
 
     // Check if the AI wants to create a task from this conversation
@@ -456,13 +500,97 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
 
 // ---- Memory Integration ----
 
-function extractMemoryTags(text: string): { response: string; memories: string[] } {
+function extractMemoryTags(text: string): { response: string; memories: string[]; saves: Array<{ field: string; value: string }> } {
   const memories: string[] = [];
-  const cleaned = text.replace(/\[REMEMBER:(.*?)\]/g, (_match, content) => {
+  const saves: Array<{ field: string; value: string }> = [];
+
+  let cleaned = text.replace(/\[REMEMBER:(.*?)\]/g, (_match, content) => {
     memories.push(content.trim());
     return "";
   });
-  return { response: cleaned.trim(), memories };
+
+  // Extract [SAVE:field=value] tags (used by interview mode)
+  cleaned = cleaned.replace(/\[SAVE:(\w+)=(.*?)\]/g, (_match, field, value) => {
+    saves.push({ field: field.trim(), value: value.trim() });
+    return "";
+  });
+
+  return { response: cleaned.trim(), memories, saves };
+}
+
+/**
+ * Save structured interview data from [SAVE:] tags to user's profile
+ */
+async function saveInterviewField(userId: string, field: string, value: string): Promise<void> {
+  const supabase = getSupabaseClient();
+
+  switch (field) {
+    case "preferred_name":
+      await supabase.from("profiles").update({ display_name: value }).eq("id", userId);
+      break;
+
+    case "main_uses": {
+      const uses = value.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+      await supabase.from("profiles").update({ main_uses: uses }).eq("id", userId);
+      break;
+    }
+
+    case "busy_hours":
+      // Save as working memory — no dedicated column
+      await saveWorkingMemory(userId, `User's busy hours: ${value}`);
+      break;
+
+    case "autonomy_preference": {
+      const lower = value.toLowerCase();
+      let confirmationMode = "unclear";
+      if (lower.includes("ask") || lower.includes("first")) {
+        confirmationMode = "always";
+      } else if (lower.includes("just") || lower.includes("go ahead") || lower.includes("do it")) {
+        confirmationMode = "risky";
+      }
+      await supabase.from("user_settings").update({ confirmation_mode: confirmationMode }).eq("user_id", userId);
+      break;
+    }
+
+    case "favorite_services": {
+      const services = value.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+      await saveWorkingMemory(userId, `User's favorite services: ${services.join(", ")}`);
+      break;
+    }
+
+    case "daily_checkin": {
+      const lower = value.toLowerCase();
+      const enabled = lower.includes("yes") || lower.includes("sure") || lower.includes("yeah");
+      await supabase.from("profiles").update({
+        daily_checkin_enabled: enabled,
+        daily_checkin_time: enabled ? "09:00" : null,
+      }).eq("id", userId);
+      break;
+    }
+
+    default:
+      // Unknown field — save as working memory
+      await saveWorkingMemory(userId, `Interview: ${field} = ${value}`);
+  }
+
+  console.log(`[VOICE-INTERVIEW] Saved ${field}=${value.slice(0, 50)} for user ${userId.slice(0, 8)}`);
+}
+
+/**
+ * Mark interview as completed after demo_interview call ends
+ */
+async function saveInterviewFromConversation(session: VoiceSession): Promise<void> {
+  if (!session.userId || session.callType !== "demo_interview") return;
+
+  try {
+    await getSupabaseClient()
+      .from("profiles")
+      .update({ onboarding_interview_status: "phone_call_completed" })
+      .eq("id", session.userId);
+    console.log(`[VOICE-INTERVIEW] Marked interview complete for ${session.userId.slice(0, 8)}`);
+  } catch (err) {
+    console.error("[VOICE-INTERVIEW] Failed to mark interview complete:", err);
+  }
 }
 
 async function saveConversationToMemory(session: VoiceSession): Promise<void> {

@@ -903,7 +903,42 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     const isDemoCall = normalizedTo === normalizedDemo;
 
     if (isDemoCall) {
-      console.log(`[VOICE-DEMO] Demo call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
+      // Check if this caller is a registered user (by phone number)
+      const callerDigits = callerNumber.replace(/\D/g, "").slice(-10);
+      let registeredUserId = "";
+      let registeredUserName = "";
+      let isRegisteredCaller = false;
+
+      if (callerDigits.length >= 10) {
+        try {
+          const { data: matchedProfiles } = await supabase
+            .from("profiles")
+            .select("id, display_name, username, onboarding_interview_status")
+            .or(`phone_number.ilike.%${callerDigits}`);
+
+          if (matchedProfiles && matchedProfiles.length > 0) {
+            const profile = matchedProfiles[0];
+            registeredUserId = profile.id;
+            registeredUserName = profile.display_name || profile.username || "";
+            // Only do interview if they haven't completed it yet
+            const interviewDone = profile.onboarding_interview_status === "phone_call_completed"
+              || profile.onboarding_interview_status === "web_completed";
+            isRegisteredCaller = !interviewDone;
+            console.log(`[VOICE-DEMO] Matched caller to user ${registeredUserId.slice(0, 8)} (${registeredUserName}), interview_done=${interviewDone}`);
+          }
+        } catch (e: any) {
+          console.error("[VOICE-DEMO] Caller lookup error:", e.message);
+        }
+      }
+
+      const effectiveCallType = isRegisteredCaller ? "demo_interview" : "demo";
+      const effectiveUserId = isRegisteredCaller ? registeredUserId : DEMO_USER_ID;
+      const interviewGreeting = registeredUserName
+        ? `Hey ${registeredUserName}! Great to hear from you. I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`
+        : `Hey there! I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`;
+      const effectiveGreeting = isRegisteredCaller ? interviewGreeting : DEMO_GREETING;
+
+      console.log(`[VOICE-DEMO] ${effectiveCallType} call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 
       // Log demo call (fire-and-forget)
       supabase.from("call_history").insert({
@@ -911,7 +946,8 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         direction: "inbound",
         from_number: callerNumber,
         to_number: twilioNumber,
-        call_type: "demo",
+        call_type: effectiveCallType,
+        user_id: effectiveUserId || null,
         pin_required: false,
         pin_success: null
       }).then(() => {}, (e: any) => console.error("[VOICE] Demo call history insert failed:", e));
@@ -920,24 +956,24 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 
       if (USE_CONVERSATION_RELAY) {
         const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
-        console.log(`[VOICE-DEMO] ConversationRelay demo: voice=${DEMO_VOICE}`);
+        console.log(`[VOICE-DEMO] ConversationRelay ${effectiveCallType}: voice=${DEMO_VOICE}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(DEMO_GREETING)}">
-      <Parameter name="userId" value="${DEMO_USER_ID}" />
-      <Parameter name="callType" value="demo" />
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(effectiveGreeting)}">
+      <Parameter name="userId" value="${effectiveUserId}" />
+      <Parameter name="callType" value="${effectiveCallType}" />
       <Parameter name="callerNumber" value="${callerNumber}" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(DEMO_GREETING)}</Say>
+  <Say voice="Polly.Joanna-Neural">${escapeXml(effectiveGreeting)}</Say>
 </Response>`);
       }
 
       // Legacy fallback for demo
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">${escapeXml(DEMO_GREETING)}</Say>
+  <Say voice="${voice}">${escapeXml(effectiveGreeting)}</Say>
   <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app'}/webhook/voice/demo" method="POST" />
   <Say voice="${voice}">I didn't catch that. Feel free to call back anytime!</Say>
