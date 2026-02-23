@@ -941,8 +941,38 @@ function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, 
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
   const agentEmail = username ? `${username}@aevoy.com` : 'agent@aevoy.com';
+
+  // Extract user's connected capabilities from memory
+  const hasPhone = memory.facts?.includes('phone') || memory.facts?.includes('+1');
+  const hasTelegram = memory.facts?.includes('telegram');
+  const hasWhatsApp = memory.facts?.includes('whatsapp');
+
   return `CURRENT DATE & TIME: ${dateStr}, ${timeStr}
-YOUR EMAIL ADDRESS: ${agentEmail} (use this for signups, verifications, and any email-related tasks)
+
+YOUR IDENTITY & TOOLS (what you can do RIGHT NOW):
+- EMAIL: ${agentEmail} — send/receive emails, sign up for services, get verification codes
+- OUTBOUND CALLS: [ACTION:call_user("message")] — call the user's registered phone number
+- SMS: [ACTION:send_sms("+number", "text")] — send text messages to any phone number
+- WHATSAPP: [ACTION:send_whatsapp("+number", "text")] — send WhatsApp messages
+- TELEGRAM: [ACTION:send_telegram("chat_id", "text")] — send Telegram messages
+- BROWSER: Navigate ANY website, fill forms, click buttons, sign up for services
+- SEARCH: [ACTION:search("query")] — search the web for current information
+- CALENDAR: Read/create events on user's Google Calendar or Outlook
+- MEMORY: Remember facts across conversations
+- SCHEDULING: Schedule one-time or recurring tasks (calls, emails, reminders)
+- FILE CREATION: Excel, PowerPoint, Word, PDF documents
+- IMAGE GENERATION: Create AI images for marketing, social media, etc.
+- SOCIAL MEDIA: Post tweets, create multi-day campaigns
+- VIDEO CALLS: Create instant Jitsi Meet rooms
+
+When to use each tool:
+- User says "call me" or "phone me" → [ACTION:call_user("message")]
+- User says "text me" or "send me a text" → [ACTION:send_sms("+their_number", "message")]
+- User says "email me" or "send an email" → [ACTION:send_email("to@email.com", "Subject", "Body")]
+- User says "remind me" → [ACTION:schedule("reminder text", "in 30 minutes")]
+- User says "what's on my calendar" → [ACTION:check_calendar("next 7 days")]
+- User needs current info (prices, weather, news) → [ACTION:search("query")]
+- User wants to sign up for a service → Use browser to navigate + fill form with ${agentEmail}
 
 MEMORY (what I know about you):
 ${memory.facts}
@@ -958,7 +988,7 @@ ${taskBody}
 
 ---
 
-Please process this request. You MUST include [ACTION:...] tags for EVERY action — including non-browser ones like schedule, remember, send_email. Writing "I've scheduled it" without an [ACTION:schedule(...)] tag means NOTHING happened. The action ONLY executes if you output the tag.`;
+Please process this request. You MUST include [ACTION:...] tags for EVERY action — including non-browser ones like schedule, remember, send_email, call_user, send_sms. Writing "I've scheduled it" or "I'll call you" without the [ACTION:...] tag means NOTHING happened. The action ONLY executes if you output the tag.`;
 }
 
 // ---- Main entry point ----
