@@ -448,7 +448,13 @@ async function tryScheduleFastPath(
     return null; // Fall through to AI
   }
 
-  const humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  // Use user's timezone for display (falls back to America/Los_Angeles)
+  let userTz = 'America/Los_Angeles';
+  try {
+    const { data: prof } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
+    if (prof?.timezone) userTz = prof.timezone;
+  } catch { /* use default */ }
+  const humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: userTz });
   const responseText = action === 'call_user'
     ? `Got it — I'll call you at ${humanTime}`
     : action === 'send_sms'
@@ -3741,7 +3747,13 @@ async function executeAction(
         console.error(`[SCHEDULE] Failed to create scheduled task:`, error.message);
       }
 
-      const humanTime = new Date(nextRun).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      // Use user's timezone for display
+      let schedTz = 'America/Los_Angeles';
+      try {
+        const { data: tzProf } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
+        if (tzProf?.timezone) schedTz = tzProf.timezone;
+      } catch { /* use default */ }
+      const humanTime = new Date(nextRun).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: schedTz });
       return {
         action,
         success: !error,
