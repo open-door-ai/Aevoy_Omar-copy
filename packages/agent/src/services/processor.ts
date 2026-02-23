@@ -188,7 +188,7 @@ function shouldSkipPayment(): boolean {
  */
 async function tryEmailSendFastPath(
   userId: string, username: string, from: string, subject: string, body: string,
-  inputChannel?: string
+  inputChannel?: string, existingTaskId?: string
 ): Promise<TaskResult | null> {
   const taskText = `${subject} ${body}`.trim();
 
@@ -231,20 +231,23 @@ async function tryEmailSendFastPath(
   const startTime = Date.now();
   console.log(`[FAST-PATH-SEND] Email send detected — ${recipients.length} recipient(s): ${recipients.join(', ')}`);
 
-  // Create task record first
-  const { data: taskRecord } = await getSupabaseClient()
-    .from("tasks")
-    .insert({
-      user_id: userId,
-      status: "processing",
-      email_subject: subject,
-      input_text: body,
-      started_at: new Date().toISOString(),
-      input_channel: inputChannel || "email",
-    })
-    .select()
-    .single();
-  const taskId = taskRecord?.id || "";
+  // Use existing task record if provided, otherwise create one
+  let taskId = existingTaskId || "";
+  if (!taskId) {
+    const { data: taskRecord } = await getSupabaseClient()
+      .from("tasks")
+      .insert({
+        user_id: userId,
+        status: "processing",
+        email_subject: subject,
+        input_text: body,
+        started_at: new Date().toISOString(),
+        input_channel: inputChannel || "email",
+      })
+      .select()
+      .single();
+    taskId = taskRecord?.id || "";
+  }
 
   // Use cheap AI (Groq) to compose the email subject/body from the user's request
   let emailSubject = "Message from Aevoy";
@@ -900,6 +903,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Clear retry failure patterns for this new task
     clearFailurePatterns();
 
+    // 2b. FAST PATH: Email sending — detect and execute BEFORE expensive AI classification
+    // This runs right after task creation so we have a taskId to update
+    const earlyEmailResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
+    if (earlyEmailResult) {
+      clearTimeout(masterTimer);
+      return earlyEmailResult;
+    }
+
     // 3. Classify task and create locked intent (SECURITY)
     const classification = await classifyTask(`${subject} ${body}`);
     const taskType = getTaskTypeFromClassification(classification.taskType);
@@ -1456,19 +1467,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // 5h. PRE-AI FAST PATH: Email SENDING (also handled in processIncomingTask,
     // but needed here too for subtask execution and direct processTask calls)
-    const sendFastPathResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel);
-    if (sendFastPathResult) {
-      // If task record already existed, update it
-      if (taskId && sendFastPathResult.taskId !== taskId) {
-        await getSupabaseClient().from("tasks").update({
-          status: "completed",
-          completed_at: new Date().toISOString(),
-          execution_time_ms: Date.now() - startTime,
-          verification_status: "verified",
-        }).eq("id", taskId);
-      }
-      return sendFastPathResult;
-    }
+    const sendFastPathResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
+    if (sendFastPathResult) return sendFastPathResult;
 
     // 6. Generate AI response (use cheapest model if over budget)
     const aiTaskType = forceCheapModel ? "validate" as const : undefined;
