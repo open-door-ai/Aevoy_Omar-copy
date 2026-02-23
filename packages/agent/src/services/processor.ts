@@ -1938,12 +1938,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           const isAdviceResponse = (
             !isConversational &&
             (
-              // Detect advice patterns: "you can", "you should", "here are", bullet lists
-              (lowerContent.includes('you can ') && lowerContent.includes('you can ') ) ||
-              (lowerContent.includes('you should ')) ||
+              // Detect advice patterns — ANY suggestion language instead of action
+              /\b(you can|you should|you could|users can|one can|consider|recommend)\b/.test(lowerContent) ||
               (lowerContent.match(/\n[-•*]\s/g) || []).length >= 3 || // 3+ bullet points = advice list
-              (lowerContent.includes('here are ') && lowerContent.includes('website')) ||
-              (lowerContent.includes('consider ') && lowerContent.includes('visit'))
+              (lowerContent.match(/\d+\.\s+\*?\*?[A-Z]/g) || []).length >= 3 || // numbered list "1. **Something"
+              (lowerContent.includes('here are ') || lowerContent.includes('here\'s a list')) ||
+              (lowerContent.includes('platform') && lowerContent.includes('sign up')) || // "platforms where you can sign up"
+              (lowerContent.includes('require') && lowerContent.includes('create a profile')) // "require users to create a profile"
             )
           );
 
@@ -1995,10 +1996,19 @@ For "${subject}":
           aiSignaledComplete = true;
           break;
         } else {
-          // Mark for exit after this round's actions execute
-          isTaskComplete = true;
-          aiSignaledComplete = true;
-          console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+          // If round 1 has search/browse actions, DON'T mark complete yet — let the search
+          // run and re-prompt the AI with ACTUAL results so it can give a data-driven answer
+          // instead of using its stale training knowledge.
+          const hasSearchBrowse = aiResponse.actions.some(a => ['search', 'browse', 'screenshot', 'extract'].includes(a.type));
+          if (hasSearchBrowse && currentIteration === 1) {
+            console.log(`[ITERATE] TASK_COMPLETE + search/browse in round 1 — deferring completion to use search results`);
+            // DON'T set isTaskComplete — let the loop continue after search executes
+          } else {
+            // Mark for exit after this round's actions execute
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+          }
         }
       }
 
