@@ -846,23 +846,38 @@ app.post("/webhook/voice/outbound-twiml", async (req, res) => {
   const userId = req.query.userId as string || req.body.userId || '';
   const message = req.query.message as string || req.body.message || '';
   const wsUrl = `${(process.env.AGENT_URL || 'http://localhost:3001').replace('http', 'ws')}/ws/voice`;
-  const voiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+  let voiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+
+  // Load user's voice preference
+  if (userId) {
+    try {
+      const { data: vs } = await getSupabaseClient()
+        .from("user_settings")
+        .select("voice_preference")
+        .eq("user_id", userId)
+        .single();
+      if (vs?.voice_preference && !vs.voice_preference.includes('.')) {
+        voiceId = vs.voice_preference;
+      }
+    } catch { /* use default */ }
+  }
 
   const greeting = message || 'Hey! Your AI assistant is calling back. What can I help you with?';
+  const escGreeting = greeting.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  // Use ConversationRelay for a full two-way conversation
+  // Use <Parameter> elements (not URL query params) so handleSetup receives them via customParameters
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}?userId=${userId}&amp;callType=callback"
-      ttsProvider="ElevenLabs" voice="${voiceId}"
-      transcriptionProvider="Deepgram" dtmfDetection="true"
-      interruptible="true"
-      welcomeGreeting="${greeting.replace(/"/g, '&quot;').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" />
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escGreeting}">
+      <Parameter name="userId" value="${userId}" />
+      <Parameter name="callType" value="callback" />
+    </ConversationRelay>
   </Connect>
+  <Say voice="Polly.Joanna-Neural">${escGreeting}</Say>
 </Response>`;
 
-  console.log(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}`);
+  console.log(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}, voice=${voiceId}`);
   res.type('text/xml').send(twiml);
 });
 
