@@ -2014,12 +2014,53 @@ For "${subject}":
         }
       }
 
-      // If no actions, we're done
+      // If no actions, check if the AI DESCRIBED actions instead of outputting them
       if (aiResponse.actions.length === 0) {
-        console.log('[ITERATE] No actions in this round, task complete');
-        isTaskComplete = true;
-        aiSignaledComplete = currentIteration > 1; // AI explicitly chose not to act after reviewing results
-        break;
+        const lc = aiResponse.content.toLowerCase();
+        const describesNextSteps = (
+          /\b(next step|should (fill|click|submit|navigate|enter|type|browse|go to)|need to (fill|click|submit|enter|type))\b/i.test(lc) ||
+          /\b(the (form|email|password) field|sign.?up|create.?account|register)\b/i.test(lc) ||
+          /\b(is the next|to complete|to finish|to proceed|to continue)\b/i.test(lc)
+        );
+
+        if (describesNextSteps && currentIteration <= 5) {
+          console.warn(`[ITERATE] AI described next steps without action tags — forcing re-prompt with format reminder`);
+          const forceActionsPrompt = `You described what to do next but DID NOT output any action tags. Your response was REJECTED.
+
+OUTPUT THE ACTUAL ACTION TAGS. Here are the formats you MUST use:
+[ACTION:fill("selector_or_label", "value")] — type into a form field
+[ACTION:click("button_text_or_selector")] — click a button/link
+[ACTION:submit("form_selector")] — submit a form
+[ACTION:browse("url")] — navigate to a URL
+[ACTION:search("query")] — web search
+
+The original task is: ${subject} ${body}
+You are currently on: ${executionEngine?.getPage()?.url() || 'unknown page'}
+
+DO NOT describe what you would do. OUTPUT THE [ACTION:...] TAGS NOW.`;
+          const forcedResponse = await generateResponse(
+            memory, subject, forceActionsPrompt, username, "complex", userId, taskId, senderName
+          );
+          totalAiCost += forcedResponse.cost || 0;
+          totalTokens += forcedResponse.tokensUsed || 0;
+          aiResponse = forcedResponse;
+          // Strip thinking blocks
+          aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+          // If STILL no actions after the force-prompt, then truly give up
+          if (aiResponse.actions.length === 0) {
+            console.log('[ITERATE] AI still produced no actions after force-prompt, task complete');
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            break;
+          }
+          // Fall through to execute the forced actions
+          console.log(`[ITERATE] Force-prompt produced ${aiResponse.actions.length} actions, executing`);
+        } else {
+          console.log('[ITERATE] No actions in this round, task complete');
+          isTaskComplete = true;
+          aiSignaledComplete = currentIteration > 1;
+          break;
+        }
       }
 
       const iterationResults: ActionResult[] = [];
@@ -2341,14 +2382,14 @@ For "${subject}":
         break;
       }
 
-      // EARLY EXIT: If ALL Round 1 actions failed for a research/general task,
-      // don't run 5 more rounds of DeepSeek narration — go straight to Haiku fallback.
-      // Round 1 is the ONLY round with actions if search/browse fails; subsequent rounds
-      // just produce more "I'll search..." narration from iterative prompts.
+      // EARLY EXIT: If ALL actions failed for 2 consecutive rounds on a research/general task,
+      // go to Haiku fallback. But give at least 2 rounds — round 1 search failures are common
+      // (search engine blocks, rate limits) and round 2 re-prompt with action format reminder
+      // often recovers by trying a different search strategy.
       const isResearchOrGeneral = taskType === 'research' || taskType === 'general' || taskType === 'email';
-      const allFailedFirstRound = currentIteration === 1 && failedActions.length > 0 && successfulActions.length === 0;
-      if (allFailedFirstRound && isResearchOrGeneral) {
-        console.log('[ITERATE] All Round 1 actions failed for research/general task — exiting loop for Haiku fallback');
+      const allFailedThisRound = failedActions.length > 0 && successfulActions.length === 0;
+      if (allFailedThisRound && isResearchOrGeneral && currentIteration >= 2) {
+        console.log(`[ITERATE] All actions failed for ${currentIteration} rounds on ${taskType} task — exiting for Haiku fallback`);
         break;
       }
 
