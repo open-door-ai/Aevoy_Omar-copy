@@ -640,6 +640,7 @@ async function tryDirectActionExecution(
   phoneNumber?: string | null
 ): Promise<boolean> {
   const lower = taskText.toLowerCase().trim();
+  console.log(`[SCHEDULER-DIRECT] Checking taskText="${taskText}" lower="${lower}" userId=${userId.slice(0,8)} phone=${phoneNumber || 'none'}`);
 
   // call_user — call the user's phone
   if (lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:')) {
@@ -771,13 +772,45 @@ async function runDueScheduledTasksInner(): Promise<void> {
 
       // Process the scheduled task (task_template is canonical, description is legacy fallback)
       const taskText = scheduled.task_template || scheduled.description || "scheduled task";
+      const isOnce = scheduled.cron_expression === "once";
+      const newRunCount = (scheduled.run_count || 0) + 1;
+      const maxRuns = scheduled.max_runs ?? null;
+      const isOneTime = isOnce || (maxRuns !== null && newRunCount >= maxRuns);
+
+      console.log(`[SCHEDULER] Processing task ${scheduled.id}: taskText="${taskText}", cron="${scheduled.cron_expression}", isOneTime=${isOneTime}, profile=${profile.username}, phone=${profile.phone_number}`);
+
+      // PREVENT DOUBLE-FIRING: Update metadata BEFORE processing.
+      // If the task takes a long time (AI loop), the lock may expire and another
+      // scheduler run could pick up the same task. By marking it now, we prevent that.
+      const nextRun = isOneTime ? null : calculateNextRun(scheduled.cron_expression, scheduled.timezone);
+      const { error: preUpdateError } = await getSupabaseClient()
+        .from('scheduled_tasks')
+        .update({
+          last_run_at: now,
+          next_run_at: nextRun,
+          run_count: newRunCount,
+          is_active: !isOneTime,
+        })
+        .eq('id', scheduled.id);
+
+      if (preUpdateError) {
+        console.error(`[SCHEDULER] Failed to pre-update scheduled task ${scheduled.id}:`, preUpdateError);
+      } else {
+        console.log(`[SCHEDULER] Pre-updated task ${scheduled.id}: is_active=${!isOneTime}, next_run=${nextRun}`);
+      }
 
       // FAST PATH: Direct action execution for known action names
       // When the AI schedules call_user/send_sms/etc., the description IS the action name.
       // Executing these directly avoids the slow AI loop that doesn't understand raw action names.
-      const directActionHandled = await tryDirectActionExecution(
-        taskText, scheduled.user_id, profile.username, profile.email, profile.phone_number
-      );
+      let directActionHandled = false;
+      try {
+        directActionHandled = await tryDirectActionExecution(
+          taskText, scheduled.user_id, profile.username, profile.email, profile.phone_number
+        );
+      } catch (directErr) {
+        console.error(`[SCHEDULER] tryDirectActionExecution threw:`, directErr);
+      }
+      console.log(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}"`);
 
       if (!directActionHandled) {
         // Fall back to full AI processing for complex/natural-language tasks
@@ -789,35 +822,8 @@ async function runDueScheduledTasksInner(): Promise<void> {
           body: taskText,
         });
       }
-      
-      // Update last_run_at and calculate next_run_at
-      const newRunCount = (scheduled.run_count || 0) + 1;
-      const maxRuns = scheduled.max_runs ?? null;
-      const isOnce = scheduled.cron_expression === "once";
-      const isOneTime = isOnce || (maxRuns !== null && newRunCount >= maxRuns);
-      const nextRun = isOneTime ? null : calculateNextRun(scheduled.cron_expression, scheduled.timezone);
 
-      const { error: updateError } = await getSupabaseClient()
-        .from('scheduled_tasks')
-        .update({
-          last_run_at: now,
-          next_run_at: nextRun,
-          run_count: newRunCount,
-          is_active: !isOneTime,
-        })
-        .eq('id', scheduled.id);
-
-      if (updateError) {
-        console.error(`[SCHEDULER] Failed to update scheduled task ${scheduled.id}:`, updateError);
-        // Fallback: try raw SQL for one-time tasks
-        if (isOneTime) {
-          try {
-            await getSupabaseClient().rpc('deactivate_scheduled_task', { task_id: scheduled.id });
-          } catch { /* last resort */ }
-        }
-      }
-
-      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${!isOneTime})`);
+      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${!isOneTime}, directAction=${directActionHandled})`);
     } catch (error) {
       console.error(`[SCHEDULER] Error processing scheduled task ${scheduled.id}:`, error);
     }
