@@ -38,10 +38,23 @@ export async function POST(request: Request) {
       }
     }
 
-    // Bot name
+    // Bot name (must be unique across all users)
     if (body.bot_name && typeof body.bot_name === 'string') {
       const botName = body.bot_name.trim().substring(0, 30);
       if (botName.length >= 1) {
+        const { data: existingBot } = await supabase
+          .from("profiles")
+          .select("id")
+          .ilike("bot_name", botName)
+          .neq("id", user.id)
+          .maybeSingle();
+
+        if (existingBot) {
+          return NextResponse.json(
+            { error: "This AI name is already taken. Please choose a different name." },
+            { status: 409 }
+          );
+        }
         profileUpdate.bot_name = botName;
       }
     }

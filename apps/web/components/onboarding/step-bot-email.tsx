@@ -78,16 +78,72 @@ export default function StepBotEmail({
   } | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [shuffleIndex, setShuffleIndex] = useState(0);
+  const [takenNames, setTakenNames] = useState<Set<string>>(new Set());
+  const [checkingBotName, setCheckingBotName] = useState(false);
+  const [botNameAvailable, setBotNameAvailable] = useState<boolean | null>(null);
 
-  // Get visible quick picks (rotate through curated names)
+  // On mount, batch-check all curated names for availability
+  useEffect(() => {
+    async function checkCuratedNames() {
+      try {
+        const res = await fetch("/api/onboarding/check-botname", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ names: CURATED_NAMES }),
+        });
+        const data = await res.json();
+        if (data.results) {
+          const taken = new Set<string>();
+          for (const [name, available] of Object.entries(data.results)) {
+            if (!available) taken.add(name);
+          }
+          setTakenNames(taken);
+        }
+      } catch { /* ignore */ }
+    }
+    checkCuratedNames();
+  }, []);
+
+  // Debounced bot name uniqueness check for custom names
+  useEffect(() => {
+    const name = botName.trim();
+    if (name.length < 1) {
+      setBotNameAvailable(null);
+      return;
+    }
+    // If it's a curated name, use the batch result
+    if (CURATED_NAMES.includes(name)) {
+      setBotNameAvailable(!takenNames.has(name));
+      return;
+    }
+    setCheckingBotName(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/onboarding/check-botname", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        setBotNameAvailable(data.available ?? null);
+      } catch {
+        setBotNameAvailable(null);
+      }
+      setCheckingBotName(false);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [botName, takenNames]);
+
+  // Get visible quick picks (rotate through curated names, skip taken ones)
   const visibleQuickPicks = useMemo(() => {
-    const start = (shuffleIndex * 6) % CURATED_NAMES.length;
+    const available = CURATED_NAMES.filter((n) => !takenNames.has(n));
+    const start = (shuffleIndex * 6) % Math.max(available.length, 1);
     const picks: string[] = [];
-    for (let i = 0; i < 6; i++) {
-      picks.push(CURATED_NAMES[(start + i) % CURATED_NAMES.length]);
+    for (let i = 0; i < 6 && i < available.length; i++) {
+      picks.push(available[(start + i) % available.length]);
     }
     return picks;
-  }, [shuffleIndex]);
+  }, [shuffleIndex, takenNames]);
 
   // Generate email suggestions when bot name changes
   useEffect(() => {
@@ -160,7 +216,7 @@ export default function StepBotEmail({
     setSuggestions(generateEmailSuggestions(botName));
   };
 
-  const isValid = availability?.available === true && botName.trim().length >= 1;
+  const isValid = availability?.available === true && botName.trim().length >= 1 && botNameAvailable === true;
   const showEmailSection = botName.trim().length >= 2;
 
   return (
@@ -176,7 +232,7 @@ export default function StepBotEmail({
       </FadeIn>
 
       <FadeIn delay={0.1} className="w-full">
-        <div className="w-full space-y-3 mb-4">
+        <div className="w-full space-y-2 mb-4">
           <Input
             value={botName}
             onChange={(e) =>
@@ -186,6 +242,26 @@ export default function StepBotEmail({
             className="text-lg text-center font-medium"
             maxLength={30}
           />
+          {/* Bot name availability */}
+          <div className="h-5 flex justify-center">
+            {checkingBotName && botName.trim().length >= 1 && (
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                <p className="text-sm text-gray-500">Checking...</p>
+              </div>
+            )}
+            {!checkingBotName && botNameAvailable === false && botName.trim().length >= 1 && (
+              <p className="text-sm text-red-500">This name is already taken by another AI</p>
+            )}
+            {!checkingBotName && botNameAvailable === true && botName.trim().length >= 1 && (
+              <div className="flex items-center gap-1.5">
+                <svg className="w-4 h-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                </svg>
+                <p className="text-sm text-green-600">Name available!</p>
+              </div>
+            )}
+          </div>
         </div>
       </FadeIn>
 
