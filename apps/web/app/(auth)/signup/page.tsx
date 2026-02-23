@@ -53,14 +53,29 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
+      // Server-side signup — bypasses Supabase email rate limits
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Signup failed");
+        setLoading(false);
+        return;
+      }
+
+      // Sign in immediately (user is already confirmed)
       const supabase = createClient();
-      const { error } = await supabase.auth.signUp({
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
-      if (error) {
-        setError(error.message);
+      if (signInError) {
+        setError(signInError.message);
         setLoading(false);
         return;
       }
