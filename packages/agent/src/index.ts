@@ -334,7 +334,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v18",
+    version: "2.0.0-agi-v19",
     gitSha: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local",
     timestamp: new Date().toISOString(),
     activeTasks,
@@ -361,6 +361,29 @@ app.get("/debug/voice-twiml", (req, res) => {
   res.json({
     conversationRelay: USE_CONVERSATION_RELAY,
     sampleTwiml: `<ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${defaultVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?" />`,
+  });
+});
+
+// ---- Scheduler matching debug endpoint ----
+app.get("/debug/scheduler-match", (req, res) => {
+  const secret = req.query.secret;
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const testText = (req.query.text as string) || "call_user";
+  const lower = testText.toLowerCase().trim();
+  const isCallUser = lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:');
+  const isSendSms = lower === 'send_sms' || lower.startsWith('send_sms:');
+  const isSendEmail = lower === 'send_email' || lower.startsWith('send_email:');
+  res.json({
+    testText,
+    lower,
+    isCallUser,
+    isSendSms,
+    isSendEmail,
+    directMatch: isCallUser || isSendSms || isSendEmail,
+    lowerLength: lower.length,
+    charCodes: Array.from(lower).map(c => c.charCodeAt(0)),
   });
 });
 
