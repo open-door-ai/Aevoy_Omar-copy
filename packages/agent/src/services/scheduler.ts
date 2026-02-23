@@ -832,6 +832,24 @@ async function runDueScheduledTasksInner(): Promise<void> {
         });
       }
 
+      // SAFETY NET: For one-time tasks, use database RPC to guarantee deactivation.
+      // The Supabase JS client sometimes strips null values from .update() calls,
+      // causing is_active to remain true and next_run_at to get a fallback value.
+      if (isOneTime) {
+        try {
+          await getSupabaseClient().rpc('deactivate_one_time_task', { p_task_id: scheduled.id });
+          console.log(`[SCHEDULER] Safety net: deactivated one-time task ${scheduled.id} via RPC`);
+        } catch (rpcErr) {
+          console.error(`[SCHEDULER] Safety net RPC failed for ${scheduled.id}:`, rpcErr);
+          // Last resort: direct update with only the critical fields
+          await getSupabaseClient()
+            .from('scheduled_tasks')
+            .update({ is_active: false })
+            .eq('id', scheduled.id)
+            .eq('cron_expression', 'once');
+        }
+      }
+
       console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${newIsActive}, directAction=${directActionHandled})`);
     } catch (error) {
       console.error(`[SCHEDULER] Error processing scheduled task ${scheduled.id}:`, error);
