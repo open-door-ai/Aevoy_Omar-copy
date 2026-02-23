@@ -5,6 +5,7 @@ import { AnimatePresence, motion, springs } from "@/components/ui/motion";
 import StepBotEmail from "./step-bot-email";
 import { StepQuickSetup } from "./step-quick-setup";
 import StepSecurityLegal from "./step-security-legal";
+import StepPhoneNew from "./step-phone-new";
 import StepEmailCalendar from "./step-email-calendar";
 import StepReady from "./step-ready";
 
@@ -13,7 +14,7 @@ interface UnifiedFlowProps {
   onComplete: () => void;
 }
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) {
   const [step, setStep] = useState(1);
@@ -165,8 +166,8 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
               transition={springs.default}
               className="w-full"
             >
-              <StepEmailCalendar
-                onNext={() => goTo(5)}
+              <StepPhoneNew
+                onNext={(_phone) => goTo(5)}
                 onBack={() => goTo(3)}
               />
             </motion.div>
@@ -175,6 +176,24 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
           {step === 5 && (
             <motion.div
               key="step-5"
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={springs.default}
+              className="w-full"
+            >
+              <StepEmailCalendar
+                onNext={() => goTo(6)}
+                onBack={() => goTo(4)}
+              />
+            </motion.div>
+          )}
+
+          {step === 6 && (
+            <motion.div
+              key="step-6"
               custom={direction}
               variants={slideVariants}
               initial="enter"
