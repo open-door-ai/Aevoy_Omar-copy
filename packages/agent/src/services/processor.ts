@@ -2474,8 +2474,12 @@ Be creative. Think outside the box. What would a human do differently?`;
       const searchSucceeded = iterationResults.some(r => r.action.type === 'search' && r.success);
       const searchCompletionHint = searchSucceeded
         ? `\n⚡ SEARCH SUCCEEDED: You have search results above. READ THEM and extract the answer NOW.
-- If the results contain a price, rating, or relevant info → answer the user and signal [TASK_COMPLETE].
-- DO NOT browse/navigate to sites shown in search results — use the data you already have.\n`
+CRITICAL: Use the SEARCH RESULTS to answer — do NOT use your own knowledge or training data.
+- Your training data is OUTDATED. The search results are CURRENT. Trust the search results over your knowledge.
+- If the results contain a price → quote that EXACT price. If they contain a name → use that EXACT name.
+- If the results say a product exists → it EXISTS. Do NOT say "has not been announced" if search results show it.
+- Extract specific data (prices, names, dates, URLs) from the results and present them clearly.
+- Signal [TASK_COMPLETE] with your answer based on the search results.\n`
         : '';
 
       // Dynamic domain failure warning — no hardcoded lists, learned from actual failures
