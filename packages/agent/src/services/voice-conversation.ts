@@ -157,17 +157,18 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   const userId = customParameters.userId || null;
   const callType = customParameters.callType || "task";
 
-  console.log(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}`);
+  const isDemo = callType === "demo";
+  console.log(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}${isDemo ? " (DEMO)" : ""}`);
 
   // Load user profile
-  let userName = "there";
+  let userName = isDemo ? "there" : "there";
   let userEmail = "";
-  let botName = "Nova";
+  let botName = isDemo ? "Aevoy" : "Nova";
   let greetingStyle = "casual";
   let timezone = "America/Los_Angeles";
   let needsPin = false;
   let userProfile = "";
-  let memoryContext = "";
+  let memoryContext = isDemo ? "This is a DEMO CALL from the website 'Call Me Now' button. The caller is a potential customer trying Aevoy for the first time. Be warm, impressive, and show off what Aevoy can do. Don't ask for personal info — just demonstrate capabilities." : "";
 
   if (userId) {
     // Load profile, settings, and memory in parallel — wrapped in try/catch so session is ALWAYS created
@@ -325,7 +326,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       return;
     }
 
-    const rawResponse = await generateVoiceResponse(session.userId!, voicePrompt, session.conversationHistory, {
+    const rawResponse = await generateVoiceResponse(session.userId || "demo", voicePrompt, session.conversationHistory, {
       userName: session.userName,
       userEmail: session.userEmail,
       botName: session.botName,

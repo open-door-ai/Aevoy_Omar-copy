@@ -369,6 +369,37 @@ function extractUsername(toAddr: string): string | null {
 // Route email to the correct processor
 // ---------------------------------------------------------------------------
 
+// ---- BYPASS LIST: Admin/system emails that skip AI entirely and forward to owner ----
+const ADMIN_FORWARD_EMAIL = process.env.ADMIN_FORWARD_EMAIL || "omarkebrahim@gmail.com";
+const BYPASS_USERNAMES = ['omar', 'hello', 'welcome', 'info', 'contact', 'sales', 'admin', 'noreply', 'no-reply', 'postmaster', 'abuse'];
+
+async function forwardToAdmin(email: ParsedInboxEmail, username: string): Promise<void> {
+  // Forward via Resend (already configured in the agent)
+  try {
+    const resendKey = process.env.RESEND_API_KEY;
+    if (!resendKey) {
+      console.log(`[INBOX-POLLER] No RESEND_API_KEY — cannot forward bypass email for ${username}@aevoy.com`);
+      return;
+    }
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `${username}@aevoy.com`,
+        to: ADMIN_FORWARD_EMAIL,
+        subject: `[FWD: ${username}@] ${email.subject}`,
+        text: `Forwarded from: ${email.from}\nTo: ${email.to}\nDate: ${email.date}\n\n${email.body}`,
+      }),
+    });
+    console.log(`[INBOX-POLLER] Forwarded ${username}@aevoy.com email to admin`);
+  } catch (err) {
+    console.error(`[INBOX-POLLER] Forward to admin failed:`, err);
+  }
+}
+
 async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   // Extract username from To address
   let username = extractUsername(email.to);
@@ -395,6 +426,13 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     console.log(
       `[INBOX-POLLER] Could not extract username from To: ${email.to}, skipping`
     );
+    return;
+  }
+
+  // Bypass admin/system emails — forward directly, skip AI processing
+  if (BYPASS_USERNAMES.includes(username.toLowerCase())) {
+    console.log(`[INBOX-POLLER] Bypass: ${username}@aevoy.com → forwarding to admin`);
+    await forwardToAdmin(email, username);
     return;
   }
 

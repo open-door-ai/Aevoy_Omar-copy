@@ -23,6 +23,7 @@ interface Env {
   AGENT_WEBHOOK_SECRET: string;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
+  ADMIN_FORWARD_EMAIL?: string;
 }
 
 interface EmailMessage {
@@ -500,8 +501,22 @@ export default {
         return;
       }
 
-      // Catch-all addresses (tasks@, hello@, ai@, inbox@) route by sender email
-      const CATCHALL_USERNAMES = ['tasks', 'hello', 'ai', 'inbox', 'mail', 'support', 'assistant'];
+      // ---- BYPASS LIST: Admin/system emails that skip AI entirely and forward to owner ----
+      const ADMIN_FORWARD_EMAIL = env.ADMIN_FORWARD_EMAIL || "omarkebrahim@gmail.com";
+      const BYPASS_USERNAMES = ['omar', 'hello', 'welcome', 'info', 'contact', 'sales', 'admin', 'noreply', 'no-reply', 'postmaster', 'abuse'];
+      if (BYPASS_USERNAMES.includes(username.toLowerCase())) {
+        console.log(`[EMAIL] Bypass: ${username}@aevoy.com → forwarding to admin`);
+        try {
+          await message.forward(ADMIN_FORWARD_EMAIL);
+          console.log(`[EMAIL] Forwarded ${username}@aevoy.com to admin successfully`);
+        } catch (fwdErr) {
+          console.error(`[EMAIL] Forward failed for ${username}@aevoy.com:`, fwdErr);
+        }
+        return;
+      }
+
+      // Catch-all addresses (tasks@, ai@, inbox@) route by sender email
+      const CATCHALL_USERNAMES = ['tasks', 'ai', 'inbox', 'mail', 'support', 'assistant'];
       let user: Profile | null = null;
 
       if (CATCHALL_USERNAMES.includes(username.toLowerCase())) {
