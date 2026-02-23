@@ -629,6 +629,100 @@ async function runDataRetention(): Promise<void> {
 }
 
 /**
+ * Fast path: execute known action names directly without AI processing.
+ * Returns true if the action was handled, false to fall through to AI.
+ */
+async function tryDirectActionExecution(
+  taskText: string,
+  userId: string,
+  username: string,
+  email: string,
+  phoneNumber?: string | null
+): Promise<boolean> {
+  const lower = taskText.toLowerCase().trim();
+
+  // call_user — call the user's phone
+  if (lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:')) {
+    const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
+    try {
+      const { callUser } = await import('./twilio.js');
+      // Look up phone from profile if not provided
+      let phone = phoneNumber;
+      if (!phone) {
+        const { data: p } = await getSupabaseClient()
+          .from('profiles')
+          .select('phone_number')
+          .eq('id', userId)
+          .single();
+        phone = p?.phone_number;
+      }
+      if (!phone) {
+        console.error(`[SCHEDULER-DIRECT] call_user: no phone number for user ${userId.slice(0, 8)}`);
+        return true; // handled (failed), don't retry via AI
+      }
+      const result = await callUser({
+        to: phone,
+        userId,
+        message: message || 'Hey, your AI assistant is calling to follow up on your request.',
+      });
+      console.log(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone}`);
+      return true;
+    } catch (err) {
+      console.error('[SCHEDULER-DIRECT] call_user error:', err);
+      return true;
+    }
+  }
+
+  // send_sms — text the user
+  if (lower === 'send_sms' || lower.startsWith('send_sms:')) {
+    const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Reminder from your AI assistant';
+    try {
+      const { sendSms } = await import('./twilio.js');
+      let phone = phoneNumber;
+      if (!phone) {
+        const { data: p } = await getSupabaseClient()
+          .from('profiles')
+          .select('phone_number')
+          .eq('id', userId)
+          .single();
+        phone = p?.phone_number;
+      }
+      if (!phone) {
+        console.error(`[SCHEDULER-DIRECT] send_sms: no phone for user ${userId.slice(0, 8)}`);
+        return true;
+      }
+      await sendSms({ userId, to: phone, body: message });
+      console.log(`[SCHEDULER-DIRECT] send_sms: sent to ${phone}`);
+      return true;
+    } catch (err) {
+      console.error('[SCHEDULER-DIRECT] send_sms error:', err);
+      return true;
+    }
+  }
+
+  // send_email — email the user (for reminders)
+  if (lower === 'send_email' || lower.startsWith('send_email:')) {
+    const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Scheduled reminder from your AI assistant';
+    try {
+      const { sendResponse } = await import('./email.js');
+      await sendResponse({
+        to: email,
+        from: `${username}@aevoy.com`,
+        subject: 'Scheduled Reminder',
+        body: message,
+      });
+      console.log(`[SCHEDULER-DIRECT] send_email: sent to ${email}`);
+      return true;
+    } catch (err) {
+      console.error('[SCHEDULER-DIRECT] send_email error:', err);
+      return true;
+    }
+  }
+
+  return false; // Not a direct action, use AI processing
+}
+
+/**
  * Run all scheduled tasks that are due.
  * Uses a distributed lock so only one instance runs at a time.
  */
@@ -674,16 +768,27 @@ async function runDueScheduledTasksInner(): Promise<void> {
         console.error(`[SCHEDULER] No profile found for scheduled task ${scheduled.id}`);
         continue;
       }
-      
+
       // Process the scheduled task (task_template is canonical, description is legacy fallback)
       const taskText = scheduled.task_template || scheduled.description || "scheduled task";
-      await processTask({
-        userId: scheduled.user_id,
-        username: profile.username,
-        from: profile.email,
-        subject: `[Scheduled] ${taskText}`,
-        body: taskText,
-      });
+
+      // FAST PATH: Direct action execution for known action names
+      // When the AI schedules call_user/send_sms/etc., the description IS the action name.
+      // Executing these directly avoids the slow AI loop that doesn't understand raw action names.
+      const directActionHandled = await tryDirectActionExecution(
+        taskText, scheduled.user_id, profile.username, profile.email, profile.phone_number
+      );
+
+      if (!directActionHandled) {
+        // Fall back to full AI processing for complex/natural-language tasks
+        await processTask({
+          userId: scheduled.user_id,
+          username: profile.username,
+          from: profile.email,
+          subject: `[Scheduled] ${taskText}`,
+          body: taskText,
+        });
+      }
       
       // Update last_run_at and calculate next_run_at
       const newRunCount = (scheduled.run_count || 0) + 1;

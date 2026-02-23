@@ -339,6 +339,129 @@ BODY: <the complete email body>`,
 }
 
 /**
+ * Fast path: detect scheduling requests and execute directly.
+ * Catches "call me back at 5:10", "remind me in 2 hours", "schedule X at noon", etc.
+ */
+async function tryScheduleFastPath(
+  userId: string, username: string, from: string, subject: string, body: string,
+  inputChannel?: string, existingTaskId?: string
+): Promise<TaskResult | null> {
+  const taskText = `${subject} ${body}`.trim();
+  const lower = taskText.toLowerCase();
+
+  // Pattern 1: "call me back at/in ..." or "call me at/in ..."
+  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at\s+|in\s+)(.+)/i);
+  // Pattern 2: "remind me at/in ..."
+  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at\s+|in\s+)(.+)/i);
+  // Pattern 3: "schedule (...) at/in ..."
+  const scheduleMatch = lower.match(/schedule\s+(.+?)\s+(?:at|in)\s+(.+)/i);
+
+  let action = '';
+  let timeStr = '';
+  let description = '';
+
+  if (callBackMatch) {
+    action = 'call_user';
+    timeStr = callBackMatch[1].trim();
+    description = 'call_user';
+  } else if (remindMatch) {
+    action = 'send_sms';
+    timeStr = remindMatch[1].trim();
+    description = `send_sms:Reminder from your AI assistant`;
+  } else if (scheduleMatch) {
+    description = scheduleMatch[1].trim();
+    timeStr = scheduleMatch[2].trim();
+    action = 'task';
+  }
+
+  if (!action || !timeStr) return null;
+
+  // Parse the time
+  const nextRun = calculateNextRun(timeStr);
+  if (!nextRun) return null;
+
+  // Verify it's a valid future time (not fallback)
+  const nextRunDate = new Date(nextRun);
+  const now = new Date();
+  if (nextRunDate <= now) return null;
+
+  const startTime = Date.now();
+  console.log(`[FAST-PATH-SCHEDULE] Detected: action=${action}, time="${timeStr}" → ${nextRun}`);
+
+  // Create task record
+  let taskId = existingTaskId || '';
+  if (!taskId) {
+    const { data: taskRecord } = await getSupabaseClient()
+      .from('tasks')
+      .insert({
+        user_id: userId,
+        status: 'processing',
+        email_subject: subject,
+        input_text: body,
+        started_at: new Date().toISOString(),
+        input_channel: inputChannel || 'voice',
+      })
+      .select()
+      .single();
+    taskId = taskRecord?.id || '';
+  }
+
+  // Detect one-time vs recurring
+  const lowerTime = timeStr.toLowerCase();
+  const isOneTime = /^(?:in\s+)?\d+\s*(?:s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)$/i.test(lowerTime)
+    || /^(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?$/i.test(lowerTime)
+    || lowerTime === 'noon' || lowerTime === 'midnight';
+
+  // Create scheduled task
+  const { error: schedError } = await getSupabaseClient()
+    .from('scheduled_tasks')
+    .insert({
+      user_id: userId,
+      description: description || action,
+      task_template: description || action,
+      cron_expression: isOneTime ? 'once' : timeStr,
+      next_run_at: nextRun,
+      is_active: true,
+    });
+
+  if (schedError) {
+    console.error('[FAST-PATH-SCHEDULE] Failed to create:', schedError.message);
+    return null; // Fall through to AI
+  }
+
+  const humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const responseText = action === 'call_user'
+    ? `Got it — I'll call you at ${humanTime}`
+    : action === 'send_sms'
+    ? `Got it — I'll remind you at ${humanTime}`
+    : `Got it — scheduled "${description}" for ${humanTime}`;
+
+  // Update task as completed
+  if (taskId) {
+    await getSupabaseClient().from('tasks').update({
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      execution_time_ms: Date.now() - startTime,
+      verification_status: 'verified',
+      action_count: 1,
+      action_success_count: 1,
+    }).eq('id', taskId);
+  }
+
+  // Notify user
+  await sendViaChannel(inputChannel as any, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+
+  console.log(`[FAST-PATH-SCHEDULE] Done in ${Date.now() - startTime}ms: ${responseText}`);
+
+  return {
+    taskId,
+    success: true,
+    response: responseText,
+    actions: [{ action: { type: 'schedule' as any, params: { description, cron: timeStr } }, success: true, result: responseText }],
+  };
+}
+
+/**
  * Process incoming email - handles clarification and confirmation flow
  */
 export async function processIncomingTask(task: TaskRequest): Promise<TaskResult> {
@@ -370,11 +493,17 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       return handleCardCommand(cardCommand, userId, from, username);
     }
 
-    // ---- PRE-CLASSIFIER FAST PATH: Email sending ----
-    // Detect "send email to X" BEFORE the autonomous planner so simple email sends
-    // don't get routed through multi-step workflow planning.
+    // ---- PRE-CLASSIFIER FAST PATHS ----
+    // Detect simple tasks BEFORE the autonomous planner so they don't get
+    // routed through expensive multi-step workflow planning.
+
+    // Fast path: Email sending ("send email to X")
     const emailSendResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel);
     if (emailSendResult) return emailSendResult;
+
+    // Fast path: Scheduling ("call me back at 5:10", "remind me in 2 hours")
+    const scheduleResult = await tryScheduleFastPath(userId, username, from, subject, body, task.inputChannel);
+    if (scheduleResult) return scheduleResult;
 
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
     if (await requiresAutonomousPlanning(subject, body)) {
@@ -903,12 +1032,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Clear retry failure patterns for this new task
     clearFailurePatterns();
 
-    // 2b. FAST PATH: Email sending — detect and execute BEFORE expensive AI classification
+    // 2b. FAST PATHS — detect and execute BEFORE expensive AI classification
     // This runs right after task creation so we have a taskId to update
+
+    // Email sending fast path ("send email to X")
     const earlyEmailResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
     if (earlyEmailResult) {
       clearTimeout(masterTimer);
       return earlyEmailResult;
+    }
+
+    // Scheduling fast path ("call me back at 5:10", "remind me in 2 hours")
+    const earlyScheduleResult = await tryScheduleFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
+    if (earlyScheduleResult) {
+      clearTimeout(masterTimer);
+      return earlyScheduleResult;
     }
 
     // 3. Classify task and create locked intent (SECURITY)
