@@ -387,6 +387,40 @@ app.get("/debug/scheduler-match", (req, res) => {
   });
 });
 
+// ---- Scheduler query debug endpoint ----
+app.get("/debug/scheduler-query", async (req, res) => {
+  const secret = req.query.secret;
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  try {
+    const now = new Date().toISOString();
+    // Test the exact same query the scheduler uses
+    const { data: dueTasks, error } = await getSupabaseClient()
+      .from('scheduled_tasks')
+      .select('*, profiles!user_id(*)')
+      .eq('is_active', true)
+      .lte('next_run_at', now);
+
+    if (error) {
+      return res.json({ error: error.message, code: error.code, details: error.details, hint: error.hint });
+    }
+
+    const summary = (dueTasks || []).map((t: any) => ({
+      id: t.id?.slice(0, 8),
+      description: t.description,
+      task_template: t.task_template,
+      cron: t.cron_expression,
+      hasProfile: !!t.profiles,
+      profileUsername: t.profiles?.username,
+      profilePhone: t.profiles?.phone_number,
+    }));
+    res.json({ count: summary.length, now, tasks: summary });
+  } catch (err: any) {
+    res.json({ thrown: err.message });
+  }
+});
+
 // ---- Email diagnostic endpoint (protected by webhook secret) ----
 app.post("/debug/email-test", async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
