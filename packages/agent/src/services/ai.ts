@@ -1264,98 +1264,112 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 }
 
 /**
- * Generate response for vision tasks (requires Claude Sonnet or Gemini Flash)
+ * Generate response for vision tasks.
+ * Order: Gemini Flash (FREE, fast) → Claude Haiku (cheap) → Claude Sonnet (expensive, last resort)
+ * All calls have 15s timeout to prevent iteration loop hangs.
  */
 export async function generateVisionResponse(
   prompt: string,
   imageBase64: string,
   systemPrompt?: string
 ): Promise<{ content: string; cost: number }> {
-  // Try Claude Sonnet first (best vision)
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const response = await getAnthropicClient().messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        system: systemPrompt || "Analyze this image and respond concisely.",
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: "image/png", data: imageBase64 }
-            },
-            { type: "text", text: prompt }
-          ]
-        }]
-      });
+  // Detect media type from base64 header or default to jpeg (screenshots are jpeg)
+  const mediaType = imageBase64.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
 
-      const content = response.content[0].type === "text" ? response.content[0].text : "";
-      const cost = (response.usage.input_tokens * 3.00 + response.usage.output_tokens * 15.00) / 1_000_000;
+  // Helper: wrap any promise with a timeout
+  const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Vision timeout after ${ms}ms`)), ms))
+    ]);
 
-      console.log(`[AI] Vision (Sonnet) | Cost: $${cost.toFixed(6)}`);
-      return { content, cost };
-    } catch (error) {
-      console.error("[AI] Vision (Sonnet) failed:", error);
-    }
-  }
-
-  // Fallback to Gemini Flash (free vision)
+  // 1. Gemini Flash FIRST — free and fast (best for iteration loops)
   if (process.env.GOOGLE_API_KEY) {
     try {
-      const response = await getGeminiClient().chat.completions.create({
+      const response = await withTimeout(getGeminiClient().chat.completions.create({
         model: "gemini-2.0-flash",
-        max_tokens: 1024,
+        max_tokens: 512,
         messages: [{
           role: "user",
           content: [
             {
               type: "image_url",
-              image_url: { url: `data:image/png;base64,${imageBase64}` }
+              image_url: { url: `data:${mediaType};base64,${imageBase64}` }
             },
             { type: "text", text: prompt }
           ] as OpenAI.Chat.Completions.ChatCompletionContentPart[],
         }],
-      });
+      }), 15000);
 
       const content = response.choices[0]?.message?.content || "";
-      console.log("[AI] Vision (Gemini Flash) | Cost: FREE");
-      return { content, cost: 0 };
+      if (content.length > 10) {
+        console.log(`[AI] Vision (Gemini Flash) | Cost: FREE | ${content.length} chars`);
+        return { content, cost: 0 };
+      }
     } catch (error) {
-      console.error("[AI] Vision (Gemini) failed:", error);
+      console.warn(`[AI] Vision (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  // Fallback to Claude Haiku (cheaper vision)
+  // 2. Claude Haiku — cheap and decent vision
   if (process.env.ANTHROPIC_API_KEY) {
     try {
-      const response = await getAnthropicClient().messages.create({
+      const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-3-5-haiku-latest",
-        max_tokens: 1024,
+        max_tokens: 512,
         system: systemPrompt || "Analyze this image and respond concisely.",
         messages: [{
           role: "user",
           content: [
             {
               type: "image",
-              source: { type: "base64", media_type: "image/png", data: imageBase64 }
+              source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 }
             },
             { type: "text", text: prompt }
           ]
         }]
-      });
+      }), 15000);
 
       const content = response.content[0].type === "text" ? response.content[0].text : "";
       const cost = (response.usage.input_tokens * 0.25 + response.usage.output_tokens * 1.25) / 1_000_000;
 
-      console.log(`[AI] Vision (Haiku) | Cost: $${cost.toFixed(6)}`);
+      console.log(`[AI] Vision (Haiku) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
       return { content, cost };
     } catch (error) {
-      console.error("[AI] Vision (Haiku) failed:", error);
+      console.warn(`[AI] Vision (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  return { content: "Vision capability requires Claude or Gemini API key", cost: 0 };
+  // 3. Claude Sonnet — expensive, last resort
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const response = await withTimeout(getAnthropicClient().messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 512,
+        system: systemPrompt || "Analyze this image and respond concisely.",
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 }
+            },
+            { type: "text", text: prompt }
+          ]
+        }]
+      }), 20000);
+
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      const cost = (response.usage.input_tokens * 3.00 + response.usage.output_tokens * 15.00) / 1_000_000;
+
+      console.log(`[AI] Vision (Sonnet) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
+      return { content, cost };
+    } catch (error) {
+      console.warn(`[AI] Vision (Sonnet) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return { content: "", cost: 0 };
 }
 
 /**

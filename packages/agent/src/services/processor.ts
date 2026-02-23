@@ -1676,6 +1676,23 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       console.log(`[BROWSER-STRIP] Classifier says no browser needed — removed ${before - aiResponse.actions.length} browser actions, ${aiResponse.actions.length} remaining`);
     }
 
+    // 6a3. FACTUAL SEARCH INJECTION: If the task asks about current prices, facts, or data
+    // and the AI didn't include a search action, inject one to prevent hallucination from stale knowledge.
+    const combinedQuery = `${subject} ${body || ''}`.toLowerCase();
+    const isFactualQuery = (
+      /\b(price|cost|how much|current|latest|today|right now|available)\b/i.test(combinedQuery) &&
+      /\b(on amazon|on ebay|on walmart|stock|weather|score|result|news)\b/i.test(combinedQuery)
+    ) || /\b(what is the|what's the|how much is|how much does)\b/i.test(combinedQuery);
+
+    const hasSearchAction = aiResponse.actions.some(a => a.type === 'search' || a.type === 'browse');
+    if (isFactualQuery && !hasSearchAction) {
+      const searchQuery = subject.replace(/\?$/, '').trim();
+      console.log(`[SEARCH-INJECT] Factual query detected with no search action — injecting search("${searchQuery}")`);
+      aiResponse.actions.unshift({ type: 'search' as any, params: { query: searchQuery } });
+      // Remove [TASK_COMPLETE] so the loop iterates with search results
+      aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+    }
+
     // 6b. MISSING-ACTION GATE: If the task explicitly needs schedule/remember/campaign/email
     // but AI returned 0 matching actions, re-prompt or inject directly.
     const taskTextLower = `${subject} ${body}`.toLowerCase();
@@ -1882,6 +1899,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const ITERATION_TIMEOUT_MS = 60000; // 60 seconds per iteration max
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
 
+      // Strip [THINKING]...[/THINKING] blocks from AI response (internal reasoning, not for user)
+      aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+
       // Stream progress to dashboard via DB (fire-and-forget)
       void Promise.resolve(getSupabaseClient().rpc('update_task_progress', {
         p_task_id: taskId,
@@ -1902,16 +1922,81 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         console.log(`[ITERATE] AI signaled TASK_COMPLETE (has ${aiResponse.actions.length} actions)`);
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
-        // If AI included actions WITH the complete signal, execute them first
-        if (aiResponse.actions.length === 0) {
+
+        // ADVICE-DETECTION QUALITY GATE: If AI completed with 0 actions on round 1,
+        // check if the response is advice (lists of suggestions) instead of results.
+        // This catches "here are some websites you could try" non-answers.
+        if (aiResponse.actions.length === 0 && currentIteration === 1) {
+          const lowerContent = aiResponse.content.toLowerCase();
+          const isConversational = ['hi', 'hello', 'thanks', 'thank you', 'ok', 'hey', 'good morning', 'good evening'].some(
+            g => subject.toLowerCase().trim().startsWith(g) || (body || '').toLowerCase().trim().startsWith(g)
+          );
+          const isAdviceResponse = (
+            !isConversational &&
+            classification.needsBrowser &&
+            (
+              // Detect advice patterns: "you can", "you should", "here are", bullet lists
+              (lowerContent.includes('you can ') && lowerContent.includes('you can ') ) ||
+              (lowerContent.includes('you should ')) ||
+              (lowerContent.match(/\n[-•*]\s/g) || []).length >= 3 || // 3+ bullet points = advice list
+              (lowerContent.includes('here are ') && lowerContent.includes('website')) ||
+              (lowerContent.includes('consider ') && lowerContent.includes('visit'))
+            )
+          );
+
+          if (isAdviceResponse) {
+            console.warn(`[QUALITY-GATE] REJECTED: AI gave advice instead of acting. Forcing re-prompt with actions.`);
+            // Don't exit — re-prompt the AI to ACTUALLY DO SOMETHING
+            aiResponse.content = ''; // Clear the advice
+            aiResponse.actions = []; // Ensure we re-enter the no-actions path below
+            // Generate a forceful re-prompt
+            const forceActionPrompt = `Original request: ${subject} ${body}
+
+YOU JUST GAVE ADVICE INSTEAD OF ACTING. That response was REJECTED.
+
+You are an AI AGENT, not a chatbot. You must USE YOUR TOOLS to accomplish the task.
+- Do NOT list websites the user "could try"
+- Do NOT say "you can" or "here are some options"
+- ACTUALLY navigate to a website, search for information, sign up for a service, or take concrete action
+
+For "${subject}":
+- Use [ACTION:search("${subject}")] to find opportunities
+- Use [ACTION:browse("url")] to go to a website
+- Use [ACTION:fill(...)], [ACTION:click(...)] to interact with forms
+- Take the FIRST concrete step yourself. NOW.`;
+
+            const forcedResponse = await generateResponse(
+              memory, subject, forceActionPrompt, username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += forcedResponse.cost || 0;
+            totalTokens += forcedResponse.tokensUsed || 0;
+            aiResponse = forcedResponse;
+            // Strip [TASK_COMPLETE] if present — we want it to iterate
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+            console.log(`[QUALITY-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
+            // Continue to action execution — don't break
+            if (aiResponse.actions.length === 0) {
+              // AI STILL gave no actions — give up and return what we have
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Fall through to execute the new actions
+          } else {
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            break;
+          }
+        } else if (aiResponse.actions.length === 0) {
           isTaskComplete = true;
           aiSignaledComplete = true;
           break;
+        } else {
+          // Mark for exit after this round's actions execute
+          isTaskComplete = true;
+          aiSignaledComplete = true;
+          console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
         }
-        // Mark for exit after this round's actions execute
-        isTaskComplete = true;
-        aiSignaledComplete = true;
-        console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
       }
 
       // If no actions, we're done
