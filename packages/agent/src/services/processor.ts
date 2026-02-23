@@ -349,11 +349,12 @@ async function tryScheduleFastPath(
   const taskText = `${subject} ${body}`.trim();
   const lower = taskText.toLowerCase();
 
-  // Pattern 1: "call me back at/in ..." or "call me at/in ..."
-  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at\s+|in\s+)(.+)/i);
-  // Pattern 2: "remind me at/in ..."
-  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at\s+|in\s+)(.+)/i);
-  // Pattern 3: "schedule (...) at/in ..."
+  // Pattern 1: "call me back at/in <time>" — extract time, stop at natural boundaries
+  // Supports digits (5:10 PM, 2 minutes, 1h) and named times (noon, midnight)
+  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at\s+|in\s+)((?:\d[\d:.\s]*(?:am|pm|a\.m\.|p\.m\.)?|\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|noon|midnight)\b.*?(?:$|(?=\s+(?:to|about|regarding|and|then))))/i);
+  // Pattern 2: "remind me in <time> to <task>" or "remind me at <time>"
+  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+((?:\d[\d:.\s]*(?:am|pm|a\.m\.|p\.m\.)?|\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|noon|midnight)\b[^a-z]*?)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
+  // Pattern 3: "schedule <task> at/in <time>"
   const scheduleMatch = lower.match(/schedule\s+(.+?)\s+(?:at|in)\s+(.+)/i);
 
   let action = '';
@@ -367,7 +368,8 @@ async function tryScheduleFastPath(
   } else if (remindMatch) {
     action = 'send_sms';
     timeStr = remindMatch[1].trim();
-    description = `send_sms:Reminder from your AI assistant`;
+    const reminderText = remindMatch[2]?.trim() || 'Reminder from your AI assistant';
+    description = `send_sms:${reminderText}`;
   } else if (scheduleMatch) {
     description = scheduleMatch[1].trim();
     timeStr = scheduleMatch[2].trim();

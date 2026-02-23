@@ -839,6 +839,33 @@ const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
 const DEMO_GREETING = "Hey there! I'm your Aevoy AI assistant. Imagine having a brilliant employee who never sleeps, handles your emails, schedules your calls, does research, creates documents, and manages your entire digital life. That's me. Go ahead, ask me anything, and I'll show you what I can do.";
 
+// ---- Outbound Call TwiML (for scheduled callbacks) ----
+// Twilio fetches this URL when making outbound calls via callUser()
+// Returns ConversationRelay TwiML for full conversational callbacks
+app.post("/webhook/voice/outbound-twiml", async (req, res) => {
+  const userId = req.query.userId as string || req.body.userId || '';
+  const message = req.query.message as string || req.body.message || '';
+  const wsUrl = `${(process.env.AGENT_URL || 'http://localhost:3001').replace('http', 'ws')}/ws/voice`;
+  const voiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+
+  const greeting = message || 'Hey! Your AI assistant is calling back. What can I help you with?';
+
+  // Use ConversationRelay for a full two-way conversation
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}?userId=${userId}&amp;callType=callback"
+      ttsProvider="ElevenLabs" voice="${voiceId}"
+      transcriptionProvider="Deepgram" dtmfDetection="true"
+      interruptible="true"
+      welcomeGreeting="${greeting.replace(/"/g, '&quot;').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" />
+  </Connect>
+</Response>`;
+
+  console.log(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}`);
+  res.type('text/xml').send(twiml);
+});
+
 // ---- Incoming Voice Calls (Caller Identification) ----
 
 app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, async (req, res) => {

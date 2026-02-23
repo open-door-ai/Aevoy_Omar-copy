@@ -163,26 +163,16 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // Use user's dedicated number if available, otherwise shared number
     const fromNumber = await getUserFromNumber(request.userId);
     const agentUrl = process.env.AGENT_URL || '';
-    const wsUrl = agentUrl.replace('http', 'ws') + '/ws/voice';
-    const voiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
 
-    // Use ConversationRelay for callbacks so the user gets a full conversational experience
-    // (not just a one-way <Say> which can fail with certain voice names)
-    const greeting = escapeXml(request.message || 'Hey! Your AI assistant is calling back. What can I help you with?');
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <ConversationRelay url="${wsUrl}?userId=${request.userId}&callType=callback"
-      ttsProvider="ElevenLabs" voice="${voiceId}"
-      transcriptionProvider="Deepgram" dtmfDetection="true"
-      interruptible="true" welcomeGreeting="${greeting}" />
-  </Connect>
-</Response>`;
+    // Use a URL-based approach: Twilio fetches TwiML from our server
+    // This supports ConversationRelay properly (inline Twiml param doesn't)
+    const callbackUrl = `${agentUrl}/webhook/voice/outbound-twiml?userId=${encodeURIComponent(request.userId)}&message=${encodeURIComponent(request.message || '')}`;
 
     const params = new URLSearchParams({
       To: request.to,
       From: fromNumber || config.phoneNumber,
-      Twiml: twiml,
+      Url: callbackUrl,
+      Method: 'POST',
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -190,8 +180,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     if (!response.ok) {
       const errorData = await response.text();
       console.error(`[TWILIO] callUser API error: ${response.status} ${errorData}`);
-      // Fallback to simple <Say> with a reliable voice
-      return await callUserFallback(request, fromNumber || config.phoneNumber);
+      return { success: false, error: `Twilio API error: ${response.status}` };
     }
 
     const data = await response.json() as { sid: string };
@@ -199,50 +188,11 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // Track usage
     await trackVoiceUsage(request.userId, 1);
 
-    console.log(`[TWILIO] Callback initiated via ConversationRelay: ${data.sid}`);
+    console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
     return { success: true, callSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("[TWILIO] Call error:", msg);
-    return { success: false, error: msg };
-  }
-}
-
-/**
- * Fallback: simple TwiML <Say> with a safe voice when ConversationRelay fails.
- */
-async function callUserFallback(request: VoiceCallRequest, fromNumber: string): Promise<{
-  success: boolean;
-  callSid?: string;
-  error?: string;
-}> {
-  try {
-    // Use Polly.Joanna-Neural — always works on Twilio, no special requirements
-    const safeTwiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(request.message || 'Hello! Your AI assistant is calling back.')}</Say>
-  <Pause length="2"/>
-  <Say voice="Polly.Joanna-Neural">If you need anything, just call me back. Goodbye!</Say>
-</Response>`;
-
-    const params = new URLSearchParams({
-      To: request.to,
-      From: fromNumber,
-      Twiml: safeTwiml,
-    });
-
-    const response = await twilioRequest("/Calls.json", "POST", params);
-    if (!response.ok) {
-      const errorData = await response.text();
-      return { success: false, error: `Twilio fallback error: ${response.status} ${errorData}` };
-    }
-
-    const data = await response.json() as { sid: string };
-    await trackVoiceUsage(request.userId, 1);
-    console.log(`[TWILIO] Callback initiated via fallback <Say>: ${data.sid}`);
-    return { success: true, callSid: data.sid };
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: msg };
   }
 }
