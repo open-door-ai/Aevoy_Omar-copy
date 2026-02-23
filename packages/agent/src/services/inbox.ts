@@ -160,7 +160,7 @@ interface EmailMessage {
 
 // ---- Credential Retrieval ----
 
-async function getEmailCredentials(
+export async function getEmailCredentials(
   userId: string
 ): Promise<EmailCredentials | null> {
   const supabase = getSupabaseClient();

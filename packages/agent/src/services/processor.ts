@@ -1513,33 +1513,38 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // emails that were auto-read or already opened. For simple "check inbox", just unread.
       let emailResult: { success: boolean; result?: string; error?: string };
       try {
-        const { isEmailConnected, getUnreadMessages, getRecentMessages } = await import("./inbox.js");
+        const { isEmailConnected, getUnreadMessages, getRecentMessages, getEmailCredentials } = await import("./inbox.js");
         const connected = await isEmailConnected(userId);
         if (!connected) {
           emailResult = { success: false, error: "You haven't connected your personal email yet. Set it up in Settings > Connected Apps." };
-        } else if (isSpecificQuery) {
-          // Specific query — fetch ALL recent emails (read + unread, 7 days)
-          const emails = await getRecentMessages(userId, 30, 7);
-          const realEmails = emails.filter(e => !e.from.includes('@aevoy.com'));
-          if (realEmails.length === 0) {
-            emailResult = { success: true, result: "No emails found in the last 7 days." };
-          } else {
-            const summary = realEmails.map((e, i) =>
-              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}${e.isUnread ? '' : ' (read)'}\n${e.snippet.substring(0, 500)}`
-            ).join('\n---\n');
-            emailResult = { success: true, result: `Found ${realEmails.length} email(s) in your inbox (last 7 days):\n${summary}` };
-          }
         } else {
-          // Simple inbox check — just unread
-          const emails = await getUnreadMessages(userId, 15);
-          const realEmails = emails.filter(e => !e.from.includes('@aevoy.com'));
-          if (realEmails.length === 0) {
-            emailResult = { success: true, result: "No unread emails in your inbox right now." };
+          // Log which credential type is being used for traceability
+          const fpCreds = await getEmailCredentials(userId);
+          console.log(`[FAST-PATH] Using ${fpCreds ? fpCreds.type : 'none'} credentials for ${userId.slice(0, 8)}`);
+          if (isSpecificQuery) {
+            // Specific query — fetch ALL recent emails (read + unread, 7 days)
+            const emails = await getRecentMessages(userId, 30, 7);
+            const realEmails = emails.filter(e => !e.from.includes('@aevoy.com'));
+            if (realEmails.length === 0) {
+              emailResult = { success: true, result: "No emails found in the last 7 days." };
+            } else {
+              const summary = realEmails.map((e, i) =>
+                `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}${e.isUnread ? '' : ' (read)'}\n${e.snippet.substring(0, 500)}`
+              ).join('\n---\n');
+              emailResult = { success: true, result: `Found ${realEmails.length} email(s) in your inbox (last 7 days):\n${summary}` };
+            }
           } else {
-            const summary = realEmails.map((e, i) =>
-              `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
-            ).join('\n---\n');
-            emailResult = { success: true, result: `Found ${realEmails.length} unread email(s) in your inbox:\n${summary}` };
+            // Simple inbox check — just unread
+            const emails = await getUnreadMessages(userId, 15);
+            const realEmails = emails.filter(e => !e.from.includes('@aevoy.com'));
+            if (realEmails.length === 0) {
+              emailResult = { success: true, result: "No unread emails in your inbox right now." };
+            } else {
+              const summary = realEmails.map((e, i) =>
+                `[${i + 1}] From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}\n${e.snippet.substring(0, 500)}`
+              ).join('\n---\n');
+              emailResult = { success: true, result: `Found ${realEmails.length} unread email(s) in your inbox:\n${summary}` };
+            }
           }
         }
       } catch (err) {
@@ -3646,10 +3651,12 @@ async function executeAction(
       };
       try {
         // 1. Try user's personal connected email first (IMAP / Nylas / Gmail OAuth)
-        const { isEmailConnected, getUnreadMessages } = await import("./inbox.js");
+        const { isEmailConnected, getUnreadMessages, getEmailCredentials } = await import("./inbox.js");
         const connected = await isEmailConnected(userId);
         console.log(`[READ-EMAIL] User ${userId.slice(0, 8)} — personal email connected: ${connected}`);
         if (connected) {
+          const creds = await getEmailCredentials(userId);
+          console.log(`[READ-EMAIL] Using ${creds ? creds.type : 'none'} credentials for ${userId.slice(0, 8)}`);
           try {
             const emails = await getUnreadMessages(userId, emailLimit || 10);
             // Filter out @aevoy.com system emails (AI-generated subtask junk)

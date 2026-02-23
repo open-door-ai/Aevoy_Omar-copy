@@ -66,12 +66,8 @@ function ConnectedAppsContent() {
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
   const [loadingCredentials, setLoadingCredentials] = useState(true);
-  const [connectingGoogle, setConnectingGoogle] = useState(false);
-  const [connectingMicrosoft, setConnectingMicrosoft] = useState(false);
   const [connectingTwitter, setConnectingTwitter] = useState(false);
   const [connectingTelegram, setConnectingTelegram] = useState(false);
-  const [disconnectingGoogle, setDisconnectingGoogle] = useState(false);
-  const [disconnectingMicrosoft, setDisconnectingMicrosoft] = useState(false);
   const [disconnectingTwitter, setDisconnectingTwitter] = useState(false);
   const [disconnectingTelegram, setDisconnectingTelegram] = useState(false);
   const [disconnectingWhatsapp, setDisconnectingWhatsapp] = useState(false);
@@ -204,70 +200,6 @@ function ConnectedAppsContent() {
       router.replace('/dashboard/apps', { scroll: false });
     }
   }, [searchParams]);
-
-  const handleConnectGoogle = async () => {
-    setConnectingGoogle(true);
-    try {
-      const response = await fetch('/api/integrations/gmail', { method: 'POST' });
-      const data = await response.json();
-      if (data.authUrl) {
-        window.location.href = data.authUrl;
-      } else {
-        toast.error(data.error || 'Failed to start Google connection');
-      }
-    } catch {
-      toast.error('Failed to connect Google');
-    } finally {
-      setConnectingGoogle(false);
-    }
-  };
-
-  const handleDisconnectGoogle = async () => {
-    setDisconnectingGoogle(true);
-    try {
-      const response = await fetch('/api/integrations/gmail', { method: 'DELETE' });
-      if (response.ok) {
-        setGoogleStatus({ connected: false, connectedAt: null, email: null });
-        toast.success('Google disconnected');
-      }
-    } catch {
-      toast.error('Failed to disconnect Google');
-    } finally {
-      setDisconnectingGoogle(false);
-    }
-  };
-
-  const handleConnectMicrosoft = async () => {
-    setConnectingMicrosoft(true);
-    try {
-      const response = await fetch('/api/integrations/microsoft', { method: 'POST' });
-      const data = await response.json();
-      if (data.authUrl) {
-        window.location.href = data.authUrl;
-      } else {
-        toast.error(data.error || 'Failed to start Microsoft connection');
-      }
-    } catch {
-      toast.error('Failed to connect Microsoft');
-    } finally {
-      setConnectingMicrosoft(false);
-    }
-  };
-
-  const handleDisconnectMicrosoft = async () => {
-    setDisconnectingMicrosoft(true);
-    try {
-      const response = await fetch('/api/integrations/microsoft', { method: 'DELETE' });
-      if (response.ok) {
-        setMicrosoftStatus({ connected: false, connectedAt: null, email: null });
-        toast.success('Microsoft disconnected');
-      }
-    } catch {
-      toast.error('Failed to disconnect Microsoft');
-    } finally {
-      setDisconnectingMicrosoft(false);
-    }
-  };
 
   const handleConnectImap = async () => {
     if (!imapEmail || !imapPassword) return;
@@ -571,18 +503,9 @@ function ConnectedAppsContent() {
                   <span className="text-muted-foreground">Connected as: </span>
                   <span className="font-medium">{googleStatus.email}</span>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDisconnectGoogle}
-                  disabled={disconnectingGoogle}
-                  className="text-red-500 hover:text-red-700"
-                >
-                  {disconnectingGoogle ? (
-                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                  ) : null}
-                  Disconnect
-                </Button>
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  OAuth is being migrated to IMAP. Please reconnect using the Email (IMAP) card below, then this connection will be removed automatically.
+                </p>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">Use the Email (IMAP) card below to connect Gmail with an app password instead.</p>
@@ -618,18 +541,9 @@ function ConnectedAppsContent() {
                   <span className="text-muted-foreground">Connected as: </span>
                   <span className="font-medium">{microsoftStatus.email}</span>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDisconnectMicrosoft}
-                  disabled={disconnectingMicrosoft}
-                  className="text-red-500 hover:text-red-700"
-                >
-                  {disconnectingMicrosoft ? (
-                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                  ) : null}
-                  Disconnect
-                </Button>
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  OAuth is being migrated to IMAP. Please reconnect using the Email (IMAP) card below, then this connection will be removed automatically.
+                </p>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">Use the Email (IMAP) card below to connect Outlook with an app password instead.</p>
