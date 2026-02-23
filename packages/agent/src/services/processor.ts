@@ -3144,9 +3144,19 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // Send response via the same channel the task arrived on
     const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
-    // Safety: if cleanResponseForEmail stripped everything (all plan-like), use an action-aware fallback
+    // Safety: if cleanResponseForEmail stripped everything or left garbage, use an action-aware fallback
+    // Detect garbage: too short, looks like code/selectors/JSON fragments, no real words
+    const isGarbageResponse = (text: string): boolean => {
+      if (!text || text.length < 20) return true;
+      // Selector/code fragments: starts with >, ), ], or contains mostly non-word chars
+      if (/^[>\)\]\."',;:\s]/.test(text.trim())) return true;
+      // Mostly punctuation/symbols (less than 40% word characters)
+      const wordChars = text.replace(/[^a-zA-Z0-9\s]/g, '').length;
+      if (wordChars / text.length < 0.4) return true;
+      return false;
+    };
     let cleanResponse: string;
-    if (rawCleanResponse) {
+    if (rawCleanResponse && !isGarbageResponse(rawCleanResponse)) {
       cleanResponse = rawCleanResponse;
     } else if (actionResults.length > 0 && actionResults.some(r => r.success)) {
       // Actions succeeded but AI response was only action tags — build user-friendly summary
@@ -3154,16 +3164,24 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const hasBrowserActions = successActions.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form'].includes(r.action.type));
 
       if (hasBrowserActions) {
-        // For browser tasks: generate AI summary instead of dumping raw HTML/JS
+        // For browser tasks: generate AI summary using search results + action data
         try {
+          // Include search result data (the actual content the AI found) — not just action types
+          const searchResults = successActions
+            .filter(r => ['search', 'browse', 'extract'].includes(r.action.type) && r.result)
+            .map(r => String(r.result).substring(0, 500))
+            .join('\n---\n');
           const actionSummary = successActions.map(r => {
             const params = Object.values(r.action.params || {}).map(v => String(v).substring(0, 50)).join(', ');
             return `${r.action.type}(${params}): ${r.success ? 'OK' : 'FAIL'}`;
           }).join('\n');
+          const context = searchResults
+            ? `Data found during search:\n${searchResults.substring(0, 2000)}\n\nActions taken:\n${actionSummary}`
+            : `Actions taken:\n${actionSummary}`;
           const { generateForcedDirectAnswer } = await import("./ai.js");
           const summary = await generateForcedDirectAnswer(
             `${subject} ${body || ''}`,
-            `Actions taken:\n${actionSummary}\n\nSummarize what was accomplished in 2-3 sentences for the user.`,
+            `${context}\n\nUsing the data above, give the user a clear, specific answer to their request. Include names, addresses, prices, URLs, or other concrete details from the search results.`,
             username
           );
           cleanResponse = summary.content || `I worked on your request. ${successActions.length} actions completed.`;
