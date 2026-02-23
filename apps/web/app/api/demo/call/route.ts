@@ -27,15 +27,16 @@ function normalizePhone(raw: string): string {
   return phone;
 }
 
+const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || '+17789008951';
+const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+
 function getTwilioCredentials() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_PHONE_NUMBER;
-  if (!accountSid || !authToken || !from) return null;
+  if (!accountSid || !authToken) return null;
   return {
     accountSid,
     authToken,
-    from,
     apiKeySid: process.env.TWILIO_API_KEY_SID || undefined,
     apiKeySecret: process.env.TWILIO_API_KEY_SECRET || undefined,
   };
@@ -77,12 +78,13 @@ export async function POST(request: Request) {
 
     const phone = normalizePhone(rawPhone);
 
-    const twiml = `<Response><Say voice="Polly.Amy">Hello! This is Aevoy, your AI employee. This call proves we're real. You can email us any task and we'll actually do it. Have a great day!</Say></Response>`;
-
+    // Use Url callback to agent's demo-outbound endpoint for full ConversationRelay experience
+    // When the call connects, Twilio fetches TwiML from this URL (which does caller lookup + interview detection)
     const callBody = new URLSearchParams({
       To: phone,
-      From: creds.from,
-      Twiml: twiml,
+      From: DEMO_PHONE_NUMBER,
+      Url: `${AGENT_URL}/webhook/voice/demo-outbound`,
+      Method: 'POST',
     });
 
     const res = await fetch(

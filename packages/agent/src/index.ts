@@ -785,6 +785,92 @@ const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
 const DEMO_GREETING = "Hey there! I'm your Aevoy AI assistant. Imagine having a brilliant employee who never sleeps, handles your emails, schedules your calls, does research, creates documents, and manages your entire digital life. That's me. Go ahead, ask me anything, and I'll show you what I can do.";
 
+// ---- Demo Outbound Call TwiML ----
+// Called by Twilio when a demo outbound call connects (from "Call Me Now" button)
+// Looks up caller in profiles for interview detection, returns ConversationRelay TwiML
+app.post("/webhook/voice/demo-outbound", async (req, res) => {
+  const callerNumber = req.body.To || ""; // For outbound calls, To = the user's phone
+  const callSid = req.body.CallSid || "";
+  const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
+
+  console.log(`[VOICE-DEMO] Outbound demo call connected to ${callerNumber?.slice(0, 4)}****`);
+
+  try {
+    const supabase = getSupabaseClient();
+    const callerDigits = callerNumber.replace(/\D/g, "").slice(-10);
+    let effectiveCallType = "demo";
+    let effectiveUserId = DEMO_USER_ID;
+    let effectiveGreeting = DEMO_GREETING;
+
+    // Check if the callee is a registered user who needs an interview
+    if (callerDigits.length >= 10) {
+      try {
+        const { data: matchedProfiles } = await supabase
+          .from("profiles")
+          .select("id, display_name, username, onboarding_interview_status")
+          .or(`phone_number.ilike.%${callerDigits}`);
+
+        if (matchedProfiles && matchedProfiles.length > 0) {
+          const profile = matchedProfiles[0];
+          const interviewDone = profile.onboarding_interview_status === "phone_call_completed"
+            || profile.onboarding_interview_status === "web_completed";
+
+          if (!interviewDone) {
+            effectiveCallType = "demo_interview";
+            effectiveUserId = profile.id;
+            const name = profile.display_name || profile.username || "";
+            effectiveGreeting = name
+              ? `Hey ${name}! Great to hear from you. I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`
+              : `Hey there! I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`;
+            console.log(`[VOICE-DEMO] Outbound matched registered user ${profile.id.slice(0, 8)} (${name}), starting interview`);
+          } else {
+            console.log(`[VOICE-DEMO] Outbound matched user ${profile.id.slice(0, 8)} but interview already done`);
+          }
+        }
+      } catch (e: any) {
+        console.error("[VOICE-DEMO] Outbound caller lookup error:", e.message);
+      }
+    }
+
+    // Log demo call (fire-and-forget)
+    supabase.from("call_history").insert({
+      call_sid: callSid,
+      direction: "outbound",
+      from_number: DEMO_PHONE_NUMBER,
+      to_number: callerNumber,
+      call_type: effectiveCallType,
+      user_id: effectiveUserId || null,
+      pin_required: false,
+      pin_success: null,
+    }).then(() => {}, (e: any) => console.error("[VOICE-DEMO] Call history insert failed:", e));
+
+    const escGreeting = effectiveGreeting.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escGreeting}">
+      <Parameter name="userId" value="${effectiveUserId}" />
+      <Parameter name="callType" value="${effectiveCallType}" />
+      <Parameter name="callerNumber" value="${callerNumber}" />
+    </ConversationRelay>
+  </Connect>
+  <Say voice="Polly.Joanna-Neural">${escGreeting}</Say>
+</Response>`;
+
+    console.log(`[VOICE-DEMO] Outbound TwiML: ${effectiveCallType}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
+    res.type("text/xml").send(twiml);
+  } catch (error: any) {
+    console.error("[VOICE-DEMO] Outbound TwiML error:", error.message);
+    // Fallback: simple greeting so the call doesn't fail silently
+    const fallback = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">Hey there! I'm Aevoy, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
+</Response>`;
+    res.type("text/xml").send(fallback);
+  }
+});
+
 // ---- Outbound Call TwiML (for scheduled callbacks) ----
 // Twilio fetches this URL when making outbound calls via callUser()
 // Returns ConversationRelay TwiML for full conversational callbacks
