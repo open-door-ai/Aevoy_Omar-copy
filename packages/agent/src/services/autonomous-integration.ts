@@ -323,8 +323,9 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
 
       console.log(`[AGI] Executing ${subTasks.length} sub-tasks for goal: "${subject.slice(0, 60)}"`);
 
-      // Execute sub-tasks with context flow
+      // Execute sub-tasks with context flow + browser session continuity
       const roundResults: Array<{ subject: string; success: boolean; response: string }> = [];
+      let lastSessionDomain = ''; // Track domain for session continuity between sub-tasks
 
       for (const [i, sub] of subTasks.entries()) {
         // Timeout check
@@ -348,6 +349,14 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
           }
         }
 
+        // Extract domain hint from sub-task subject/body for session continuity
+        // e.g., "Create Twitter account" → twitter.com, "Navigate to developer portal" → developer.twitter.com
+        let sessionHint: { userId: string; domain: string } | undefined;
+        if (lastSessionDomain && sub.dependsOnPrior) {
+          sessionHint = { userId, domain: lastSessionDomain };
+          console.log(`[AGI] Session continuity: restoring session for ${lastSessionDomain}`);
+        }
+
         try {
           const result = await processTask({
             userId,
@@ -356,8 +365,16 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
             subject: sub.subject,
             body: enrichedBody,
             inputChannel: task.inputChannel || "web",
-            suppressEmail: true, // Sub-tasks don't send individual emails — one summary at the end
+            suppressEmail: true,
+            sessionHint,
           });
+
+          // Extract domain from sub-task response for next sub-task's session continuity
+          const urlMatch = result.response.match(/https?:\/\/([^\/\s]+)/);
+          if (urlMatch) {
+            lastSessionDomain = urlMatch[1];
+            console.log(`[AGI] Session domain extracted: ${lastSessionDomain}`);
+          }
 
           roundResults.push({
             subject: sub.subject,
@@ -365,7 +382,6 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
             response: result.response,
           });
 
-          // Accumulate context for future sub-tasks and re-planning
           accumulatedContext += `\n[Step ${allResults.length + roundResults.length}] ${sub.subject}: ${result.success ? "SUCCESS" : "FAILED"} — ${result.response.substring(0, 300)}`;
 
           console.log(`[AGI] Sub-task ${i + 1} ${result.success ? "completed" : "failed"}`);

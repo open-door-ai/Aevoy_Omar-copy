@@ -7,7 +7,7 @@
 
 import crypto from "crypto";
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
-import { generateResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate, trackServiceCost } from "./ai.js";
+import { generateResponse, generateVisionResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate, trackServiceCost } from "./ai.js";
 import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
 import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
@@ -1793,7 +1793,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const { incrementBrowserTasks } = await import("../utils/concurrency.js");
       incrementBrowserTasks();
 
-      let domain = classification.domains?.[0] || null;
+      // Session continuity: prefer sessionHint domain (from prior sub-task) over classifier
+      let domain = task.sessionHint?.domain || classification.domains?.[0] || null;
+      if (task.sessionHint?.domain) {
+        console.log(`[BROWSER] Session continuity: using domain '${task.sessionHint.domain}' from prior sub-task`);
+      }
 
       // Domain allowlist only matters for local Playwright session persistence
       // Browserbase persists ALL domains via the user's context
@@ -1857,6 +1861,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const strategiesAttempted = new Map<string, number>(); // strategyHash -> attemptCount
     const MAX_SAME_STRATEGY_RETRIES = 3;
     let lastPageTitle = ''; // Track page titles to detect bot-blocked repetition
+    // Context summarization: store round results for compression after round 5
+    const roundHistory: { round: number; summary: string }[] = [];
+    let compressedHistory = ''; // Compressed summary of rounds 1-N after round 5
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -1934,6 +1941,51 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
 
         const action = aiResponse.actions[actionIndex];
+
+        // HARD ACTION REJECTION: Physically block repeated failing strategies
+        // This is the difference between "please try something different" and FORCING it
+        const actionStrategyKey = `${action.type}:${action.params?.url || action.params?.selector || action.params?.text || ''}`;
+        const priorAttempts = strategiesAttempted.get(actionStrategyKey) || 0;
+        if (priorAttempts >= MAX_SAME_STRATEGY_RETRIES) {
+          console.warn(`[REJECT] BLOCKED: strategy '${actionStrategyKey}' already failed ${priorAttempts}x — forcing different approach`);
+          iterationResults.push({
+            action,
+            success: false,
+            error: `BLOCKED: This exact approach has failed ${priorAttempts} times. You MUST try a completely different strategy — different selector, different URL, different method. Repeating the same action will NOT work.`
+          });
+          continue;
+        }
+
+        // HARD METHOD TYPE REJECTION: Block entire method categories after too many failures
+        const actionMethodType = classifyMethodType(action);
+        const methodAttempts = methodTypesAttempted.get(actionMethodType) || 0;
+        if (methodAttempts >= MAX_SAME_METHOD_TYPE_RETRIES) {
+          console.warn(`[REJECT] BLOCKED: method type '${actionMethodType}' exhausted (${methodAttempts} failures) — must use different method`);
+          iterationResults.push({
+            action,
+            success: false,
+            error: `BLOCKED: ${actionMethodType} method has failed ${methodAttempts} times. Switch to a DIFFERENT method type (e.g., if clicking fails, try keyboard navigation, JavaScript execution, or a different URL entirely).`
+          });
+          continue;
+        }
+
+        // HARD DOMAIN REJECTION: Block domains that have failed repeatedly
+        if (action.params?.url) {
+          try {
+            const actionDomain = new URL(String(action.params.url)).hostname;
+            const domainFails = domainFailures.get(actionDomain) || 0;
+            if (domainFails >= 2) {
+              console.warn(`[REJECT] BLOCKED: domain '${actionDomain}' failed ${domainFails}x — use search instead`);
+              iterationResults.push({
+                action,
+                success: false,
+                error: `BLOCKED: ${actionDomain} has been blocked/failed ${domainFails} times. Use [ACTION:search("your query site:${actionDomain}")] to get data from search results instead, or try a completely different website.`
+              });
+              continue;
+            }
+          } catch { /* invalid URL, skip domain check */ }
+        }
+
         // Validate action against locked intent
         const validation = await validator.validate({
           type: action.type,
@@ -2200,26 +2252,18 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
       }).join('\n\n');
 
-      // OBSERVE: Capture current page state for AI context
+      // OBSERVE: Capture current page state with SCREENSHOT VISION
       console.log(`[DEBUG-ITER] Starting page observation for iteration ${currentIteration}`);
       let pageStateSection = '';
       if (executionEngine?.getPage()) {
         try {
-          console.log(`[DEBUG-ITER] Getting page object...`);
           const page = executionEngine.getPage()!;
-          console.log(`[DEBUG-ITER] Getting current URL...`);
-          // Get current URL
           const currentUrl = page.url();
-          console.log(`[DEBUG-ITER] URL: ${currentUrl}, getting page text...`);
-          // Get visible page text (truncated for token efficiency)
           const rawPageText = await page.textContent('body').catch(() => '');
-          console.log(`[DEBUG-ITER] Got ${rawPageText?.length || 0} chars, getting title...`);
           const pageText = (rawPageText || '').replace(/\s+/g, ' ').trim().substring(0, 1500);
-          // Get page title
           const pageTitle = await page.title().catch(() => '');
-          console.log(`[DEBUG-ITER] Page title: ${pageTitle}`);
 
-          // Detect bot-blocked pages by checking page title/text
+          // Detect bot-blocked pages
           const isBotBlockPage = (
             pageTitle.toLowerCase().includes('sorry! something went wrong') ||
             pageTitle.toLowerCase().includes('access denied') ||
@@ -2236,30 +2280,65 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           }
           lastPageTitle = pageTitle;
 
-          pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
+          // SCREENSHOT VISION: Capture screenshot and analyze with AI vision
+          // This is THE key intelligence upgrade — AI can now SEE error messages,
+          // grayed-out buttons, CAPTCHAs, form validation errors, layouts
+          let visualObservation = '';
+          try {
+            console.log(`[VISION] Capturing screenshot for round ${currentIteration}...`);
+            const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 60 });
+            const screenshotBase64 = screenshotBuffer.toString('base64');
+            console.log(`[VISION] Screenshot captured (${Math.round(screenshotBase64.length / 1024)}KB), analyzing...`);
+
+            const visionResult = await generateVisionResponse(
+              `Describe what you see on this webpage. Focus on:
+1. What page/form is visible? (login, signup, dashboard, search results, etc.)
+2. Are there any ERROR MESSAGES or validation warnings? Quote them exactly.
+3. Are there any form fields? Which are filled, which are empty, which have errors?
+4. Are there any buttons? Are they enabled (clickable) or disabled (grayed out)?
+5. Is there a CAPTCHA or verification challenge visible?
+6. What is the most important thing to do next on this page?
+Be specific and concise. 3-5 sentences max.`,
+              screenshotBase64,
+              'You are a browser automation expert analyzing a screenshot. Describe the page state precisely — focus on actionable details like error messages, form state, and next steps. Be concise.'
+            );
+
+            if (visionResult.content) {
+              visualObservation = visionResult.content.substring(0, 600);
+              totalAiCost += visionResult.cost || 0;
+              console.log(`[VISION] Analysis complete (cost: $${(visionResult.cost || 0).toFixed(4)}): ${visualObservation.substring(0, 100)}...`);
+            }
+          } catch (visionErr) {
+            console.log(`[VISION] Screenshot analysis failed (falling back to text): ${visionErr}`);
+          }
+
+          // Build page state with vision-first, text as fallback
+          if (visualObservation) {
+            pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
+  URL: ${currentUrl}
+  Title: ${pageTitle}
+  VISUAL OBSERVATION (from screenshot): ${visualObservation}
+  Raw text (backup): ${(pageText || '(empty)').substring(0, 500)}${stuckWarning}`;
+          } else {
+            pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
   Title: ${pageTitle}
   Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}${stuckWarning}`;
+          }
 
-          // SELF-CRITIQUE: Quick AI check on whether actions worked (cheap/free model)
-          console.log(`[DEBUG-ITER] Checking if self-critique needed (failed=${failedActions.length}, success=${successfulActions.length})`);
+          // SELF-CRITIQUE on failures
           if (failedActions.length > 0 || successfulActions.length === 0 || isBotBlockPage) {
             try {
-              console.log(`[DEBUG-ITER] Running self-critique via quickValidate...`);
               const critiqueResult = await quickValidate(
-                `Actions attempted: ${resultsSummary.substring(0, 500)}\nPage now shows: ${pageText.substring(0, 500)}\nDid the actions succeed? What should be done differently? Be brief (2 sentences max).`,
+                `Actions attempted: ${resultsSummary.substring(0, 500)}\nPage now shows: ${visualObservation || pageText.substring(0, 500)}\nDid the actions succeed? What should be done differently? Be brief (2 sentences max).`,
                 'You are a task execution critic. Briefly evaluate if the actions succeeded based on the page state. 2 sentences max.'
               );
-              console.log(`[DEBUG-ITER] Self-critique complete: ${critiqueResult?.result ? 'got result' : 'no result'}`);
               if (critiqueResult?.result) {
                 pageStateSection += `\n  Self-critique: ${critiqueResult.result.substring(0, 300)}`;
               }
             } catch (critErr) {
-              console.log(`[DEBUG-ITER] Self-critique error: ${critErr}`);
-              // Self-critique is optional, don't block on failure
+              // Self-critique is optional
             }
-          } else {
-            console.log(`[DEBUG-ITER] Skipping self-critique (all actions succeeded)`);
           }
         } catch (e) {
           console.log(`[OBSERVE] Failed to capture page state: ${e}`);
@@ -2267,7 +2346,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       } else {
         console.log(`[DEBUG-ITER] No page object, skipping observation`);
       }
-      console.log(`[DEBUG-ITER] Page observation complete`);
 
 
       // Check for repeated strategies and build enforcement message
@@ -2320,8 +2398,32 @@ Be creative. Think outside the box. What would a human do differently?`;
         ? `\n⛔ BLOCKED DOMAINS (failed ${blockedDomains.length > 1 ? '2+' : '2'} times — DO NOT retry these):\n${blockedDomains.map(d => `  - ${d} → use [ACTION:search("your query site:${d}")] instead`).join('\n')}\n`
         : '';
 
-      const iterativePrompt = `Original request: ${subject} ${body}
+      // CONTEXT SUMMARIZATION: After round 5, compress old rounds to prevent context bloat
+      // This cuts context by ~60%, keeping AI focused on current state not old noise
+      roundHistory.push({ round: currentIteration, summary: `Round ${currentIteration}: ${resultsSummary.substring(0, 200)}` });
 
+      let historySection = '';
+      if (currentIteration > 5 && roundHistory.length > 3) {
+        // Compress old rounds into a 2-sentence summary (if not already done)
+        if (!compressedHistory) {
+          try {
+            const oldRounds = roundHistory.slice(0, -2).map(r => r.summary).join('\n');
+            const compressionResult = await quickValidate(
+              `Summarize these browser automation rounds in 2 sentences. Focus on: what was attempted, what worked, what failed, current progress.\n\n${oldRounds}`,
+              'Summarize browser automation history. 2 sentences max. Focus on progress and failures.'
+            );
+            if (compressionResult?.result) {
+              compressedHistory = compressionResult.result.substring(0, 300);
+            }
+          } catch { /* compression is optional */ }
+        }
+        if (compressedHistory) {
+          historySection = `\nPRIOR ROUNDS SUMMARY: ${compressedHistory}\n`;
+        }
+      }
+
+      const iterativePrompt = `Original request: ${subject} ${body}
+${historySection}
 ROUND ${currentIteration}/${MAX_ITERATIONS} RESULTS:
 ${resultsSummary}
 ${pageStateSection}
@@ -2332,11 +2434,19 @@ ${searchCompletionHint}
 ${domainWarning}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 ${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Wrap up: give your best answer from what you have and signal [TASK_COMPLETE].\n` : ''}
-OBSERVE the current page state above, then decide what to do next:
+MANDATORY THINKING STEP — You MUST reason before acting:
+[THINKING]
+1. What happened last round? (success/failure)
+2. What do I see on the page RIGHT NOW? (from the visual observation above)
+3. What went WRONG and WHY?
+4. What is a DIFFERENT approach I haven't tried yet?
+5. What are my next 2-3 actions and WHY will they work?
+[/THINKING]
+
+Then include your actions. OBSERVE → THINK → ACT. Never act without thinking first.
 - If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
 - If the page shows an error or unexpected state, adapt your approach.
 - If more steps are needed, include the next 2-3 actions (focused, not scattered).
-- Build on what worked in prior rounds. Don't start over.
 - NEVER give up. Always find a way.`;
 
       console.log(`[ITERATE] Re-prompting AI with page observation for round ${currentIteration + 1}...`);

@@ -752,11 +752,46 @@ CONDITIONAL LOGIC & REASONING:
 - DO NOT plan out both branches up front. Execute ONE branch at a time based on observations.
 - AGI means: reason about causality, understand conditionals, make money through intelligent decision-making.
 
-SELF-CRITIQUE (between rounds):
+SELF-CRITIQUE & THINKING (between rounds):
+- You MUST include a [THINKING]...[/THINKING] block before your actions in EVERY round after round 1.
+- Inside [THINKING], answer: What happened? What do I see? What went wrong? What's a different approach? Why will it work?
 - Before planning next actions, ask yourself: "Did my last actions succeed? What do I see on the page now?"
 - If the page hasn't changed or shows errors, your actions likely failed — try something different.
 - If you see a success confirmation, the task may be done — include [TASK_COMPLETE].
 - If you see a login wall, try [ACTION:login(...)]. If you see a CAPTCHA, try waiting or a different URL.
+
+VISUAL REASONING (you can SEE the page via screenshots):
+- Between rounds, I'll describe what the page looks like visually (VISUAL OBSERVATION).
+- READ the visual observation carefully — it tells you about error messages, form states, disabled buttons, CAPTCHAs.
+- If the observation says a button is "grayed out" or "disabled", it means you're MISSING A REQUIRED FIELD. Fill all required fields before clicking.
+- If it says there's an "error message" → read the error, understand what it's asking for, and fix it.
+- If it mentions a CAPTCHA → the system handles reCAPTCHA/hCaptcha automatically. Just wait or try again.
+- Trust the visual observation over raw text — it gives you the TRUE state of the page.
+
+FORM INTELLIGENCE:
+- Multi-step forms: Complete ALL fields on the CURRENT step before clicking Next/Continue/Submit.
+- Required fields often marked with * or show red borders — fill ALL of them.
+- Password requirements: Most sites need 8+ chars, 1 uppercase, 1 number, 1 special char. Use a strong password.
+- If a button is disabled/grayed → something is missing. Check: unchecked checkboxes, empty required fields, unverified CAPTCHA.
+- Date fields: Try YYYY-MM-DD format first, then MM/DD/YYYY.
+- Dropdown menus: Use [ACTION:select("selector", "value")] not [ACTION:fill(...)].
+- If fill() doesn't work, try: click the field first, then type; or use JavaScript to set the value.
+
+EMAIL VERIFICATION FLOW:
+- After submitting a signup form, the site usually sends a verification email.
+- WAIT 15 seconds: [ACTION:wait(15000)]
+- CHECK your email: [ACTION:read_email(5, 5)] — last 5 emails from past 5 minutes
+- EXTRACT the code (usually 4-8 digits) from the email content.
+- GO BACK to the verification page and ENTER the code.
+- If no email after 15s, wait 30s more and check again. Some services are slow.
+
+DEVELOPER PORTAL NAVIGATION (Twitter/X, Google, Meta, etc.):
+- After creating an account, navigate to the developer portal (e.g., developer.twitter.com, developer.x.com).
+- Create an "App" or "Project" — fill in the required fields (app name, description, website URL).
+- Look for "Keys and Tokens" or "API Keys" section.
+- EXTRACT: API Key, API Secret Key, Access Token, Access Token Secret, Client ID, Client Secret.
+- Copy these values EXACTLY — they're usually shown once and can't be retrieved later.
+- Use [ACTION:remember("Twitter API Key: xxx")] to save credentials for later use.
 
 AUTONOMOUS MULTI-STEP PLANNING:
 You have up to 15 rounds of actions. Use them wisely for complex tasks.
@@ -901,11 +936,13 @@ HOW TO SOUND HUMAN:
 - Never narrate your process: don't say "I'm going to search for X" — just do it and report the outcome.
 - Short responses are almost always better than long ones. Don't over-explain.`;
 
-function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string): string {
+function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, username?: string): string {
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+  const agentEmail = username ? `${username}@aevoy.com` : 'agent@aevoy.com';
   return `CURRENT DATE & TIME: ${dateStr}, ${timeStr}
+YOUR EMAIL ADDRESS: ${agentEmail} (use this for signups, verifications, and any email-related tasks)
 
 MEMORY (what I know about you):
 ${memory.facts}
@@ -952,7 +989,7 @@ export async function generateResponse(
     senderName,
     SYSTEM_PROMPT
   );
-  const userPrompt = buildUserPrompt(memory, taskSubject, taskBody);
+  const userPrompt = buildUserPrompt(memory, taskSubject, taskBody, username);
 
   // Check response cache (skip for vision/complex types)
   if (taskType !== "vision" && taskType !== "complex") {
@@ -1773,8 +1810,10 @@ export function cleanResponseForEmail(response: string): string {
   const normalized = response
     .replace(/[\u2018\u2019\u201B]/g, "'")
     .replace(/[\u201C\u201D]/g, '"');
+  // Strip [THINKING]...[/THINKING] blocks — internal reasoning, not for the user
+  let cleaned = normalized.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, "").trim();
   // Strip action tags — use [\s\S]*? to match multiline JSON blobs in create_word/excel/etc
-  let cleaned = normalized.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
+  cleaned = cleaned.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
 
   // Strip plan-like paragraphs — the user sees a finished email, not a live process
   const paragraphs = cleaned.split(/\n\n/);

@@ -80,6 +80,8 @@ export interface TaskRequest {
   inputChannel?: InputChannel;
   /** When true, processTask skips sending result emails (used by autonomous sub-tasks) */
   suppressEmail?: boolean;
+  /** Session hint for browser continuity between sub-tasks — restores cookies/localStorage */
+  sessionHint?: { userId: string; domain: string };
 }
 
 export interface Attachment {
