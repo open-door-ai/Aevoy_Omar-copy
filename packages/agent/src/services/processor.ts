@@ -4027,6 +4027,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const finalSuccessCount = actionResults.filter(r => r.success).length;
     console.log(`[TASK] Final update: actions=${finalActionCount}, successes=${finalSuccessCount}, iterations=${currentIteration}`);
 
+    // Build a meaningful stuck_reason when verification fails
+    let stuckReason: string | null = null;
+    if (dbVerificationPassed === false && verificationResult) {
+      const conf = verificationResult.confidence ?? 0;
+      const method = verificationResult.method || 'unknown';
+      const evidence = verificationResult.evidence ? `: ${verificationResult.evidence.slice(0, 200)}` : '';
+      stuckReason = `Verification failed (${method}, confidence ${conf}% < ${dbTierTarget}% target)${evidence}`;
+    }
+
     await getSupabaseClient()
       .from("tasks")
       .update({
@@ -4041,6 +4050,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         action_count: finalActionCount,
         action_success_count: finalSuccessCount,
         iteration_count: currentIteration,
+        stuck_reason: stuckReason,
+        error_message: stuckReason,
         verification_status: dbVerificationPassed === true ? "verified" : (verificationResult ? "unverified" : null),
         verification_data: verificationResult ? {
           confidence: verificationResult.confidence,
