@@ -31,9 +31,10 @@ import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
 import { validateUrlSafety } from '../utils/url-validator.js';
 
-// Timeouts — fast fail for better retry behavior
+// Timeouts — tuned per action type for optimal speed vs reliability
 const TASK_TIMEOUT_MS = 1200000;  // 20 minutes per task
-const STEP_TIMEOUT_MS = 15000;    // 15 seconds per step (was 60s — too slow to fail, wastes minutes on bad selectors)
+const STEP_TIMEOUT_MS = 15000;    // 15 seconds for click/fill/select (fast fail on bad selectors)
+const NAV_TIMEOUT_MS = 35000;     // 35 seconds for navigate/submit (heavy pages like Amazon need time)
 const POST_ACTION_WAIT_MS = 800;  // Wait after click/fill/submit/select
 
 export interface ExecutionStep {
@@ -328,12 +329,17 @@ export class ExecutionEngine {
         return { success: false, error: 'Page not available', data: this.results };
       }
 
-      // Wrap each step in a step-level timeout
+      // Wrap each step in a step-level timeout (navigate/submit get more time for heavy pages)
+      const isSlowAction = ['navigate', 'submit', 'login'].includes(step.action);
+      const isWaitAction = step.action === 'wait';
+      const stepTimeout = isWaitAction
+        ? Math.min(((step.params?.ms as number) || 5000) + 5000, 60000) // wait: requested + 5s buffer, max 60s
+        : isSlowAction ? NAV_TIMEOUT_MS : STEP_TIMEOUT_MS;
       let result: StepResult;
       try {
         result = await withTimeout(
           this.executeStep(step),
-          STEP_TIMEOUT_MS,
+          stepTimeout,
           `Step: ${step.action}`
         );
       } catch (error) {
@@ -394,9 +400,10 @@ export class ExecutionEngine {
 
       if (!result.success) {
         // Step-level retry: exponential backoff (1s, 2s, 4s) for transient failures
-        // Skip retry for bot-blocked navigations — retrying won't help and wastes time
+        // Skip retry for bot-blocked or page crash — retrying won't help
         const isBotBlockedError = result.error?.includes('Bot-blocked') || result.error?.includes('bot-block');
-        if (step.action !== 'verify' && step.action !== 'wait' && !isBotBlockedError) {
+        const isPageCrash = result.error?.includes('Page crashed') || result.error?.includes('Target closed');
+        if (step.action !== 'verify' && step.action !== 'wait' && !isBotBlockedError && !isPageCrash) {
           console.log(`[ENGINE] Step '${step.action}' failed, retrying with exponential backoff...`);
 
           const retryPolicy = new RetryPolicy({
@@ -415,7 +422,7 @@ export class ExecutionEngine {
 
                 const res = await withTimeout(
                   this.executeStep(step),
-                  STEP_TIMEOUT_MS,
+                  stepTimeout,
                   `Step retry ${attempt + 1}: ${step.action}`
                 );
 

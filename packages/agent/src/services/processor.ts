@@ -2292,6 +2292,48 @@ DO NOT just give me the address again. COMPLETE THE BOOKING.`;
               break;
             }
             // Continue to action execution
+
+          // LAZY DATA GATE: AI says "check the website" or "prices fluctuate" for a data lookup task
+          } else if (
+            !isConversational &&
+            currentIteration <= 3 &&
+            /\b(price|cost|how much|cheapest|best deal|compare)\b/i.test(subject) &&
+            (
+              /\b(prices? (fluctuate|vary|change)|check the (website|site|page)|visit .*(website|page|link)|for (current|up.to.date|latest) (price|pricing))\b/i.test(lowerContent) ||
+              (/\b(available at|listed on)\b/i.test(lowerContent) && !/\$\d/.test(lowerContent))
+            )
+          ) {
+            console.warn(`[DATA-GATE] REJECTED: AI gave "check the website" instead of actual data. Forcing extraction.`);
+            aiResponse.content = '';
+            aiResponse.actions = [];
+            const forceDataPrompt = `Original request: ${subject} ${body}
+
+YOUR RESPONSE WAS REJECTED. You told the user to "check the website" or "prices fluctuate" instead of giving them the ACTUAL DATA.
+
+The user asked YOU to find this information. YOU must extract the actual numbers/data.
+
+DO THIS NOW:
+1. [ACTION:search("${subject.replace(/"/g, '')} current price 2026")]
+2. Look at the search results for ACTUAL numbers ($XX.XX prices, specific data)
+3. If search results have the data, report it with EXACT numbers
+4. If you need to browse a page, use [ACTION:browse("url")] and then [ACTION:extract("body")]
+5. NEVER tell the user to "check the website" — YOU are the one who checks websites
+
+Give me the ACTUAL price/data with specific numbers. Not "prices fluctuate."`;
+            const forcedData = await generateResponse(
+              memory, subject, forceDataPrompt, username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += forcedData.cost || 0;
+            totalTokens += forcedData.tokensUsed || 0;
+            aiResponse = forcedData;
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+            if (aiResponse.actions.length === 0 && aiResponse.content) {
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Continue to execute the new actions
+
           } else if (isAdviceResponse) {
             console.warn(`[QUALITY-GATE] REJECTED: AI gave advice instead of acting. Forcing re-prompt with actions.`);
             // Don't exit — re-prompt the AI to ACTUALLY DO SOMETHING
@@ -2792,6 +2834,19 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           if (retryResult.success) {
             console.log(`[RETRY] Action '${action.type}' succeeded on retry`);
             result = retryResult;
+          }
+        }
+
+        // CRASH RECOVERY: If page crashed, enrich error message to guide AI toward search fallback
+        if (!result.success && result.error && (result.error.includes('Page crashed') || result.error.includes('Target closed'))) {
+          const crashUrl = String(action.params?.url || '');
+          const crashDomain = crashUrl ? (() => { try { return new URL(crashUrl).hostname; } catch { return ''; } })() : '';
+          result.error = `PAGE CRASHED (out of memory) trying to load ${crashDomain || 'the page'}. This site is too heavy for the browser. ` +
+            `Use [ACTION:search("${subject.replace(/"/g, '')}")] to get the information from search results instead. ` +
+            `Do NOT try to navigate to ${crashDomain || 'this site'} again.`;
+          // Also block this domain so AI doesn't retry
+          if (crashDomain) {
+            domainFailures.set(crashDomain, (domainFailures.get(crashDomain) || 0) + 2);
           }
         }
 
