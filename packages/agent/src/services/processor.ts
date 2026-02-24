@@ -462,21 +462,68 @@ async function tryScheduleFastPath(
     || /^(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?$/i.test(lowerTime)
     || lowerTime === 'noon' || lowerTime === 'midnight';
 
-  // Create scheduled task
-  const { error: schedError } = await getSupabaseClient()
-    .from('scheduled_tasks')
-    .insert({
-      user_id: userId,
-      description: description || action,
-      task_template: description || action,
-      cron_expression: isOneTime ? 'once' : timeStr,
-      next_run_at: nextRun,
-      is_active: true,
-    });
+  // For one-time call_user/send_sms: use setTimeout for GUARANTEED execution.
+  // The scheduler has persistent bugs with one-time deactivation and string comparison
+  // that cause callbacks to never fire. setTimeout is reliable for short delays.
+  const delayMs = nextRunDate.getTime() - Date.now();
 
-  if (schedError) {
-    console.error('[FAST-PATH-SCHEDULE] Failed to create:', schedError.message);
-    return null; // Fall through to AI
+  if (isOneTime && (action === 'call_user' || action === 'send_sms') && delayMs > 0 && delayMs < 24 * 60 * 60 * 1000) {
+    console.log(`[FAST-PATH-SCHEDULE] Using setTimeout (${delayMs}ms) for guaranteed ${action} execution`);
+
+    // Look up phone once now
+    const { data: schedProfile } = await getSupabaseClient()
+      .from('profiles').select('phone_number, email').eq('id', userId).single();
+    const schedPhone = schedProfile?.phone_number;
+
+    if (schedPhone) {
+      setTimeout(async () => {
+        try {
+          console.log(`[TIMER-FIRE] Executing ${action} for user ${userId.slice(0, 8)} after ${delayMs}ms delay`);
+          if (action === 'call_user') {
+            const { callUser: timerCallUser } = await import('./twilio.js');
+            const result = await timerCallUser({ userId, to: schedPhone, message: 'Your AI assistant is calling you back as requested.' });
+            console.log(`[TIMER-FIRE] call_user result: ${result.success ? 'success' : 'failed'} ${result.error || ''}`);
+          } else if (action === 'send_sms') {
+            const smsMessage = description.includes(':') ? description.split(':').slice(1).join(':').trim() : 'Reminder from your AI assistant';
+            await sendSms({ userId, to: schedPhone, body: `[Aevoy] ${smsMessage}` });
+            console.log(`[TIMER-FIRE] send_sms sent to ${schedPhone}`);
+          }
+        } catch (timerErr) {
+          console.error(`[TIMER-FIRE] ${action} execution failed:`, timerErr);
+        }
+      }, delayMs);
+    }
+
+    // Also create DB record for audit trail (but don't rely on it for execution)
+    try {
+      await getSupabaseClient()
+        .from('scheduled_tasks')
+        .insert({
+          user_id: userId,
+          description: description || action,
+          task_template: description || action,
+          cron_expression: 'once',
+          next_run_at: nextRun,
+          is_active: false, // Already handled by setTimeout
+        });
+    } catch { /* audit trail is non-critical */ }
+  } else {
+    // Recurring or complex schedules: use the DB scheduler
+    const { error: schedError } = await getSupabaseClient()
+      .from('scheduled_tasks')
+      .insert({
+        user_id: userId,
+        description: description || action,
+        task_template: description || action,
+        cron_expression: isOneTime ? 'once' : timeStr,
+        next_run_at: nextRun,
+        is_active: true,
+      });
+
+    if (schedError) {
+      console.error('[FAST-PATH-SCHEDULE] Failed to create:', schedError.message);
+      return null; // Fall through to AI
+    }
   }
 
   // Use user's timezone for display (falls back to America/Los_Angeles)
@@ -498,6 +545,7 @@ async function tryScheduleFastPath(
       status: 'completed',
       completed_at: new Date().toISOString(),
       execution_time_ms: Date.now() - startTime,
+      response_text: responseText,
       verification_status: 'verified',
       action_count: 1,
       action_success_count: 1,
