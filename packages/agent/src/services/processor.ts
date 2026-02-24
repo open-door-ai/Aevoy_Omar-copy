@@ -341,6 +341,9 @@ BODY: <the complete email body>`,
       completed_at: new Date().toISOString(),
       execution_time_ms: Date.now() - startTime,
       verification_status: "verified",
+      response_text: responseText,
+      action_count: recipients.length,
+      action_success_count: results.filter(r => r.startsWith('Email sent')).length,
     }).eq("id", taskId);
   }
 
@@ -369,8 +372,10 @@ async function tryScheduleFastPath(
 
   // Pattern 1: "call me back at/in <time>" — capture ONLY the time expression (no trailing .*)
   const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at|in)\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)/i);
-  // Pattern 2: "remind me in <time> to <task>" or "remind me at <time>"
+  // Pattern 2a: "remind me in <time> to <task>" or "remind me at <time>"
   const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
+  // Pattern 2b: "remind me to <task> in <time>" — task comes BEFORE the time
+  const remindToMatch = !remindMatch ? lower.match(/remind\s+(?:me\s+)?(?:to|about|that)\s+(.+?)\s+in\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd]))/i) : null;
   // Pattern 3: "schedule <task> at/in <time>"
   const scheduleMatch = lower.match(/schedule\s+(.+?)\s+(?:at|in)\s+(.+)/i);
 
@@ -386,6 +391,12 @@ async function tryScheduleFastPath(
     action = 'send_sms';
     timeStr = remindMatch[1].trim();
     const reminderText = remindMatch[2]?.trim() || 'Reminder from your AI assistant';
+    description = `send_sms:${reminderText}`;
+  } else if (remindToMatch) {
+    // "remind me to check my email in 3 minutes" — task before time
+    action = 'send_sms';
+    timeStr = remindToMatch[2].trim();
+    const reminderText = remindToMatch[1].trim() || 'Reminder from your AI assistant';
     description = `send_sms:${reminderText}`;
   } else if (scheduleMatch) {
     description = scheduleMatch[1].trim();
@@ -1580,8 +1591,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       'mail from', 'messages in', 'emails in', 'inbox for',
     ];
     const isEmailReadTask = EMAIL_READ_KEYWORDS.some(kw => taskTextForFastPath.includes(kw));
+    // Don't treat scheduling requests as email reads — "remind me to check my email in 3 minutes"
+    const isActuallySchedule = /\b(remind|schedule|later|in\s+\d+\s*(min|sec|hour|minute|second|day|hr|[smhd]))\b/i.test(taskTextForFastPath);
 
-    if (isEmailReadTask) {
+    if (isEmailReadTask && !isActuallySchedule) {
       const userQuery = `${subject} ${body}`.trim();
       const isSpecificQuery = /regarding|about|from\s+\w|subject|mention|related to|contain|saying|with\s+\w|where|which|tks|cnbc/i.test(userQuery);
 
@@ -3321,6 +3334,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // Mostly punctuation/symbols (less than 40% word characters)
       const wordChars = text.replace(/[^a-zA-Z0-9\s]/g, '').length;
       if (wordChars / text.length < 0.4) return true;
+      // AI narration leak — starts with planning text, not results
+      const lc = text.trim().toLowerCase();
+      if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking')) return true;
+      // Contains leaked action tag fragments (mismatched brackets, escaped quotes)
+      if (/\\"\)?]\s*$/.test(text.trim()) || /\)\]\s*$/.test(text.trim())) return true;
       return false;
     };
     let cleanResponse: string;
