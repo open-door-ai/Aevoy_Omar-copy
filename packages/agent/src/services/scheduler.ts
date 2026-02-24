@@ -639,13 +639,16 @@ async function tryDirectActionExecution(
   email: string,
   phoneNumber?: string | null
 ): Promise<boolean> {
-  const lower = taskText.toLowerCase().trim();
-  console.log(`[SCHEDULER-DIRECT] Checking taskText="${taskText}" lower="${lower}" userId=${userId.slice(0,8)} phone=${phoneNumber || 'none'}`);
+  try {
+    const lower = taskText.toLowerCase().trim();
+    console.log(`[SCHEDULER-DIRECT] Checking taskText="${taskText}" lower="${lower}" (len=${lower.length}) userId=${userId.slice(0,8)} phone=${phoneNumber || 'none'}`);
 
-  // call_user — call the user's phone
-  if (lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:')) {
-    const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
-    try {
+    // call_user — call the user's phone
+    const isCallUser = lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:') || lower.includes('call_user');
+    console.log(`[SCHEDULER-DIRECT] isCallUser=${isCallUser} (===check: ${lower === 'call_user'}, includes: ${lower.includes('call_user')})`);
+
+    if (isCallUser) {
+      const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
       const { callUser } = await import('./twilio.js');
       // Look up phone from profile if not provided
       let phone = phoneNumber;
@@ -661,23 +664,20 @@ async function tryDirectActionExecution(
         console.error(`[SCHEDULER-DIRECT] call_user: no phone number for user ${userId.slice(0, 8)}`);
         return true; // handled (failed), don't retry via AI
       }
+      console.log(`[SCHEDULER-DIRECT] call_user: calling ${phone} for user ${userId.slice(0, 8)}`);
       const result = await callUser({
         to: phone,
         userId,
         message: message || 'Hey, your AI assistant is calling to follow up on your request.',
       });
-      console.log(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone}`);
-      return true;
-    } catch (err) {
-      console.error('[SCHEDULER-DIRECT] call_user error:', err);
+      console.log(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone} ${result.error || ''}`);
       return true;
     }
-  }
 
-  // send_sms — text the user
-  if (lower === 'send_sms' || lower.startsWith('send_sms:')) {
-    const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Reminder from your AI assistant';
-    try {
+    // send_sms — text the user
+    const isSendSms = lower === 'send_sms' || lower.startsWith('send_sms:') || lower.includes('send_sms');
+    if (isSendSms) {
+      const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Reminder from your AI assistant';
       const { sendSms } = await import('./twilio.js');
       let phone = phoneNumber;
       if (!phone) {
@@ -695,16 +695,12 @@ async function tryDirectActionExecution(
       await sendSms({ userId, to: phone, body: message });
       console.log(`[SCHEDULER-DIRECT] send_sms: sent to ${phone}`);
       return true;
-    } catch (err) {
-      console.error('[SCHEDULER-DIRECT] send_sms error:', err);
-      return true;
     }
-  }
 
-  // send_email — email the user (for reminders)
-  if (lower === 'send_email' || lower.startsWith('send_email:')) {
-    const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Scheduled reminder from your AI assistant';
-    try {
+    // send_email — email the user (for reminders)
+    const isSendEmail = lower === 'send_email' || lower.startsWith('send_email:') || lower.includes('send_email');
+    if (isSendEmail) {
+      const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : 'Scheduled reminder from your AI assistant';
       const { sendResponse } = await import('./email.js');
       await sendResponse({
         to: email,
@@ -714,13 +710,14 @@ async function tryDirectActionExecution(
       });
       console.log(`[SCHEDULER-DIRECT] send_email: sent to ${email}`);
       return true;
-    } catch (err) {
-      console.error('[SCHEDULER-DIRECT] send_email error:', err);
-      return true;
     }
-  }
 
-  return false; // Not a direct action, use AI processing
+    console.log(`[SCHEDULER-DIRECT] No match for taskText="${taskText}" — falling through to AI`);
+    return false; // Not a direct action, use AI processing
+  } catch (err) {
+    console.error(`[SCHEDULER-DIRECT] CRITICAL ERROR in tryDirectActionExecution:`, err);
+    return false; // Let AI try as fallback
+  }
 }
 
 /**
@@ -790,7 +787,8 @@ async function runDueScheduledTasksInner(): Promise<void> {
 
       // PREVENT DOUBLE-FIRING: Update metadata BEFORE processing.
       // For one-time tasks: deactivate immediately. For recurring: calculate next run.
-      const nextRun = isOneTime ? null : calculateNextRun(cronExpr, scheduled.timezone);
+      // NOTE: Supabase JS client strips null values from .update(), so use epoch date instead of null
+      const nextRun = isOneTime ? '1970-01-01T00:00:00Z' : calculateNextRun(cronExpr, scheduled.timezone);
       const newIsActive = isOneTime ? false : true;
 
       const { error: preUpdateError } = await getSupabaseClient()

@@ -2010,11 +2010,25 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // Send progress update ONLY for browser tasks with a live view URL (useful info).
-    // Skip for non-browser tasks to avoid inbox spam — user just gets the final result.
+    // Send progress update for browser tasks — SMS for voice/SMS, email for email channel.
+    // This is the tactile "proof of action" for complex browser tasks.
     if (executionEngine && !task.suppressEmail) {
-      const liveViewUrl = await executionEngine.getLiveViewUrl();
-      if (liveViewUrl) {
+      const liveViewUrl = executionEngine.getLiveViewUrl();
+      const channel = task.inputChannel || 'email';
+      if (channel === 'voice' || channel === 'sms') {
+        // SMS progress: short, concrete, with live view link if available
+        const progressSms = liveViewUrl
+          ? `[Aevoy] Working on "${subject.substring(0, 40)}" — watch live: ${liveViewUrl}`
+          : `[Aevoy] Working on "${subject.substring(0, 60)}" — will text you when done`;
+        (async () => {
+          try {
+            const { phone: progressPhone } = await resolveRecipient(channel as any, from, userId);
+            if (progressPhone) {
+              await sendSms({ userId, to: progressPhone, body: progressSms });
+            }
+          } catch { /* non-critical */ }
+        })();
+      } else if (liveViewUrl) {
         await sendProgressEmail(from, `${username}@aevoy.com`, subject,
           `Working on your request...\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`, taskId);
       }
