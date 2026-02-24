@@ -4756,9 +4756,26 @@ async function executeAction(
     }
 
     case "send_sms": {
-      const { to, body: smsBody } = action.params as { to: string; body: string };
-      if (!to || !smsBody) {
-        return { action, success: false, error: "SMS requires 'to' phone number and 'body' text" };
+      let { to, body: smsBody } = action.params as { to: string; body: string };
+      if (!smsBody) {
+        return { action, success: false, error: "SMS requires 'body' text" };
+      }
+      // Auto-resolve phone number: if 'to' is missing, a placeholder, or not E.164, look up user's phone
+      if (!to || !/^\+\d{10,15}$/.test(to)) {
+        try {
+          const { data: smsLookup } = await getSupabaseClient()
+            .from('profiles')
+            .select('phone_number')
+            .eq('id', userId)
+            .single();
+          if (smsLookup?.phone_number) {
+            console.log(`[ACTION:send_sms] Auto-resolved phone: ${to || 'empty'} → ${smsLookup.phone_number}`);
+            to = smsLookup.phone_number;
+          }
+        } catch { /* keep original */ }
+      }
+      if (!to || !/^\+\d{10,15}$/.test(to)) {
+        return { action, success: false, error: "Could not determine phone number. Make sure your phone is set in settings." };
       }
       try {
         const result = await sendSms({ to, body: smsBody, userId });
