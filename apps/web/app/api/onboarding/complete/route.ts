@@ -1,5 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+
+// Service-role client bypasses RLS — needed for cross-user uniqueness checks
+function getAdminClient() {
+  return createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -11,6 +21,8 @@ export async function POST(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const admin = getAdminClient();
 
   try {
     const body = await request.json();
@@ -24,8 +36,8 @@ export async function POST(request: Request) {
     if (body.username) {
       const username = body.username.trim().toLowerCase();
       if (/^[a-z0-9_-]{3,20}$/.test(username)) {
-        // Verify still available
-        const { data: existing } = await supabase
+        // Use admin client to check ALL profiles (RLS blocks cross-user with anon key)
+        const { data: existing } = await admin
           .from("profiles")
           .select("id")
           .eq("username", username)
@@ -42,7 +54,8 @@ export async function POST(request: Request) {
     if (body.bot_name && typeof body.bot_name === 'string') {
       const botName = body.bot_name.trim().substring(0, 30);
       if (botName.length >= 1) {
-        const { data: existingBot } = await supabase
+        // Use admin client to check ALL profiles (RLS blocks cross-user with anon key)
+        const { data: existingBot } = await admin
           .from("profiles")
           .select("id")
           .ilike("bot_name", botName)
