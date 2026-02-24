@@ -29,6 +29,7 @@ import { handleCaptchaIfPresent } from './captcha.js';
 import { sessionManager } from './session-manager.js';
 import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
+import { validateUrlSafety } from '../utils/url-validator.js';
 
 // Timeouts — generous limits for complex autonomous tasks
 const TASK_TIMEOUT_MS = 1200000;  // 20 minutes per task
@@ -990,6 +991,13 @@ export class ExecutionEngine {
     // Auto-prepend https:// if no protocol specified
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = `https://${url}`;
+    }
+
+    // SECURITY: Block navigation to private/internal network addresses (SSRF prevention)
+    const urlBlockReason = validateUrlSafety(url);
+    if (urlBlockReason) {
+      console.warn(`[ENGINE-SECURITY] ${urlBlockReason}`);
+      return { success: false, action: 'navigate', error: urlBlockReason };
     }
 
     try {

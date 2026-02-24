@@ -5,6 +5,7 @@
 
 import { chromium, Browser, BrowserContext, Page } from "patchright";
 import Anthropic from "@anthropic-ai/sdk";
+import { validateUrlSafety } from "../utils/url-validator.js";
 
 let anthropic: Anthropic | null = null;
 
@@ -60,11 +61,18 @@ export interface BrowseResult {
 }
 
 export async function browse(url: string): Promise<BrowseResult> {
+  // SECURITY: Block navigation to private/internal network addresses (SSRF prevention)
+  const urlBlockReason = validateUrlSafety(url);
+  if (urlBlockReason) {
+    console.warn(`[BROWSER-SECURITY] ${urlBlockReason}`);
+    return { success: false, url, title: '', content: '', error: urlBlockReason };
+  }
+
   const context = await createContext();
-  
+
   try {
     const page = await context.newPage();
-    
+
     await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: 30000,

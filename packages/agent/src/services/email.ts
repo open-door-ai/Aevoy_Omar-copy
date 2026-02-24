@@ -1,6 +1,15 @@
 import { Resend } from "resend";
 import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
 
+/**
+ * SECURITY: Sanitize email header values to prevent header injection.
+ * Strips carriage returns, newlines, and null bytes that could inject
+ * additional headers (e.g. BCC, additional recipients).
+ */
+function sanitizeEmailHeader(value: string): string {
+  return value.replace(/[\r\n\0]/g, '').trim();
+}
+
 let resend: Resend | null = null;
 
 function getResendClient(): Resend {
@@ -25,7 +34,11 @@ interface EmailAttachment {
 }
 
 export async function sendResponse(options: EmailOptions): Promise<boolean> {
-  const { to, from, subject, body, attachments } = options;
+  // SECURITY: Sanitize all header fields to prevent email header injection
+  const to = sanitizeEmailHeader(options.to);
+  const from = sanitizeEmailHeader(options.from);
+  const subject = sanitizeEmailHeader(options.subject);
+  const { body, attachments } = options;
 
   console.log(`[EMAIL-SEND] sendResponse called: to=${to}, from=${from}, subject="${subject?.substring(0, 50)}", bodyLen=${body?.length || 0}`);
 
@@ -272,6 +285,11 @@ export async function sendConfirmationEmail(
   goal: string,
   confirmationMessage: string
 ): Promise<boolean> {
+  // SECURITY: Sanitize header fields
+  const safeTo = sanitizeEmailHeader(to);
+  const safeFrom = sanitizeEmailHeader(from);
+  const safeGoal = sanitizeEmailHeader(goal);
+
   const body = `${confirmationMessage}
 
 ---
@@ -279,11 +297,11 @@ export async function sendConfirmationEmail(
 
   try {
     const htmlBody = formatResponseEmail(body);
-    
+
     const { error } = await getResendClient().emails.send({
-      from,
-      to,
-      subject: `Confirm: ${goal.slice(0, 40)}${goal.length > 40 ? '...' : ''}`,
+      from: safeFrom,
+      to: safeTo,
+      subject: `Confirm: ${safeGoal.slice(0, 40)}${safeGoal.length > 40 ? '...' : ''}`,
       html: htmlBody,
       text: body,
     });
@@ -307,6 +325,10 @@ export async function sendVerificationCodeRequest(
   context: string,
   liveViewUrl?: string
 ): Promise<boolean> {
+  // SECURITY: Sanitize header fields
+  const safeTo = sanitizeEmailHeader(to);
+  const safeFrom = sanitizeEmailHeader(from);
+
   const liveViewSection = liveViewUrl
     ? `\n\n**Or enter it yourself:** ${liveViewUrl}\nOpen this link on any device to see and control the browser directly.\n`
     : '';
@@ -326,10 +348,10 @@ A code was just sent to your phone/email.
 
   try {
     const htmlBody = formatResponseEmail(body);
-    
+
     const { error } = await getResendClient().emails.send({
-      from,
-      to,
+      from: safeFrom,
+      to: safeTo,
       subject: `🔐 Need verification code to continue`,
       html: htmlBody,
       text: body,
@@ -353,6 +375,10 @@ export async function sendTaskAccepted(
   goal: string,
   taskId?: string
 ): Promise<boolean> {
+  // SECURITY: Sanitize header fields
+  const safeTo = sanitizeEmailHeader(to);
+  const safeFrom = sanitizeEmailHeader(from);
+
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com';
   const taskLink = taskId ? `\n\n📊 **Track progress:** ${appUrl}/dashboard/tasks/${taskId}` : '';
   const body = `Got it! Working on: "${goal}"
@@ -361,10 +387,10 @@ I'll email you when it's done.${taskLink}`;
 
   try {
     const htmlBody = formatResponseEmail(body);
-    
+
     const { error } = await getResendClient().emails.send({
-      from,
-      to,
+      from: safeFrom,
+      to: safeTo,
       subject: `Working on it...`,
       html: htmlBody,
       text: body,

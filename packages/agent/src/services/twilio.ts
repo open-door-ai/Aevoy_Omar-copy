@@ -16,6 +16,27 @@ import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js"
 import { trackServiceCost } from "./ai.js";
 import { calculateSMSCost } from "../utils/cost-calculator.js";
 
+// ---- Security: Input Sanitization ----
+
+/**
+ * SECURITY: Strip control characters from SMS body to prevent SMS injection.
+ * Preserves normal whitespace (spaces, newlines for readability) but removes
+ * characters that could manipulate SMS protocol or confuse rendering.
+ */
+function sanitizeSmsBody(text: string): string {
+  // Remove control characters (C0 and C1) EXCEPT \n (0x0A) and \r (0x0D) and space (0x20)
+  // Also remove null bytes, backspace, escape, delete, and other non-printable chars
+  return text.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '').trim();
+}
+
+/**
+ * SECURITY: Sanitize phone number to prevent injection via Twilio API params.
+ * Only allows digits, +, -, (, ), and spaces.
+ */
+function sanitizePhoneNumber(phone: string): string {
+  return phone.replace(/[^\d+\-() ]/g, '').trim();
+}
+
 // ---- Configuration ----
 
 export interface TwilioConfig {
@@ -364,13 +385,17 @@ export async function sendSms(request: SmsRequest): Promise<{
   if (!config) return { success: false, error: "Twilio not configured" };
 
   try {
+    // SECURITY: Sanitize SMS body and phone number before sending
+    const sanitizedBody = sanitizeSmsBody(request.body);
+    const sanitizedTo = sanitizePhoneNumber(request.to);
+
     // Use user's dedicated number if available
     const fromNumber = await getUserFromNumber(request.userId);
 
     const params = new URLSearchParams({
-      To: request.to,
+      To: sanitizedTo,
       From: fromNumber || config.phoneNumber,
-      Body: request.body,
+      Body: sanitizedBody,
     });
 
     const response = await twilioRequest("/Messages.json", "POST", params);

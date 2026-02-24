@@ -423,8 +423,8 @@ if (process.env.NODE_ENV !== "production") {
         responseLength: result.response.length,
       });
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Unknown";
-      res.status(500).json({ success: false, error: msg });
+      console.error("[SMOKE-TEST] Error:", error);
+      res.status(500).json({ success: false, error: "Internal server error" });
     }
   });
 }
@@ -490,9 +490,9 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
     }
   } catch (error) {
     console.error("[TASK-V2] Processing failed:", error);
-    res.status(500).json({ 
-      status: "error", 
-      message: error instanceof Error ? error.message : "Processing failed" 
+    res.status(500).json({
+      status: "error",
+      message: "An unexpected error occurred while processing your task"
     });
   } finally {
     activeTasks--;
@@ -733,8 +733,8 @@ app.post("/email/test", taskLimiter, async (req, res) => {
     const result = await testImapConnection(email, password, provider.imap_host, provider.imap_port);
     return res.json(result);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Test failed";
-    return res.json({ success: false, error: msg });
+    console.error("[IMAP-TEST] Connection test failed:", err);
+    return res.json({ success: false, error: "Email connection test failed" });
   }
 });
 

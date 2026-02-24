@@ -1392,24 +1392,27 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const domain = primaryDomain;
       const { data: learnings } = await getSupabaseClient()
         .from("learnings")
-        .select("steps, gotchas, difficulty")
+        .select("title, steps, gotchas, difficulty, success_rate, times_used, service")
         .or(`service.ilike.*${domain}*,task_type.eq.${classification.taskType}`)
-        .limit(3);
+        .order("success_rate", { ascending: false })
+        .limit(5);
 
       if (learnings && learnings.length > 0) {
         const hints = learnings.map(l => {
           const parts: string[] = [];
+          if (l.title) parts.push(`Task: ${l.title}`);
           // steps and gotchas are JSONB arrays
           if (l.steps && Array.isArray(l.steps) && l.steps.length > 0) {
-            parts.push(`Steps: ${l.steps.join(", ")}`);
+            parts.push(`Steps: ${l.steps.join(" → ")}`);
           }
           if (l.gotchas && Array.isArray(l.gotchas) && l.gotchas.length > 0) {
             parts.push(`Watch for: ${l.gotchas.join(", ")}`);
           }
+          if (l.success_rate) parts.push(`Success rate: ${l.success_rate}%`);
           return parts.join(". ");
         }).filter(Boolean);
         if (hints.length > 0) {
-          learningsHint += `\n\nKnown approaches:\n${hints.join("\n")}`;
+          learningsHint += `\n\nPRIOR LEARNINGS (from past tasks — use these to work smarter):\n${hints.join("\n")}`;
           console.log(`[LEARNINGS] Found ${hints.length} relevant hints for ${domain || classification.taskType}`);
         }
       }
@@ -2291,10 +2294,46 @@ For "${subject}":
             console.log(`[ITERATE] TASK_COMPLETE + search/browse in round 1 — deferring completion to use search results`);
             // DON'T set isTaskComplete — let the loop continue after search executes
           } else {
-            // Mark for exit after this round's actions execute
-            isTaskComplete = true;
-            aiSignaledComplete = true;
-            console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+            // RESEARCH DEPTH GATE: For research/comparison tasks, reject early completion
+            // if fewer than 3 search/browse actions have been executed across ALL rounds
+            const isResearchTask = ['research', 'general'].includes(taskType) ||
+              /\b(find|search|compare|look up|price|rating|review|best|top|cheapest)\b/i.test(subject);
+            const totalSearchActions = actionResults.filter(r =>
+              ['search', 'browse'].includes(r.action?.type || '')
+            ).length;
+
+            if (isResearchTask && totalSearchActions < 3 && currentIteration < 5) {
+              console.log(`[RESEARCH-GATE] REJECTED: Only ${totalSearchActions} search/browse actions for research task. Minimum 3 required. Forcing deeper research.`);
+              aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+              // Inject research depth enforcement into next iteration prompt
+              const depthPrompt = `Original request: ${subject} ${body}
+
+YOUR ANSWER WAS REJECTED — NOT ENOUGH RESEARCH.
+You only checked ${totalSearchActions} source(s). For research tasks, you MUST check at least 3-5 different sources.
+
+DO MORE RESEARCH NOW:
+1. Search from a DIFFERENT angle (different keywords, different site)
+2. Browse the ACTUAL product/business page (not just search snippets)
+3. Cross-reference your findings with another source
+4. Only signal [TASK_COMPLETE] when you have VERIFIED data from 3+ sources
+
+Your current findings so far: ${aiResponse.content.substring(0, 500)}
+
+Continue researching. Use [ACTION:search(...)] or [ACTION:browse(...)] to check more sources.`;
+              const deeperResponse = await generateResponse(
+                memory, subject, depthPrompt, username, "complex", userId, taskId, senderName
+              );
+              totalAiCost += deeperResponse.cost || 0;
+              totalTokens += deeperResponse.tokensUsed || 0;
+              aiResponse = deeperResponse;
+              aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+              // Continue iterating — don't break
+            } else {
+              // Mark for exit after this round's actions execute
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+            }
           }
         }
       }
@@ -4017,6 +4056,29 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         await recordLearning(taskOutcome);
       } else {
         await recordFailurePattern(taskOutcome);
+      }
+
+      // ENHANCED LEARNING: Save structured approach summary for future similar tasks
+      const successActions = actionResults.filter(r => r.success);
+      const failedActions = actionResults.filter(r => !r.success);
+      const toolsUsed = [...new Set(successActions.map(a => a.action?.type).filter(Boolean))];
+      const approachSummary = toolsUsed.length > 0
+        ? `Effective tools: ${toolsUsed.join(', ')}. ${failedActions.length > 0 ? `Avoid: ${[...new Set(failedActions.map(a => a.action?.type))].join(', ')} failed.` : ''}`
+        : '';
+      if (approachSummary && primaryDomain) {
+        void getSupabaseClient().from("learnings").upsert({
+          service: primaryDomain,
+          task_type: classification.taskType || taskType,
+          title: subject.substring(0, 200),
+          steps: toolsUsed.map(t => `Use ${t}()`),
+          gotchas: failedActions.slice(0, 3).map(a => `${a.action?.type || 'unknown'}: ${(a.error || 'failed').substring(0, 100)}`),
+          success_rate: Math.round((successActions.length / Math.max(actionResults.length, 1)) * 100),
+          times_used: 1,
+          page_hash: crypto.createHash('md5').update(subject).digest('hex').substring(0, 16),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'service,task_type' }).then(() => {
+          console.log(`[LEARNING] Saved structured approach for ${primaryDomain}/${classification.taskType}`);
+        }, () => { /* upsert failed — non-critical */ });
       }
     } catch {
       // Non-critical
