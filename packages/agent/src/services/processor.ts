@@ -2164,7 +2164,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // AGI-LEVEL STRATEGY TRACKING: Prevent wasting money on repeated failed attempts
     // Track what strategies have been tried and force AI to use DIFFERENT approaches
     const strategiesAttempted = new Map<string, number>(); // strategyHash -> attemptCount
-    const MAX_SAME_STRATEGY_RETRIES = 3;
+    const MAX_SAME_STRATEGY_RETRIES = 2; // Was 3 — faster rejection of dead-end strategies
+    // Track SELECTORS that have failed — block ALL actions targeting a dead selector
+    const failedSelectors = new Map<string, number>(); // selector -> failure count
+    const MAX_SELECTOR_FAILURES = 2; // After 2 fails on same selector, block it regardless of action type
     let lastPageTitle = ''; // Track page titles to detect bot-blocked repetition
     // Context summarization: store round results for compression after round 5
     const roundHistory: { round: number; summary: string }[] = [];
@@ -2603,6 +2606,21 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           continue;
         }
 
+        // DEAD SELECTOR REJECTION: Block ANY action targeting a selector that already failed 2+ times
+        const actionSelector = String(action.params?.selector || action.params?.text || '');
+        if (actionSelector && failedSelectors.has(actionSelector)) {
+          const selectorFails = failedSelectors.get(actionSelector)!;
+          if (selectorFails >= MAX_SELECTOR_FAILURES) {
+            console.warn(`[REJECT] BLOCKED: selector "${actionSelector}" has failed ${selectorFails}x — use a DIFFERENT element`);
+            iterationResults.push({
+              action,
+              success: false,
+              error: `BLOCKED: The element "${actionSelector}" does NOT EXIST or is not interactable — it has failed ${selectorFails} times. Look at the CLICKABLE ELEMENTS list and use one of those exact text values instead. Do NOT guess CSS selectors.`
+            });
+            continue;
+          }
+        }
+
         // HARD ACTION REJECTION: Physically block repeated failing strategies
         // This is the difference between "please try something different" and FORCING it
         const actionStrategyKey = `${action.type}:${action.params?.url || action.params?.selector || action.params?.text || ''}`;
@@ -2731,6 +2749,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
         // STRATEGY TRACKING: Detect if same approach is being retried (waste of money)
         if (!result.success) {
+          // Track failed SELECTORS to block all future actions on dead elements
+          const failedSel = String(action.params?.selector || action.params?.text || '');
+          if (failedSel) {
+            failedSelectors.set(failedSel, (failedSelectors.get(failedSel) || 0) + 1);
+          }
           // Hash the action to detect same strategy
           const strategyKey = `${action.type}:${action.params?.url || action.params?.selector || action.params?.text || ''}`;
           const currentAttempts = strategiesAttempted.get(strategyKey) || 0;

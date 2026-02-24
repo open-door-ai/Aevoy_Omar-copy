@@ -619,9 +619,9 @@ BROWSER ACTIONS (require a browser - I'll open one automatically):
 [ACTION:browse("url")] — Navigate to URL and extract all text content
 [ACTION:search("query")] — Search the web (DuckDuckGo → Bing → Google → vision fallback)
 [ACTION:screenshot("url")] — Take a screenshot of a webpage
-[ACTION:click("selector_or_text")] — Click an element (CSS selector, button text, or description)
-[ACTION:fill("selector_or_label", "value")] — Type into a form field
-[ACTION:select("selector_or_label", "option_text")] — Choose a dropdown option
+[ACTION:click("visible button text")] — Click a button/link by its VISIBLE TEXT. ALWAYS use the exact text shown on the page (e.g. "Find a Table", "Search", "Submit"). NEVER use CSS selectors like "#id" or "input:nth-of-type(1)" — those fail.
+[ACTION:fill("selector_or_label", "value")] — Type into a form field. Use the selector from FORM FIELDS list if available.
+[ACTION:select("selector_or_label", "option_text")] — Choose a dropdown/select option. Use for <select> elements, NOT fill().
 [ACTION:submit("selector")] — Submit a form
 [ACTION:login("url", "username", "password")] — Log into a website using credentials
 [ACTION:scroll("down")] — Scroll the page (up/down)
@@ -789,6 +789,9 @@ FORM INTELLIGENCE (CRITICAL — FORMS ARE YOUR #1 FAILURE MODE):
 - Date fields: Try YYYY-MM-DD format first, then MM/DD/YYYY.
 - Dropdown menus: Use [ACTION:select("selector", "value")] not [ACTION:fill(...)].
 - If fill() doesn't work, try: click the field first, then type; or use JavaScript to set the value.
+- ⚠️ CRITICAL CLICK RULE: ALWAYS use the button's VISIBLE TEXT for click actions (e.g. [ACTION:click("Search Flights")]).
+  NEVER fabricate CSS selectors like "input:nth-of-type(1)" or "#search-btn" — you cannot see the DOM. Use what the CLICKABLE ELEMENTS list shows you.
+  If no CLICKABLE ELEMENTS list is provided, use the text you see in the screenshot description.
 - EXAMPLE — booking form with 3 fields:
   [ACTION:fill("#firstName", "Tess")]
   [ACTION:fill("#email", "tess@aevoy.com")]
