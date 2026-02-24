@@ -2288,6 +2288,105 @@ DO NOT describe what you would do. OUTPUT THE [ACTION:...] TAGS NOW.`;
         }
       }
 
+      // FORM-STUCK AUTO-FILL: If AI has been on a form page for 2+ rounds and still
+      // generating individual fill actions, extract ALL form fields and inject batch fills.
+      // This prevents the "1 field per round" pattern that wastes 6+ iterations on one form.
+      if (currentIteration >= 3 && executionEngine?.getPage()) {
+        const fillActions = aiResponse.actions.filter(a => a.type === 'fill');
+        const hasOnlyFills = fillActions.length > 0 && fillActions.length <= 2; // AI only filling 1-2 fields per round
+        if (hasOnlyFills) {
+          try {
+            const formPage = executionEngine.getPage()!;
+            const emptyFormFields = await formPage.evaluate(() => {
+              const fields: Array<{ selector: string; type: string; label: string }> = [];
+              const inputs = document.querySelectorAll('input, textarea, select');
+              inputs.forEach((el) => {
+                const input = el as HTMLInputElement;
+                const rect = input.getBoundingClientRect();
+                const isVisible = rect.width > 0 && rect.height > 0 &&
+                  getComputedStyle(input).display !== 'none' &&
+                  getComputedStyle(input).visibility !== 'hidden';
+                if (!isVisible || input.value) return;
+                const skipTypes = ['hidden', 'submit', 'button', 'image', 'reset', 'checkbox', 'radio'];
+                if (skipTypes.includes(input.type)) return;
+                let label = '';
+                if (input.id) {
+                  const lbl = document.querySelector(`label[for="${input.id}"]`);
+                  if (lbl) label = lbl.textContent?.trim() || '';
+                }
+                if (!label) label = input.getAttribute('aria-label') || input.placeholder || input.name || input.id || input.type;
+                let selector = input.id ? `#${input.id}` : input.name ? `[name="${input.name}"]` : '';
+                if (!selector) return;
+                fields.push({ selector, type: input.type || 'text', label });
+              });
+              return fields;
+            });
+
+            if (emptyFormFields.length > 0) {
+              // Check if AI's current fill actions already cover these fields
+              const alreadyCovered = new Set(fillActions.map(a => String(a.params?.selector || a.params?.label || '')));
+              const uncovered = emptyFormFields.filter(f => !alreadyCovered.has(f.selector) && !alreadyCovered.has(f.label));
+
+              if (uncovered.length > 0) {
+                console.log(`[FORM-AUTOFILL] AI only filling ${fillActions.length} fields but ${uncovered.length} more empty fields detected — injecting batch fills`);
+                for (const field of uncovered) {
+                  // Smart value generation based on field type/label
+                  let autoValue = '';
+                  const lbl = field.label.toLowerCase();
+                  if (field.type === 'email' || lbl.includes('email')) autoValue = `${username}@aevoy.com`;
+                  else if (field.type === 'tel' || lbl.includes('phone') || lbl.includes('tel')) {
+                    // Look up user phone
+                    try {
+                      const { data: phoneProfile } = await getSupabaseClient()
+                        .from('profiles').select('phone_number').eq('id', userId).single();
+                      autoValue = phoneProfile?.phone_number || '';
+                    } catch { autoValue = ''; }
+                  }
+                  else if (lbl.includes('first') && lbl.includes('name')) autoValue = username || 'User';
+                  else if (lbl.includes('last') && lbl.includes('name')) autoValue = 'via Aevoy';
+                  else if (lbl.includes('name') && !lbl.includes('user')) autoValue = username || 'User';
+                  else if (field.type === 'number' || lbl.includes('party') || lbl.includes('guest') || lbl.includes('people')) autoValue = '2';
+                  else if (lbl.includes('comment') || lbl.includes('note') || lbl.includes('message') || lbl.includes('special')) autoValue = 'No special requests';
+
+                  if (autoValue) {
+                    aiResponse.actions.push({
+                      type: 'fill' as any,
+                      params: { selector: field.selector, label: field.label, value: autoValue }
+                    });
+                    console.log(`[FORM-AUTOFILL] Injected fill: ${field.selector} (${field.label}) = "${autoValue}"`);
+                  }
+                }
+                // After filling all empty fields, inject a submit/click if AI didn't already include one
+                const hasSubmitAction = aiResponse.actions.some(a => a.type === 'submit' || (a.type === 'click' && /submit|next|continue|book|reserve|confirm|complete|sign.?up|create|send/i.test(String(a.params?.selector || a.params?.text || ''))));
+                if (!hasSubmitAction) {
+                  // Try to find a submit button on the page
+                  try {
+                    const submitBtn = await formPage.evaluate(() => {
+                      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
+                      const submitKeywords = ['submit', 'next', 'continue', 'book', 'reserve', 'confirm', 'complete', 'sign up', 'create', 'send', 'done', 'finish'];
+                      for (const btn of buttons) {
+                        const text = (btn.textContent || '').trim().toLowerCase();
+                        const value = (btn as HTMLInputElement).value?.toLowerCase() || '';
+                        if (submitKeywords.some(kw => text.includes(kw) || value.includes(kw))) {
+                          return text || value || 'submit';
+                        }
+                      }
+                      return null;
+                    });
+                    if (submitBtn) {
+                      aiResponse.actions.push({ type: 'click' as any, params: { selector: submitBtn, text: submitBtn } });
+                      console.log(`[FORM-AUTOFILL] Injected submit click: "${submitBtn}"`);
+                    }
+                  } catch { /* submit detection non-critical */ }
+                }
+              }
+            }
+          } catch (autoFillErr) {
+            console.log(`[FORM-AUTOFILL] Auto-fill extraction failed: ${autoFillErr}`);
+          }
+        }
+      }
+
       const iterationResults: ActionResult[] = [];
 
       for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
@@ -2734,17 +2833,99 @@ Be specific and concise. 3-5 sentences max.`,
             console.log(`[VISION] Screenshot analysis failed (falling back to text): ${visionErr}`);
           }
 
+          // FORM FIELD EXTRACTION: Detect all form fields on the page via JS
+          // This gives the AI exact selectors, types, labels, and current values —
+          // so it can batch-fill ALL fields in one round instead of guessing one at a time.
+          let formFieldsSection = '';
+          try {
+            const formFields = await page.evaluate(() => {
+              const fields: Array<{
+                tag: string;
+                type: string;
+                name: string;
+                id: string;
+                label: string;
+                placeholder: string;
+                value: string;
+                required: boolean;
+                visible: boolean;
+                selector: string;
+              }> = [];
+              const inputs = document.querySelectorAll('input, textarea, select');
+              inputs.forEach((el, idx) => {
+                const input = el as HTMLInputElement;
+                const rect = input.getBoundingClientRect();
+                const isVisible = rect.width > 0 && rect.height > 0 &&
+                  getComputedStyle(input).display !== 'none' &&
+                  getComputedStyle(input).visibility !== 'hidden';
+                if (!isVisible) return;
+                // Skip hidden/submit/button inputs
+                const skipTypes = ['hidden', 'submit', 'button', 'image', 'reset'];
+                if (skipTypes.includes(input.type)) return;
+
+                // Find associated label
+                let labelText = '';
+                if (input.id) {
+                  const labelEl = document.querySelector(`label[for="${input.id}"]`);
+                  if (labelEl) labelText = labelEl.textContent?.trim() || '';
+                }
+                if (!labelText) {
+                  const parent = input.closest('label');
+                  if (parent) labelText = parent.textContent?.replace(input.value || '', '').trim() || '';
+                }
+                // Look for nearby text (preceding sibling, aria-label)
+                if (!labelText) labelText = input.getAttribute('aria-label') || '';
+
+                // Build the most reliable selector
+                let selector = '';
+                if (input.id) selector = `#${input.id}`;
+                else if (input.name) selector = `[name="${input.name}"]`;
+                else selector = `${input.tagName.toLowerCase()}:nth-of-type(${idx + 1})`;
+
+                fields.push({
+                  tag: input.tagName.toLowerCase(),
+                  type: input.type || (input.tagName === 'TEXTAREA' ? 'textarea' : 'text'),
+                  name: input.name || '',
+                  id: input.id || '',
+                  label: labelText.substring(0, 60),
+                  placeholder: input.placeholder || '',
+                  value: input.value || '',
+                  required: input.required,
+                  visible: true,
+                  selector,
+                });
+              });
+              return fields;
+            });
+
+            if (formFields.length > 0) {
+              const emptyFields = formFields.filter(f => !f.value);
+              const filledFields = formFields.filter(f => f.value);
+              formFieldsSection = `\n  FORM FIELDS DETECTED (${formFields.length} total, ${emptyFields.length} empty):`;
+              for (const f of formFields) {
+                const status = f.value ? `FILLED="${f.value.substring(0, 30)}"` : 'EMPTY';
+                const label = f.label || f.placeholder || f.name || f.id || f.type;
+                formFieldsSection += `\n    - ${label} [${f.type}] selector="${f.selector}" ${status}${f.required ? ' (required)' : ''}`;
+              }
+              if (emptyFields.length > 0) {
+                formFieldsSection += `\n  ⚡ FORM STRATEGY: Fill ALL ${emptyFields.length} empty fields in THIS round using [ACTION:fill("selector", "value")] for each. Do NOT fill one field per round.`;
+              }
+            }
+          } catch (formErr) {
+            console.log(`[FORM-DETECT] Form field extraction failed: ${formErr}`);
+          }
+
           // Build page state with vision-first, text as fallback
           if (visualObservation) {
             pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
   Title: ${pageTitle}
-  VISUAL OBSERVATION (from screenshot): ${visualObservation}
+  VISUAL OBSERVATION (from screenshot): ${visualObservation}${formFieldsSection}
   Raw text (backup): ${(pageText || '(empty)').substring(0, 500)}${stuckWarning}`;
           } else {
             pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
-  Title: ${pageTitle}
+  Title: ${pageTitle}${formFieldsSection}
   Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}${stuckWarning}`;
           }
 
@@ -2886,7 +3067,8 @@ WRONG: "The next step would be to fill in the email field with tess@aevoy.com"
 RIGHT: [ACTION:fill("email", "tess@aevoy.com")]
 
 - If the page shows the task is complete (success message, data found, etc.), include [TASK_COMPLETE] with the final answer.
-- If the page shows a FORM → output [ACTION:fill(...)] for each field, then [ACTION:click("Submit")] or [ACTION:submit("form")].
+- If the page shows a FORM → output [ACTION:fill("selector", "value")] for EVERY empty field, then [ACTION:click("Submit")] or [ACTION:submit("form")]. Fill ALL fields in ONE round — do NOT fill one field per round.
+- If FORM FIELDS DETECTED is shown above, use the exact selectors listed. Fill every EMPTY field before clicking submit.
 - If the page shows an error or unexpected state, adapt your approach.
 - If more steps are needed, include the next 2-3 actions (focused, not scattered).
 - NEVER give up. Always find a way.`;

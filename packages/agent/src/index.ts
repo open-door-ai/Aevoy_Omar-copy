@@ -334,7 +334,7 @@ app.get("/health", async (_req, res) => {
 
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v21",
+    version: "2.0.0-agi-v22",
     gitSha: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local",
     timestamp: new Date().toISOString(),
     activeTasks,

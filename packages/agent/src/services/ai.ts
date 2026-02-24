@@ -768,14 +768,22 @@ VISUAL REASONING (you can SEE the page via screenshots):
 - If it mentions a CAPTCHA → the system handles reCAPTCHA/hCaptcha automatically. Just wait or try again.
 - Trust the visual observation over raw text — it gives you the TRUE state of the page.
 
-FORM INTELLIGENCE:
+FORM INTELLIGENCE (CRITICAL — FORMS ARE YOUR #1 FAILURE MODE):
+- BATCH ALL FIELDS: Output [ACTION:fill(...)] for EVERY empty field in ONE round, then [ACTION:submit(...)] or [ACTION:click("Submit")]. Never fill just 1 field per round — that wastes 6+ rounds on one form.
+- When FORM FIELDS DETECTED is shown in the page state, use the EXACT selectors listed. They are extracted from the live DOM and are 100% accurate.
 - Multi-step forms: Complete ALL fields on the CURRENT step before clicking Next/Continue/Submit.
 - Required fields often marked with * or show red borders — fill ALL of them.
+- For reservation/booking forms: Use the user's profile data. First name = their username, email = their @aevoy.com email, phone = from their profile.
 - Password requirements: Most sites need 8+ chars, 1 uppercase, 1 number, 1 special char. Use a strong password.
 - If a button is disabled/grayed → something is missing. Check: unchecked checkboxes, empty required fields, unverified CAPTCHA.
 - Date fields: Try YYYY-MM-DD format first, then MM/DD/YYYY.
 - Dropdown menus: Use [ACTION:select("selector", "value")] not [ACTION:fill(...)].
 - If fill() doesn't work, try: click the field first, then type; or use JavaScript to set the value.
+- EXAMPLE — booking form with 3 fields:
+  [ACTION:fill("#firstName", "Tess")]
+  [ACTION:fill("#email", "tess@aevoy.com")]
+  [ACTION:fill("#phone", "+16047245161")]
+  [ACTION:click("Complete Reservation")]
 
 EMAIL VERIFICATION FLOW:
 - After submitting a signup form, the site usually sends a verification email.
