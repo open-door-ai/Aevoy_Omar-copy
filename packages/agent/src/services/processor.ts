@@ -3033,6 +3033,7 @@ Be specific and concise. 3-5 sentences max.`,
                 required: boolean;
                 visible: boolean;
                 selector: string;
+                options: string;
               }> = [];
               const inputs = document.querySelectorAll('input, textarea, select');
               inputs.forEach((el, idx) => {
@@ -3065,9 +3066,19 @@ Be specific and concise. 3-5 sentences max.`,
                 else if (input.name) selector = `[name="${input.name}"]`;
                 else selector = `${input.tagName.toLowerCase()}:nth-of-type(${idx + 1})`;
 
+                // For <select> elements, extract available options
+                let options = '';
+                if (input.tagName === 'SELECT') {
+                  const opts = Array.from((input as unknown as HTMLSelectElement).options)
+                    .map(o => o.text || o.value)
+                    .filter(o => o && o !== '')
+                    .slice(0, 15);
+                  options = opts.join(', ');
+                }
+
                 fields.push({
                   tag: input.tagName.toLowerCase(),
-                  type: input.type || (input.tagName === 'TEXTAREA' ? 'textarea' : 'text'),
+                  type: input.type || (input.tagName === 'TEXTAREA' ? 'textarea' : (input.tagName === 'SELECT' ? 'select' : 'text')),
                   name: input.name || '',
                   id: input.id || '',
                   label: labelText.substring(0, 60),
@@ -3076,6 +3087,7 @@ Be specific and concise. 3-5 sentences max.`,
                   required: input.required,
                   visible: true,
                   selector,
+                  options,
                 });
               });
               return fields;
@@ -3088,10 +3100,20 @@ Be specific and concise. 3-5 sentences max.`,
               for (const f of formFields) {
                 const status = f.value ? `FILLED="${f.value.substring(0, 30)}"` : 'EMPTY';
                 const label = f.label || f.placeholder || f.name || f.id || f.type;
-                formFieldsSection += `\n    - ${label} [${f.type}] selector="${f.selector}" ${status}${f.required ? ' (required)' : ''}`;
+                const optionsHint = f.options ? ` options=[${f.options}]` : '';
+                const typeHint = f.tag === 'select' ? ' (DROPDOWN — use select() not fill())' : '';
+                formFieldsSection += `\n    - ${label} [${f.type}] selector="${f.selector}" ${status}${f.required ? ' (required)' : ''}${optionsHint}${typeHint}`;
               }
               if (emptyFields.length > 0) {
-                formFieldsSection += `\n  ⚡ FORM STRATEGY: Fill ALL ${emptyFields.length} empty fields in THIS round using [ACTION:fill("selector", "value")] for each. Do NOT fill one field per round.`;
+                const selectFields = emptyFields.filter(f => f.tag === 'select');
+                const inputFields = emptyFields.filter(f => f.tag !== 'select');
+                formFieldsSection += `\n  ⚡ FORM STRATEGY: Fill ALL ${emptyFields.length} empty fields in THIS round. Do NOT fill one field per round.`;
+                if (inputFields.length > 0) {
+                  formFieldsSection += `\n    - For text inputs: [ACTION:fill("selector", "value")]`;
+                }
+                if (selectFields.length > 0) {
+                  formFieldsSection += `\n    - For DROPDOWN/SELECT fields (${selectFields.map(f => f.label || f.name || f.id).join(', ')}): Use [ACTION:select("selector", "option_text")] NOT fill()`;
+                }
               }
             }
           } catch (formErr) {
@@ -5070,6 +5092,29 @@ async function executeAction(
       const fillResult = await executionEngine.executeSteps([
         { action: 'fill', params: { selector: fillSelector, label: fillSelector, placeholder: fillSelector, value: fillValue } }
       ]);
+      // If fill fails, try select (dropdown) as fallback — handles <select> elements and custom dropdowns
+      if (!fillResult.success) {
+        console.log(`[FILL→SELECT] Fill failed for "${fillSelector}", trying select fallback`);
+        const selectFallback = await executionEngine.executeSteps([
+          { action: 'select', params: { selector: fillSelector, value: fillValue } }
+        ]);
+        if (selectFallback.success) {
+          return { action, success: true, result: `Selected ${fillValue} in dropdown ${fillSelector}` };
+        }
+        // If select also failed, try click-based approach: click the field, then click option text
+        const clickFallback = await executionEngine.executeSteps([
+          { action: 'click', params: { selector: fillSelector, text: fillSelector } },
+        ]);
+        if (clickFallback.success) {
+          await new Promise(r => setTimeout(r, 500));
+          const optionClick = await executionEngine.executeSteps([
+            { action: 'click', params: { text: fillValue, selector: fillValue } },
+          ]);
+          if (optionClick.success) {
+            return { action, success: true, result: `Clicked dropdown and selected ${fillValue}` };
+          }
+        }
+      }
       return { action, success: fillResult.success, result: fillResult.success ? `Filled ${fillSelector} with value` : undefined, error: fillResult.error };
     }
 

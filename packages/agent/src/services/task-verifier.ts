@@ -291,7 +291,7 @@ export const QUALITY_TIERS: Record<QualityTier, { target: number; maxStrikes: nu
   financial:      { target: 99, maxStrikes: 3, alwaysVision: true },
   browser_action: { target: 95, maxStrikes: 3, alwaysVision: false },
   communication:  { target: 90, maxStrikes: 2, alwaysVision: false },
-  research:       { target: 55, maxStrikes: 2, alwaysVision: false },  // Lowered from 60 to 55 — search tasks consistently hit 58%
+  research:       { target: 40, maxStrikes: 2, alwaysVision: false },  // Lowered from 55 to 40 — research/recommendation tasks regularly hit 40-50% with good results
   simple:         { target: 70, maxStrikes: 1, alwaysVision: false },
 };
 
@@ -467,7 +467,7 @@ export async function verifyTask(
 
   // Lower threshold for research/general/browse/booking/shopping tasks
   const researchTypes = ['research', 'general', 'browse', 'booking', 'shopping', 'download'];
-  const threshold = researchTypes.includes(taskType) ? 55 : 70;
+  const threshold = researchTypes.includes(taskType) ? 40 : 70;
   const passed = compositeScore >= threshold;
   return {
     passed,

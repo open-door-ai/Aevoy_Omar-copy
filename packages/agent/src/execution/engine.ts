@@ -1092,6 +1092,147 @@ export class ExecutionEngine {
     const url = this.page!.url();
     const selector = params.selector as string | undefined;
     const label = params.label as string | undefined;
+    const value = (params.value as string) || '';
+    const page = this.page!;
+
+    // --- Dropdown detection: check if target is a <select> or custom dropdown BEFORE fill cascade ---
+    if (selector) {
+      try {
+        const elementInfo = await page.evaluate((sel) => {
+          const el = document.querySelector(sel);
+          if (!el) return null;
+          const tagName = el.tagName.toLowerCase();
+          const role = el.getAttribute('role');
+          const ariaHaspopup = el.getAttribute('aria-haspopup');
+          return { tagName, role, ariaHaspopup };
+        }, selector);
+
+        // Case 1: Native <select> element — use selectOption() instead of fill()
+        if (elementInfo?.tagName === 'select') {
+          console.log(`[FILL] Detected <select> element, using selectOption instead of fill`);
+          const selectMethods: Array<{ name: string; fn: () => Promise<boolean> }> = [
+            {
+              name: 'select_by_value',
+              fn: async () => { await page.selectOption(selector, value); return true; },
+            },
+            {
+              name: 'select_by_label',
+              fn: async () => { await page.selectOption(selector, { label: value }); return true; },
+            },
+            {
+              name: 'select_by_text_match',
+              fn: async () => {
+                // Find option whose text contains the value (case-insensitive)
+                const matched = await page.evaluate(({ sel, val }) => {
+                  const select = document.querySelector(sel) as HTMLSelectElement;
+                  if (!select) return false;
+                  const valLower = val.toLowerCase();
+                  for (const opt of Array.from(select.options)) {
+                    if (opt.text.toLowerCase().includes(valLower) || opt.value.toLowerCase().includes(valLower)) {
+                      select.value = opt.value;
+                      select.dispatchEvent(new Event('change', { bubbles: true }));
+                      select.dispatchEvent(new Event('input', { bubbles: true }));
+                      return true;
+                    }
+                  }
+                  return false;
+                }, { sel: selector, val: value });
+                return matched;
+              },
+            },
+          ];
+          for (const method of selectMethods) {
+            try {
+              const success = await method.fn();
+              if (success) {
+                return { success: true, action: 'fill', method: `dropdown_${method.name}` };
+              }
+            } catch {
+              continue;
+            }
+          }
+          return { success: false, action: 'fill', error: `<select> detected but all selectOption methods failed for: ${selector}` };
+        }
+
+        // Case 2: Custom dropdown (combobox, listbox, aria-haspopup) — click to open then click matching option
+        if (elementInfo?.role === 'combobox' || elementInfo?.role === 'listbox' || elementInfo?.ariaHaspopup === 'true' || elementInfo?.ariaHaspopup === 'listbox') {
+          console.log(`[FILL] Detected custom dropdown (role=${elementInfo.role}, aria-haspopup=${elementInfo.ariaHaspopup}), clicking to open`);
+          try {
+            await page.click(selector);
+            await page.waitForTimeout(500);
+            // Try to click the matching option in the dropdown
+            const optionLocator = page.locator(
+              `[role="option"]:has-text("${value}"), li:has-text("${value}"), [data-value="${value}"], option:has-text("${value}")`
+            );
+            if ((await optionLocator.count()) > 0) {
+              await optionLocator.first().click();
+              return { success: true, action: 'fill', method: 'dropdown_click_option' };
+            }
+            // Fallback: type the value into the combobox input to filter, then pick first option
+            try {
+              await page.locator(selector).fill(value);
+              await page.waitForTimeout(300);
+              const filteredOption = page.locator('[role="option"], li[class*="option"]');
+              if ((await filteredOption.count()) > 0) {
+                await filteredOption.first().click();
+                return { success: true, action: 'fill', method: 'dropdown_type_then_select' };
+              }
+            } catch {
+              // Type-to-filter failed, continue to regular fill cascade
+            }
+          } catch {
+            // Custom dropdown interaction failed, fall through to regular fill cascade
+          }
+        }
+      } catch {
+        // Element detection failed, proceed with normal fill cascade
+      }
+    }
+
+    // --- Also detect <select> by label when no selector is provided ---
+    if (!selector && label) {
+      try {
+        const isSelect = await page.evaluate((lbl) => {
+          // Find label matching text, then check if associated element is a select
+          const labels = Array.from(document.querySelectorAll('label'));
+          for (const labelEl of labels) {
+            if (labelEl.textContent?.toLowerCase().includes(lbl.toLowerCase())) {
+              const forAttr = labelEl.getAttribute('for');
+              if (forAttr) {
+                const target = document.getElementById(forAttr);
+                if (target?.tagName.toLowerCase() === 'select') return forAttr;
+              }
+              // Check next sibling or child
+              const sibling = labelEl.nextElementSibling;
+              if (sibling?.tagName.toLowerCase() === 'select') return true;
+              const child = labelEl.querySelector('select');
+              if (child) return true;
+            }
+          }
+          return false;
+        }, label);
+
+        if (isSelect) {
+          console.log(`[FILL] Detected <select> via label "${label}", redirecting to selectOption`);
+          const selectSelector = typeof isSelect === 'string' ? `#${isSelect}` : `select`;
+          try {
+            await page.selectOption(selectSelector, value);
+            return { success: true, action: 'fill', method: 'dropdown_label_select_value' };
+          } catch {
+            try {
+              await page.selectOption(selectSelector, { label: value });
+              return { success: true, action: 'fill', method: 'dropdown_label_select_label' };
+            } catch {
+              // Fall through to normal fill cascade
+            }
+          }
+        }
+      } catch {
+        // Label-based select detection failed, proceed normally
+      }
+    }
+
+    // --- Standard fill cascade (for text inputs, textareas, etc.) ---
 
     const pastFailure = await getFailureMemory({
       site: url,
