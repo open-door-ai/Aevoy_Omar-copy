@@ -195,6 +195,44 @@ export function clearFailurePatterns(): void {
 }
 
 /**
+ * Load failure patterns from DB for a domain — cross-task learning.
+ * Previously, each task started blank. Now we pre-load what we know about this domain.
+ */
+export async function loadFailurePatternsFromDB(domain: string): Promise<number> {
+  try {
+    const { data } = await getSupabaseClient()
+      .from('failure_memory')
+      .select('action_type, original_selector, error_type, success_rate')
+      .eq('site_domain', domain)
+      .lt('success_rate', 30)  // Only load patterns with <30% success (confirmed bad)
+      .gte('last_seen_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()) // last 30 days
+      .limit(20);
+
+    if (!data || data.length === 0) return 0;
+
+    let loaded = 0;
+    for (const row of data) {
+      const sig = `${row.action_type}:${row.original_selector || ''}`;
+      if (!taskFailurePatterns.has(sig)) {
+        taskFailurePatterns.set(sig, {
+          signature: sig,
+          failureCount: 3, // Pre-mark as forbidden
+          forbiddenMethods: new Set([row.action_type]),
+        });
+        loaded++;
+      }
+    }
+
+    if (loaded > 0) {
+      console.log(`[RETRY] Pre-loaded ${loaded} known-bad patterns for ${domain} from DB`);
+    }
+    return loaded;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Persist failure patterns to database for cross-task learning.
  */
 export async function persistFailurePatterns(userId: string, taskId: string): Promise<void> {

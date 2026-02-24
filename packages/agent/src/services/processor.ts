@@ -18,7 +18,7 @@ import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCa
 import { verifyTask, quickVerify, getQualityTier, QUALITY_TIERS } from "./task-verifier.js";
 import { detectWorkflow, createWorkflow } from "./workflow.js";
 import { requiresAutonomousPlanning, handleAutonomousWorkflow } from "./autonomous-integration.js";
-import { clearFailurePatterns, persistFailurePatterns, buildRetryEnforcementMessage, recordFailedAttempt, getRetryGuidance } from "./retry-intelligence.js";
+import { clearFailurePatterns, loadFailurePatternsFromDB, persistFailurePatterns, buildRetryEnforcementMessage, recordFailedAttempt, getRetryGuidance } from "./retry-intelligence.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, StrikeContext, StrikeRecord, VerificationResult } from "../types/index.js";
 import { readFileSync } from 'fs';
@@ -1280,7 +1280,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 3. Classify task and create locked intent (SECURITY)
     const classification = await classifyTask(`${subject} ${body}`);
     const taskType = getTaskTypeFromClassification(classification.taskType);
-    
+
+    // CROSS-TASK LEARNING: Pre-load domain-specific known-bad patterns from DB
+    // So we don't repeat the same failed selectors/methods from previous tasks
+    if (classification.domains?.[0]) {
+      await loadFailurePatternsFromDB(classification.domains[0]).catch(() => {});
+    }
+
     const lockedIntent = createLockedIntent({
       userId,
       taskType,

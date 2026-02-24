@@ -347,6 +347,14 @@ export class ExecutionEngine {
       if (['click', 'fill', 'submit', 'select', 'login'].includes(step.action) && this.page && !this.page.isClosed()) {
         await this.page.waitForLoadState('networkidle').catch(() => {});
         await delay(POST_ACTION_WAIT_MS);
+
+        // Universal CAPTCHA check after ALL interactive actions (not just navigate/submit)
+        // CAPTCHAs frequently appear after clicks, form fills, and selections
+        try {
+          await handleCaptchaIfPresent(this.page!, this.userId, this.taskId);
+        } catch {
+          // Non-critical — don't fail the action because CAPTCHA check errored
+        }
       }
 
       // Capture post-action screenshot for evidence (JPEG, quality 60 for efficiency)
