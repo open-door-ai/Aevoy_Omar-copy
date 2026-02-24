@@ -3593,6 +3593,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // Send response via the same channel the task arrived on
+    // Strip thinking blocks one final time before cleaning for email — the iteration loop
+    // strips them at the top, but the last iteration's response may still have them
+    aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
     const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
     // Safety: if cleanResponseForEmail stripped everything or left garbage, use an action-aware fallback
     // Detect garbage: too short, looks like code/selectors/JSON fragments, no real words

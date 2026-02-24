@@ -1864,6 +1864,16 @@ export function cleanResponseForEmail(response: string): string {
     .replace(/[\u201C\u201D]/g, '"');
   // Strip [THINKING]...[/THINKING] blocks — internal reasoning, not for the user
   let cleaned = normalized.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, "").trim();
+  // Fallback: if AI wrote [THINKING] without closing tag, strip from [THINKING] to next double-newline
+  if (cleaned.includes('[THINKING]')) {
+    cleaned = cleaned.replace(/\[THINKING\][\s\S]*?(\n\n|\n(?=[A-Z]))/gi, "").trim();
+  }
+  // Final fallback: strip any remaining [THINKING] tag and numbered thinking lines at the start
+  cleaned = cleaned.replace(/^\[THINKING\]\s*/i, '').trim();
+  if (/^1\.\s+What happened/i.test(cleaned)) {
+    // Strip numbered thinking lines at start (1. What happened... 2. What do I see... etc.)
+    cleaned = cleaned.replace(/^(?:\d+\.\s+(?:What happened|What do I see|What went|What is a|What are my)[\s\S]*?(?:\n\n|\n(?=[A-Z])))/gi, '').trim();
+  }
   // Strip action tags — use [\s\S]*? to match multiline JSON blobs in create_word/excel/etc
   cleaned = cleaned.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
   // Strip [TASK_COMPLETE] tags
