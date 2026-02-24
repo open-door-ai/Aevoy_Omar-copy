@@ -1075,10 +1075,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // SMS fast path ("text me", "send me a text") — bypass AI completely
+    // Only triggers when SMS is the PRIMARY intent, not a compound request like "check weather and text me"
     const smsStart = Date.now();
     const smsTaskText = `${subject} ${body}`.toLowerCase();
     const wantsSms = /\b(text me|send me a text|sms me|shoot me a text|send a text|drop me a text)\b/i.test(smsTaskText);
-    if (wantsSms) {
+    const isCompoundRequest = /\b(and then|and also|after that|first|also|then|before|check|search|find|look up|research|book|weather|email|call)\b/i.test(smsTaskText.replace(/\b(text me|send me a text|sms me|shoot me a text)\b/gi, ''));
+    if (wantsSms && !isCompoundRequest) {
       try {
         const { data: smsProfile } = await getSupabaseClient()
           .from('profiles')
@@ -1107,8 +1109,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // Call fast path ("call me", "phone me") — immediate call, no scheduling
+    // Only triggers for simple "call me" requests, not scheduling ("call me back in 5 min") or compound requests
     const wantsCall = /\b(call me|phone me|give me a call|ring me)\b/i.test(smsTaskText) && !/\b(back|at|in\s+\d|later|tomorrow|tonight)\b/i.test(smsTaskText);
-    if (wantsCall) {
+    const isCompoundCallRequest = /\b(and then|and also|after that|first|also|then|before|check|search|find|look up|research|book|weather|email|text)\b/i.test(smsTaskText.replace(/\b(call me|phone me|give me a call|ring me)\b/gi, ''));
+    if (wantsCall && !isCompoundCallRequest) {
       try {
         const { data: callProfile } = await getSupabaseClient()
           .from('profiles')
