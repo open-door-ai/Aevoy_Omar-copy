@@ -1022,6 +1022,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const timeoutController = new AbortController();
   const masterTimer = setTimeout(() => timeoutController.abort(), MASTER_TIMEOUT_MS);
 
+  // Declare outside try so catch block can clean up browser on error
+  let executionEngine: ExecutionEngine | null = null;
+
   try {
     // 1. Check quota
     const { data: profile } = await getSupabaseClient()
@@ -2001,7 +2004,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
-    let executionEngine: ExecutionEngine | null = null;
 
     // Check if we need browser for any action (browser actions already stripped above if not needed)
     const needsBrowser = aiResponse.actions.some(a =>
@@ -3978,6 +3980,20 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     };
   } catch (error) {
     clearTimeout(masterTimer);
+
+    // CRITICAL: Clean up browser on error path — prevents resource leaks and concurrency counter drift
+    if (executionEngine) {
+      try {
+        await executionEngine.cleanup();
+        console.log(`[BROWSER] Execution engine cleaned up (error path)`);
+      } catch (cleanupErr) {
+        console.error(`[BROWSER] Cleanup failed in error path:`, cleanupErr);
+      }
+      try {
+        const { decrementBrowserTasks } = await import("../utils/concurrency.js");
+        decrementBrowserTasks();
+      } catch { /* non-critical */ }
+    }
 
     const isTimeout = timeoutController.signal.aborted || (Date.now() - startTime > MASTER_TIMEOUT_MS);
     const errorMessage = isTimeout

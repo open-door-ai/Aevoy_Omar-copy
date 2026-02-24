@@ -2718,8 +2718,11 @@ process.on("uncaughtException", (err) => {
   setTimeout(() => process.exit(1), 1000);
 });
 
-process.on("unhandledRejection", (reason) => {
+process.on("unhandledRejection", (reason, promise) => {
   console.error("[FATAL] Unhandled rejection:", reason);
+  if (reason instanceof Error && reason.stack) {
+    console.error("[FATAL] Stack:", reason.stack);
+  }
 });
 
 process.on("SIGTERM", () => {
