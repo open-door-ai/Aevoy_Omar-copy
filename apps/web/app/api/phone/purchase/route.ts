@@ -23,8 +23,8 @@ export async function POST(request: Request) {
     // 1. Purchase number from Twilio
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
-    // CRITICAL: Must point to Railway production, never localhost
-    const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
+    // CRITICAL: Must point to Railway production, never localhost — Twilio fetches these URLs
+    const agentUrl = process.env.TWILIO_CALLBACK_URL || "https://agent-production-1339.up.railway.app";
 
     const purchaseUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/IncomingPhoneNumbers.json`;
 

@@ -29,7 +29,13 @@ function normalizePhone(raw: string): string {
 }
 
 const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || '+17789008951';
-const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+
+// CRITICAL: This is the Twilio callback URL — Twilio's servers fetch TwiML from here.
+// It MUST be the public Railway production URL, never localhost or any internal URL.
+// Do NOT use AGENT_URL here — that env var may be set to localhost for local dev.
+const TWILIO_CALLBACK_BASE = process.env.TWILIO_CALLBACK_URL
+  || process.env.RAILWAY_PUBLIC_URL
+  || 'https://agent-production-1339.up.railway.app';
 
 function getTwilioCredentials() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -89,16 +95,20 @@ export async function POST(request: Request) {
       } catch { /* not logged in — cold demo */ }
     }
 
-    // Use Url callback to agent's demo-outbound endpoint for full ConversationRelay experience
-    // When the call connects, Twilio fetches TwiML from this URL (which does caller lookup + interview detection)
-    const demoUrl = new URL(`${AGENT_URL}/webhook/voice/demo-outbound`);
+    // Twilio callback: when the callee answers, Twilio POSTs to this URL to get TwiML
+    const demoUrl = new URL(`${TWILIO_CALLBACK_BASE}/webhook/voice/demo-outbound`);
     if (userId) demoUrl.searchParams.set('userId', userId);
+
+    console.log('[DEMO/CALL] Callback URL:', demoUrl.toString());
+    console.log('[DEMO/CALL] TWILIO_CALLBACK_BASE:', TWILIO_CALLBACK_BASE);
 
     const callBody = new URLSearchParams({
       To: phone,
       From: DEMO_PHONE_NUMBER,
       Url: demoUrl.toString(),
       Method: 'POST',
+      StatusCallback: `${TWILIO_CALLBACK_BASE}/webhook/voice/status`,
+      StatusCallbackEvent: 'initiated ringing answered completed',
     });
 
     const res = await fetch(

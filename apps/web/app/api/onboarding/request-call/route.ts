@@ -99,14 +99,21 @@ export async function POST(request: Request) {
       });
     }
 
-    // Initiate the call via Twilio
-    const agentUrl = process.env.AGENT_URL || "https://agent-production-1339.up.railway.app";
+    // Initiate the call via Twilio — use the demo-outbound endpoint (same as "Call Me Now")
+    // CRITICAL: Use hardcoded Railway URL for Twilio callback (Twilio can't reach localhost)
+    const callbackBase = process.env.TWILIO_CALLBACK_URL || 'https://agent-production-1339.up.railway.app';
+    const demoNumber = process.env.DEMO_PHONE_NUMBER || '+17789008951';
+    const callbackUrl = new URL(`${callbackBase}/webhook/voice/demo-outbound`);
+    callbackUrl.searchParams.set('userId', user.id);
+
+    console.log('[ONBOARDING/CALL] Callback URL:', callbackUrl.toString());
+
     const callBody = new URLSearchParams({
       To: phoneNumber,
-      From: twilioNumber,
-      Url: `${agentUrl}/webhook/interview-call/${user.id}`,
+      From: demoNumber,
+      Url: callbackUrl.toString(),
       Method: "POST",
-      StatusCallback: `${agentUrl}/webhook/call-status/${user.id}`,
+      StatusCallback: `${callbackBase}/webhook/voice/status`,
       StatusCallbackMethod: "POST",
     });
 
