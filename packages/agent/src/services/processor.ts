@@ -3176,7 +3176,16 @@ ${retryEnforcement}
 ${searchCompletionHint}
 ${domainWarning}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
-${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Wrap up: give your best answer from what you have and signal [TASK_COMPLETE].\n` : ''}
+${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Wrap up: give your best answer from what you have and signal [TASK_COMPLETE].\n` : ''}${
+  // Phone nudge: for sourcing/negotiation tasks at round 5+, remind AI to call businesses
+  currentIteration >= 5 && /\b(source|sourcing|negotiate|dealership|dealer|find me a|get me a)\b/i.test(subject) &&
+  /\b(car|vehicle|auto|house|apartment|service|provider)\b/i.test(subject) &&
+  !actionResults.some(r => ['call_external', 'call_user'].includes(r.action?.type || ''))
+    ? `\n📞 PHONE REMINDER: You have enough research data. NOW CALL the businesses you found!
+Use [ACTION:call_external("+phone_number", "your message")] to negotiate directly.
+A 2-minute phone call gets better results than 10 more rounds of browsing.\n`
+    : ''
+}
 MANDATORY THINKING STEP — You MUST reason before acting:
 [THINKING]
 1. What happened last round? (success/failure)
@@ -3196,6 +3205,7 @@ ACTION FORMAT REMINDER (you MUST use these exact tags — describing actions doe
 [ACTION:select("selector", "option value")] — Select dropdown option
 [ACTION:submit("form selector or button text")] — Submit a form
 [ACTION:read_email(5, 5)] — Check email (last N emails, past N minutes)
+[ACTION:call_external("+14165551234", "message")] — Call a business/dealer/provider
 [ACTION:wait(5000)] — Wait milliseconds
 
 CRITICAL: You must OUTPUT the [ACTION:...] tags in your response. Saying "I should fill the email field" does NOTHING.
@@ -4403,13 +4413,28 @@ async function executeAction(
       if (!executionEngine) {
         return { action, success: false, error: "Browser not available" };
       }
-      
+
       const url = action.params.url as string;
-      const result = await executionEngine.executeSteps([
+      let result = await executionEngine.executeSteps([
         { action: 'navigate', params: { url } },
         { action: 'extract', params: { selector: 'body' } }
       ]);
-      
+
+      // If page crashed (OOM on Railway), try to recover with fresh browser context
+      if (!result.success && result.error && /crash|not available|closed|disposed/i.test(result.error)) {
+        console.log(`[BROWSE] Page crashed on ${url} — attempting browser recovery`);
+        try {
+          await executionEngine.cleanup();
+          await executionEngine.initialize(userId);
+          result = await executionEngine.executeSteps([
+            { action: 'navigate', params: { url } },
+            { action: 'extract', params: { selector: 'body' } }
+          ]);
+        } catch (recoveryErr) {
+          console.error(`[BROWSE] Recovery failed:`, recoveryErr);
+        }
+      }
+
       return {
         action,
         success: result.success,
