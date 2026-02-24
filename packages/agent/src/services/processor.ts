@@ -2429,10 +2429,45 @@ DO NOT describe what you would do. OUTPUT THE [ACTION:...] TAGS NOW.`;
           // Fall through to execute the forced actions
           console.log(`[ITERATE] Force-prompt produced ${aiResponse.actions.length} actions, executing`);
         } else {
-          console.log('[ITERATE] No actions in this round, task complete');
-          isTaskComplete = true;
-          aiSignaledComplete = currentIteration > 1;
-          break;
+          // Before completing, check if the phone gate should trigger
+          const isPhoneTaskNoActions = /\b(negotiate|negotiat|dealership|dealer|call them|call the|get me a quote|haggle)\b/i.test(subject) ||
+            (/\b(source|sourcing|quote|appointment|book a)\b/i.test(subject) &&
+             /\b(car|vehicle|auto|toyota|honda|ford|bmw|camry|civic|corolla|suv|sedan|truck)\b/i.test(subject));
+          const hasPhoneActionNoActions = actionResults.some(r =>
+            ['call_user', 'call_external'].includes(r.action?.type || '')
+          );
+
+          if (isPhoneTaskNoActions && !hasPhoneActionNoActions && currentIteration < 8) {
+            console.log(`[PHONE-GATE] No-action exit blocked — sourcing task needs phone calls first`);
+            const phoneNudge = `You finished researching but didn't CALL anyone. For negotiation tasks, you MUST make phone calls.
+
+Search for dealership phone numbers and call them:
+[ACTION:search("${subject.replace(/"/g, '')} phone number")]
+
+Then call the best option:
+[ACTION:call_external("+14165551234", "Hi, I'm calling about the listing. Is it available? What's your best price?")]
+
+The user asked you to NEGOTIATE — that requires a phone call, not just web research.`;
+            const phoneForceResponse = await generateResponse(
+              memory, subject, phoneNudge, username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += phoneForceResponse.cost || 0;
+            totalTokens += phoneForceResponse.tokensUsed || 0;
+            aiResponse = phoneForceResponse;
+            aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+            if (aiResponse.actions.length === 0) {
+              console.log('[ITERATE] Phone nudge produced no actions, completing');
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Fall through to execute the phone actions
+          } else {
+            console.log('[ITERATE] No actions in this round, task complete');
+            isTaskComplete = true;
+            aiSignaledComplete = currentIteration > 1;
+            break;
+          }
         }
       }
 
