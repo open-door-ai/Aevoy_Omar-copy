@@ -635,6 +635,7 @@ NON-BROWSER ACTIONS:
 [ACTION:send_whatsapp("+1234567890", "Message text")] — Send a WhatsApp message. Use the user's whatsapp_phone from their profile if available.
 [ACTION:send_telegram("chat_id", "Message text")] — Send a Telegram message. Use the user's telegram_chat_id from their profile if available.
 [ACTION:call_user("Optional message to say")] — Call the user on their registered phone number. Use when they say "call me" or you need to reach them by voice.
+[ACTION:call_external("+1234567890", "Message to say")] — Call ANY phone number (businesses, dealers, restaurants, support lines). Use for sourcing, negotiations, appointments, price quotes.
 [ACTION:read_email()] — Check your @aevoy.com inbox for recent emails (verification codes, replies, etc.)
 [ACTION:read_email(5, 60)] — Check last 5 emails from the past 60 minutes
 [ACTION:remember("important fact")] — Save information to long-term memory
@@ -841,7 +842,8 @@ RESEARCH DEPTH — MULTI-SOURCE VERIFICATION (CRITICAL):
   Don't rely on search engine price snippets — they're often outdated.
 
 PHONE & NEGOTIATION INTELLIGENCE (USE YOUR PHONE):
-- You can MAKE PHONE CALLS using [ACTION:call_user("message")] and the user's phone.
+- You can CALL ANYONE using [ACTION:call_external("+1234567890", "message to say")] — businesses, dealers, restaurants, etc.
+- You can CALL THE USER using [ACTION:call_user("message")] to relay results or have a conversation.
 - For tasks involving businesses (car dealers, restaurants, service providers, vendors):
   * SEARCH for the business first to get their phone number
   * If the task involves negotiation, pricing, or booking → CALL the business directly
@@ -849,6 +851,7 @@ PHONE & NEGOTIATION INTELLIGENCE (USE YOUR PHONE):
   * After calling, [ACTION:remember("Called {{business}} — got quote of $X, contact: {{name}}")] to save the result
 - WHEN TO USE THE PHONE (decide proactively — the user shouldn't have to tell you):
   * "Find me a car" → search listings, then CALL top 3 dealers to negotiate
+    Example: [ACTION:call_external("+14165551234", "Hi, I'm calling about the 2023 Camry listed for $22,000. Is it still available? What's your best price?")]
   * "Get me an appointment" → find providers, then CALL to book (faster than web forms)
   * "Get a price quote" → browse for ballpark, then CALL for exact/negotiated price
   * "Source this product" → find suppliers, then CALL to discuss bulk pricing/availability
@@ -1019,7 +1022,8 @@ function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, 
 
 YOUR IDENTITY & TOOLS (what you can do RIGHT NOW):
 - EMAIL: ${agentEmail} — send/receive emails, sign up for services, get verification codes
-- OUTBOUND CALLS: [ACTION:call_user("message")] — call the user's registered phone number
+- CALL USER: [ACTION:call_user("message")] — call the user's registered phone number
+- CALL ANYONE: [ACTION:call_external("+number", "message")] — call ANY phone number (businesses, dealers, restaurants, etc.)
 - SMS: [ACTION:send_sms("+number", "text")] — send text messages to any phone number
 - WHATSAPP: [ACTION:send_whatsapp("+number", "text")] — send WhatsApp messages
 - TELEGRAM: [ACTION:send_telegram("chat_id", "text")] — send Telegram messages
@@ -1914,6 +1918,15 @@ function parseAction(type: string, paramsStr: string): Action | null {
       return { type: "call_user", params: { message } };
     }
 
+    case "call_external": {
+      // [ACTION:call_external("+14165551234", "message to say")]
+      const parts = paramsStr.match(/["']([^"']+)["']/g);
+      if (!parts || parts.length < 1) return null;
+      const to = parts[0].replace(/^["']|["']$/g, "");
+      const message = parts[1]?.replace(/^["']|["']$/g, "") || undefined;
+      return { type: "call_external", params: { to, message } };
+    }
+
     default:
       console.warn(`Unknown action type: ${type}`);
       return null;
@@ -2070,31 +2083,32 @@ export async function classifyTask(userMessage: string): Promise<{
 
   // ---- Task type classification (browser is already enabled by default) ----
 
-  if (text.includes("research") || text.includes("find") || text.includes("search") || text.includes("look up")) {
+  // Use word boundary regex to avoid substring false positives (e.g. "MacBook" → "book", "information" → "form")
+  if (/\b(research|find|search|look up|price|cost|compare|how much|cheapest|best rated|review)\b/.test(text)) {
     taskType = "research";
-  } else if (text.includes("book") || text.includes("reservation") || text.includes("schedule appointment")) {
+  } else if (/\bbook(?:ing)?\b/.test(text) || /\breservation\b/.test(text) || text.includes("schedule appointment")) {
     taskType = "booking";
-  } else if (text.includes("schedule") || text.includes("recurring") || text.includes("every day") || text.includes("every morning") || text.includes("daily task") || text.includes("weekly task") || text.includes("campaign") || text.includes("cron")) {
+  } else if (/\b(schedule|recurring|campaign|cron)\b/.test(text) || text.includes("every day") || text.includes("every morning") || text.includes("daily task") || text.includes("weekly task")) {
     taskType = "reminder";
     // Schedule/campaign tasks are pure DB operations — no browser needed.
     // Browser init on Railway often times out and wastes resources.
     needsBrowser = false;
-  } else if (text.includes("form") || text.includes("fill") || text.includes("apply") || text.includes("submit")) {
+  } else if (/\b(fill out|fill in|apply for|submit)\b/.test(text) || /\bform\b/.test(text)) {
     taskType = "form";
-  } else if (text.includes("buy") || text.includes("purchase") || text.includes("order") || text.includes("shop")) {
+  } else if (/\b(buy|purchase|order|shop)\b/.test(text)) {
     taskType = "shopping";
-  } else if (text.includes("email") || text.includes("send") || text.includes("write to")) {
+  } else if (/\b(email|send|write to)\b/.test(text)) {
     taskType = "email";
     // Keep needsBrowser = true so browser is available as FALLBACK if IMAP fails.
     // The missing-action gate in processor.ts injects read_email() first,
     // and direct result injection handles the fast path. If IMAP fails,
     // the browser is still available for the AI to try Gmail/Outlook via UI.
-  } else if (text.includes("remind") || text.includes("alert") || text.includes("notify")) {
+  } else if (/\b(remind|alert|notify)\b/.test(text)) {
     taskType = "reminder";
     needsBrowser = false;
-  } else if (text.includes("write") || text.includes("draft") || text.includes("compose")) {
+  } else if (/\b(write|draft|compose)\b/.test(text)) {
     taskType = "writing";
-  } else if (text.includes("call") || text.includes("phone") || text.includes("dial")) {
+  } else if (/\b(call|phone|dial)\b/.test(text)) {
     taskType = "voice";
   }
 

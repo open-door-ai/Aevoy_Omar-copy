@@ -2329,10 +2329,47 @@ Continue researching. Use [ACTION:search(...)] or [ACTION:browse(...)] to check 
               aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
               // Continue iterating — don't break
             } else {
-              // Mark for exit after this round's actions execute
-              isTaskComplete = true;
-              aiSignaledComplete = true;
-              console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+              // PHONE ENGAGEMENT GATE: For sourcing/negotiation/appointment tasks,
+              // nudge the AI to use phone calls if it hasn't tried calling yet
+              const isPhoneTask = /\b(source|sourcing|negotiate|negotiat|dealership|dealer|quote|appointment|book a|get me a|find me a)\b/i.test(subject) &&
+                /\b(car|vehicle|auto|house|apartment|service|provider|doctor|dentist|contractor|plumber|mechanic)\b/i.test(subject);
+              const hasPhoneAction = actionResults.some(r =>
+                ['call_user', 'call_external'].includes(r.action?.type || '')
+              );
+
+              if (isPhoneTask && !hasPhoneAction && currentIteration < 8) {
+                console.log(`[PHONE-GATE] Sourcing/negotiation task completed without phone calls — nudging AI to call`);
+                aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+                const phonePrompt = `Original request: ${subject}
+
+YOU FOUND GOOD OPTIONS — NOW MAKE IT HAPPEN.
+You've done the research, but for sourcing/negotiation tasks, a 2-minute phone call achieves more than 30 minutes of browsing.
+
+CALL THE TOP OPTIONS NOW:
+- Use [ACTION:call_external("phone_number", "message")] to call businesses/dealers you found
+  Example: [ACTION:call_external("+14165551234", "Hi, I'm calling about the 2023 Toyota Camry listed at $22,000. Is it still available? Can you do any better on the price?")]
+- Negotiate on the user's behalf — ask about pricing, availability, deals
+- If you found phone numbers in your research, CALL THEM
+- Compare what different sellers/providers tell you by phone
+- You can also use [ACTION:call_user("summary")] to call the USER and relay what you found
+
+Your research so far: ${aiResponse.content.substring(0, 500)}
+
+Make at least 1 phone call, then report back with what you negotiated.`;
+                const phoneResponse = await generateResponse(
+                  memory, subject, phonePrompt, username, "complex", userId, taskId, senderName
+                );
+                totalAiCost += phoneResponse.cost || 0;
+                totalTokens += phoneResponse.tokensUsed || 0;
+                aiResponse = phoneResponse;
+                aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+                // Continue iterating — don't break
+              } else {
+                // Mark for exit after this round's actions execute
+                isTaskComplete = true;
+                aiSignaledComplete = true;
+                console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+              }
             }
           }
         }
@@ -3726,7 +3763,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     } else if (actionResults.length > 0 && actionResults.some(r => r.success)) {
       // Actions succeeded but AI response was only action tags — build user-friendly summary
       const successActions = actionResults.filter(r => r.success);
-      const hasBrowserActions = successActions.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form'].includes(r.action.type));
+      const hasBrowserActions = successActions.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
 
       if (hasBrowserActions) {
         // For browser tasks: generate AI summary using search results + action data
@@ -3754,23 +3791,43 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           cleanResponse = `I worked on your request "${subject}". ${successActions.length} actions completed successfully.`;
         }
       } else {
-        const summaries = successActions.map(r => {
-          if (r.action.type === 'remember') return `Remembered: ${r.action.params.fact || r.action.params.text || 'your preference'}`;
-          if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
-          if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
-          if (r.action.type === 'generate_image') return `Image generated`;
-          if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
-          if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
-          if (r.action.type === 'post_tweet') return `Tweet posted`;
-          if (r.action.type === 'send_email') return `Email sent`;
-          if (r.action.type === 'send_sms') return `Text message sent`;
-          if (r.action.type === 'call_user') return `Calling you now`;
-          if (r.action.type === 'send_whatsapp') return `WhatsApp message sent`;
-          if (r.action.type === 'send_telegram') return `Telegram message sent`;
-          if (r.action.type === 'search' && r.result) return String(r.result).substring(0, 300);
-          return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
-        });
-        cleanResponse = `Done!\n\n${summaries.join('\n')}`;
+        // Check if there are search results that need AI summarization
+        const hasSearchResults = successActions.some(r => r.action.type === 'search' && r.result);
+        if (hasSearchResults) {
+          // Search-only task — generate AI summary instead of dumping raw HTML
+          try {
+            const searchResults = successActions
+              .filter(r => r.action.type === 'search' && r.result)
+              .map(r => String(r.result).substring(0, 500))
+              .join('\n---\n');
+            const { generateForcedDirectAnswer } = await import("./ai.js");
+            const summary = await generateForcedDirectAnswer(
+              `${subject} ${body || ''}`,
+              `Search results:\n${searchResults.substring(0, 2000)}\n\nUsing the data above, give the user a clear, specific answer. Include names, addresses, prices, URLs, or other concrete details.`,
+              username
+            );
+            cleanResponse = summary.content || `I searched for your request but couldn't extract a clear answer.`;
+          } catch {
+            cleanResponse = `I searched for your request but had trouble summarizing the results. Please try again.`;
+          }
+        } else {
+          const summaries = successActions.map(r => {
+            if (r.action.type === 'remember') return `Remembered: ${r.action.params.fact || r.action.params.text || 'your preference'}`;
+            if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
+            if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
+            if (r.action.type === 'generate_image') return `Image generated`;
+            if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
+            if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
+            if (r.action.type === 'post_tweet') return `Tweet posted`;
+            if (r.action.type === 'send_email') return `Email sent`;
+            if (r.action.type === 'send_sms') return `Text message sent`;
+            if (r.action.type === 'call_user') return `Calling you now`;
+            if (r.action.type === 'send_whatsapp') return `WhatsApp message sent`;
+            if (r.action.type === 'send_telegram') return `Telegram message sent`;
+            return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
+          });
+          cleanResponse = `Done!\n\n${summaries.join('\n')}`;
+        }
       }
     } else {
       cleanResponse = `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
@@ -5345,6 +5402,31 @@ async function executeAction(
       } catch (callErr) {
         console.error("[ACTION:call_user] Failed:", callErr);
         return { action, success: false, error: "Could not place the call right now" };
+      }
+    }
+
+    case "call_external": {
+      const { to: extNumber, message: extMsg } = action.params as { to?: string; message?: string };
+      if (!extNumber) {
+        return { action, success: false, error: "Missing 'to' phone number — specify who to call" };
+      }
+      try {
+        const { callExternal } = await import("./twilio.js");
+        const result = await callExternal(
+          userId,
+          extNumber,
+          extMsg || "Hi, I'm calling on behalf of my client to inquire about your listing.",
+          true
+        );
+        return {
+          action,
+          success: result.success,
+          result: result.success ? `Calling ${extNumber} — ${extMsg || 'inquiry'}` : undefined,
+          error: result.error,
+        };
+      } catch (callErr) {
+        console.error("[ACTION:call_external] Failed:", callErr);
+        return { action, success: false, error: "Could not place the external call right now" };
       }
     }
 
