@@ -1972,17 +1972,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // Quick "on it" confirmation for voice/SMS channels — tactile feedback
-    // Only for tasks going through the AI pipeline (fast paths already respond instantly)
-    if (!task.suppressEmail && (task.inputChannel === 'voice' || task.inputChannel === 'sms')) {
-      try {
-        const { email: recipEmail, phone: recipPhone } = await resolveRecipient(task.inputChannel, from, userId);
-        if (recipPhone) {
-          await sendSms({ userId, to: recipPhone, body: `[Aevoy] On it! Working on "${subject.substring(0, 50)}"...` });
-        }
-      } catch { /* non-critical */ }
-    }
-
     // Send progress update ONLY for browser tasks with a live view URL (useful info).
     // Skip for non-browser tasks to avoid inbox spam — user just gets the final result.
     if (executionEngine && !task.suppressEmail) {
