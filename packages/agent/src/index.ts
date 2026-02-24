@@ -783,7 +783,7 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+17789008951";
 const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an account (set on Railway)
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
-const DEMO_GREETING = "Hey there! I'm your Aevoy AI assistant. Imagine having a brilliant employee who never sleeps, handles your emails, schedules your calls, does research, creates documents, and manages your entire digital life. That's me. Go ahead, ask me anything, and I'll show you what I can do.";
+const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
 
 // ---- Demo Outbound Call TwiML ----
 // Called by Twilio when a demo outbound call connects (from "Call Me Now" button)
@@ -791,19 +791,68 @@ const DEMO_GREETING = "Hey there! I'm your Aevoy AI assistant. Imagine having a 
 app.post("/webhook/voice/demo-outbound", async (req, res) => {
   const callerNumber = req.body.To || ""; // For outbound calls, To = the user's phone
   const callSid = req.body.CallSid || "";
+  const queryUserId = req.query.userId as string || ""; // Passed from /api/demo/call for logged-in users
   const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
 
-  console.log(`[VOICE-DEMO] Outbound demo call connected to ${callerNumber?.slice(0, 4)}****`);
+  console.log(`[VOICE-DEMO] Outbound demo call connected to ${callerNumber?.slice(0, 4)}****, queryUserId=${queryUserId?.slice(0, 8) || "none"}`);
 
   try {
     const supabase = getSupabaseClient();
     const callerDigits = callerNumber.replace(/\D/g, "").slice(-10);
     let effectiveCallType = "demo";
-    let effectiveUserId = DEMO_USER_ID;
+    let effectiveUserId = queryUserId || DEMO_USER_ID;
     let effectiveGreeting = DEMO_GREETING;
 
-    // Check if the callee is a registered user who needs an interview
-    if (callerDigits.length >= 10) {
+    // Resolution priority: 1) queryUserId from web API, 2) phone number lookup, 3) cold demo
+    if (queryUserId) {
+      // Logged-in user — look up their profile directly by userId
+      try {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id, display_name, username, onboarding_interview_status")
+          .eq("id", queryUserId)
+          .single();
+
+        if (profile) {
+          const interviewDone = profile.onboarding_interview_status === "phone_call_completed"
+            || profile.onboarding_interview_status === "web_completed";
+          const name = profile.display_name || profile.username || "";
+
+          if (!interviewDone) {
+            effectiveCallType = "onboarding_setup";
+            effectiveUserId = profile.id;
+            effectiveGreeting = name
+              ? `Hey ${name}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
+              : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
+            console.log(`[VOICE-DEMO] Outbound matched logged-in user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
+          } else {
+            effectiveCallType = "demo";
+            effectiveUserId = profile.id;
+            effectiveGreeting = name
+              ? `Hey ${name}! Good to hear from you. What can I help you with?`
+              : `Hey there! Good to hear from you. What can I help you with?`;
+            console.log(`[VOICE-DEMO] Outbound user ${profile.id.slice(0, 8)} already onboarded, regular demo`);
+          }
+
+          // Auto-save the caller's phone number to their profile if not already set
+          if (callerDigits.length >= 10) {
+            const { data: currentProfile } = await supabase
+              .from("profiles")
+              .select("phone_number")
+              .eq("id", profile.id)
+              .single();
+            if (currentProfile && !currentProfile.phone_number) {
+              const normalized = callerNumber.startsWith("+") ? callerNumber : `+${callerNumber.replace(/\D/g, "")}`;
+              await supabase.from("profiles").update({ phone_number: normalized }).eq("id", profile.id);
+              console.log(`[VOICE-DEMO] Auto-saved phone number for user ${profile.id.slice(0, 8)}`);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.error("[VOICE-DEMO] Outbound userId lookup error:", e.message);
+      }
+    } else if (callerDigits.length >= 10) {
+      // No userId — fall back to phone number lookup
       try {
         const { data: matchedProfiles } = await supabase
           .from("profiles")
@@ -816,13 +865,13 @@ app.post("/webhook/voice/demo-outbound", async (req, res) => {
             || profile.onboarding_interview_status === "web_completed";
 
           if (!interviewDone) {
-            effectiveCallType = "demo_interview";
+            effectiveCallType = "onboarding_setup";
             effectiveUserId = profile.id;
             const name = profile.display_name || profile.username || "";
             effectiveGreeting = name
-              ? `Hey ${name}! Great to hear from you. I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`
-              : `Hey there! I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`;
-            console.log(`[VOICE-DEMO] Outbound matched registered user ${profile.id.slice(0, 8)} (${name}), starting interview`);
+              ? `Hey ${name}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
+              : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
+            console.log(`[VOICE-DEMO] Outbound matched registered user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
           } else {
             console.log(`[VOICE-DEMO] Outbound matched user ${profile.id.slice(0, 8)} but interview already done`);
           }
@@ -963,11 +1012,11 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         }
       }
 
-      const effectiveCallType = isRegisteredCaller ? "demo_interview" : "demo";
+      const effectiveCallType = isRegisteredCaller ? "onboarding_setup" : "demo";
       const effectiveUserId = isRegisteredCaller ? registeredUserId : DEMO_USER_ID;
       const interviewGreeting = registeredUserName
-        ? `Hey ${registeredUserName}! Great to hear from you. I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`
-        : `Hey there! I'd love to get to know you better so I can be the best assistant possible. Mind if I ask you a few quick questions?`;
+        ? `Hey ${registeredUserName}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
+        : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
       const effectiveGreeting = isRegisteredCaller ? interviewGreeting : DEMO_GREETING;
 
       console.log(`[VOICE-DEMO] ${effectiveCallType} call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);

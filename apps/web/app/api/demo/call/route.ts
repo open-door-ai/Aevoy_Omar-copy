@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 import { checkRateLimit, getClientIp } from '../_rate-limit';
 
 const PHONE_REGEX = /^\+?[1-9]\d{9,14}$/;
@@ -78,12 +79,25 @@ export async function POST(request: Request) {
 
     const phone = normalizePhone(rawPhone);
 
+    // Check if the caller is a logged-in user (for onboarding calls)
+    let userId = body.userId || '';
+    if (!userId) {
+      try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) userId = user.id;
+      } catch { /* not logged in — cold demo */ }
+    }
+
     // Use Url callback to agent's demo-outbound endpoint for full ConversationRelay experience
     // When the call connects, Twilio fetches TwiML from this URL (which does caller lookup + interview detection)
+    const demoUrl = new URL(`${AGENT_URL}/webhook/voice/demo-outbound`);
+    if (userId) demoUrl.searchParams.set('userId', userId);
+
     const callBody = new URLSearchParams({
       To: phone,
       From: DEMO_PHONE_NUMBER,
-      Url: `${AGENT_URL}/webhook/voice/demo-outbound`,
+      Url: demoUrl.toString(),
       Method: 'POST',
     });
 
