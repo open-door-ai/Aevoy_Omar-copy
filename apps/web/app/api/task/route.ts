@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
 
     if (useV2) {
       // Use new V2 processor
-      const response = await fetch(process.env.AGENT_URL + "/task/v2" || "", {
+      const response = await fetch((process.env.AGENT_URL || "https://agent-production-1339.up.railway.app") + "/task/v2", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(result);
     } else {
       // Use legacy processor
-      const response = await fetch(process.env.AGENT_URL + "/task" || "", {
+      const response = await fetch((process.env.AGENT_URL || "https://agent-production-1339.up.railway.app") + "/task", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
