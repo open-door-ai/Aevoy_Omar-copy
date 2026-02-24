@@ -609,6 +609,36 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const scheduleResult = await tryScheduleFastPath(userId, username, from, subject, body, task.inputChannel);
     if (scheduleResult) return scheduleResult;
 
+    // Fast path: Conversational greetings — respond immediately without full AI pipeline
+    const taskTextTrimmed = (subject || '').trim().toLowerCase();
+    const GREETING_PATTERNS = ['hi', 'hello', 'hey', 'yo', 'sup', 'what\'s up', 'whatsup', 'good morning', 'good evening', 'good afternoon', 'thanks', 'thank you', 'ok', 'okay', 'bye', 'goodbye', 'good night'];
+    const isGreeting = GREETING_PATTERNS.some(g => taskTextTrimmed === g || taskTextTrimmed.startsWith(g + ' ') || taskTextTrimmed.startsWith(g + '!') || taskTextTrimmed.startsWith(g + ','));
+    if (isGreeting && (!body || body.trim().length < 10)) {
+      console.log(`[FAST-PATH] Conversational greeting detected: "${taskTextTrimmed}"`);
+      const startMs = Date.now();
+      // Quick AI response via Groq (fast, cheap) instead of full pipeline
+      const { quickValidate } = await import("./ai.js");
+      const greetResult = await quickValidate(
+        `The user said: "${subject}"\nYou are their AI assistant named Aevoy. Respond naturally in 1-2 sentences. Be warm but brief. If they said "hi" or "hello", greet them back and ask what they need help with. If they said "thanks", acknowledge it warmly.`,
+        'You are Aevoy, a friendly AI assistant. Sound human, use contractions, be brief. No emojis unless the user used them.'
+      );
+      const greetResponse = greetResult?.result || "Hey! What can I help you with?";
+      // Send response back
+      if (!task.suppressEmail) {
+        await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: greetResponse });
+      }
+      // Save to DB
+      const greetTaskId = task.taskId || '';
+      if (greetTaskId) {
+        await getSupabaseClient().from('tasks').update({
+          status: 'completed', completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startMs, response_text: greetResponse,
+          action_count: 0, action_success_count: 0,
+        }).eq('id', greetTaskId);
+      }
+      return { taskId: greetTaskId, success: true, response: greetResponse, actions: [] };
+    }
+
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
     if (await requiresAutonomousPlanning(subject, body)) {
       console.log(`[AUTONOMOUS] Task requires autonomous workflow planning`);
