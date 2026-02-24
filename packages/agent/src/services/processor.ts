@@ -3856,6 +3856,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // AI narration leak — starts with planning text, not results
       const lc = text.trim().toLowerCase();
       if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking')) return true;
+      // Raw search/browse dump — contains search engine output or browser scraping fragments
+      if (lc.startsWith('search results for') || lc.startsWith('browsed:') || lc.includes('duckduckgo') ||
+          lc.includes('region: ') || lc.includes('scrolled down') || lc.includes('waited ')) return true;
       // Contains leaked action tag fragments (mismatched brackets, escaped quotes)
       if (/\\"\)?]\s*$/.test(text.trim()) || /\)\]\s*$/.test(text.trim())) return true;
       return false;
