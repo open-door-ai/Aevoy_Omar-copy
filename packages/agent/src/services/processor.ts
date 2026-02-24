@@ -2302,10 +2302,13 @@ For "${subject}":
               ['search', 'browse'].includes(r.action?.type || '')
             ).length;
 
+            // Track whether any gate rejected completion
+            let gateRejected = false;
+
+            // GATE 1: RESEARCH DEPTH — reject early completion with insufficient sources
             if (isResearchTask && totalSearchActions < 3 && currentIteration < 5) {
               console.log(`[RESEARCH-GATE] REJECTED: Only ${totalSearchActions} search/browse actions for research task. Minimum 3 required. Forcing deeper research.`);
               aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
-              // Inject research depth enforcement into next iteration prompt
               const depthPrompt = `Original request: ${subject} ${body}
 
 YOUR ANSWER WAS REJECTED — NOT ENOUGH RESEARCH.
@@ -2327,10 +2330,12 @@ Continue researching. Use [ACTION:search(...)] or [ACTION:browse(...)] to check 
               totalTokens += deeperResponse.tokensUsed || 0;
               aiResponse = deeperResponse;
               aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
-              // Continue iterating — don't break
-            } else {
-              // PHONE ENGAGEMENT GATE: For sourcing/negotiation/appointment tasks,
-              // nudge the AI to use phone calls if it hasn't tried calling yet
+              gateRejected = true;
+            }
+
+            // GATE 2: PHONE ENGAGEMENT — for sourcing/negotiation tasks, nudge phone calls
+            // This gate runs INDEPENDENTLY of the research gate
+            if (!gateRejected) {
               const isPhoneTask = /\b(source|sourcing|negotiate|negotiat|dealership|dealer|quote|appointment|book a|get me a|find me a)\b/i.test(subject) &&
                 /\b(car|vehicle|auto|house|apartment|service|provider|doctor|dentist|contractor|plumber|mechanic)\b/i.test(subject);
               const hasPhoneAction = actionResults.some(r =>
@@ -2355,6 +2360,9 @@ CALL THE TOP OPTIONS NOW:
 
 Your research so far: ${aiResponse.content.substring(0, 500)}
 
+Search for the dealership phone number first, then call them:
+[ACTION:search("${subject.replace(/"/g, '')} dealership phone number Toronto")]
+
 Make at least 1 phone call, then report back with what you negotiated.`;
                 const phoneResponse = await generateResponse(
                   memory, subject, phonePrompt, username, "complex", userId, taskId, senderName
@@ -2363,13 +2371,15 @@ Make at least 1 phone call, then report back with what you negotiated.`;
                 totalTokens += phoneResponse.tokensUsed || 0;
                 aiResponse = phoneResponse;
                 aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
-                // Continue iterating — don't break
-              } else {
-                // Mark for exit after this round's actions execute
-                isTaskComplete = true;
-                aiSignaledComplete = true;
-                console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
+                gateRejected = true;
               }
+            }
+
+            if (!gateRejected) {
+              // All gates passed — mark for exit after this round's actions execute
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              console.log(`[ITERATE] Executing ${aiResponse.actions.length} final action(s) before completing`);
             }
           }
         }
