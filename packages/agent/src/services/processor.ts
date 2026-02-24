@@ -3380,10 +3380,10 @@ Then include your actions using the EXACT format below. OBSERVE → THINK → AC
 ACTION FORMAT REMINDER (you MUST use these exact tags — describing actions does NOT execute them):
 [ACTION:browse("https://example.com")] — Navigate to a URL
 [ACTION:search("your query")] — Web search
-[ACTION:click("button text or CSS selector")] — Click an element
-[ACTION:fill("field name or CSS selector", "value to type")] — Type into a form field
-[ACTION:select("selector", "option value")] — Select dropdown option
-[ACTION:submit("form selector or button text")] — Submit a form
+[ACTION:click("exact visible button text")] — Click by VISIBLE TEXT only. Use text from CLICKABLE ELEMENTS list. NEVER use CSS selectors.
+[ACTION:fill("selector_from_FORM_FIELDS", "value")] — Fill form field using selector from FORM FIELDS list above
+[ACTION:select("selector_from_FORM_FIELDS", "option text")] — Select dropdown option (for <select> elements)
+[ACTION:submit("Submit button text")] — Submit a form
 [ACTION:read_email(5, 5)] — Check email (last N emails, past N minutes)
 [ACTION:call_external("+14165551234", "message")] — Call a business/dealer/provider
 [ACTION:wait(5000)] — Wait milliseconds
