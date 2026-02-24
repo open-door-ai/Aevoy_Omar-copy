@@ -1,58 +1,13 @@
-import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import crypto from "crypto";
-import { checkRateLimit, getClientIp } from "../../_rate-limit";
 
-function hashVoicePin(pin: string, userId: string): string {
-  return crypto.createHash('sha256').update(`${userId}:${pin}`).digest('hex');
-}
-
-export async function POST(request: Request) {
-  // Rate limit: 5 PIN updates per 15 minutes per IP
-  const ip = getClientIp(request);
-  if (!checkRateLimit('voice-pin', ip, 5, 15 * 60 * 1000)) {
-    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
-  }
-
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  try {
-    const body = await request.json();
-    const newPin = body.pin?.toString();
-
-    if (!newPin || !/^\d{4,6}$/.test(newPin)) {
-      return NextResponse.json(
-        { error: "PIN must be 4-6 digits" },
-        { status: 400 }
-      );
-    }
-
-    // Hash PIN before storing (SHA-256 with userId salt)
-    const hashedPin = hashVoicePin(newPin, user.id);
-
-    // Update PIN and reset lockout
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        voice_pin: hashedPin,
-        voice_pin_attempts: 0,
-        voice_pin_locked_until: null
-      })
-      .eq("id", user.id);
-
-    if (error) throw error;
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("[SETTINGS] PIN update error:", error);
-    return NextResponse.json(
-      { error: "Failed to update PIN" },
-      { status: 500 }
-    );
-  }
+/**
+ * DEPRECATED: This endpoint used the old voice_pin column (SHA-256 hash).
+ * All PIN management now goes through /api/settings/unified-pin which uses bcrypt.
+ * This redirect prevents old frontend code from silently writing to dead columns.
+ */
+export async function POST() {
+  return NextResponse.json(
+    { error: "This endpoint is deprecated. Use /api/settings/unified-pin instead." },
+    { status: 410 }
+  );
 }

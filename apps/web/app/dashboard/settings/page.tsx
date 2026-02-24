@@ -718,8 +718,9 @@ export default function SettingsPage() {
     setEmailPinStatus(null);
 
     try {
-      const res = await fetch("/api/settings/email-pin", {
-        method: "POST",
+      // Use unified PIN endpoint — replaces old email-pin and voice-pin endpoints
+      const res = await fetch("/api/settings/unified-pin", {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin: emailPin }),
       });

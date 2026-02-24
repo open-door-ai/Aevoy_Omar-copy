@@ -133,15 +133,8 @@ async function runProactiveChecks(): Promise<void> {
     // Non-critical
   }
 
-  // Cleanup expired email PIN sessions
-  try {
-    const { data: cleanupResult } = await getSupabaseClient().rpc('cleanup_expired_email_pin_sessions');
-    if (cleanupResult && cleanupResult > 0) {
-      console.log(`[SCHEDULER] Cleaned up ${cleanupResult} expired email PIN sessions`);
-    }
-  } catch {
-    // Non-critical
-  }
+  // Old email_pin_sessions cleanup REMOVED — that table/RPC is from the
+  // deprecated v15 PIN system. All PIN auth now uses unified_pin_hash (v36).
 
   // SELF-LEARNING: Run cross-task pattern detection (daily, checked hourly)
   try {
