@@ -1186,6 +1186,34 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       return earlyScheduleResult;
     }
 
+    // Conversational greeting fast path — instant response for hi/hello/thanks
+    const greetTextTrimmed = (subject || '').trim().toLowerCase();
+    const GREET_PATTERNS = ['hi', 'hello', 'hey', 'yo', 'sup', 'what\'s up', 'whatsup', 'good morning', 'good evening', 'good afternoon', 'thanks', 'thank you', 'ok', 'okay', 'bye', 'goodbye', 'good night'];
+    const isGreetingTask = GREET_PATTERNS.some(g => greetTextTrimmed === g || greetTextTrimmed.startsWith(g + ' ') || greetTextTrimmed.startsWith(g + '!') || greetTextTrimmed.startsWith(g + ','));
+    if (isGreetingTask && (!body || body.trim().length < 10)) {
+      console.log(`[FAST-PATH] Conversational greeting detected: "${greetTextTrimmed}"`);
+      try {
+        const { quickValidate } = await import("./ai.js");
+        const greetResult = await quickValidate(
+          `The user said: "${subject}"\nYou are their AI assistant named Aevoy. Respond naturally in 1-2 sentences. Be warm but brief. If they said "hi" or "hello", greet them back and ask what they need help with. If they said "thanks", acknowledge it warmly.`,
+          'You are Aevoy, a friendly AI assistant. Sound human, use contractions, be brief. No emojis unless the user used them.'
+        );
+        const greetResponse = greetResult?.result || "Hey! What can I help you with?";
+        if (!task.suppressEmail) {
+          await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: greetResponse });
+        }
+        await getSupabaseClient().from('tasks').update({
+          status: 'completed', completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime, response_text: greetResponse,
+          action_count: 0, action_success_count: 0,
+        }).eq('id', taskId);
+        clearTimeout(masterTimer);
+        return { taskId, success: true, response: greetResponse, actions: [] };
+      } catch (greetErr) {
+        console.log(`[FAST-PATH] Greeting fast path failed, falling through:`, greetErr);
+      }
+    }
+
     // SMS fast path ("text me", "send me a text") — bypass AI completely
     // Only triggers when SMS is the PRIMARY intent, not a compound request like "check weather and text me"
     const smsStart = Date.now();
