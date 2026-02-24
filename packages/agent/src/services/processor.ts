@@ -1863,8 +1863,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           aiResponse.content = (aiResponse.content || '') + `\n[ACTION:call_user("${callMsg.substring(0, 50)}")] [TASK_COMPLETE]`;
           console.log(`[MISSING-ACTION] Injected call_user`);
         } else if (pattern.actionType === 'send_email') {
-          // Look up user's email and inject send_email
-          const emailTo = from.includes('@') ? from : '';
+          // Look up user's email — "from" may be phone number for voice/SMS channels
+          let emailTo = from.includes('@') ? from : '';
+          if (!emailTo) {
+            const { data: emailProfile } = await getSupabaseClient()
+              .from('profiles').select('email').eq('id', userId).single();
+            emailTo = emailProfile?.email || '';
+          }
           if (emailTo) {
             const emailSubjectGuess = taskTextLower.includes('report') ? 'Your Report' : `Re: ${subject}`;
             const emailBodyContent = aiResponse.content
