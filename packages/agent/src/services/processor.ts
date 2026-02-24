@@ -202,6 +202,9 @@ async function tryEmailSendFastPath(
     /(?:send|forward|reply)\s+to\s+([^\s,]+@[^\s,]+)/i,             // "send to X@Y"
   ];
 
+  // "email me" patterns (no explicit address — resolve from profile)
+  const EMAIL_ME_PATTERN = /\b(email me|send me an email|email me a|send me a report|email me the)\b/i;
+
   let matched = false;
   const recipients: string[] = [];
 
@@ -212,6 +215,23 @@ async function tryEmailSendFastPath(
       const addr = m[1].replace(/[.,;]+$/, '');
       if (!recipients.includes(addr)) recipients.push(addr);
       break;
+    }
+  }
+
+  // If no explicit address but user said "email me", resolve from profile
+  if (!matched && EMAIL_ME_PATTERN.test(taskText)) {
+    const fromEmail = from.includes('@') ? from : null;
+    if (fromEmail) {
+      matched = true;
+      recipients.push(fromEmail);
+    } else {
+      // Look up user's email from profile (voice/SMS channel)
+      const { data: emailLookup } = await getSupabaseClient()
+        .from('profiles').select('email').eq('id', userId).single();
+      if (emailLookup?.email) {
+        matched = true;
+        recipients.push(emailLookup.email);
+      }
     }
   }
 
