@@ -373,6 +373,36 @@ function extractUsername(toAddr: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// PIN reply helpers (Resend email)
+// ---------------------------------------------------------------------------
+
+async function sendPinReply(toEmail: string, username: string, originalSubject: string, message: string): Promise<void> {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) {
+    console.log(`[INBOX-POLLER] No RESEND_API_KEY — cannot send PIN reply for ${username}`);
+    return;
+  }
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `${username}@aevoy.com`,
+        to: toEmail,
+        subject: `Re: ${originalSubject}`,
+        text: `${message}\n\n— ${username}'s AI assistant`,
+      }),
+    });
+  } catch (err) {
+    console.error("[INBOX-POLLER] Failed to send PIN reply:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Route email to the correct processor
 // ---------------------------------------------------------------------------
 
@@ -456,13 +486,53 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     return;
   }
 
-  // Validate sender matches registered email
+  // Check if sender is a recognized email
   const senderEmail = email.from.toLowerCase().trim();
-  if (user.email && senderEmail !== user.email.toLowerCase().trim()) {
-    console.log(
-      `[INBOX-POLLER] Sender mismatch for ${username}: ${maskEmail(senderEmail)} vs ${maskEmail(user.email)}`
-    );
-    return;
+  const isKnownSender = user.email && senderEmail === user.email.toLowerCase().trim();
+
+  if (!isKnownSender) {
+    // Unknown sender — check for PIN authentication
+    const { verifyUnifiedPin, hasPin: userHasPin, getRemainingAttempts } = await import("../utils/pin-auth.js");
+    const hasPinSet = await userHasPin(user.id);
+
+    if (!hasPinSet) {
+      // No PIN set — tell sender to contact the user
+      await sendPinReply(email.from, username, email.subject,
+        `This email address only accepts emails from ${username}'s registered email. To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aevoy settings.`);
+      console.log(`[INBOX-POLLER] Unknown sender ${maskEmail(senderEmail)} for ${username}, no PIN set — sent setup instructions`);
+      return;
+    }
+
+    // Look for 4-6 digit PIN in subject or body
+    const pinMatch = email.subject.match(/\b(\d{4,6})\b/) || email.body.match(/\b(\d{4,6})\b/);
+
+    if (!pinMatch) {
+      // No PIN found — reply asking for PIN
+      await sendPinReply(email.from, username, email.subject,
+        `Hi! This is ${username}'s AI assistant at Aevoy.\n\nI received your email, but I don't recognize your email address. To verify your identity, please reply with your 4-6 digit security PIN in the subject line or body of your email.\n\nIf you don't have a PIN, please ask ${username} to share it with you.`);
+      console.log(`[INBOX-POLLER] Sent PIN request to ${maskEmail(senderEmail)} for ${username}`);
+      return;
+    }
+
+    const pinResult = await verifyUnifiedPin(user.id, pinMatch[1]);
+
+    if (pinResult === "locked") {
+      await sendPinReply(email.from, username, email.subject,
+        "Too many incorrect PIN attempts. Your account has been temporarily locked. Please try again in about an hour.");
+      return;
+    }
+
+    if (pinResult !== "valid") {
+      const remaining = await getRemainingAttempts(user.id);
+      await sendPinReply(email.from, username, email.subject,
+        `Incorrect PIN. You have ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining. Please reply with the correct 4-6 digit security PIN in the subject or body.`);
+      return;
+    }
+
+    // PIN valid — strip PIN from subject/body before processing
+    email.subject = email.subject.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || email.subject;
+    email.body = email.body.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || email.body;
+    console.log(`[INBOX-POLLER] PIN verified for ${maskEmail(senderEmail)} → ${username}`);
   }
 
   // Detect email type and route

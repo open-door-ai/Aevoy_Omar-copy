@@ -1065,25 +1065,63 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     const resolved = await resolveUser(callerNumber);
 
     if (!resolved) {
-      // ---- Not demo, not recognized — reject ----
-      console.log(`[VOICE] Unknown caller: ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
+      // ---- Not demo, not recognized — look up who owns the called number ----
+      const calledUser = await resolveUser(twilioNumber);
 
-      // Fire-and-forget (don't await) - saves ~200ms
+      if (!calledUser) {
+        // Nobody owns this number
+        console.log(`[VOICE] Unknown caller ${maskPhone(callerNumber)} to unowned number ${maskPhone(twilioNumber)} (${Date.now() - startTime}ms)`);
+        supabase.from("call_history").insert({
+          call_sid: callSid, direction: "inbound", from_number: callerNumber,
+          to_number: twilioNumber, call_type: "unknown", pin_required: false, pin_success: false
+        }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Sorry, this number is not in service. Visit aevoy dot com for more information.</Say>
+  <Hangup/>
+</Response>`);
+      }
+
+      // Found the user who owns this number — check if PIN is required
+      const { hasPin: userHasPinCheck } = await import("./utils/pin-auth.js");
+      const hasPinSet = await userHasPinCheck(calledUser.userId);
+      voice = await getUserVoice(calledUser.userId);
+      const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+
+      console.log(`[VOICE] Unknown caller ${maskPhone(callerNumber)} to ${calledUser.username}'s number, PIN required: ${hasPinSet} (${Date.now() - startTime}ms)`);
+
       supabase.from("call_history").insert({
-        call_sid: callSid,
-        direction: "inbound",
-        from_number: callerNumber,
-        to_number: twilioNumber,
-        call_type: "unknown",
-        pin_required: true,
-        pin_success: false
+        call_sid: callSid, direction: "inbound", from_number: callerNumber,
+        to_number: twilioNumber, call_type: hasPinSet ? "pin_challenge" : "receptionist",
+        user_id: calledUser.userId, pin_required: hasPinSet, pin_success: null
       }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
+
+      if (hasPinSet) {
+        // Prompt for PIN via DTMF keypad
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Welcome to ${escapeXml(calledUser.username)}'s assistant. I don't recognize your phone number. Please enter your security PIN using your keypad, then press pound.</Say>
+  <Gather action="${agentUrl}/webhook/voice/pin-verify" numDigits="6" timeout="15" finishOnKey="#">
+    <Say voice="${voice}">Enter your 4 to 6 digit PIN now.</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't receive a PIN. Goodbye.</Say>
+  <Hangup/>
+</Response>`);
+      }
+
+      // No PIN set — receptionist mode (take a message)
+      const processUrl = `${agentUrl}/webhook/voice/message/${calledUser.userId}?caller=${encodeURIComponent(callerNumber)}`;
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">Sorry, I don't recognize this phone number. Please sign up at aevoy dot com first, or call from your registered number.</Say>
-  <Hangup/>
+  <Say voice="${voice}">Hello! You've reached ${escapeXml(calledUser.username)}'s assistant. They're not available right now, but I can take a message.</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto"
+    action="${processUrl}" method="POST">
+    <Say voice="${voice}">Please leave your message. What would you like me to tell ${escapeXml(calledUser.username)}?</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't hear a message. I'll let ${escapeXml(calledUser.username)} know you called. Goodbye!</Say>
 </Response>`);
     }
 
@@ -1270,11 +1308,51 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
   const voice = await getUserVoice(userId);
+  const callerNum = req.body.From || "";
 
-  console.log(`[TWILIO] Incoming voice call for user ${maskUserId(userId)}`);
+  console.log(`[TWILIO] Incoming voice call for user ${maskUserId(userId)} from ${maskPhone(callerNum)}`);
 
   try {
     res.type("text/xml");
+
+    // Check if caller is the registered phone owner
+    const { isRegisteredPhone: isCallerOwner, hasPin: callerHasPin } = await import("./utils/pin-auth.js");
+    const callerIsOwner = callerNum ? await isCallerOwner(userId, callerNum) : false;
+
+    if (!callerIsOwner && callerNum) {
+      // Unknown caller — check if user has PIN
+      const hasPinSet = await callerHasPin(userId);
+      const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+
+      if (hasPinSet) {
+        // Prompt for PIN via DTMF
+        console.log(`[TWILIO] Unknown caller to ${maskUserId(userId)}'s number — PIN challenge`);
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">I don't recognize your phone number. Please enter your security PIN using your keypad, then press pound.</Say>
+  <Gather action="${agentUrl}/webhook/voice/pin-verify" numDigits="6" timeout="15" finishOnKey="#">
+    <Say voice="${voice}">Enter your 4 to 6 digit PIN now.</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't receive a PIN. Goodbye.</Say>
+  <Hangup/>
+</Response>`);
+      }
+
+      // No PIN set — receptionist mode
+      const { data: ownerProfile } = await getSupabaseClient().from("profiles").select("username").eq("id", userId).single();
+      const userName = ownerProfile?.username || "the user";
+      const processUrl = `${agentUrl}/webhook/voice/message/${userId}?caller=${encodeURIComponent(callerNum)}`;
+      console.log(`[TWILIO] Unknown caller to ${maskUserId(userId)}'s number — receptionist mode`);
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Hello! You've reached ${escapeXml(userName)}'s assistant. They're not available right now, but I can take a message.</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto"
+    action="${processUrl}" method="POST">
+    <Say voice="${voice}">Please leave your message. What would you like me to tell ${escapeXml(userName)}?</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't hear a message. Goodbye!</Say>
+</Response>`);
+    }
 
     if (USE_CONVERSATION_RELAY) {
       const wsUrl = `${(process.env.AGENT_URL || "http://localhost:3001").replace("http", "ws")}/ws/voice`;
@@ -1549,13 +1627,76 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     const resolved = await resolveUser(senderNumber);
 
     if (!resolved) {
-      // Unknown sender
-      console.log(`[SMS] Unknown sender: ${senderNumber}`);
-      res.type("text/xml");
-      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+      // Unknown sender — look up who owns the Aevoy number being texted
+      const recipientUser = await resolveUser(twilioNumber);
+
+      if (!recipientUser) {
+        console.log(`[SMS] Unknown sender ${maskPhone(senderNumber)} to unowned number ${maskPhone(twilioNumber)}`);
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Message>Sorry, I don't recognize this number. Sign up at aevoy.com first 👋</Message>
+  <Message>Sorry, this number is not in service. Visit aevoy.com for more information.</Message>
 </Response>`);
+      }
+
+      // Found the user — check if PIN is required
+      const { hasPin: smsHasPin, verifyUnifiedPin: smsVerifyPin, getRemainingAttempts: smsGetRemaining } = await import("./utils/pin-auth.js");
+      const hasPinSet = await smsHasPin(recipientUser.userId);
+
+      if (!hasPinSet) {
+        // No PIN — process message directly for the user
+        console.log(`[SMS] No PIN set for ${recipientUser.username} — processing message from unknown sender`);
+        const { processTask: smsProcessTask } = await import("./services/processor.js");
+        await smsProcessTask({
+          userId: recipientUser.userId, username: recipientUser.username,
+          from: senderNumber, subject: "[SMS]", body: message, inputChannel: "sms"
+        });
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+      }
+
+      // PIN required — look for 4-6 digit PIN in message body
+      const pinMatch = message.match(/\b(\d{4,6})\b/);
+
+      if (!pinMatch) {
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Hi! This is ${recipientUser.username}'s AI assistant. I don't recognize your number. Please include your 4-6 digit security PIN in your message to verify your identity.</Message>
+</Response>`);
+      }
+
+      const pinResult = await smsVerifyPin(recipientUser.userId, pinMatch[1]);
+
+      if (pinResult === "locked") {
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Too many incorrect PIN attempts. Please try again in about an hour.</Message>
+</Response>`);
+      }
+
+      if (pinResult !== "valid") {
+        const remaining = await smsGetRemaining(recipientUser.userId);
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Incorrect PIN. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining. Include your correct PIN and resend.</Message>
+</Response>`);
+      }
+
+      // PIN verified — strip PIN and process
+      const cleanMessage = message.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim();
+      console.log(`[SMS] PIN verified for unknown sender ${maskPhone(senderNumber)} -> ${recipientUser.username}`);
+
+      const { processTask: smsProcessTask } = await import("./services/processor.js");
+      await smsProcessTask({
+        userId: recipientUser.userId, username: recipientUser.username,
+        from: senderNumber, subject: "[SMS]", body: cleanMessage || message, inputChannel: "sms"
+      });
+
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
     }
 
     const userId = resolved.userId;
@@ -1654,14 +1795,34 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
   try {
     const supabase = getSupabaseClient();
 
-    // Resolve user identity (checks both twilio_number and phone_number)
-    const resolved = await resolveUser(callerNumber);
+    // Resolve user identity — try caller first, then the called number (To)
+    let resolved = await resolveUser(callerNumber);
+
+    if (!resolved) {
+      // Unknown caller — resolve by the Aevoy number being called (To)
+      const calledNumber = req.body.To || req.body.Called || "";
+      if (calledNumber) {
+        resolved = await resolveUser(calledNumber);
+      }
+    }
+
+    if (!resolved) {
+      // Also check ownerId query parameter (backup from Gather URL)
+      const ownerId = (req.query as Record<string, string>).ownerId;
+      if (ownerId) {
+        const { data: ownerProfile } = await supabase
+          .from("profiles").select("id, username, email").eq("id", ownerId).single();
+        if (ownerProfile) {
+          resolved = { userId: ownerProfile.id, username: ownerProfile.username, email: ownerProfile.email, phone: null };
+        }
+      }
+    }
 
     if (!resolved) {
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="${voice}">No account found for this phone number. Please sign up at aevoy dot com.</Say>
+  <Say voice="${voice}">No account found. Please sign up at aevoy dot com.</Say>
   <Hangup/>
 </Response>`);
     }
@@ -1758,10 +1919,49 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
 
-  console.log(`[VOICE-PREMIUM] Call to user ${userId.slice(0, 8)} from ${from}`);
+  console.log(`[VOICE-PREMIUM] Call to user ${userId.slice(0, 8)} from ${maskPhone(from)}`);
 
   try {
     const supabase = getSupabaseClient();
+
+    // Check if caller is the registered phone owner
+    const { isRegisteredPhone: isPremiumVoiceOwner, hasPin: premiumVoiceHasPin } = await import("./utils/pin-auth.js");
+    const callerIsOwner = from ? await isPremiumVoiceOwner(userId, from) : false;
+
+    if (!callerIsOwner && from) {
+      const hasPinSet = await premiumVoiceHasPin(userId);
+      const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+
+      if (hasPinSet) {
+        console.log(`[VOICE-PREMIUM] Unknown caller ${maskPhone(from)} — PIN challenge`);
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">I don't recognize your phone number. Please enter your security PIN using your keypad, then press pound.</Say>
+  <Gather action="${agentUrl}/webhook/voice/pin-verify" numDigits="6" timeout="15" finishOnKey="#">
+    <Say voice="${voice}">Enter your 4 to 6 digit PIN now.</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't receive a PIN. Goodbye.</Say>
+  <Hangup/>
+</Response>`);
+      }
+
+      // No PIN — receptionist mode
+      const { data: ownerProfile } = await supabase.from("profiles").select("username").eq("id", userId).single();
+      const userName = ownerProfile?.username || "the user";
+      const processUrl = `${agentUrl}/webhook/voice/message/${userId}?caller=${encodeURIComponent(from)}`;
+      console.log(`[VOICE-PREMIUM] Unknown caller ${maskPhone(from)} — receptionist mode`);
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="${voice}">Hello! You've reached ${escapeXml(userName)}'s assistant. They're not available right now, but I can take a message.</Say>
+  <Gather input="speech" timeout="15" speechTimeout="auto"
+    action="${processUrl}" method="POST">
+    <Say voice="${voice}">Please leave your message.</Say>
+  </Gather>
+  <Say voice="${voice}">I didn't hear a message. Goodbye!</Say>
+</Response>`);
+    }
 
     // Check daily call limit (50/day per user)
     if (!(await checkDailyCallLimit(userId))) {
@@ -1848,13 +2048,12 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
 app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.params.userId;
   const from = req.body.From || "";
-  const message = req.body.Body || "";
+  let smsBody = req.body.Body || "";
   const messageSid = req.body.MessageSid || "";
 
-  console.log(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${from}: "${message.slice(0, 50)}..."`);
+  console.log(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${maskPhone(from)}: "${smsBody.slice(0, 50)}..."`);
 
   try {
-    // Process as task
     const supabase = getSupabaseClient();
     const { data: profile } = await supabase
       .from("profiles")
@@ -1862,13 +2061,58 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
       .eq("id", userId)
       .single();
 
+    // Check if sender is the registered phone owner
+    const { isRegisteredPhone: isPremiumOwner, hasPin: premiumHasPin, verifyUnifiedPin: premiumVerifyPin, getRemainingAttempts: premiumGetRemaining } = await import("./utils/pin-auth.js");
+    const callerIsOwner = from ? await isPremiumOwner(userId, from) : false;
+
+    if (!callerIsOwner && from) {
+      const hasPinSet = await premiumHasPin(userId);
+
+      if (hasPinSet) {
+        // PIN required — look for 4-6 digit PIN in message
+        const pinMatch = smsBody.match(/\b(\d{4,6})\b/);
+
+        if (!pinMatch) {
+          res.type("text/xml");
+          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>I don't recognize this number. Include your 4-6 digit security PIN in the message to verify your identity.</Message>
+</Response>`);
+        }
+
+        const pinResult = await premiumVerifyPin(userId, pinMatch[1]);
+
+        if (pinResult === "locked") {
+          res.type("text/xml");
+          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Too many incorrect PIN attempts. Please try again in about an hour.</Message>
+</Response>`);
+        }
+
+        if (pinResult !== "valid") {
+          const remaining = await premiumGetRemaining(userId);
+          res.type("text/xml");
+          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Incorrect PIN. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.</Message>
+</Response>`);
+        }
+
+        // Strip PIN from message
+        smsBody = smsBody.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || smsBody;
+        console.log(`[SMS-PREMIUM] PIN verified for ${maskPhone(from)} -> user ${userId.slice(0, 8)}`);
+      }
+    }
+
+    // Process as task
     const { processTask } = await import("./services/processor.js");
     await processTask({
       userId,
       username: profile?.username || "user",
       from,
       subject: "[SMS Premium]",
-      body: message,
+      body: smsBody,
       inputChannel: "sms"
     });
 
