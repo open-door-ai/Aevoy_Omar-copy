@@ -3616,7 +3616,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       return false;
     };
     let cleanResponse: string;
+    // For conversational messages with no actions, don't apply garbage detection —
+    // short greetings like "Hey!" are valid responses, not garbage
+    const isConversationalSubject = ['hi', 'hello', 'thanks', 'thank you', 'ok', 'hey', 'good morning', 'good evening', 'sup', 'yo', 'what\'s up', 'how are you'].some(
+      g => subject.toLowerCase().trim().startsWith(g) || (body || '').toLowerCase().trim().startsWith(g)
+    );
     if (rawCleanResponse && !isGarbageResponse(rawCleanResponse)) {
+      cleanResponse = rawCleanResponse;
+    } else if (isConversationalSubject && rawCleanResponse && rawCleanResponse.length > 2) {
+      // Short conversational response — valid, not garbage
       cleanResponse = rawCleanResponse;
     } else if (actionResults.length > 0 && actionResults.some(r => r.success)) {
       // Actions succeeded but AI response was only action tags — build user-friendly summary
