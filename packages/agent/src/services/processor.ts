@@ -1972,6 +1972,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // Quick "on it" confirmation for voice/SMS channels — tactile feedback
+    // Only for tasks going through the AI pipeline (fast paths already respond instantly)
+    if (!task.suppressEmail && (task.inputChannel === 'voice' || task.inputChannel === 'sms')) {
+      try {
+        const { email: recipEmail, phone: recipPhone } = await resolveRecipient(task.inputChannel, from, userId);
+        if (recipPhone) {
+          await sendSms({ userId, to: recipPhone, body: `[Aevoy] On it! Working on "${subject.substring(0, 50)}"...` });
+        }
+      } catch { /* non-critical */ }
+    }
+
     // Send progress update ONLY for browser tasks with a live view URL (useful info).
     // Skip for non-browser tasks to avoid inbox spam — user just gets the final result.
     if (executionEngine && !task.suppressEmail) {
@@ -3319,6 +3330,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
           if (r.action.type === 'post_tweet') return `Tweet posted`;
           if (r.action.type === 'send_email') return `Email sent`;
+          if (r.action.type === 'send_sms') return `Text message sent`;
+          if (r.action.type === 'call_user') return `Calling you now`;
+          if (r.action.type === 'send_whatsapp') return `WhatsApp message sent`;
+          if (r.action.type === 'send_telegram') return `Telegram message sent`;
           if (r.action.type === 'search' && r.result) return String(r.result).substring(0, 300);
           return r.result ? String(r.result).substring(0, 100) : `${r.action.type} completed`;
         });

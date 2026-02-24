@@ -1858,12 +1858,15 @@ export function cleanResponseForEmail(response: string): string {
   let cleaned = normalized.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, "").trim();
   // Strip action tags — use [\s\S]*? to match multiline JSON blobs in create_word/excel/etc
   cleaned = cleaned.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
+  // Strip [TASK_COMPLETE] tags
+  cleaned = cleaned.replace(/\[TASK_COMPLETE\]/gi, "").trim();
 
-  // Strip plan-like paragraphs — the user sees a finished email, not a live process
+  // Strip plan-like paragraphs — the user sees a finished result, not a live process
   const paragraphs = cleaned.split(/\n\n/);
   const filtered = [];
   for (const p of paragraphs) {
     const lower = p.toLowerCase().trim();
+    if (!lower) continue;
     // Skip paragraphs that describe what the AI will/is going to do (plans, not results)
     if (
       (lower.startsWith('what i can do next') || lower.startsWith('what i can next')) ||
@@ -1871,13 +1874,25 @@ export function cleanResponseForEmail(response: string): string {
       (lower.startsWith('next, i') || lower.startsWith("next i'll")) ||
       (lower.startsWith('i need to find') || lower.startsWith('i need to search')) ||
       (lower.startsWith('let me try') || lower.startsWith('let me search') || lower.startsWith('let me find')) ||
+      // Planning/reasoning narration
+      (lower.startsWith('the user wants') || lower.startsWith('user wants') || lower.startsWith('the user is asking')) ||
+      (lower.startsWith('my plan') || lower.startsWith('here\'s my plan') || lower.startsWith('here is my plan')) ||
+      (lower.startsWith('step 1:') || lower.startsWith('first, i\'ll') || lower.startsWith('first i\'ll')) ||
+      (lower.startsWith('to accomplish this') || lower.startsWith('to complete this')) ||
+      (lower.startsWith('i\'ll start by') || lower.startsWith('i will start by')) ||
+      (lower.startsWith('**plan') || lower.startsWith('**step')) ||
       (/^(?:i'll|let me|i'm going to|i will)\s+(?:navigate|browse|search|look|try|check|go|find|get|fetch|head|visit|begin|open|access|sign|create|make|build|write|post|apply|use|take)\b/.test(lower) && p.length < 300) ||
       // Drop narration about search/page failures
       (/(?:search results?|the page|bing|google|duckduckgo)\s+(?:didn't|did not|doesn't|isn't|wasn't|seems? to have)\s+/i.test(lower) && p.length < 300) ||
       (lower.includes('technical issues') && (lower.includes('search') || lower.includes('bing'))) ||
       (lower.includes('unable to process') || lower.includes('error has occurred')) ||
       // Drop "looking at the current state" type narration
-      (lower.startsWith('looking at the current') || lower.startsWith('i can see the search') || lower.startsWith('i can see that the'))
+      (lower.startsWith('looking at the current') || lower.startsWith('i can see the search') || lower.startsWith('i can see that the')) ||
+      // Drop self-referential AI process descriptions
+      (lower.startsWith('i\'m now') || lower.startsWith('i am now') || lower.startsWith('now i\'ll') || lower.startsWith('now let me')) ||
+      (lower.startsWith('alright') && lower.includes('let me')) ||
+      // Drop raw code fragments that leaked through
+      (/^[>\)\]\."',;:\s{]/.test(lower) && p.length < 100)
     ) {
       continue; // Drop this paragraph
     }
