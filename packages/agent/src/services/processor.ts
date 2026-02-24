@@ -574,6 +574,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
         structured_intent: clarified.structuredIntent,
         confidence: clarified.confidence,
         started_at: new Date().toISOString(),
+        input_channel: task.inputChannel || 'email',
       })
       .select()
       .single();
@@ -1041,6 +1042,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           email_subject: subject,
           input_text: body,
           started_at: new Date().toISOString(),
+          input_channel: task.inputChannel || 'email',
         })
         .select()
         .single();
@@ -1070,6 +1072,64 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     if (earlyScheduleResult) {
       clearTimeout(masterTimer);
       return earlyScheduleResult;
+    }
+
+    // SMS fast path ("text me", "send me a text") — bypass AI completely
+    const smsStart = Date.now();
+    const smsTaskText = `${subject} ${body}`.toLowerCase();
+    const wantsSms = /\b(text me|send me a text|sms me|shoot me a text|send a text|drop me a text)\b/i.test(smsTaskText);
+    if (wantsSms) {
+      try {
+        const { data: smsProfile } = await getSupabaseClient()
+          .from('profiles')
+          .select('phone_number')
+          .eq('id', userId)
+          .single();
+        const userPhone = smsProfile?.phone_number;
+        if (userPhone) {
+          // Extract the message content — strip the SMS request part
+          let smsBody = body.replace(/\b(text me|send me a text|sms me|shoot me a text|send a text|drop me a text)\b/gi, '').trim();
+          if (!smsBody || smsBody.length < 3) smsBody = 'Hey! Your AI assistant here. What do you need?';
+          const smsResult = await sendSms({ to: userPhone, body: smsBody, userId });
+          const responseText = smsResult.success ? `Done — texted you at ${userPhone.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3')}` : 'Could not send SMS right now. Check your phone number in settings.';
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed', completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - smsStart,
+            response_text: responseText,
+            action_count: 1, action_success_count: smsResult.success ? 1 : 0,
+          }).eq('id', taskId);
+          if (!task.suppressEmail) await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+          clearTimeout(masterTimer);
+          return { taskId, success: smsResult.success, response: responseText, actions: [{ action: { type: 'send_sms' as any, params: { to: userPhone, body: smsBody } }, success: smsResult.success, result: responseText }] };
+        }
+      } catch (smsErr) { console.error('[FAST-PATH-SMS] Error:', smsErr); }
+    }
+
+    // Call fast path ("call me", "phone me") — immediate call, no scheduling
+    const wantsCall = /\b(call me|phone me|give me a call|ring me)\b/i.test(smsTaskText) && !/\b(back|at|in\s+\d|later|tomorrow|tonight)\b/i.test(smsTaskText);
+    if (wantsCall) {
+      try {
+        const { data: callProfile } = await getSupabaseClient()
+          .from('profiles')
+          .select('phone_number')
+          .eq('id', userId)
+          .single();
+        const callPhone = callProfile?.phone_number;
+        if (callPhone) {
+          const { callUser } = await import('./twilio.js');
+          const callResult = await callUser({ userId, to: callPhone, message: 'Your AI assistant is calling you back.' });
+          const callResponse = callResult ? 'Calling you now!' : 'Could not place the call right now.';
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed', completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - smsStart,
+            response_text: callResponse,
+            action_count: 1, action_success_count: callResult ? 1 : 0,
+          }).eq('id', taskId);
+          if (!task.suppressEmail) await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, callResponse);
+          clearTimeout(masterTimer);
+          return { taskId, success: !!callResult, response: callResponse, actions: [{ action: { type: 'call_user' as any, params: {} }, success: !!callResult, result: callResponse }] };
+        }
+      } catch (callErr) { console.error('[FAST-PATH-CALL] Error:', callErr); }
     }
 
     // 3. Classify task and create locked intent (SECURITY)
@@ -1710,6 +1770,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // but AI returned 0 matching actions, re-prompt or inject directly.
     const taskTextLower = `${subject} ${body}`.toLowerCase();
     const expectedActionPatterns: Array<{ keywords: string[]; actionType: string; example: string }> = [
+      { keywords: ['text me', 'send me a text', 'send a text', 'sms me', 'shoot me a text', 'send text', 'message me', 'send me a message via sms', 'drop me a text'],
+        actionType: 'send_sms', example: '[ACTION:send_sms("+1234567890", "message")]' },
+      { keywords: ['call me', 'phone me', 'give me a call', 'ring me', 'call me back', 'phone call', 'give me a ring'],
+        actionType: 'call_user', example: '[ACTION:call_user("message")]' },
+      { keywords: ['email me', 'send me an email', 'email report', 'send an email to me', 'email me a', 'send me a report by email', 'send a report'],
+        actionType: 'send_email', example: '[ACTION:send_email("to@email.com", "Subject", "Body")]' },
       { keywords: ['check email', 'check my email', 'read email', 'read my email', 'my inbox', 'any email', 'any new email', 'last email', 'unread email', 'gmail inbox', 'outlook inbox', 'what email'],
         actionType: 'read_email', example: '[ACTION:read_email()]' },
       { keywords: ['schedule', 'recurring', 'every day', 'daily task', 'every morning', 'weekly', 'cron'],
@@ -1749,7 +1815,48 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Direct injection fallback
       if (needsInjection) {
         console.log(`[MISSING-ACTION] Injecting ${pattern.actionType} directly from task text`);
-        if (pattern.actionType === 'read_email') {
+        if (pattern.actionType === 'send_sms') {
+          // Look up user's phone number from profile
+          try {
+            const { data: smsProfile } = await getSupabaseClient()
+              .from('profiles')
+              .select('phone_number')
+              .eq('id', userId)
+              .single();
+            const userPhone = smsProfile?.phone_number;
+            if (userPhone) {
+              // Extract what to say from the AI response or task body
+              const smsMessage = aiResponse.content
+                ? aiResponse.content.replace(/\[ACTION:[^\]]*\]/g, '').replace(/\[TASK_COMPLETE\]/g, '').trim().substring(0, 1500) || body
+                : body;
+              aiResponse.actions = [{ type: 'send_sms' as any, params: { to: userPhone, body: smsMessage } }];
+              aiResponse.content = (aiResponse.content || '') + `\n[ACTION:send_sms("${userPhone}", "${smsMessage.substring(0, 50)}...")] [TASK_COMPLETE]`;
+              console.log(`[MISSING-ACTION] Injected send_sms to ${userPhone}`);
+            } else {
+              console.log(`[MISSING-ACTION] Cannot inject send_sms — user has no phone number on profile`);
+            }
+          } catch { console.log(`[MISSING-ACTION] Failed to look up phone for send_sms injection`); }
+        } else if (pattern.actionType === 'call_user') {
+          // Inject call_user directly — the action handler looks up the phone from DB
+          const callMsg = aiResponse.content
+            ? aiResponse.content.replace(/\[ACTION:[^\]]*\]/g, '').replace(/\[TASK_COMPLETE\]/g, '').trim().substring(0, 200) || 'Calling you now'
+            : 'Calling you now';
+          aiResponse.actions = [{ type: 'call_user' as any, params: { message: callMsg } }];
+          aiResponse.content = (aiResponse.content || '') + `\n[ACTION:call_user("${callMsg.substring(0, 50)}")] [TASK_COMPLETE]`;
+          console.log(`[MISSING-ACTION] Injected call_user`);
+        } else if (pattern.actionType === 'send_email') {
+          // Look up user's email and inject send_email
+          const emailTo = from.includes('@') ? from : '';
+          if (emailTo) {
+            const emailSubjectGuess = taskTextLower.includes('report') ? 'Your Report' : `Re: ${subject}`;
+            const emailBodyContent = aiResponse.content
+              ? aiResponse.content.replace(/\[ACTION:[^\]]*\]/g, '').replace(/\[TASK_COMPLETE\]/g, '').trim() || body
+              : body;
+            aiResponse.actions = [{ type: 'send_email' as any, params: { to: emailTo, subject: emailSubjectGuess, body: emailBodyContent } }];
+            aiResponse.content = (aiResponse.content || '') + `\n[ACTION:send_email("${emailTo}", "${emailSubjectGuess}", "...")] [TASK_COMPLETE]`;
+            console.log(`[MISSING-ACTION] Injected send_email to ${emailTo}`);
+          }
+        } else if (pattern.actionType === 'read_email') {
           // IMAP-first, browser-fallback:
           // Prepend read_email so it runs FIRST. Keep browser actions as fallback
           // — if IMAP fails, the iterate loop can still try browser.
@@ -4773,10 +4880,25 @@ function calculateNextRun(cron: string): string {
 
   // ---- Relative time support ----
   // "in 2 minutes", "in 30 seconds", "in 1 hour", "5 minutes", "2m", "1h", etc.
-  const relativeMatch = lower.match(/^(?:in\s+)?(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)$/);
+  // Also handles embedded patterns: "call me back in 5 minutes", "remind me in 2 hours"
+  const relativeMatch = lower.match(/(?:in\s+)?(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)\b/);
   if (relativeMatch) {
     const amount = parseInt(relativeMatch[1]);
     const unit = relativeMatch[2].charAt(0); // s, m, h, d
+    const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const ms = amount * (multipliers[unit] || 60_000);
+    return new Date(now.getTime() + ms).toISOString();
+  }
+
+  // Handle text numbers: "five minutes", "ten seconds", etc.
+  const textNumbers: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    fifteen: 15, twenty: 20, thirty: 30, forty: 40, forty5: 45, sixty: 60, half: 30,
+  };
+  const textMatch = lower.match(/(?:in\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|sixty|half)\s*(an?\s+)?(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)\b/);
+  if (textMatch) {
+    const amount = textNumbers[textMatch[1]] || 5;
+    const unit = textMatch[3].charAt(0);
     const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
     const ms = amount * (multipliers[unit] || 60_000);
     return new Date(now.getTime() + ms).toISOString();
@@ -4875,7 +4997,18 @@ function calculateNextRun(cron: string): string {
     return new Date(now.getTime() + named[lower]).toISOString();
   }
 
-  // Default: 1 day from now
+  // Last resort: try to extract ANY number and time unit from the string
+  const lastResortMatch = lower.match(/(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)/);
+  if (lastResortMatch) {
+    const amount = parseInt(lastResortMatch[1]);
+    const unit = lastResortMatch[2].charAt(0);
+    const multipliers: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+    const ms = amount * (multipliers[unit] || 60_000);
+    console.warn(`[SCHEDULE] Last-resort extraction from "${cron}": ${amount}${unit} = ${ms}ms`);
+    return new Date(now.getTime() + ms).toISOString();
+  }
+
+  // Default: 1 day from now (this should rarely fire now)
   console.warn(`[SCHEDULE] Unrecognized schedule format: "${cron}" — defaulting to 24h`);
   return new Date(now.getTime() + 86_400_000).toISOString();
 }
