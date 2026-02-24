@@ -3120,17 +3120,60 @@ Be specific and concise. 3-5 sentences max.`,
             console.log(`[FORM-DETECT] Form field extraction failed: ${formErr}`);
           }
 
+          // INTERACTIVE ELEMENT MAP: Extract all clickable elements so AI uses real selectors
+          let interactiveSection = '';
+          try {
+            const clickables = await page.evaluate(() => {
+              const elements: Array<{ tag: string; text: string; selector: string; role: string; disabled: boolean }> = [];
+              const seen = new Set<string>();
+              // Buttons, links, and role=button elements
+              const candidates = document.querySelectorAll('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [onclick], input[type="submit"], input[type="button"]');
+              candidates.forEach((el) => {
+                const htmlEl = el as HTMLElement;
+                const rect = htmlEl.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) return;
+                if (getComputedStyle(htmlEl).display === 'none' || getComputedStyle(htmlEl).visibility === 'hidden') return;
+                const text = (htmlEl.textContent || htmlEl.getAttribute('aria-label') || htmlEl.getAttribute('title') || '').trim().substring(0, 60);
+                if (!text || seen.has(text)) return;
+                seen.add(text);
+                let selector = '';
+                if (htmlEl.id) selector = `#${htmlEl.id}`;
+                else if (htmlEl.getAttribute('data-testid')) selector = `[data-testid="${htmlEl.getAttribute('data-testid')}"]`;
+                else if (htmlEl.getAttribute('aria-label')) selector = `[aria-label="${htmlEl.getAttribute('aria-label')}"]`;
+                else selector = text; // Fall back to text-based click
+                elements.push({
+                  tag: htmlEl.tagName.toLowerCase(),
+                  text,
+                  selector,
+                  role: htmlEl.getAttribute('role') || htmlEl.tagName.toLowerCase(),
+                  disabled: htmlEl.hasAttribute('disabled') || htmlEl.getAttribute('aria-disabled') === 'true',
+                });
+              });
+              return elements.slice(0, 20); // Top 20 most visible
+            });
+            if (clickables.length > 0) {
+              interactiveSection = `\n  CLICKABLE ELEMENTS (use these EXACT text values in click actions):`;
+              for (const el of clickables) {
+                const state = el.disabled ? ' [DISABLED]' : '';
+                interactiveSection += `\n    - [${el.tag}] "${el.text}"${state}`;
+              }
+              interactiveSection += `\n  💡 To click: [ACTION:click("${clickables[0].text}")] — use the quoted text above, NOT guessed selectors.`;
+            }
+          } catch (clickErr) {
+            // Non-critical
+          }
+
           // Build page state with vision-first, text as fallback
           if (visualObservation) {
             pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
   Title: ${pageTitle}
-  VISUAL OBSERVATION (from screenshot): ${visualObservation}${formFieldsSection}
+  VISUAL OBSERVATION (from screenshot): ${visualObservation}${formFieldsSection}${interactiveSection}
   Raw text (backup): ${(pageText || '(empty)').substring(0, 500)}${stuckWarning}`;
           } else {
             pageStateSection = `\nCURRENT PAGE STATE (what you can see right now):
   URL: ${currentUrl}
-  Title: ${pageTitle}${formFieldsSection}
+  Title: ${pageTitle}${formFieldsSection}${interactiveSection}
   Visible text (first 1500 chars): ${pageText || '(page is empty or loading)'}${stuckWarning}`;
           }
 
