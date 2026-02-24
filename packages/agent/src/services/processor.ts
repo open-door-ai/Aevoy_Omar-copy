@@ -2336,8 +2336,10 @@ Continue researching. Use [ACTION:search(...)] or [ACTION:browse(...)] to check 
             // GATE 2: PHONE ENGAGEMENT — for sourcing/negotiation tasks, nudge phone calls
             // This gate runs INDEPENDENTLY of the research gate
             if (!gateRejected) {
-              const isPhoneTask = /\b(source|sourcing|negotiate|negotiat|dealership|dealer|quote|appointment|book a|get me a|find me a)\b/i.test(subject) &&
-                /\b(car|vehicle|auto|house|apartment|service|provider|doctor|dentist|contractor|plumber|mechanic)\b/i.test(subject);
+              // A phone task is one where calling a business would get better results than browsing
+              const isPhoneTask = /\b(negotiate|negotiat|dealership|dealer|call them|call the|get me a quote|haggle)\b/i.test(subject) ||
+                (/\b(source|sourcing|quote|appointment|book a)\b/i.test(subject) &&
+                 /\b(car|vehicle|auto|house|apartment|service|provider|doctor|dentist|contractor|plumber|mechanic|toyota|honda|ford|bmw|audi|mercedes|lexus|camry|civic|corolla|suv|sedan|truck|van|minivan)\b/i.test(subject));
               const hasPhoneAction = actionResults.some(r =>
                 ['call_user', 'call_external'].includes(r.action?.type || '')
               );
