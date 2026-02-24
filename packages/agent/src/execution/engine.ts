@@ -31,9 +31,9 @@ import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
 import { validateUrlSafety } from '../utils/url-validator.js';
 
-// Timeouts — generous limits for complex autonomous tasks
+// Timeouts — fast fail for better retry behavior
 const TASK_TIMEOUT_MS = 1200000;  // 20 minutes per task
-const STEP_TIMEOUT_MS = 60000;    // 60 seconds per step
+const STEP_TIMEOUT_MS = 15000;    // 15 seconds per step (was 60s — too slow to fail, wastes minutes on bad selectors)
 const POST_ACTION_WAIT_MS = 800;  // Wait after click/fill/submit/select
 
 export interface ExecutionStep {

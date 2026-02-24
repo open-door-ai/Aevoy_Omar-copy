@@ -3674,8 +3674,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const hasNoActions = actionResults.length === 0;
     const allActionsFailed = actionResults.length > 0 && actionResults.every(r => !r.success);
     const noBrowserUsed = !executionEngine;
-    if ((noBrowserUsed || hasNoActions || allActionsFailed) && aiResponse.content) {
-      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : 'all actions failed';
+    // Auto-pass research tasks that used search but no complex browser interactions (forms, clicks, fills)
+    // Verification self-check gives unreliable confidence for pure research responses
+    const isSearchOnly = actionResults.length > 0 && actionResults.every(r =>
+      ['search', 'browse', 'extract', 'wait', 'navigate'].includes(r.action?.type || '')
+    );
+    const isResearchTier = tier === 'research';
+    if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier)) && aiResponse.content) {
+      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
