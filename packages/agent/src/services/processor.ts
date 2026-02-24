@@ -4511,7 +4511,45 @@ async function executeAction(
         console.log(`[SEARCH] Fetch-based DDG failed: ${fetchErr}`);
       }
 
-      // Also try DuckDuckGo Instant Answer API (returns structured JSON)
+      // Check if DDG returned a bot challenge instead of real results
+      if (apiSearchResult && /please try again|verify you are human|bot detection|challenge|blocked/i.test(apiSearchResult)) {
+        console.log(`[SEARCH] DDG Lite returned bot challenge — clearing result`);
+        apiSearchResult = '';
+      }
+
+      // Strategy 0b: Try Brave Search API (public, no API key needed for basic HTML)
+      if (!apiSearchResult) {
+        try {
+          console.log(`[SEARCH] Strategy 0b: Brave Search HTML for "${query}"`);
+          const braveUrl = `https://search.brave.com/search?q=${encodeURIComponent(query)}`;
+          const braveResponse = await fetch(braveUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html',
+              'Accept-Language': 'en-US,en;q=0.9',
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (braveResponse.ok) {
+            const html = await braveResponse.text();
+            const textContent = html
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (textContent.length > 200 && !isGarbageText(textContent)) {
+              apiSearchResult = textContent.substring(0, 3000);
+              console.log(`[SEARCH] Brave Search succeeded: ${apiSearchResult.length} chars`);
+            }
+          }
+        } catch (braveErr) {
+          console.log(`[SEARCH] Brave Search failed: ${braveErr}`);
+        }
+      }
+
+      // Strategy 0c: DuckDuckGo Instant Answer API (returns structured JSON)
       if (!apiSearchResult) {
         try {
           console.log(`[SEARCH] Strategy 0b: DuckDuckGo Instant Answer API`);
