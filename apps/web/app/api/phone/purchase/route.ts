@@ -84,14 +84,10 @@ export async function POST(request: Request) {
     // 3. Update profiles.twilio_number
     await supabase.from("profiles").update({ twilio_number: phoneNumber }).eq("id", user.id);
 
-    // 4. Create Stripe subscription ($2/mo)
-    // TODO: Implement Stripe integration
-    // For now, just return success
-
     return NextResponse.json({
       success: true,
       phone_number: phoneNumber,
-      message: "Number purchased! You'll be charged $2/mo starting next billing cycle."
+      message: "Phone number activated successfully."
     });
   } catch (error) {
     console.error("[PHONE] Purchase error:", error);

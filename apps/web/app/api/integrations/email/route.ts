@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { encrypt, decrypt } from "@/lib/encryption";
 
 /**
  * Simple email connection — user enters email + app password, we auto-detect provider.
@@ -133,7 +134,14 @@ export async function GET(request: Request) {
 
     if (imapCred) {
       try {
-        const creds = JSON.parse(imapCred.encrypted_data);
+        // Try decrypting first (new format), fallback to raw JSON (legacy)
+        let creds;
+        try {
+          const decrypted = await decrypt(imapCred.encrypted_data);
+          creds = JSON.parse(decrypted);
+        } catch {
+          creds = JSON.parse(imapCred.encrypted_data);
+        }
         return NextResponse.json({
           connected: true,
           method: "imap",
@@ -278,8 +286,9 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
+      console.error(`[EMAIL] IMAP connection error for ${provider.name}:`, errMsg);
       return NextResponse.json(
-        { error: `Could not connect to ${provider.name}: ${errMsg.substring(0, 100)}` },
+        { error: `Could not connect to ${provider.name}. Please check your email and app password are correct.` },
         { status: 400 }
       );
     }
@@ -291,12 +300,23 @@ export async function POST(request: Request) {
       .eq("user_id", user.id)
       .eq("site_domain", "email_imap");
 
+    // Encrypt credentials before storing (AES-256-GCM)
+    let encryptedPayload: string;
+    try {
+      encryptedPayload = await encrypt(JSON.stringify(credentialData));
+    } catch {
+      return NextResponse.json(
+        { error: "Failed to secure credentials" },
+        { status: 500 }
+      );
+    }
+
     const { error: insertError } = await supabase
       .from("user_credentials")
       .insert({
         user_id: user.id,
         site_domain: "email_imap",
-        encrypted_data: JSON.stringify(credentialData),
+        encrypted_data: encryptedPayload,
       });
 
     if (insertError) {

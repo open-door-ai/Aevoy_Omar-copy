@@ -79,7 +79,7 @@ export default function DashboardLayout({
           Aevoy
         </Link>
       </div>
-      <nav className="p-3 space-y-1 flex-1">
+      <nav className="p-3 space-y-1 flex-1 overflow-y-auto">
         {navItems.map((item) => {
           const active = isActive(item.href);
           const Icon = item.icon;
@@ -166,7 +166,7 @@ export default function DashboardLayout({
       )}
 
       {/* Main content */}
-      <main className="flex-1 min-w-0 p-6 md:p-8 pt-16 md:pt-8">
+      <main className="flex-1 min-w-0 p-6 md:p-8 pt-[52px] md:pt-8">
         {children}
       </main>
     </div>

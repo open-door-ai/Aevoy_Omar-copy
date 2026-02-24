@@ -1676,11 +1676,14 @@ const FeatureCard = ({ feature, index }: { feature: { title: string; description
 // ============================================
 
 export default function AevoyLanding() {
-  const [showIntro, setShowIntro] = useState(() => {
-    // Show AGI intro only on the very first visit ever
-    if (typeof window === 'undefined') return false;
-    return !localStorage.getItem('agi_intro_shown');
-  });
+  const [showIntro, setShowIntro] = useState(false);
+
+  // Check localStorage after mount to avoid SSR/CSR hydration mismatch
+  useEffect(() => {
+    if (!localStorage.getItem('agi_intro_shown')) {
+      setShowIntro(true);
+    }
+  }, []);
   const [scrollY, setScrollY] = useState(0);
   const [selectedDemo, setSelectedDemo] = useState('call');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);

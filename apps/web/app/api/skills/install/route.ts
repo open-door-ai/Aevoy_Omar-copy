@@ -68,7 +68,6 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "Installation failed",
-        message: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
     );

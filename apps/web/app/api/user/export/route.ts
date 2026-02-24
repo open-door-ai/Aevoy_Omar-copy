@@ -30,7 +30,7 @@ export async function GET() {
       usage,
       agentCards,
     ] = await Promise.all([
-      supabase.from("profiles").select("*").eq("id", userId).single(),
+      supabase.from("profiles").select("id, username, email, display_name, bot_name, timezone, subscription_tier, messages_used, messages_limit, onboarding_completed, created_at, updated_at").eq("id", userId).single(),
       supabase.from("tasks").select("id, status, type, email_subject, created_at, completed_at, cost_usd").eq("user_id", userId).gte("created_at", ninetyDaysAgo).order("created_at", { ascending: false }),
       supabase.from("scheduled_tasks").select("*").eq("user_id", userId),
       supabase.from("user_settings").select("*").eq("user_id", userId).single(),
