@@ -1091,7 +1091,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           let smsBody = body.replace(/\b(text me|send me a text|sms me|shoot me a text|send a text|drop me a text)\b/gi, '').trim();
           if (!smsBody || smsBody.length < 3) smsBody = 'Hey! Your AI assistant here. What do you need?';
           const smsResult = await sendSms({ to: userPhone, body: smsBody, userId });
-          const responseText = smsResult.success ? `Done — texted you at ${userPhone.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3')}` : 'Could not send SMS right now. Check your phone number in settings.';
+          const formattedPhone = userPhone.replace(/^\+?1?(\d{3})(\d{3})(\d{4})$/, '($1) $2-$3') || userPhone;
+          const responseText = smsResult.success ? `Done — texted you at ${formattedPhone}` : 'Could not send SMS right now. Check your phone number in settings.';
           await getSupabaseClient().from('tasks').update({
             status: 'completed', completed_at: new Date().toISOString(),
             execution_time_ms: Date.now() - smsStart,
