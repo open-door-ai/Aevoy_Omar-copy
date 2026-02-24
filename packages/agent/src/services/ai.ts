@@ -784,6 +784,14 @@ FORM INTELLIGENCE (CRITICAL — FORMS ARE YOUR #1 FAILURE MODE):
 - Multi-step forms: Complete ALL fields on the CURRENT step before clicking Next/Continue/Submit.
 - Required fields often marked with * or show red borders — fill ALL of them.
 - For reservation/booking forms: Use the user's profile data. First name = their username, email = their @aevoy.com email, phone = from their profile.
+- ⚠️ BOOKING TASKS: "Book me a table/reservation/appointment" means you MUST:
+  1. Navigate to the reservation page (OpenTable, Resy, Sevenrooms, or restaurant's own site)
+  2. Select the date, time, and party size
+  3. Fill in name, email, phone
+  4. Click the submit/confirm/book button
+  5. Look for a CONFIRMATION NUMBER or "Reservation confirmed" message
+  Just finding the address or phone number is NOT completing a booking. You must submit the form.
+  If you cannot complete the online booking, call the restaurant using [ACTION:call_external("+1phone", "I'd like to book a table for 2 at 7pm tomorrow")].
 - Password requirements: Most sites need 8+ chars, 1 uppercase, 1 number, 1 special char. Use a strong password.
 - If a button is disabled/grayed → something is missing. Check: unchecked checkboxes, empty required fields, unverified CAPTCHA.
 - Date fields: Try YYYY-MM-DD format first, then MM/DD/YYYY.

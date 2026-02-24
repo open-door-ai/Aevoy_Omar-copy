@@ -2241,7 +2241,52 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             )
           );
 
-          if (isAdviceResponse) {
+          // BOOKING COMPLETION GATE: If task is "booking" and response is just address/phone, reject it
+          const isBookingTask = classification.taskType === 'booking';
+          const hasBookingConfirmation = (
+            /\b(confirmed|booked|reservation.*confirm|confirmation.*number|booking.*id|successfully.*booked|table.*reserved)\b/i.test(lowerContent) ||
+            /\b(called|phoned|spoke|reached)\b.*\b(restaurant|hostess|front desk)\b/i.test(lowerContent)
+          );
+          const isJustInfo = (
+            !hasBookingConfirmation &&
+            (/\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation)\b/i.test(lowerContent))
+          );
+
+          if (isBookingTask && isJustInfo && currentIteration <= 4) {
+            console.warn(`[BOOKING-GATE] REJECTED: AI gave restaurant info instead of completing booking. Forcing form fill.`);
+            aiResponse.content = '';
+            aiResponse.actions = [];
+            const forceBookingPrompt = `Original request: ${subject} ${body}
+
+YOU DID NOT COMPLETE THE BOOKING. You just returned the restaurant's address/phone.
+That is NOT what the user asked for. They said "book me a table" — you must ACTUALLY BOOK IT.
+
+DO THIS NOW:
+1. Navigate to the restaurant's reservation page (OpenTable, Resy, Sevenrooms, or their website)
+2. Select the date, time (${subject}), and party size
+3. Fill in: Name="${username}", Email="${username}@aevoy.com", Phone from profile
+4. Click the Book/Reserve/Confirm button
+5. Report the confirmation number or "Booking confirmed" message
+
+If online booking fails, call them: [ACTION:call_external("+1PHONENUMBER", "I'd like to book a table for the date/time specified")]
+
+DO NOT just give me the address again. COMPLETE THE BOOKING.`;
+
+            const forcedBooking = await generateResponse(
+              memory, subject, forceBookingPrompt, username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += forcedBooking.cost || 0;
+            totalTokens += forcedBooking.tokensUsed || 0;
+            aiResponse = forcedBooking;
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+            console.log(`[BOOKING-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
+            if (aiResponse.actions.length === 0) {
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Continue to action execution
+          } else if (isAdviceResponse) {
             console.warn(`[QUALITY-GATE] REJECTED: AI gave advice instead of acting. Forcing re-prompt with actions.`);
             // Don't exit — re-prompt the AI to ACTUALLY DO SOMETHING
             aiResponse.content = ''; // Clear the advice
