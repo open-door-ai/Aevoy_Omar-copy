@@ -3297,6 +3297,60 @@ RIGHT: [ACTION:fill("email", "tess@aevoy.com")]
       console.log(`[ITERATE] Reached max iterations (${MAX_ITERATIONS}), finalizing`);
     }
 
+    // POST-LOOP PHONE GATE: If task is a negotiation/sourcing task and no phone calls were made,
+    // give the AI one more chance to call before finalizing
+    const postLoopIsPhoneTask = /\b(negotiate|negotiat|dealership|dealer|call them|call the|get me a quote|haggle)\b/i.test(subject) ||
+      (/\b(source|sourcing|quote|appointment|book a)\b/i.test(subject) &&
+       /\b(car|vehicle|auto|toyota|honda|ford|bmw|camry|civic|corolla|suv|sedan|truck)\b/i.test(subject));
+    const postLoopHasPhoneAction = actionResults.some(r =>
+      ['call_user', 'call_external'].includes(r.action?.type || '')
+    );
+    if (postLoopIsPhoneTask && !postLoopHasPhoneAction && currentIteration <= MAX_ITERATIONS) {
+      console.log(`[PHONE-GATE-POST] Task completed without phone calls — final phone nudge`);
+      try {
+        const phoneSearchPrompt = `The user asked: "${subject}"
+
+You completed the research phase. Now you MUST negotiate by phone.
+
+Step 1: Search for dealership phone numbers
+[ACTION:search("Toyota dealership Toronto phone number")]
+
+Step 2: Call the best dealership
+[ACTION:call_external("+14165551234", "Hi, I'm calling about the 2023 Toyota Camry. What's your best price? I have competing offers.")]
+
+DO NOT just search. You MUST output a [ACTION:call_external(...)] tag with a real phone number from your search results.
+The user explicitly asked you to negotiate. That requires a phone call. DO IT NOW.`;
+        const phoneSearchResponse = await generateResponse(
+          memory, subject, phoneSearchPrompt, username, "complex", userId, taskId, senderName
+        );
+        totalAiCost += phoneSearchResponse.cost || 0;
+        totalTokens += phoneSearchResponse.tokensUsed || 0;
+
+        // Execute any actions from the phone search response
+        if (phoneSearchResponse.actions && phoneSearchResponse.actions.length > 0) {
+          console.log(`[PHONE-GATE-POST] Got ${phoneSearchResponse.actions.length} phone actions, executing`);
+          for (const phoneAction of phoneSearchResponse.actions) {
+            try {
+              const phoneResult = await executeAction(phoneAction, userId, username, executionEngine);
+              actionResults.push(phoneResult);
+              if (phoneResult.success) {
+                console.log(`[PHONE-GATE-POST] ${phoneAction.type} succeeded`);
+              }
+            } catch (phoneErr) {
+              console.error(`[PHONE-GATE-POST] ${phoneAction.type} failed:`, phoneErr);
+            }
+          }
+          // Update response with phone call results
+          const phoneCallResults = actionResults.filter(r => ['call_external', 'search'].includes(r.action?.type || '') && r.success);
+          if (phoneCallResults.length > 0) {
+            aiResponse.content += `\n\nPhone negotiation: ${phoneCallResults.map(r => r.result || r.action.type).join('; ')}`;
+          }
+        }
+      } catch (phoneErr) {
+        console.error(`[PHONE-GATE-POST] Phone gate failed:`, phoneErr);
+      }
+    }
+
     // Update cost tracking with all iterations
     aiResponse.cost = totalAiCost;
     aiResponse.tokensUsed = totalTokens;
