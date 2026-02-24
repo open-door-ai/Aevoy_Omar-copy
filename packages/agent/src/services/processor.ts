@@ -2018,6 +2018,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const methodTypesAttempted = new Map<MethodType, number>(); // methodType -> attemptCount
     const MAX_SAME_METHOD_TYPE_RETRIES = 5;
 
+    // PROOF OF ACTION: Send the first concrete result as tactile proof (voice/SMS only).
+    // This replaces generic "working on it" — users get real evidence the system acted.
+    let sentFirstProof = false;
+
     while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
       currentIteration++;
       const iterationStart = Date.now();
@@ -2382,6 +2386,49 @@ DO NOT describe what you would do. OUTPUT THE [ACTION:...] TAGS NOW.`;
               .eq("id", taskId);
           } catch {
             // Non-critical
+          }
+        }
+
+        // PROOF OF ACTION: Send the first concrete result immediately via SMS.
+        // NOT "working on it" — actual DATA from the completed action.
+        // e.g. "Email sent to john@..." or "3 new emails from..." or "Scheduled for 5:10 PM"
+        // Only triggers once, only for voice/SMS channels.
+        if (result.success && !sentFirstProof && !task.suppressEmail &&
+            (task.inputChannel === 'voice' || task.inputChannel === 'sms')) {
+          // Only proof-worthy actions that produce tangible user-facing outcomes
+          let proofMsg = '';
+          if (action.type === 'send_email') {
+            proofMsg = `[Aevoy] Email sent to ${action.params?.to || 'recipient'}`;
+          } else if (action.type === 'send_sms') {
+            proofMsg = `[Aevoy] Text sent to ${action.params?.to || 'you'}`;
+          } else if (action.type === 'call_user') {
+            proofMsg = `[Aevoy] Calling you now`;
+          } else if (action.type === 'send_whatsapp') {
+            proofMsg = `[Aevoy] WhatsApp sent`;
+          } else if (action.type === 'send_telegram') {
+            proofMsg = `[Aevoy] Telegram sent`;
+          } else if (action.type === 'read_email' && result.result) {
+            // Extract actual data — "3 emails, latest from John about Project X"
+            const emailSnippet = String(result.result).substring(0, 120);
+            proofMsg = `[Aevoy] ${emailSnippet}`;
+          } else if (action.type === 'schedule') {
+            const schedDesc = action.params?.description || action.params?.task || subject;
+            proofMsg = `[Aevoy] Scheduled: ${String(schedDesc).substring(0, 100)}`;
+          } else if (action.type === 'generate_image' && result.result) {
+            proofMsg = `[Aevoy] Image ready — sending full results now`;
+          }
+          // NOTE: search/browse results are NOT sent as proof — they're intermediate data
+          // that needs AI synthesis. The final answer IS the proof for research tasks.
+          if (proofMsg) {
+            sentFirstProof = true;
+            (async () => {
+              try {
+                const { phone: proofPhone } = await resolveRecipient(task.inputChannel, from, userId);
+                if (proofPhone) {
+                  await sendSms({ userId, to: proofPhone, body: proofMsg });
+                }
+              } catch { /* non-critical */ }
+            })();
           }
         }
 
