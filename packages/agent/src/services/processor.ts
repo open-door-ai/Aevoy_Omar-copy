@@ -3366,12 +3366,14 @@ Be creative. Think outside the box. What would a human do differently?`;
       const searchSucceeded = iterationResults.some(r => r.action.type === 'search' && r.success);
       const searchCompletionHint = searchSucceeded
         ? `\n⚡ SEARCH SUCCEEDED: You have search results above. READ THEM and extract the answer NOW.
-CRITICAL: Use the SEARCH RESULTS to answer — do NOT use your own knowledge or training data.
-- Your training data is OUTDATED. The search results are CURRENT. Trust the search results over your knowledge.
-- If the results contain a price → quote that EXACT price. If they contain a name → use that EXACT name.
-- If the results say a product exists → it EXISTS. Do NOT say "has not been announced" if search results show it.
-- Extract specific data (prices, names, dates, URLs) from the results and present them clearly.
-- Signal [TASK_COMPLETE] with your answer based on the search results.\n`
+CRITICAL RULES:
+- Use the SEARCH RESULTS to answer — NOT your training data (it's outdated).
+- If results contain a price like "$299.99" → quote that EXACT price. NEVER say "prices fluctuate" or "check the website."
+- If results contain names/dates/numbers → use those EXACT values.
+- If the results say a product exists → it EXISTS. Don't say "not announced."
+- NEVER tell the user to "visit the website" or "check for current pricing" — YOU already searched, extract the data.
+- If results show "PRICES FOUND: $X, $Y" at the top, those are your answer.
+- Signal [TASK_COMPLETE] with specific data (numbers, prices, names) from the results.\n`
         : '';
 
       // Dynamic domain failure warning — no hardcoded lists, learned from actual failures
@@ -4884,11 +4886,27 @@ async function executeAction(
       }
 
       // If API-based search worked, return immediately (no browser needed)
+      // Extract key data points (prices, numbers, dates) so AI doesn't have to parse HTML noise
       if (apiSearchResult && apiSearchResult.length > 100) {
+        let enrichedResult = `Search results for "${query}":\n${apiSearchResult}`;
+
+        // Auto-extract prices from search results to make them prominent
+        const priceMatches = apiSearchResult.match(/\$[\d,]+\.?\d{0,2}/g);
+        if (priceMatches && priceMatches.length > 0) {
+          const uniquePrices = [...new Set(priceMatches)].slice(0, 10);
+          enrichedResult = `PRICES FOUND IN RESULTS: ${uniquePrices.join(', ')}\n\n${enrichedResult}`;
+        }
+
+        // Auto-extract calorie/nutrition data
+        const calorieMatches = apiSearchResult.match(/\d+\s*(?:calories?|cal|kcal)/gi);
+        if (calorieMatches && calorieMatches.length > 0) {
+          enrichedResult = `NUTRITION DATA: ${[...new Set(calorieMatches)].join(', ')}\n\n${enrichedResult}`;
+        }
+
         return {
           action,
           success: true,
-          result: `Search results for "${query}":\n${apiSearchResult}`,
+          result: enrichedResult,
         };
       }
 
