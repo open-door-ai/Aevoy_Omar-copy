@@ -2431,12 +2431,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
                   : `Navigated to signup page but could not find email field to fill.`;
               aiResponse.content = resultMsg;
               console.log(`[SIGNUP-GATE] Direct form fill complete: email=${emailFilled}, password=${passwordFilled}`);
+
+              // CRITICAL: If we filled the form, mark task complete and stop iterating.
+              // Without this, the loop continues and wastes iterations re-prompting the AI.
+              if (emailFilled) {
+                isTaskComplete = true;
+                aiSignaledComplete = true;
+                break;
+              }
             } else {
               console.log(`[SIGNUP-GATE] Could not find email field on page`);
               aiResponse.content = `I navigated to the signup page but couldn't locate the email input field. The site may require JavaScript interaction or use a non-standard form.`;
             }
           }
-          // Don't break — continue to action execution loop for any remaining actions
+          // If signup gate didn't fill anything, continue to next iteration
         }
 
         // ADVICE-DETECTION QUALITY GATE: If AI completed with no REAL actions on round 1,
@@ -3231,6 +3239,148 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
       if (isTaskComplete) break;
+
+      // POST-ACTION SIGNUP DETECTION: After browsing to a signup page, immediately
+      // fill the form using Playwright directly instead of waiting for the AI to
+      // signal TASK_COMPLETE with advice. The AI can't fill forms — we do it mechanically.
+      const isSignupTaskPostAction = /\b(sign ?up|signup|create (an? )?(account|profile|gmail|email)|register|enroll|open (an? )?account)\b/i.test(taskTextLower);
+      const hasBrowseSuccess = iterationResults.some(r =>
+        ['browse', 'navigate'].includes(r.action?.type || '') && r.success
+      );
+      const hasFormActionsPostAction = actionResults.some(r =>
+        ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
+      );
+      if (isSignupTaskPostAction && hasBrowseSuccess && !hasFormActionsPostAction && executionEngine) {
+        const signupPagePost = executionEngine.getPage?.();
+        const currentPageUrl = signupPagePost?.url() || '';
+        const currentPageTitle = await signupPagePost?.title().catch(() => '') || '';
+        const isOnSignupPage = /sign.?up|register|create.?account|join|get.?started/i.test(currentPageUrl + ' ' + currentPageTitle);
+
+        if (isOnSignupPage && signupPagePost) {
+          console.log(`[SIGNUP-AUTO] Detected signup page after browse (${currentPageUrl}). Filling form directly.`);
+
+          // Resolve password
+          let autoPassword = '';
+          try {
+            const { getAgentPasswords } = await import("./agent-passwords.js");
+            const pw = await getAgentPasswords(userId);
+            autoPassword = pw?.primary || 'AevoyAgent2026!';
+          } catch { autoPassword = 'AevoyAgent2026!'; }
+
+          const autoEmail = `${username}@aevoy.com`;
+          const autoName = senderName || username;
+
+          // Step 1: Click through OAuth-first pages to reveal email form
+          for (const linkText of ['Continue with email', 'Sign up with email', 'Continue another way', 'Use email instead', 'Other sign up options']) {
+            try {
+              const el = signupPagePost.getByText(linkText, { exact: false });
+              if (await el.count() > 0) {
+                await el.first().click({ timeout: 3000 });
+                console.log(`[SIGNUP-AUTO] Clicked "${linkText}"`);
+                await signupPagePost.waitForTimeout(2000);
+                break;
+              }
+            } catch { /* try next */ }
+          }
+
+          // Step 2: Fill email
+          let autoEmailFilled = false;
+          for (const sel of ['input[type="email"]', '[name*="email"]', '[placeholder*="email" i]', '[aria-label*="email" i]', '#email', '[name="email"]', 'input[autocomplete="email"]']) {
+            try {
+              const el = signupPagePost.locator(sel).first();
+              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                await el.click({ timeout: 2000 });
+                await el.fill(autoEmail, { timeout: 3000 });
+                autoEmailFilled = true;
+                actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: autoEmail } }, success: true, result: `Filled email: ${autoEmail}` });
+                console.log(`[SIGNUP-AUTO] Email filled: ${sel}`);
+                break;
+              }
+            } catch { /* next */ }
+          }
+
+          // Step 3: Fill password
+          let autoPasswordFilled = false;
+          for (const sel of ['input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]', '#password', '[name="password"]', 'input[autocomplete="new-password"]']) {
+            try {
+              const el = signupPagePost.locator(sel).first();
+              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                await el.click({ timeout: 2000 });
+                await el.fill(autoPassword, { timeout: 3000 });
+                autoPasswordFilled = true;
+                actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: '***' } }, success: true, result: 'Filled password' });
+                console.log(`[SIGNUP-AUTO] Password filled`);
+                break;
+              }
+            } catch { /* next */ }
+          }
+
+          // Step 4: Fill name fields
+          for (const [sel, val] of [
+            ['input[name="firstName"]', autoName], ['input[name="first_name"]', autoName],
+            ['input[name="name"]', autoName], ['[placeholder*="name" i]', autoName],
+            ['input[name="lastName"]', 'Aevoy'], ['input[name="last_name"]', 'Aevoy'],
+          ] as [string, string][]) {
+            try {
+              const el = signupPagePost.locator(sel).first();
+              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                await el.fill(val, { timeout: 3000 });
+                console.log(`[SIGNUP-AUTO] Name filled: ${sel} = ${val}`);
+              }
+            } catch { /* skip */ }
+          }
+
+          // Step 5: Click submit
+          if (autoEmailFilled) {
+            for (const btnText of ['Sign Up', 'Create Account', 'Register', 'Continue', 'Get Started', 'Join', 'Submit', 'Create', 'Next', 'Sign up']) {
+              try {
+                const btn = signupPagePost.getByRole('button', { name: btnText });
+                if (await btn.count() > 0 && await btn.first().isVisible({ timeout: 1000 })) {
+                  await btn.first().click({ timeout: 3000 });
+                  actionResults.push({ action: { type: 'click' as any, params: { selector: btnText } }, success: true, result: `Clicked ${btnText}` });
+                  console.log(`[SIGNUP-AUTO] Clicked submit: "${btnText}"`);
+                  await signupPagePost.waitForTimeout(3000);
+                  break;
+                }
+              } catch { /* next */ }
+            }
+
+            // Step 6: Handle CAPTCHA
+            try {
+              const { handleCaptchaIfPresent } = await import("../execution/captcha.js");
+              await handleCaptchaIfPresent(signupPagePost, userId, taskId);
+            } catch { /* non-critical */ }
+
+            // Step 7: Wait and check for verification email
+            await signupPagePost.waitForTimeout(5000);
+
+            // Check post-submit page state
+            const postUrl = signupPagePost.url();
+            const postTitle = await signupPagePost.title().catch(() => '');
+            const postText = await signupPagePost.textContent('body').catch(() => '') || '';
+            const shortText = postText.substring(0, 500);
+
+            // Detect success indicators
+            const signupSuccess = /welcome|verify|check.*email|confirm.*email|account.*created|dashboard|profile/i.test(postTitle + ' ' + shortText);
+            const needsVerification = /verify|confirm.*email|check.*inbox|verification.*sent/i.test(shortText);
+
+            let resultMsg = '';
+            if (signupSuccess && needsVerification) {
+              resultMsg = `Signed up on ${postUrl} using ${autoEmail}. A verification email has been sent — check ${autoEmail} inbox to complete registration.`;
+            } else if (signupSuccess) {
+              resultMsg = `Successfully signed up on ${postUrl} using ${autoEmail}. Account created.`;
+            } else {
+              resultMsg = `Attempted signup on ${postUrl} using ${autoEmail}. Email ${autoEmailFilled ? 'filled' : 'not found'}, password ${autoPasswordFilled ? 'filled' : 'not found'}. Check the page for any errors or next steps.`;
+            }
+
+            aiResponse.content = resultMsg;
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            console.log(`[SIGNUP-AUTO] Complete: ${resultMsg.substring(0, 100)}`);
+            break;
+          }
+        }
+      }
 
       // DIRECT RESULT INJECTION: For completed actions, inject the result directly —
       // BOTH success AND failure. NEVER let AI narration survive.
