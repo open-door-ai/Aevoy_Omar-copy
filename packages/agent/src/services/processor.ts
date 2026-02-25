@@ -3298,14 +3298,16 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // fill the form using Playwright directly instead of waiting for the AI to
       // signal TASK_COMPLETE with advice. The AI can't fill forms — we do it mechanically.
       const isSignupTaskPostAction = /\b(sign ?up|signup|create\b.*\baccount|create\b.*\bprofile|create\b.*\bgmail|create\b.*\bemail|register|enroll|open\b.*\baccount|make\b.*\baccount)\b/i.test(taskTextLower);
-      // Check ALL rounds for browse (not just current), and check current page URL
+      // Check ALL rounds for browse (not just current) — accept even failed browse if page loaded
       const hasBrowseEver = actionResults.some(r =>
-        ['browse', 'navigate'].includes(r.action?.type || '') && r.success
+        ['browse', 'navigate'].includes(r.action?.type || '')
       );
       const hasFormActionsPostAction = actionResults.some(r =>
         ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
       );
-      if (isSignupTaskPostAction && hasBrowseEver && !hasFormActionsPostAction && executionEngine) {
+      // Also trigger if we have a page object with a real URL (browse may have "failed" but page loaded)
+      const hasLoadedPage = executionEngine?.getPage?.()?.url()?.startsWith('http');
+      if (isSignupTaskPostAction && (hasBrowseEver || hasLoadedPage) && !hasFormActionsPostAction && executionEngine) {
         const signupPagePost = executionEngine.getPage?.();
         const currentPageUrl = signupPagePost?.url() || '';
         const currentPageTitle = await signupPagePost?.title().catch(() => '') || '';
@@ -3574,6 +3576,34 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 await signupPagePost.waitForTimeout(3000);
               }
             } catch { /* non-critical */ }
+
+            // Step 5b: Multi-step form — after submit, check for password field (step 2)
+            if (!autoPasswordFilled) {
+              for (const sel of ['input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]', '#password', 'input[autocomplete="new-password"]']) {
+                try {
+                  const el = signupPagePost.locator(sel).first();
+                  if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
+                    await el.click({ timeout: 2000 });
+                    await el.fill(autoPassword, { timeout: 5000 });
+                    autoPasswordFilled = true;
+                    console.log(`[SIGNUP-AUTO] Step 2 password filled: ${sel}`);
+                    // Look for second submit/continue button
+                    for (const btn2 of ['Continue', 'Next', 'Sign Up', 'Create Account', 'Submit']) {
+                      try {
+                        const b = signupPagePost.getByRole('button', { name: btn2 });
+                        if (await b.count() > 0 && await b.first().isVisible({ timeout: 1000 })) {
+                          await b.first().click({ timeout: 3000 });
+                          console.log(`[SIGNUP-AUTO] Step 2 submit: "${btn2}"`);
+                          await signupPagePost.waitForTimeout(3000);
+                          break;
+                        }
+                      } catch { /* next */ }
+                    }
+                    break;
+                  }
+                } catch { /* next */ }
+              }
+            }
 
             // Step 6: Handle CAPTCHA
             try {
