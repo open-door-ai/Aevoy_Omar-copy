@@ -2047,7 +2047,7 @@ export function cleanResponseForEmail(response: string): string {
  */
 const VALID_TASK_TYPES = [
   "research", "booking", "form", "shopping", "email",
-  "reminder", "writing", "voice", "general",
+  "reminder", "writing", "voice", "general", "signup",
 ] as const;
 
 type ClassifiedTaskType = typeof VALID_TASK_TYPES[number];
@@ -2056,7 +2056,7 @@ type ClassifiedTaskType = typeof VALID_TASK_TYPES[number];
  * Map of task types that require browser access.
  */
 const BROWSER_TASK_TYPES: ReadonlySet<string> = new Set([
-  "research", "booking", "form", "shopping",
+  "research", "booking", "form", "shopping", "signup",
 ]);
 
 /**
@@ -2150,6 +2150,8 @@ export async function classifyTask(userMessage: string): Promise<{
     taskType = "writing";
   } else if (/\b(call|phone|dial)\b/.test(text)) {
     taskType = "voice";
+  } else if (/\b(sign ?up|signup|create (an? )?(account|profile)|register|enroll|open (an? )?account)\b/.test(text)) {
+    taskType = "signup";
   }
 
   // Extract URLs/domains

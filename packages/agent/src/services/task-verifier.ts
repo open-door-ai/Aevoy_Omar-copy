@@ -305,6 +305,7 @@ export function getQualityTier(taskType: string): QualityTier {
     case 'account_creation':
     case '2fa_completion':
     case 'booking':  // Bookings require form fill + submit — NOT just "here's the address"
+    case 'signup':   // Signups require form fill + submit — NOT just "here's the signup page"
       return 'browser_action';
     case 'shopping':
       return 'research';
