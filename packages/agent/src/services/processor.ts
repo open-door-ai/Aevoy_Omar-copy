@@ -3684,11 +3684,12 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
     // book reservation, fill out form) but AI gave advice/instructions instead of acting, REJECT the
     // response and force browser re-execution. This is the #1 failure mode — AI acts like ChatGPT.
     const isActionTask = /\b(sign up|signup|create (an? )?(account|profile|gmail|email)|register|make (an? )?(account|profile)|book (a |an )?(reservation|table|appointment|room)|fill (out |in )?(the |a |an )?(form|application|survey)|apply (for|to)|subscribe|enroll|open (an? )?(account|page))\b/i.test(taskTextLower);
-    const hasBrowserCompletion = actionResults.some(r =>
-      ['fill', 'fill_form', 'submit', 'click', 'login'].includes(r.action?.type || '') && r.success
+    // For signup/creation tasks, require FORM actions (fill/fill_form/submit) — just clicking isn't enough
+    const hasFormCompletion = actionResults.some(r =>
+      ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
     );
-    if (isActionTask && aiResponse.content && !hasBrowserCompletion && currentIteration <= MAX_ITERATIONS) {
-      const isAdviceResponse = /\b(you can|available at|accessible at|you('ll| will) need to|here's how|sign.?up page|registration (page|form)|visit|go to)\b/i.test(aiResponse.content) ||
+    if (isActionTask && aiResponse.content && !hasFormCompletion && currentIteration <= MAX_ITERATIONS) {
+      const isAdviceResponse = /\b(you can|available at|accessible at|you('ll| will) need to|here's how|sign.?up page|registration (page|form)|visit|go to|proceed to|ready at|loaded and ready)\b/i.test(aiResponse.content) ||
         /https?:\/\/\S+\.(com|org|net|io)/i.test(aiResponse.content); // Contains bare URLs = advice
       if (isAdviceResponse) {
         console.log(`[ADVICE-GATE] Task is "${subject.substring(0, 50)}" — AI gave advice instead of doing it. Forcing browser action.`);
@@ -3757,7 +3758,7 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
       // Step 1: Try to extract phone number from existing response/action results
       const allText = [
         aiResponse.content || '',
-        ...actionResults.map(r => r.result || ''),
+        ...actionResults.map(r => typeof r.result === 'string' ? r.result : JSON.stringify(r.result || '')),
       ].join(' ');
       // Must match full 10+ digit phone number (area code + 7 digits)
       // Formats: (604) 568-3900, 604-568-3900, +1 604-568-3900, 6045683900
