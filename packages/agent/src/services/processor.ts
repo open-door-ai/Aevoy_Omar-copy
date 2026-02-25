@@ -1202,13 +1202,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           if (weatherText && weatherText.length > 5 && !weatherText.includes('<')) {
             const weatherResponse = `Current weather in ${weatherMatch[1].trim()}: ${weatherText}`;
             console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
-            if (!task.suppressEmail) {
-              await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, weatherResponse);
-            }
+            // Update Supabase FIRST so task shows completed immediately
             await getSupabaseClient().from('tasks').update({
               status: 'completed', response_text: weatherResponse,
               completed_at: new Date().toISOString(), type: 'general',
             }).eq('id', taskId);
+            // Send email async — fire-and-forget, don't block the response
+            if (!task.suppressEmail) {
+              sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, weatherResponse).catch(() => {});
+            }
             clearTimeout(masterTimer);
             return { taskId, success: true, response: weatherResponse, actions: [] };
           }
@@ -1238,14 +1240,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           'You are Aevoy, a friendly AI assistant. Sound human, use contractions, be brief. No emojis unless the user used them.'
         );
         const greetResponse = greetResult?.result || "Hey! What can I help you with?";
-        if (!task.suppressEmail) {
-          await sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: greetResponse });
-        }
         await getSupabaseClient().from('tasks').update({
           status: 'completed', completed_at: new Date().toISOString(),
           execution_time_ms: Date.now() - startTime, response_text: greetResponse,
           action_count: 0, action_success_count: 0,
         }).eq('id', taskId);
+        if (!task.suppressEmail) {
+          sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: greetResponse }).catch(() => {});
+        }
         clearTimeout(masterTimer);
         return { taskId, success: true, response: greetResponse, actions: [] };
       } catch (greetErr) {
@@ -1280,7 +1282,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             response_text: responseText,
             action_count: 1, action_success_count: smsResult.success ? 1 : 0,
           }).eq('id', taskId);
-          if (!task.suppressEmail) await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText);
+          if (!task.suppressEmail) sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, responseText).catch(() => {});
           clearTimeout(masterTimer);
           return { taskId, success: smsResult.success, response: responseText, actions: [{ action: { type: 'send_sms' as any, params: { to: userPhone, body: smsBody } }, success: smsResult.success, result: responseText }] };
         }
@@ -1309,7 +1311,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             response_text: callResponse,
             action_count: 1, action_success_count: callResult ? 1 : 0,
           }).eq('id', taskId);
-          if (!task.suppressEmail) await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, callResponse);
+          if (!task.suppressEmail) sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, callResponse).catch(() => {});
           clearTimeout(masterTimer);
           return { taskId, success: !!callResult, response: callResponse, actions: [{ action: { type: 'call_user' as any, params: {} }, success: !!callResult, result: callResponse }] };
         }
