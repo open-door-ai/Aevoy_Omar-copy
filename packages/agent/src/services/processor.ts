@@ -2086,6 +2086,55 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       break; // Only fix the first matching pattern
     }
 
+    // 6c. CREDENTIAL-DEPENDENT TASK EARLY EXIT: If the task requires logging into a service
+    // (cancel subscription, manage account) and we don't have stored credentials, respond
+    // immediately instead of wasting 5+ minutes on doomed browser attempts.
+    const isCredentialTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|manage|change plan|switch plan|update payment|change password|close account|log.?in|sign.?in|get into)\b/i.test(taskTextLower) &&
+      /\b(subscription|account|netflix|hulu|spotify|disney|amazon prime|youtube premium|apple music|hbo|paramount|peacock|my account)\b/i.test(taskTextLower);
+    if (isCredentialTask) {
+      // Check if we have stored credentials for this service
+      const serviceDomain = classification.domains?.[0] || '';
+      let hasCredentials = false;
+      try {
+        const { data: passwords } = await getSupabaseClient()
+          .from('profiles')
+          .select('agent_passwords_encrypted')
+          .eq('id', userId)
+          .single();
+        hasCredentials = !!(passwords?.agent_passwords_encrypted);
+        if (!hasCredentials && serviceDomain) {
+          // Also check credential_vault for service-specific logins
+          const { data: vaultCreds } = await getSupabaseClient()
+            .from('credential_vault')
+            .select('id')
+            .eq('user_id', userId)
+            .ilike('service_name', `%${serviceDomain.replace('.com', '').replace('.ca', '')}%`)
+            .limit(1);
+          hasCredentials = !!(vaultCreds && vaultCreds.length > 0);
+        }
+      } catch { /* continue with browser attempt */ }
+
+      if (!hasCredentials) {
+        console.log(`[CREDENTIAL-GATE] Task requires credentials for ${serviceDomain || 'service'} but none found — responding immediately`);
+        const credResponse = `I'd love to help you with that, but I need your login credentials first.\n\nPlease add your ${serviceDomain || 'account'} login to **Connected Apps** in your Aevoy settings (Settings → Agent Passwords), and then ask me again. I'll log in and handle it for you.\n\nAlternatively, you can share your username and password securely through the Agent Passwords section of your settings.`;
+
+        await getSupabaseClient().from("tasks").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime,
+          response_text: credResponse,
+          action_count: 0,
+          action_success_count: 0,
+        }).eq("id", taskId);
+
+        if (!task.suppressEmail) {
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, credResponse);
+        }
+        clearTimeout(masterTimer);
+        return { taskId, success: true, response: credResponse, actions: [] };
+      }
+    }
+
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
 
@@ -3646,15 +3695,14 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
         aiResponse.content || '',
         ...actionResults.map(r => r.result || ''),
       ].join(' ');
-      const phoneMatch = allText.match(/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}/);
+      // Must match full 10+ digit phone number (area code + 7 digits)
+      // Formats: (604) 568-3900, 604-568-3900, +1 604-568-3900, 6045683900
+      const phoneMatch = allText.match(/(?:\+?1[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})/);
 
-      if (phoneMatch) {
-        // We already have a phone number — call it directly, no AI needed
-        const rawPhone = phoneMatch[0].replace(/[^\d+]/g, '');
-        const formattedPhone = rawPhone.startsWith('+') ? rawPhone
-          : rawPhone.length === 10 ? `+1${rawPhone}`
-          : rawPhone.length === 11 && rawPhone.startsWith('1') ? `+${rawPhone}`
-          : `+${rawPhone}`;
+      if (phoneMatch && phoneMatch[1] && phoneMatch[2] && phoneMatch[3]) {
+        // We have a verified 10-digit phone number — call it directly, no AI needed
+        const cleanDigits = `${phoneMatch[1]}${phoneMatch[2]}${phoneMatch[3]}`;
+        const formattedPhone = `+1${cleanDigits}`;
         const callMessage = body || subject.replace(/\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+/i, '').trim();
         console.log(`[CALL-GATE] Found phone ${formattedPhone} in response — calling directly`);
         try {
