@@ -2290,6 +2290,58 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
 
+        // SIGNUP COMPLETION GATE (independent of real actions):
+        // If this is a signup/account creation task and AI signaled TASK_COMPLETE but never
+        // filled any forms, it just browsed to the page and gave advice. REJECT.
+        const isSignupTask = /\b(sign ?up|signup|create (an? )?(account|profile|gmail|email)|register|enroll|open (an? )?account)\b/i.test(taskTextLower);
+        const hasFormActions = actionResults.some(r =>
+          ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
+        );
+        const signupLowerContent = aiResponse.content.toLowerCase();
+        const isSignupAdvice = (
+          /\b(you can|proceed to|available at|accessible at|loaded and ready|sign.?up page|registration (page|form)|is available|is loaded)\b/i.test(signupLowerContent) ||
+          /https?:\/\/\S+\.(com|org|net|io)/i.test(aiResponse.content)
+        );
+        if (isSignupTask && !hasFormActions && isSignupAdvice && currentIteration <= 4) {
+          console.warn(`[SIGNUP-GATE] REJECTED: AI browsed to signup page but didn't fill the form. Forcing form fill.`);
+          aiResponse.content = '';
+          aiResponse.actions = [];
+          const forceSignupPrompt = `Original request: ${subject} ${body}
+
+YOU DID NOT COMPLETE THE SIGNUP. You navigated to the page but didn't fill out the form.
+That is WRONG. The user wants YOU to create the account, not tell them where to go.
+
+YOU MUST DO THIS NOW:
+1. [ACTION:screenshot_ocr({})] — See the current page state
+2. Look for email/username fields and fill them:
+   [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
+   [ACTION:fill("input[name=username]", "${username.toLowerCase()}")]
+3. Fill password field with agent password:
+   [ACTION:fill("input[type=password]", "{primary_password}")]
+4. Fill any name fields: [ACTION:fill("input[name=firstName]", "${senderName || username}")]
+5. Click the submit/signup/create button:
+   [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Register")]
+6. If CAPTCHA appears, the system handles it. Just click submit.
+7. If email verification needed: [ACTION:wait(10000)] then [ACTION:read_email()] to get the code
+
+DO NOT describe what the user should do. FILL THE FORM AND SUBMIT IT.`;
+
+          const forcedSignup = await generateResponse(
+            memory, subject, forceSignupPrompt, username, "complex", userId, taskId, senderName
+          );
+          totalAiCost += forcedSignup.cost || 0;
+          totalTokens += forcedSignup.tokensUsed || 0;
+          aiResponse = forcedSignup;
+          aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+          console.log(`[SIGNUP-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
+          if (aiResponse.actions.length === 0) {
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            break;
+          }
+          // Continue to action execution — the AI should now fill forms
+        }
+
         // ADVICE-DETECTION QUALITY GATE: If AI completed with no REAL actions on round 1,
         // check if the response is advice (lists of suggestions) instead of results.
         // Treat wait-only or scroll-only as "no real actions" — the AI is being lazy.
@@ -2359,52 +2411,7 @@ DO NOT just give me the address again. COMPLETE THE BOOKING.`;
             }
             // Continue to action execution
 
-          // SIGNUP COMPLETION GATE: If task is signup/creation and AI just browsed to page without filling forms
-          } else if (
-            !isConversational &&
-            currentIteration <= 4 &&
-            /\b(sign ?up|signup|create (an? )?(account|profile|gmail|email)|register|enroll|open (an? )?account)\b/i.test(taskTextLower) &&
-            !actionResults.some(r => ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success) &&
-            (/\b(you can|proceed to|available at|accessible at|loaded and ready|sign.?up page|registration (page|form))\b/i.test(lowerContent) ||
-             /https?:\/\/\S+\.(com|org|net|io)/i.test(aiResponse.content))
-          ) {
-            console.warn(`[SIGNUP-GATE] REJECTED: AI browsed to signup page but didn't fill the form. Forcing form fill.`);
-            aiResponse.content = '';
-            aiResponse.actions = [];
-            const forceSignupPrompt = `Original request: ${subject} ${body}
-
-YOU DID NOT COMPLETE THE SIGNUP. You navigated to the page but didn't fill out the form.
-That is WRONG. The user wants YOU to create the account, not tell them where to go.
-
-YOU MUST DO THIS NOW:
-1. [ACTION:screenshot_ocr({})] — See the current page state
-2. Look for email/username fields and fill them:
-   [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
-   [ACTION:fill("input[name=username]", "${username.toLowerCase()}")]
-3. Fill password field with agent password:
-   [ACTION:fill("input[type=password]", "{primary_password}")]
-4. Fill any name fields: [ACTION:fill("input[name=firstName]", "${senderName || username}")]
-5. Click the submit/signup/create button:
-   [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Register")]
-6. If CAPTCHA appears, the system handles it. Just click submit.
-7. If email verification needed: [ACTION:wait(10000)] then [ACTION:read_email()] to get the code
-
-DO NOT describe what the user should do. FILL THE FORM AND SUBMIT IT.`;
-
-            const forcedSignup = await generateResponse(
-              memory, subject, forceSignupPrompt, username, "complex", userId, taskId, senderName
-            );
-            totalAiCost += forcedSignup.cost || 0;
-            totalTokens += forcedSignup.tokensUsed || 0;
-            aiResponse = forcedSignup;
-            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
-            console.log(`[SIGNUP-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
-            if (aiResponse.actions.length === 0) {
-              isTaskComplete = true;
-              aiSignaledComplete = true;
-              break;
-            }
-            // Continue to action execution — the AI should now fill forms
+          // (Signup gate now runs independently above, before the !hasRealActions check)
 
           // LAZY DATA GATE: AI says "check the website" or "prices fluctuate" for a data lookup task
           } else if (
