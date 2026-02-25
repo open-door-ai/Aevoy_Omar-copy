@@ -452,6 +452,13 @@ export async function runVisionAgent(
       // STUCK DETECTION: Same URL for too long → force scroll to unstick
       if (url === lastUrl) {
         sameUrlCount++;
+
+        // Early bail-out: stuck on error page for 3+ steps → give up so CALL-GATE can take over
+        if (sameUrlCount >= 3 && (url.startsWith('chrome-error://') || url.startsWith('about:') || url === '')) {
+          console.log(`[VISION-AGENT] Stuck on error page for ${sameUrlCount} steps — bailing out for CALL-GATE`);
+          return { success: false, error: `Site unreachable (bot-blocked or error page). CALL-GATE will call the business directly.`, steps, cost: totalCost, screenshots };
+        }
+
         if (sameUrlCount === 4) {
           console.log(`[VISION-AGENT] Stuck on same URL for 4 steps — forcing scroll down`);
           await page.mouse.wheel(0, 600);
