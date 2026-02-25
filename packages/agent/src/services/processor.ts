@@ -3310,6 +3310,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         // Broad match: signup/register pages OR any page from the target domain when task is account creation
         const isOnSignupPage = /sign.?up|register|create.?account|join|get.?started|login|log.?in|onboarding/i.test(currentPageUrl + ' ' + currentPageTitle);
 
+        // Debug: write progress to DB so we can trace what's happening
+        void getSupabaseClient().from('tasks').update({
+          progress_message: `[SIGNUP-AUTO] isOnSignupPage=${isOnSignupPage}, url=${currentPageUrl.substring(0, 80)}, title=${(currentPageTitle || '').substring(0, 40)}`
+        }).eq('id', taskId).then(() => {});
+
         if (isOnSignupPage && signupPagePost) {
           console.log(`[SIGNUP-AUTO] Detected signup page after browse (${currentPageUrl}). Filling form directly.`);
 
@@ -3445,6 +3450,20 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             actionResults.push({ action: { type: 'fill' as any, params: { selector: 'email', value: autoEmail } }, success: true, result: `Filled email: ${autoEmail}` });
           } else {
             console.log(`[SIGNUP-AUTO] Could not find email field. Page URL: ${currentPageUrl}, Title: ${currentPageTitle}`);
+            // Debug: count visible inputs on page
+            try {
+              const inputCount = await signupPagePost.evaluate(() => {
+                const all = document.querySelectorAll('input');
+                const visible = Array.from(all).filter(i => {
+                  const r = i.getBoundingClientRect();
+                  return r.width > 0 && r.height > 0;
+                });
+                return { total: all.length, visible: visible.length, types: visible.map(i => `${i.type}|${i.name}|${i.placeholder}`).join(', ') };
+              });
+              void getSupabaseClient().from('tasks').update({
+                progress_message: `[SIGNUP-AUTO] NO EMAIL FIELD. inputs: ${inputCount.visible}/${inputCount.total}, types: ${inputCount.types.substring(0, 200)}`
+              }).eq('id', taskId).then(() => {});
+            } catch { /* non-critical */ }
           }
 
           // Step 3: Fill password — same multi-strategy approach
