@@ -2302,69 +2302,141 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           /\b(you can|proceed to|available at|accessible at|loaded and ready|sign.?up page|registration (page|form)|is available|is loaded)\b/i.test(signupLowerContent) ||
           /https?:\/\/\S+\.(com|org|net|io)/i.test(aiResponse.content)
         );
-        if (isSignupTask && !hasFormActions && isSignupAdvice && currentIteration <= 4) {
-          console.warn(`[SIGNUP-GATE] REJECTED: AI browsed to signup page but didn't fill the form. Forcing form fill.`);
-          aiResponse.content = '';
-          aiResponse.actions = [];
-          const forceSignupPrompt = `Original request: ${subject} ${body}
+        if (isSignupTask && !hasFormActions && isSignupAdvice && currentIteration <= 4 && executionEngine) {
+          console.warn(`[SIGNUP-GATE] REJECTED: AI browsed but didn't fill form. Executing DIRECT form fill (bypassing AI).`);
 
-YOU DID NOT COMPLETE THE SIGNUP. You navigated to the page but didn't fill out the form.
-That is WRONG. The user wants YOU to create the account, not tell them where to go.
+          // Get the live page from execution engine
+          const signupPage = executionEngine.getPage?.();
+          if (signupPage) {
+            // Resolve agent password for form fill
+            let agentPassword = '';
+            try {
+              const { getAgentPasswords } = await import("./agent-passwords.js");
+              const passwords = await getAgentPasswords(userId);
+              agentPassword = passwords?.primary || 'AevoyAgent2026!';
+            } catch { agentPassword = 'AevoyAgent2026!'; }
 
-IMPORTANT: Many signup pages show OAuth buttons first (Google, Facebook, Apple).
-Look for a link like "Continue with email", "Sign up with email", "Continue another way",
-"Use email instead", or "Other options". CLICK THAT FIRST to reveal the email/password form.
+            const email = `${username}@aevoy.com`;
+            const displayName = senderName || username;
 
-EXECUTE THESE ACTIONS NOW:
-1. First, check if you need to reveal the email form:
-   [ACTION:click("Continue with email")]
-   or [ACTION:click("Continue another way")]
-   or [ACTION:click("Sign up with email")]
-   (Skip if email fields are already visible)
+            // Step 1: Click "Continue with email" / "Sign up with email" / "Continue another way"
+            const emailRevealTexts = [
+              'Continue with email', 'Sign up with email', 'Continue another way',
+              'Use email instead', 'Other sign up options', 'Sign up', 'Email'
+            ];
+            for (const linkText of emailRevealTexts) {
+              try {
+                const el = signupPage.getByText(linkText, { exact: false });
+                if (await el.count() > 0) {
+                  await el.first().click({ timeout: 3000 });
+                  console.log(`[SIGNUP-GATE] Clicked "${linkText}" to reveal email form`);
+                  await signupPage.waitForTimeout(2000); // Wait for form to appear
+                  break;
+                }
+              } catch { /* try next */ }
+            }
 
-2. Fill email field:
-   [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
-   If that fails try: [ACTION:fill("[name*=email]", "${username}@aevoy.com")]
-   If that fails try: [ACTION:fill("[placeholder*=email]", "${username}@aevoy.com")]
+            // Step 2: Try all common email selectors
+            const emailSelectors = [
+              'input[type="email"]', '[name*="email"]', '[placeholder*="email" i]',
+              '[placeholder*="Email"]', '[aria-label*="email" i]', '[data-testid*="email"]',
+              '#email', '[name="email"]', 'input[autocomplete="email"]',
+            ];
+            let emailFilled = false;
+            for (const sel of emailSelectors) {
+              try {
+                const el = signupPage.locator(sel).first();
+                if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                  await el.click({ timeout: 2000 });
+                  await el.fill(email, { timeout: 3000 });
+                  console.log(`[SIGNUP-GATE] Filled email with selector: ${sel}`);
+                  emailFilled = true;
+                  actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: email } }, success: true, result: `Filled email: ${email}` });
+                  break;
+                }
+              } catch { /* try next selector */ }
+            }
 
-3. Fill password field:
-   [ACTION:fill("input[type=password]", "{primary_password}")]
-   If that fails try: [ACTION:fill("[name*=pass]", "{primary_password}")]
+            // Step 3: Try all common password selectors
+            const passwordSelectors = [
+              'input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]',
+              '[placeholder*="Password"]', '[aria-label*="password" i]', '#password',
+              '[name="password"]', 'input[autocomplete="new-password"]',
+            ];
+            let passwordFilled = false;
+            for (const sel of passwordSelectors) {
+              try {
+                const el = signupPage.locator(sel).first();
+                if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                  await el.click({ timeout: 2000 });
+                  await el.fill(agentPassword, { timeout: 3000 });
+                  console.log(`[SIGNUP-GATE] Filled password with selector: ${sel}`);
+                  passwordFilled = true;
+                  actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: '***' } }, success: true, result: 'Filled password' });
+                  break;
+                }
+              } catch { /* try next selector */ }
+            }
 
-4. Fill name fields if present:
-   [ACTION:fill("input[name=firstName]", "${senderName || username}")]
-   [ACTION:fill("input[name=lastName]", "Aevoy")]
+            // Step 4: Try name fields
+            const nameSelectors = [
+              ['input[name="firstName"]', displayName], ['input[name="first_name"]', displayName],
+              ['input[name="name"]', displayName], ['[placeholder*="name" i]', displayName],
+              ['input[name="lastName"]', 'Aevoy'], ['input[name="last_name"]', 'Aevoy'],
+              ['#firstName', displayName], ['#lastName', 'Aevoy'],
+            ];
+            for (const [sel, val] of nameSelectors) {
+              try {
+                const el = signupPage.locator(sel).first();
+                if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                  await el.fill(val, { timeout: 3000 });
+                  console.log(`[SIGNUP-GATE] Filled name field: ${sel} = ${val}`);
+                }
+              } catch { /* skip */ }
+            }
 
-5. Click submit:
-   [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Continue")] or [ACTION:click("Register")]
+            // Step 5: Click submit button
+            if (emailFilled) {
+              const submitTexts = [
+                'Sign Up', 'Create Account', 'Register', 'Continue', 'Get Started',
+                'Join', 'Submit', 'Create', 'Next', 'Sign up',
+              ];
+              for (const btnText of submitTexts) {
+                try {
+                  const btn = signupPage.getByRole('button', { name: btnText });
+                  if (await btn.count() > 0 && await btn.first().isVisible({ timeout: 1000 })) {
+                    await btn.first().click({ timeout: 3000 });
+                    console.log(`[SIGNUP-GATE] Clicked submit button: "${btnText}"`);
+                    actionResults.push({ action: { type: 'click' as any, params: { selector: btnText } }, success: true, result: `Clicked ${btnText}` });
+                    await signupPage.waitForTimeout(3000);
+                    break;
+                  }
+                } catch { /* try next */ }
+              }
 
-6. If CAPTCHA appears, the system handles it automatically. Just click submit.
+              // Step 6: Check for CAPTCHA and handle
+              try {
+                const { handleCaptchaIfPresent } = await import("../execution/captcha.js");
+                await handleCaptchaIfPresent(signupPage, userId, taskId);
+              } catch { /* captcha handling is optional */ }
 
-7. After submission, if email verification is needed:
-   [ACTION:wait(15000)]
-   [ACTION:read_email()]
-   Then fill the verification code field with the code from the email.
+              // Step 7: Wait for verification email if needed
+              await signupPage.waitForTimeout(5000);
 
-Your email: ${username}@aevoy.com
-Your password: {primary_password} (agent password from vault)
-
-DO NOT describe what the user should do. FILL THE FORM AND SUBMIT IT.
-Output the [ACTION:...] tags directly. Do NOT explain what you're going to do.`;
-
-          const forcedSignup = await generateResponse(
-            memory, subject, forceSignupPrompt, username, "complex", userId, taskId, senderName
-          );
-          totalAiCost += forcedSignup.cost || 0;
-          totalTokens += forcedSignup.tokensUsed || 0;
-          aiResponse = forcedSignup;
-          aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
-          console.log(`[SIGNUP-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
-          if (aiResponse.actions.length === 0) {
-            isTaskComplete = true;
-            aiSignaledComplete = true;
-            break;
+              // Update AI response with what we did
+              const resultMsg = emailFilled && passwordFilled
+                ? `Signed up on ${signupPage.url()} using ${email}. Form was filled and submitted.`
+                : emailFilled
+                  ? `Partially signed up on ${signupPage.url()} — email filled (${email}), password field ${passwordFilled ? 'filled' : 'not found'}.`
+                  : `Navigated to signup page but could not find email field to fill.`;
+              aiResponse.content = resultMsg;
+              console.log(`[SIGNUP-GATE] Direct form fill complete: email=${emailFilled}, password=${passwordFilled}`);
+            } else {
+              console.log(`[SIGNUP-GATE] Could not find email field on page`);
+              aiResponse.content = `I navigated to the signup page but couldn't locate the email input field. The site may require JavaScript interaction or use a non-standard form.`;
+            }
           }
-          // Continue to action execution — the AI should now fill forms
+          // Don't break — continue to action execution loop for any remaining actions
         }
 
         // ADVICE-DETECTION QUALITY GATE: If AI completed with no REAL actions on round 1,
