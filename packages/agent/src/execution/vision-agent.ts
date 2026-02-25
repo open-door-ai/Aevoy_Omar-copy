@@ -290,9 +290,15 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
     ? `\nPREVIOUS STEPS:\n${history.slice(-8).join('\n')}\n`
     : '';
 
+  // If on an error page, tell the agent explicitly
+  const isErrorPage = url.startsWith('chrome-error://') || url.startsWith('about:') || url.includes('error') || url === '';
+  const errorNote = isErrorPage
+    ? `\nNOTE: The browser is on an error/blank page. The task requires you to navigate to a website. Extract the website URL from the TASK description and output NAVIGATE:"url" as your first action.\n`
+    : '';
+
   return `TASK: ${task}
 URL: ${url}
-${historyText}
+${errorNote}${historyText}
 INTERACTIVE ELEMENTS (reference by number):
 ${elemLines || '(none visible)'}
 

@@ -3660,7 +3660,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine) {
         const visionPage = executionEngine.getPage?.();
         const visionPageUrl = visionPage?.url() || '';
-        const isValidPage = visionPageUrl && visionPageUrl !== 'about:blank' && !visionPageUrl.startsWith('chrome-error://') && !visionPageUrl.startsWith('chrome://') && !visionPageUrl.startsWith('about:');
+        const isValidPage = visionPageUrl && visionPageUrl !== 'about:blank';
         if (visionPage && isValidPage && !visionPage.isClosed()) {
           let visionPassword = '';
           try {
@@ -4424,8 +4424,7 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
               // After advice-gate browse, run vision agent to complete the task on the loaded page
               const advGatePage = executionEngine?.getPage?.();
               const advGateUrl = advGatePage?.url() || '';
-              const isAdvGatePageValid = advGateUrl && advGateUrl !== 'about:blank' && !advGateUrl.startsWith('chrome-error://') && !advGateUrl.startsWith('chrome://') && !advGateUrl.startsWith('about:');
-              if (advGatePage && isAdvGatePageValid && !advGatePage.isClosed()) {
+              if (advGatePage && advGateUrl && advGateUrl !== 'about:blank' && !advGatePage.isClosed()) {
                 console.log(`[ADVICE-GATE] Launching vision agent to complete task on ${advGateUrl.substring(0, 80)}`);
                 try {
                   let agPw = '';
