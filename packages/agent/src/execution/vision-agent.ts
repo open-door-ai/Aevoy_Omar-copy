@@ -48,24 +48,9 @@ interface ElementInfo {
  * Extract all interactive elements from the page with numeric indices.
  * Returns a compact list the AI can reference by number.
  */
-async function extractElements(page: Page): Promise<ElementInfo[]> {
-  return await page.evaluate(() => {
-    const interactive = Array.from(document.querySelectorAll(
-      'input:not([type="hidden"]):not([disabled]), ' +
-      'textarea:not([disabled]), ' +
-      'select:not([disabled]), ' +
-      'button:not([disabled]), ' +
-      'a[href], ' +
-      '[role="button"]:not([disabled]), ' +
-      '[role="link"], ' +
-      '[role="option"], ' +
-      '[role="menuitem"], ' +
-      '[role="tab"], ' +
-      '[role="checkbox"], ' +
-      '[role="radio"], ' +
-      '[role="textbox"], ' +
-      '[contenteditable="true"]'
-    ));
+async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> {
+  return await page.evaluate((sel) => {
+    const interactive = Array.from(document.querySelectorAll(sel));
 
     const results: Array<{
       index: number; tag: string; type?: string; text?: string;
@@ -101,43 +86,53 @@ async function extractElements(page: Page): Promise<ElementInfo[]> {
     }
 
     return results;
-  });
+  }, sel);
 }
+
+// Selector for all interactive elements (serialized as string to pass into page.evaluate)
+const INTERACTIVE_SELECTOR =
+  'input:not([type="hidden"]):not([disabled]),' +
+  'textarea:not([disabled]),' +
+  'select:not([disabled]),' +
+  'button:not([disabled]),' +
+  'a[href],' +
+  '[role="button"]:not([disabled]),' +
+  '[role="link"],[role="option"],[role="menuitem"],[role="tab"],' +
+  '[role="checkbox"],[role="radio"],[role="textbox"],' +
+  '[contenteditable="true"]';
 
 /**
  * Click an element by its numeric index.
+ * Scrolls element into view first so clicks work on elements below the fold.
  */
 async function clickByIndex(page: Page, index: number): Promise<boolean> {
   try {
-    const result = await page.evaluate((idx: number) => {
-      const interactive = Array.from(document.querySelectorAll(
-        'input:not([type="hidden"]):not([disabled]), ' +
-        'textarea:not([disabled]), ' +
-        'select:not([disabled]), ' +
-        'button:not([disabled]), ' +
-        'a[href], ' +
-        '[role="button"]:not([disabled]), ' +
-        '[role="link"], ' +
-        '[role="option"], ' +
-        '[role="menuitem"], ' +
-        '[role="tab"], ' +
-        '[role="checkbox"], ' +
-        '[role="radio"], ' +
-        '[role="textbox"], ' +
-        '[contenteditable="true"]'
-      )).filter(el => {
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return false;
-        const style = window.getComputedStyle(el);
-        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    // Scroll into view first
+    await page.evaluate(([idx, sel]: [number, string]) => {
+      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
       });
-
       const el = interactive[idx] as HTMLElement | undefined;
-      if (!el) return { ok: false, reason: 'element not found' };
+      if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]);
 
+    await page.waitForTimeout(150);
+
+    const result = await page.evaluate(([idx, sel]: [number, string]) => {
+      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+      });
+      const el = interactive[idx] as HTMLElement | undefined;
+      if (!el) return { ok: false as const };
       const rect = el.getBoundingClientRect();
-      return { ok: true, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }, index);
+      return { ok: true as const, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]);
 
     if (!result.ok) return false;
     await page.mouse.click(result.x!, result.y!);
@@ -149,61 +144,32 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
 
 /**
  * Type text into an element by its numeric index.
- * Clears existing value first.
+ * Scrolls into view, clicks to focus, clears, then types with keyboard.
  */
 async function typeByIndex(page: Page, index: number, text: string): Promise<boolean> {
   try {
-    const focused = await page.evaluate((idx: number) => {
-      const interactive = Array.from(document.querySelectorAll(
-        'input:not([type="hidden"]):not([disabled]), ' +
-        'textarea:not([disabled]), ' +
-        '[role="textbox"], ' +
-        '[contenteditable="true"]'
-      )).filter(el => {
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return false;
-        const style = window.getComputedStyle(el);
-        return style.display !== 'none' && style.visibility !== 'hidden';
+    // Scroll into view + get position
+    const pos = await page.evaluate(([idx, sel]: [number, string]) => {
+      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
       });
-
-      // Try to match by position among all interactive elements including non-inputs
-      const all = Array.from(document.querySelectorAll(
-        'input:not([type="hidden"]):not([disabled]), ' +
-        'textarea:not([disabled]), ' +
-        'select:not([disabled]), ' +
-        'button:not([disabled]), ' +
-        'a[href], ' +
-        '[role="button"]:not([disabled]), ' +
-        '[role="link"], ' +
-        '[role="option"], ' +
-        '[role="menuitem"], ' +
-        '[role="tab"], ' +
-        '[role="checkbox"], ' +
-        '[role="radio"], ' +
-        '[role="textbox"], ' +
-        '[contenteditable="true"]'
-      )).filter(el => {
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return false;
-        const style = window.getComputedStyle(el);
-        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-      });
-
-      const el = all[idx] as HTMLElement | undefined;
-      if (!el) return false;
-
-      el.focus();
+      const el = interactive[idx] as HTMLElement | undefined;
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
       const rect = el.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }, index);
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]);
 
-    if (!focused) return false;
+    if (!pos) return false;
+    await page.waitForTimeout(150);
 
-    // Click to focus
-    await page.mouse.click((focused as {x:number;y:number}).x, (focused as {x:number;y:number}).y);
+    await page.mouse.click(pos.x, pos.y);
     await page.waitForTimeout(200);
 
-    // Select all + delete to clear, then type
+    // Clear existing value then type
     await page.keyboard.press('Control+a');
     await page.keyboard.press('Backspace');
     await page.keyboard.type(text, { delay: 30 });
@@ -214,37 +180,63 @@ async function typeByIndex(page: Page, index: number, text: string): Promise<boo
 }
 
 /**
+ * Fill an element using React/Vue-compatible value injection.
+ * Use when TYPE doesn't trigger framework onChange events.
+ */
+async function fillByIndex(page: Page, index: number, text: string): Promise<boolean> {
+  try {
+    const done = await page.evaluate(([idx, val, sel]: [number, string, string]) => {
+      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+      });
+      const el = interactive[idx] as HTMLInputElement | undefined;
+      if (!el) return false;
+
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      el.focus();
+
+      // React-compatible value injection via native setter
+      const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(el, val);
+      } else {
+        el.value = val;
+      }
+
+      // Dispatch events React/Vue listen to
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      return true;
+    }, [index, text, INTERACTIVE_SELECTOR] as [number, string, string]);
+
+    return done as boolean;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Select an option by index (for <select> elements).
  */
 async function selectByIndex(page: Page, index: number, value: string): Promise<boolean> {
   try {
-    return await page.evaluate(([idx, val]: [number, string]) => {
-      const interactive = Array.from(document.querySelectorAll(
-        'input:not([type="hidden"]):not([disabled]), ' +
-        'textarea:not([disabled]), ' +
-        'select:not([disabled]), ' +
-        'button:not([disabled]), ' +
-        'a[href], ' +
-        '[role="button"]:not([disabled]), ' +
-        '[role="link"], ' +
-        '[role="option"], ' +
-        '[role="menuitem"], ' +
-        '[role="tab"], ' +
-        '[role="checkbox"], ' +
-        '[role="radio"], ' +
-        '[role="textbox"], ' +
-        '[contenteditable="true"]'
-      )).filter(el => {
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return false;
-        const style = window.getComputedStyle(el);
-        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    return await page.evaluate(([idx, val, sel]: [number, string, string]) => {
+      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
       });
 
       const el = interactive[idx] as HTMLSelectElement | undefined;
       if (!el || el.tagName.toLowerCase() !== 'select') return false;
 
-      // Try matching by text or value
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
       const options = Array.from(el.options);
       const opt = options.find(o =>
         o.text.toLowerCase().includes(val.toLowerCase()) ||
@@ -256,7 +248,7 @@ async function selectByIndex(page: Page, index: number, value: string): Promise<
         return true;
       }
       return false;
-    }, [index, value] as [number, string]);
+    }, [index, value, INTERACTIVE_SELECTOR] as [number, string, string]);
   } catch {
     return false;
   }
@@ -306,9 +298,10 @@ Look at the screenshot and the element list. Choose ONE action to take next.
 
 RESPOND WITH EXACTLY ONE LINE in this format:
 - CLICK:N              (click element N)
-- TYPE:N:"text"        (clear element N and type text)
+- TYPE:N:"text"        (keyboard-type text into element N — clears first)
+- FILL:N:"text"        (directly set value of element N — use for React/custom inputs when TYPE fails)
 - SELECT:N:"value"     (select option in dropdown N)
-- SCROLL:down          (scroll down)
+- SCROLL:down          (scroll down to find more elements)
 - SCROLL:up            (scroll up)
 - NAVIGATE:"url"       (go to URL)
 - PRESS:Tab            (press keyboard key)
@@ -321,10 +314,12 @@ RULES:
 - One action only. No explanation.
 - If you need to fill a form, fill ONE field at a time.
 - After typing in a field, use PRESS:Tab to move to the next field.
+- If TYPE does not work on a field (no text appears after 2 tries), use FILL instead.
 - After filling all fields, CLICK the submit button.
-- If a CAPTCHA appears, output WAIT.
+- If a CAPTCHA appears, output WAIT (it will be solved automatically).
 - If you see a success confirmation, output DONE.
-- If asked to sign up and you filled the email, that counts as progress — keep going.`;
+- If asked to sign up and you filled the email, that counts as progress — keep going.
+- If form has required fields with asterisks (*) fill ALL of them before submitting.`;
 }
 
 /**
@@ -342,6 +337,12 @@ function parseAction(response: string): { type: string; index?: number; text?: s
   // Also handle TYPE:N:text without quotes
   const typeNoQuote = line.match(/^TYPE:(\d+):(.+)/);
   if (typeNoQuote) return { type: 'type', index: parseInt(typeNoQuote[1]), text: typeNoQuote[2].trim() };
+
+  const fill = line.match(/^FILL:(\d+):"((?:[^"\\]|\\.)*)"/);
+  if (fill) return { type: 'fill', index: parseInt(fill[1]), text: fill[2].replace(/\\"/g, '"') };
+
+  const fillNoQuote = line.match(/^FILL:(\d+):(.+)/);
+  if (fillNoQuote) return { type: 'fill', index: parseInt(fillNoQuote[1]), text: fillNoQuote[2].trim() };
 
   const select = line.match(/^SELECT:(\d+):"((?:[^"\\]|\\.)*)"/);
   if (select) return { type: 'select', index: parseInt(select[1]), text: select[2] };
@@ -434,7 +435,7 @@ export async function runVisionAgent(
       try {
         [screenshot, elements] = await Promise.all([
           takeScreenshot(page),
-          extractElements(page),
+          extractElements(page, INTERACTIVE_SELECTOR),
         ]);
       } catch (err) {
         return { success: false, error: `Page capture failed: ${err}`, steps, cost: totalCost, screenshots };
@@ -519,6 +520,13 @@ export async function runVisionAgent(
 
           case 'type': {
             actionOk = await typeByIndex(page, action.index!, action.text!);
+            if (actionOk) await page.waitForTimeout(300);
+            break;
+          }
+
+          case 'fill': {
+            // React-compatible fill — sets value directly via native setter
+            actionOk = await fillByIndex(page, action.index!, action.text!);
             if (actionOk) await page.waitForTimeout(300);
             break;
           }
