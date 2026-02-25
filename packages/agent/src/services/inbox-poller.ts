@@ -490,8 +490,58 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   const senderEmail = email.from.toLowerCase().trim();
   const isKnownSender = user.email && senderEmail === user.email.toLowerCase().trim();
 
-  if (!isKnownSender) {
-    // Unknown sender — check for PIN authentication
+  // SERVICE EMAIL BYPASS: Allow automated/noreply emails from known services through
+  // without PIN. These are verification codes, receipts, newsletters, etc.
+  // The agent reads them but never follows instructions blindly (content is sanitized).
+  const senderDomain = senderEmail.split('@')[1] || '';
+  const TRUSTED_SERVICE_DOMAINS = [
+    // Big tech & email services
+    'google.com', 'gmail.com', 'accounts.google.com', 'youtube.com',
+    'apple.com', 'id.apple.com', 'icloud.com',
+    'microsoft.com', 'outlook.com', 'live.com', 'hotmail.com',
+    'amazon.com', 'amazon.ca', 'amazon.co.uk',
+    // Social & messaging
+    'twitter.com', 'x.com', 'facebook.com', 'facebookmail.com', 'instagram.com',
+    'linkedin.com', 'reddit.com', 'discord.com', 'slack.com', 'telegram.org',
+    // Streaming & entertainment
+    'netflix.com', 'hulu.com', 'spotify.com', 'disneyplus.com', 'hbomax.com',
+    'peacocktv.com', 'paramountplus.com', 'crunchyroll.com',
+    // Shopping & delivery
+    'ebay.com', 'walmart.com', 'target.com', 'bestbuy.com', 'costco.com',
+    'ubereats.com', 'doordash.com', 'grubhub.com', 'instacart.com',
+    'uber.com', 'lyft.com', 'airbnb.com',
+    // Banking & finance
+    'paypal.com', 'venmo.com', 'stripe.com', 'squareup.com', 'cash.app',
+    'chase.com', 'bankofamerica.com', 'wellsfargo.com', 'citibank.com',
+    // SaaS & developer tools
+    'github.com', 'gitlab.com', 'atlassian.com', 'notion.so', 'figma.com',
+    'vercel.com', 'railway.app', 'heroku.com', 'netlify.com', 'cloudflare.com',
+    'twilio.com', 'sendgrid.net', 'mailgun.org', 'postmarkapp.com',
+    // Health & fitness
+    'fitbit.com', 'myfitnesspal.com', 'peloton.com', 'strava.com',
+    // Travel & booking
+    'booking.com', 'expedia.com', 'tripadvisor.com', 'kayak.com',
+    'aircanada.com', 'united.com', 'delta.com', 'southwest.com',
+    // Canadian services
+    'rogers.com', 'bell.ca', 'telus.com', 'td.com', 'rbc.com', 'bmo.com',
+    'scotiabank.com', 'cibc.com', 'canadapost-postescanada.ca',
+    // Utilities & government
+    'intuit.com', 'turbotax.ca', 'gov.bc.ca', 'canada.ca', 'cra-arc.gc.ca',
+  ];
+  // Match exact domain or subdomains (e.g., noreply@mail.netflix.com → netflix.com)
+  const isServiceEmail = TRUSTED_SERVICE_DOMAINS.some(d =>
+    senderDomain === d || senderDomain.endsWith('.' + d)
+  );
+  // Also detect noreply/automated sender patterns
+  const isNoReplyEmail = /^(no-?reply|noreply|notifications?|alerts?|info|support|verify|confirm|donotreply|mailer-daemon|postmaster)\b/i.test(senderEmail.split('@')[0]);
+
+  if (!isKnownSender && (isServiceEmail || isNoReplyEmail)) {
+    // Service/automated email — allow through but log it. Content will be sanitized
+    // by the AI system prompt's injection protection before processing.
+    console.log(`[INBOX-POLLER] Service email from ${maskEmail(senderEmail)} → ${username} (domain: ${senderDomain}, noreply: ${isNoReplyEmail}) — bypassing PIN`);
+    // Fall through to normal processing (no PIN required)
+  } else if (!isKnownSender) {
+    // Unknown HUMAN sender — require PIN authentication
     const { verifyUnifiedPin, hasPin: userHasPin, getRemainingAttempts } = await import("../utils/pin-auth.js");
     const hasPinSet = await userHasPin(user.id);
 

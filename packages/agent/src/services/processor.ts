@@ -3472,6 +3472,12 @@ ACTION FORMAT REMINDER (you MUST use these exact tags — describing actions doe
 [ACTION:submit("Submit button text")] — Submit a form
 [ACTION:read_email(5, 5)] — Check email (last N emails, past N minutes)
 [ACTION:call_external("+14165551234", "message")] — Call a business/dealer/provider
+[ACTION:send_sms("+14165551234", "message")] — Send SMS to the user${
+  /\b(text me|send me a text|sms me)\b/i.test(subject) ? ' ← USER WANTS THIS! Send results via SMS when done.' : ''
+}
+[ACTION:call_user("message to say")] — Call the user${
+  /\b(call me|call me back|phone me)\b/i.test(subject) ? ' ← USER WANTS THIS! Call them when done.' : ''
+}
 [ACTION:wait(5000)] — Wait milliseconds
 
 CRITICAL: You must OUTPUT the [ACTION:...] tags in your response. Saying "I should fill the email field" does NOTHING.
@@ -3626,45 +3632,71 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
     }
 
     // POST-LOOP CALL GATE: If user asked to "call the dentist/florist/restaurant/etc."
-    // and no call_external was executed, force the AI to search for the number and call.
+    // and no call_external was executed, FORCE the call — extract phone from response if needed.
     const isCallBusinessTask = /\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+\w+/i.test(subject) &&
       !/(call me|call me back|give me a call)/i.test(subject); // Exclude "call ME" requests
+    // Also detect implicit call tasks: "book a reservation at X", "make an appointment with X"
+    const isBookingTask = /\b(book|reserve|make (a|an) (reservation|appointment|booking))\b/i.test(subject);
     const hasCallExternalAction = actionResults.some(r => r.action?.type === 'call_external');
-    if (isCallBusinessTask && !hasCallExternalAction && currentIteration <= MAX_ITERATIONS) {
-      console.log(`[CALL-GATE] Task asks to call a business but no call_external was executed — forcing phone action`);
-      try {
-        const callBusinessPrompt = `The user asked: "${subject}"
+    if ((isCallBusinessTask || isBookingTask) && !hasCallExternalAction && currentIteration <= MAX_ITERATIONS) {
+      console.log(`[CALL-GATE] Task requires calling a business but no call_external was executed`);
 
-You researched but NEVER CALLED the business. The user wants you to CALL THEM, not just find information.
+      // Step 1: Try to extract phone number from existing response/action results
+      const allText = [
+        aiResponse.content || '',
+        ...actionResults.map(r => r.result || ''),
+      ].join(' ');
+      const phoneMatch = allText.match(/(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}/);
 
-Step 1: Use search results to find the phone number. If you already have it, skip to step 2.
-[ACTION:search("${subject.replace(/call\s+(the|my|a|an|that)\s+/i, '')} phone number")]
-
-Step 2: CALL the business with the user's request:
-[ACTION:call_external("+1XXXXXXXXXX", "Hi, ${body || subject}")]
-
-You MUST output a [ACTION:call_external(...)] tag with a real phone number. DO IT NOW.`;
-        const callBizResponse = await generateResponse(
-          memory, subject, callBusinessPrompt, username, "complex", userId, taskId, senderName
-        );
-        totalAiCost += callBizResponse.cost || 0;
-        totalTokens += callBizResponse.tokensUsed || 0;
-        if (callBizResponse.actions && callBizResponse.actions.length > 0) {
-          console.log(`[CALL-GATE] Got ${callBizResponse.actions.length} actions, executing`);
-          for (const callBizAction of callBizResponse.actions) {
-            try {
-              const callBizResult = await executeAction(callBizAction, userId, username, executionEngine);
-              actionResults.push(callBizResult);
-              if (callBizResult.success && callBizAction.type === 'call_external') {
-                aiResponse.content += `\n\nCalled the business: ${callBizResult.result || 'call placed'}`;
+      if (phoneMatch) {
+        // We already have a phone number — call it directly, no AI needed
+        const rawPhone = phoneMatch[0].replace(/[^\d+]/g, '');
+        const formattedPhone = rawPhone.startsWith('+') ? rawPhone
+          : rawPhone.length === 10 ? `+1${rawPhone}`
+          : rawPhone.length === 11 && rawPhone.startsWith('1') ? `+${rawPhone}`
+          : `+${rawPhone}`;
+        const callMessage = body || subject.replace(/\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+/i, '').trim();
+        console.log(`[CALL-GATE] Found phone ${formattedPhone} in response — calling directly`);
+        try {
+          const { callExternal } = await import("./twilio.js");
+          const callResult = await callExternal(userId, formattedPhone, callMessage);
+          actionResults.push({ action: { type: 'call_external' as any, params: { to: formattedPhone, message: callMessage } }, success: true, result: `Called ${formattedPhone}` });
+          aiResponse.content += `\n\nCalled ${formattedPhone} on your behalf.`;
+          console.log(`[CALL-GATE] Direct call placed to ${formattedPhone}`);
+        } catch (callErr) {
+          console.error(`[CALL-GATE] Direct call failed:`, callErr);
+          aiResponse.content += `\n\nFound the number (${phoneMatch[0]}) but couldn't place the call automatically. You can call them directly.`;
+        }
+      } else {
+        // No phone found — ask AI to search for one
+        console.log(`[CALL-GATE] No phone number in response — asking AI to find one`);
+        try {
+          const callBusinessPrompt = `The user asked: "${subject}"
+You found information but NO phone number. Search for the business phone number NOW.
+[ACTION:search("${subject.replace(/\b(call|phone|ring|dial|book|reserve|make a reservation at|make an appointment with)\s+(the|my|a|an|that)?\s*/i, '').trim()} phone number")]
+After finding the number, call them:
+[ACTION:call_external("+1XXXXXXXXXX", "${body || subject}")]`;
+          const callBizResponse = await generateResponse(
+            memory, subject, callBusinessPrompt, username, "complex", userId, taskId, senderName
+          );
+          totalAiCost += callBizResponse.cost || 0;
+          totalTokens += callBizResponse.tokensUsed || 0;
+          if (callBizResponse.actions && callBizResponse.actions.length > 0) {
+            for (const callBizAction of callBizResponse.actions) {
+              try {
+                const callBizResult = await executeAction(callBizAction, userId, username, executionEngine);
+                actionResults.push(callBizResult);
+                if (callBizResult.success && callBizAction.type === 'call_external') {
+                  aiResponse.content += `\n\nCalled the business: ${callBizResult.result || 'call placed'}`;
+                }
+              } catch (callBizErr) {
+                console.error(`[CALL-GATE] ${callBizAction.type} failed:`, callBizErr);
               }
-            } catch (callBizErr) {
-              console.error(`[CALL-GATE] ${callBizAction.type} failed:`, callBizErr);
             }
           }
+        } catch (callBizErr) {
+          console.error(`[CALL-GATE] Failed:`, callBizErr);
         }
-      } catch (callBizErr) {
-        console.error(`[CALL-GATE] Failed:`, callBizErr);
       }
     }
 
@@ -3752,10 +3784,19 @@ You MUST output a [ACTION:call_external(...)] tag with a real phone number. DO I
       }
     }
 
-    // Strip [ACTION:...] tags from response content before quality checks
-    // Multiline tags (create_word/excel JSON blobs) would otherwise appear verbatim to users
+    // Strip [ACTION:...] tags, [THINKING] blocks, and internal markers from response content
+    // This MUST happen before multi-action SMS injection so thinking doesn't leak into texts
     if (aiResponse.content) {
-      aiResponse.content = aiResponse.content.replace(/\[ACTION:[\s\S]*?\]\s*/g, "").trim();
+      aiResponse.content = aiResponse.content
+        // Strip [THINKING]...[/THINKING] tagged blocks
+        .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '')
+        // Strip untagged thinking-like prose that AI sometimes writes
+        .replace(/^(?:thinking|reasoning|analysis|observation|assessment)[:\s]*(?:what happened|last round|previous|the page|i see|i notice|the results|looking at)[\s\S]*?(?=\n\n|\[ACTION|\n[A-Z])/gim, '')
+        // Strip [ACTION:...] tags (multiline safe)
+        .replace(/\[ACTION:[\s\S]*?\]\s*/g, '')
+        // Strip [TASK_COMPLETE] markers
+        .replace(/\[TASK_COMPLETE\]/g, '')
+        .trim();
       // Normalize curly/smart apostrophes to straight apostrophes so all regex checks match
       // e.g. "I\u2019ll" (curly) → "I'll" (straight) — otherwise isPlanLike/stillBad regexes miss it
       aiResponse.content = aiResponse.content
@@ -3785,7 +3826,11 @@ You MUST output a [ACTION:call_external(...)] tag with a real phone number. DO I
             const { data: smsProf } = await getSupabaseClient()
               .from('profiles').select('phone_number').eq('id', userId).single();
             if (smsProf?.phone_number) {
-              const smsBody = aiResponse.content.replace(/\[ACTION:[^\]]*\]/g, '').replace(/\[TASK_COMPLETE\]/g, '').trim().substring(0, 1500);
+              const smsBody = aiResponse.content
+                .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '')
+                .replace(/\[ACTION:[^\]]*\]/g, '')
+                .replace(/\[TASK_COMPLETE\]/g, '')
+                .trim().substring(0, 1500);
               const { sendSms } = await import("./twilio.js");
               await sendSms({ userId, to: smsProf.phone_number, body: smsBody });
               console.log(`[MULTI-ACTION] Sent SMS to ${smsProf.phone_number}`);
@@ -5890,6 +5935,12 @@ async function executeAction(
       if (!smsBody) {
         return { action, success: false, error: "SMS requires 'body' text" };
       }
+      // Strip thinking blocks and action tags that might leak into user-facing SMS
+      smsBody = smsBody
+        .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '')
+        .replace(/\[ACTION:[^\]]*\]/g, '')
+        .replace(/\[TASK_COMPLETE\]/g, '')
+        .trim();
       // Auto-resolve phone number: if 'to' is missing, a placeholder, or not E.164, look up user's phone
       if (!to || !/^\+\d{10,15}$/.test(to)) {
         try {
