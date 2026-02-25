@@ -2311,20 +2311,45 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 YOU DID NOT COMPLETE THE SIGNUP. You navigated to the page but didn't fill out the form.
 That is WRONG. The user wants YOU to create the account, not tell them where to go.
 
-YOU MUST DO THIS NOW:
-1. [ACTION:screenshot_ocr({})] — See the current page state
-2. Look for email/username fields and fill them:
-   [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
-   [ACTION:fill("input[name=username]", "${username.toLowerCase()}")]
-3. Fill password field with agent password:
-   [ACTION:fill("input[type=password]", "{primary_password}")]
-4. Fill any name fields: [ACTION:fill("input[name=firstName]", "${senderName || username}")]
-5. Click the submit/signup/create button:
-   [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Register")]
-6. If CAPTCHA appears, the system handles it. Just click submit.
-7. If email verification needed: [ACTION:wait(10000)] then [ACTION:read_email()] to get the code
+IMPORTANT: Many signup pages show OAuth buttons first (Google, Facebook, Apple).
+Look for a link like "Continue with email", "Sign up with email", "Continue another way",
+"Use email instead", or "Other options". CLICK THAT FIRST to reveal the email/password form.
 
-DO NOT describe what the user should do. FILL THE FORM AND SUBMIT IT.`;
+EXECUTE THESE ACTIONS NOW:
+1. First, check if you need to reveal the email form:
+   [ACTION:click("Continue with email")]
+   or [ACTION:click("Continue another way")]
+   or [ACTION:click("Sign up with email")]
+   (Skip if email fields are already visible)
+
+2. Fill email field:
+   [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
+   If that fails try: [ACTION:fill("[name*=email]", "${username}@aevoy.com")]
+   If that fails try: [ACTION:fill("[placeholder*=email]", "${username}@aevoy.com")]
+
+3. Fill password field:
+   [ACTION:fill("input[type=password]", "{primary_password}")]
+   If that fails try: [ACTION:fill("[name*=pass]", "{primary_password}")]
+
+4. Fill name fields if present:
+   [ACTION:fill("input[name=firstName]", "${senderName || username}")]
+   [ACTION:fill("input[name=lastName]", "Aevoy")]
+
+5. Click submit:
+   [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Continue")] or [ACTION:click("Register")]
+
+6. If CAPTCHA appears, the system handles it automatically. Just click submit.
+
+7. After submission, if email verification is needed:
+   [ACTION:wait(15000)]
+   [ACTION:read_email()]
+   Then fill the verification code field with the code from the email.
+
+Your email: ${username}@aevoy.com
+Your password: {primary_password} (agent password from vault)
+
+DO NOT describe what the user should do. FILL THE FORM AND SUBMIT IT.
+Output the [ACTION:...] tags directly. Do NOT explain what you're going to do.`;
 
           const forcedSignup = await generateResponse(
             memory, subject, forceSignupPrompt, username, "complex", userId, taskId, senderName
