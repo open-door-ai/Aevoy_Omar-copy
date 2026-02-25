@@ -3617,12 +3617,17 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               resultMsg = `Attempted signup on ${postUrl} using ${autoEmail}. Email ${autoEmailFilled ? 'filled' : 'not found'}, password ${autoPasswordFilled ? 'filled' : 'not found'}. Check the page for any errors or next steps.`;
             }
 
-            aiResponse.content = resultMsg;
-            isTaskComplete = true;
-            aiSignaledComplete = true;
-            signupAutoCompleted = true; // Protect this response from quality gate + verification overwrite
-            console.log(`[SIGNUP-AUTO] Complete: ${resultMsg.substring(0, 100)}`);
-            break;
+            // Only complete task if we actually filled the email — otherwise let AI iterate
+            if (autoEmailFilled) {
+              aiResponse.content = resultMsg;
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              signupAutoCompleted = true; // Protect this response from quality gate + verification overwrite
+              console.log(`[SIGNUP-AUTO] Complete: ${resultMsg.substring(0, 100)}`);
+              break;
+            } else {
+              console.log(`[SIGNUP-AUTO] Email not filled — letting AI continue iterating`);
+            }
           }
         }
       }
