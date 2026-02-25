@@ -265,7 +265,7 @@ async function takeScreenshot(page: Page): Promise<string> {
 /**
  * Build the AI prompt: element list + current URL + task.
  */
-function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[]): string {
+function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = ''): string {
   const elemLines = elements.map(e => {
     const parts = [`[${e.index}] ${e.tag.toUpperCase()}`];
     if (e.type && e.type !== 'text') parts.push(`type=${e.type}`);
@@ -290,14 +290,15 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
 
   return `TASK: ${task}
 URL: ${url}
-${errorNote}${historyText}
+${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}
 INTERACTIVE ELEMENTS (reference by number):
 ${elemLines || '(none visible)'}
 
 Look at the screenshot and the element list. Choose ONE action to take next.
 
 RESPOND WITH EXACTLY ONE LINE in this format:
-- CLICK:N              (click element N)
+- CLICK:N              (click element N from the list above)
+- CLICK_AT:x,y        (click at pixel coordinates — use when element is not in the list but visible in screenshot)
 - TYPE:N:"text"        (keyboard-type text into element N — clears first)
 - FILL:N:"text"        (directly set value of element N — use for React/custom inputs when TYPE fails)
 - SELECT:N:"value"     (select option in dropdown N)
@@ -315,6 +316,7 @@ RULES:
 - If you need to fill a form, fill ONE field at a time.
 - After typing in a field, use PRESS:Tab to move to the next field.
 - If TYPE does not work on a field (no text appears after 2 tries), use FILL instead.
+- If an element you need to click is NOT in the element list but you can SEE it in the screenshot, use CLICK_AT:x,y with estimated pixel coordinates.
 - After filling all fields, CLICK the submit button.
 - If a CAPTCHA appears, output WAIT (it will be solved automatically).
 - If you see a success confirmation, output DONE.
@@ -327,6 +329,9 @@ RULES:
  */
 function parseAction(response: string): { type: string; index?: number; text?: string; key?: string; url?: string; result?: string } | null {
   const line = response.trim().split('\n')[0].trim();
+
+  const clickAt = line.match(/^CLICK_AT:(\d+),(\d+)/);
+  if (clickAt) return { type: 'click_at', index: parseInt(clickAt[1]), text: clickAt[2] };
 
   const click = line.match(/^CLICK:(\d+)/);
   if (click) return { type: 'click', index: parseInt(click[1]) };
@@ -417,6 +422,26 @@ export async function runVisionAgent(
 
   console.log(`[VISION-AGENT] Starting task: "${task.substring(0, 100)}"`);
 
+  // PRE-PLANNING STEP (Manus-style): Generate a structured plan before touching the browser.
+  // This gives the AI a north star to follow even when individual steps fail.
+  let taskPlan = '';
+  try {
+    const planPrompt = `TASK: ${task}
+
+You are a browser automation planner. Output a concise execution plan as 3-5 bullet points:
+1. What URL to navigate to first
+2. What form fields to fill (if any)
+3. What button to click to submit
+4. What success looks like
+5. Fallback if the primary approach fails
+
+Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
+    const planResult = await generateVisionResponse(planPrompt, '', SYSTEM_PROMPT);
+    taskPlan = planResult.content.substring(0, 500);
+    totalCost += planResult.cost;
+    console.log(`[VISION-AGENT] Plan: ${taskPlan.substring(0, 200)}`);
+  } catch { /* planning is optional — continue without it */ }
+
   try {
     for (steps = 0; steps < MAX_STEPS; steps++) {
       // Check total timeout
@@ -474,7 +499,7 @@ export async function runVisionAgent(
       }
 
       // REASON: Ask AI what to do
-      const prompt = buildObservePrompt(elements, url, task, history);
+      const prompt = buildObservePrompt(elements, url, task, history, taskPlan);
       let aiResponse: string;
       let stepCost = 0;
       try {
@@ -555,6 +580,17 @@ export async function runVisionAgent(
               await page.waitForLoadState('domcontentloaded').catch(() => {});
               await page.waitForTimeout(800);
             }
+            break;
+          }
+
+          case 'click_at': {
+            // Coordinate-based click — Manus-style fallback for elements not in DOM list
+            const x = action.index!;
+            const y = parseInt(action.text!);
+            await page.mouse.click(x, y);
+            await page.waitForLoadState('domcontentloaded').catch(() => {});
+            await page.waitForTimeout(800);
+            actionOk = true;
             break;
           }
 

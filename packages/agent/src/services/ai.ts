@@ -1423,6 +1423,7 @@ export async function generateVisionResponse(
 ): Promise<{ content: string; cost: number }> {
   // Detect media type from base64 header or default to jpeg (screenshots are jpeg)
   const mediaType = imageBase64.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
+  const hasImage = imageBase64.length > 100;
 
   // Helper: wrap any promise with a timeout
   const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
@@ -1434,19 +1435,17 @@ export async function generateVisionResponse(
   // 1. Gemini Flash FIRST — free and fast (best for iteration loops)
   if (process.env.GOOGLE_API_KEY) {
     try {
+      const msgContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = hasImage
+        ? [
+            { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
+            { type: "text", text: prompt }
+          ]
+        : [{ type: "text", text: prompt }];
+
       const response = await withTimeout(getGeminiClient().chat.completions.create({
         model: "gemini-2.0-flash",
         max_tokens: 512,
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: { url: `data:${mediaType};base64,${imageBase64}` }
-            },
-            { type: "text", text: prompt }
-          ] as OpenAI.Chat.Completions.ChatCompletionContentPart[],
-        }],
+        messages: [{ role: "user", content: msgContent }],
       }), 15000);
 
       const content = response.choices[0]?.message?.content || "";
@@ -1462,20 +1461,14 @@ export async function generateVisionResponse(
   // 2. Claude Haiku — cheap and decent vision
   if (process.env.ANTHROPIC_API_KEY) {
     try {
+      const haikuContent = hasImage
+        ? [{ type: "image" as const, source: { type: "base64" as const, media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } }, { type: "text" as const, text: prompt }]
+        : [{ type: "text" as const, text: prompt }];
       const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-3-5-haiku-latest",
         max_tokens: 512,
         system: systemPrompt || "Analyze this image and respond concisely.",
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 }
-            },
-            { type: "text", text: prompt }
-          ]
-        }]
+        messages: [{ role: "user", content: haikuContent }]
       }), 15000);
 
       const content = response.content[0].type === "text" ? response.content[0].text : "";
@@ -1491,20 +1484,14 @@ export async function generateVisionResponse(
   // 3. Claude Sonnet — expensive, last resort
   if (process.env.ANTHROPIC_API_KEY) {
     try {
+      const sonnetContent = hasImage
+        ? [{ type: "image" as const, source: { type: "base64" as const, media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } }, { type: "text" as const, text: prompt }]
+        : [{ type: "text" as const, text: prompt }];
       const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-sonnet-4-20250514",
         max_tokens: 512,
         system: systemPrompt || "Analyze this image and respond concisely.",
-        messages: [{
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 }
-            },
-            { type: "text", text: prompt }
-          ]
-        }]
+        messages: [{ role: "user", content: sonnetContent }]
       }), 20000);
 
       const content = response.content[0].type === "text" ? response.content[0].text : "";
