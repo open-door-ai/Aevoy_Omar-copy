@@ -35,9 +35,10 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           userId: user.id,
           username: profile?.username || "user",
-          email: profile?.email || "",
-          task,
-          channel: "web",
+          from: profile?.email || `${profile?.username || "user"}@aevoy.com`,
+          body: task,       // task content goes in 'body' field
+          subject: task.substring(0, 100), // subject = first 100 chars of task
+          inputChannel: "web",
         }),
       });
 
