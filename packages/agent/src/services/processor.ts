@@ -4419,6 +4419,29 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                   console.error(`[ADVICE-GATE] ${advAction.type} failed:`, advErr);
                 }
               }
+
+              // After advice-gate browse, run vision agent to complete the task on the loaded page
+              const advGatePage = executionEngine?.getPage?.();
+              const advGateUrl = advGatePage?.url() || '';
+              if (advGatePage && advGateUrl && advGateUrl !== 'about:blank' && !advGatePage.isClosed()) {
+                console.log(`[ADVICE-GATE] Launching vision agent to complete task on ${advGateUrl.substring(0, 80)}`);
+                try {
+                  let agPw = '';
+                  try { const { getAgentPasswords } = await import("./agent-passwords.js"); const agP = await getAgentPasswords(userId); agPw = agP?.primary || 'AevoyAgent2026!'; } catch { agPw = 'AevoyAgent2026!'; }
+                  const agEmail = `${username}@aevoy.com`;
+                  const agName = senderName || username;
+                  const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy. Complete the task fully.`;
+                  const agResult = await runVisionAgent(advGatePage, agTask, userId, taskId);
+                  if (agResult.success) {
+                    aiResponse.content = agResult.result || `Task completed.`;
+                    console.log(`[ADVICE-GATE] Vision agent completed: ${aiResponse.content.substring(0, 80)}`);
+                  } else {
+                    console.log(`[ADVICE-GATE] Vision agent failed: ${agResult.error}`);
+                  }
+                } catch (agErr) {
+                  console.warn(`[ADVICE-GATE] Vision agent exception: ${agErr}`);
+                }
+              }
             }
           } catch (advErr) {
             console.error(`[ADVICE-GATE] Failed:`, advErr);
