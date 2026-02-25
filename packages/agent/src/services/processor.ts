@@ -3394,14 +3394,14 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           // Step 2: Fill email — 3 strategies: CSS selectors, Playwright locators, DOM injection
           let autoEmailFilled = false;
 
-          // Strategy A: CSS selectors
+          // Strategy A: CSS selectors (reduced timeouts — 1s visibility, 2s fill)
           if (!autoEmailFilled) {
-            for (const sel of ['input[type="email"]', '[name*="email"]', '[placeholder*="email" i]', '[placeholder*="Email"]', '[aria-label*="email" i]', '[data-testid*="email"]', '#email', '[name="email"]', 'input[autocomplete="email"]', 'input[type="text"][name*="mail"]']) {
+            for (const sel of ['input[type="email"]', '[name*="email"]', '[placeholder*="email" i]', '[aria-label*="email" i]', '#email', '[name="email"]', 'input[autocomplete="email"]']) {
               try {
                 const el = signupPagePost.locator(sel).first();
-                if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
-                  await el.click({ timeout: 2000 });
-                  await el.fill(autoEmail, { timeout: 5000 });
+                if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                  await el.click({ timeout: 1000 });
+                  await el.fill(autoEmail, { timeout: 2000 });
                   autoEmailFilled = true;
                   console.log(`[SIGNUP-AUTO] Email filled via CSS: ${sel}`);
                   break;
@@ -3410,36 +3410,22 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             }
           }
 
-          // Strategy B: Playwright built-in locators (handle React/dynamic content better)
+          // Strategy B: Playwright locators (single combined check)
           if (!autoEmailFilled) {
-            try {
-              const byPlaceholder = signupPagePost.getByPlaceholder(/email/i);
-              if (await byPlaceholder.count() > 0) {
-                await byPlaceholder.first().fill(autoEmail, { timeout: 5000 });
-                autoEmailFilled = true;
-                console.log(`[SIGNUP-AUTO] Email filled via getByPlaceholder`);
-              }
-            } catch { /* next */ }
-          }
-          if (!autoEmailFilled) {
-            try {
-              const byRole = signupPagePost.getByRole('textbox', { name: /email/i });
-              if (await byRole.count() > 0) {
-                await byRole.first().fill(autoEmail, { timeout: 5000 });
-                autoEmailFilled = true;
-                console.log(`[SIGNUP-AUTO] Email filled via getByRole`);
-              }
-            } catch { /* next */ }
-          }
-          if (!autoEmailFilled) {
-            try {
-              const byLabel = signupPagePost.getByLabel(/email/i);
-              if (await byLabel.count() > 0) {
-                await byLabel.first().fill(autoEmail, { timeout: 5000 });
-                autoEmailFilled = true;
-                console.log(`[SIGNUP-AUTO] Email filled via getByLabel`);
-              }
-            } catch { /* next */ }
+            for (const locator of [
+              signupPagePost.getByPlaceholder(/email/i),
+              signupPagePost.getByRole('textbox', { name: /email/i }),
+              signupPagePost.getByLabel(/email/i),
+            ]) {
+              try {
+                if (await locator.count() > 0) {
+                  await locator.first().fill(autoEmail, { timeout: 2000 });
+                  autoEmailFilled = true;
+                  console.log(`[SIGNUP-AUTO] Email filled via Playwright locator`);
+                  break;
+                }
+              } catch { /* next */ }
+            }
           }
 
           // Strategy C: DOM injection fallback — find ANY visible text input and fill it
@@ -3508,14 +3494,14 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             } catch { /* non-critical */ }
           }
 
-          // Step 3: Fill password — same multi-strategy approach
+          // Step 3: Fill password (reduced timeouts)
           let autoPasswordFilled = false;
-          for (const sel of ['input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]', '#password', '[name="password"]', 'input[autocomplete="new-password"]']) {
+          for (const sel of ['input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]', '#password', 'input[autocomplete="new-password"]']) {
             try {
               const el = signupPagePost.locator(sel).first();
-              if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
-                await el.click({ timeout: 2000 });
-                await el.fill(autoPassword, { timeout: 5000 });
+              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                await el.click({ timeout: 1000 });
+                await el.fill(autoPassword, { timeout: 2000 });
                 autoPasswordFilled = true;
                 console.log(`[SIGNUP-AUTO] Password filled: ${sel}`);
                 break;
@@ -3524,11 +3510,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           }
           if (!autoPasswordFilled) {
             try {
-              const pwByPlaceholder = signupPagePost.getByPlaceholder(/password/i);
-              if (await pwByPlaceholder.count() > 0) {
-                await pwByPlaceholder.first().fill(autoPassword, { timeout: 5000 });
+              const pwLoc = signupPagePost.getByPlaceholder(/password/i);
+              if (await pwLoc.count() > 0) {
+                await pwLoc.first().fill(autoPassword, { timeout: 2000 });
                 autoPasswordFilled = true;
-                console.log(`[SIGNUP-AUTO] Password filled via getByPlaceholder`);
+                console.log(`[SIGNUP-AUTO] Password filled via Playwright locator`);
               }
             } catch { /* next */ }
           }
@@ -3536,17 +3522,16 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             actionResults.push({ action: { type: 'fill' as any, params: { selector: 'password', value: '***' } }, success: true, result: 'Filled password' });
           }
 
-          // Step 4: Fill name fields
+          // Step 4: Fill name fields (fast — 500ms timeouts)
           for (const [sel, val] of [
             ['input[name="firstName"]', autoName], ['input[name="first_name"]', autoName],
-            ['input[name="name"]', autoName], ['[placeholder*="name" i]', autoName],
-            ['[placeholder*="First" i]', autoName], ['[placeholder*="Last" i]', 'Aevoy'],
-            ['input[name="lastName"]', 'Aevoy'], ['input[name="last_name"]', 'Aevoy'],
+            ['input[name="name"]', autoName], ['[placeholder*="First" i]', autoName],
+            ['[placeholder*="Last" i]', 'Aevoy'], ['input[name="lastName"]', 'Aevoy'],
           ] as [string, string][]) {
             try {
               const el = signupPagePost.locator(sel).first();
-              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
-                await el.fill(val, { timeout: 3000 });
+              if (await el.count() > 0 && await el.isVisible({ timeout: 500 })) {
+                await el.fill(val, { timeout: 1000 });
                 console.log(`[SIGNUP-AUTO] Name filled: ${sel} = ${val}`);
               }
             } catch { /* skip */ }
@@ -3558,11 +3543,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             for (const btnText of submitTexts) {
               try {
                 const btn = signupPagePost.getByRole('button', { name: btnText });
-                if (await btn.count() > 0 && await btn.first().isVisible({ timeout: 1000 })) {
-                  await btn.first().click({ timeout: 3000 });
+                if (await btn.count() > 0 && await btn.first().isVisible({ timeout: 500 })) {
+                  await btn.first().click({ timeout: 2000 });
                   actionResults.push({ action: { type: 'click' as any, params: { selector: btnText } }, success: true, result: `Clicked ${btnText}` });
                   console.log(`[SIGNUP-AUTO] Clicked submit: "${btnText}"`);
-                  await signupPagePost.waitForTimeout(3000);
+                  await signupPagePost.waitForTimeout(2000);
                   break;
                 }
               } catch { /* next */ }
@@ -3570,31 +3555,30 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             // Fallback: click any visible submit-like button
             try {
               const anySubmit = signupPagePost.locator('button[type="submit"], input[type="submit"]').first();
-              if (await anySubmit.count() > 0 && await anySubmit.isVisible({ timeout: 1000 })) {
-                await anySubmit.click({ timeout: 3000 });
+              if (await anySubmit.count() > 0 && await anySubmit.isVisible({ timeout: 500 })) {
+                await anySubmit.click({ timeout: 2000 });
                 console.log(`[SIGNUP-AUTO] Clicked submit via type=submit`);
-                await signupPagePost.waitForTimeout(3000);
+                await signupPagePost.waitForTimeout(2000);
               }
             } catch { /* non-critical */ }
 
             // Step 5b: Multi-step form — after submit, check for password field (step 2)
             if (!autoPasswordFilled) {
-              for (const sel of ['input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]', '#password', 'input[autocomplete="new-password"]']) {
+              for (const sel of ['input[type="password"]', '[name*="pass"]', '#password', 'input[autocomplete="new-password"]']) {
                 try {
                   const el = signupPagePost.locator(sel).first();
-                  if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
-                    await el.click({ timeout: 2000 });
-                    await el.fill(autoPassword, { timeout: 5000 });
+                  if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                    await el.click({ timeout: 1000 });
+                    await el.fill(autoPassword, { timeout: 2000 });
                     autoPasswordFilled = true;
                     console.log(`[SIGNUP-AUTO] Step 2 password filled: ${sel}`);
-                    // Look for second submit/continue button
                     for (const btn2 of ['Continue', 'Next', 'Sign Up', 'Create Account', 'Submit']) {
                       try {
                         const b = signupPagePost.getByRole('button', { name: btn2 });
-                        if (await b.count() > 0 && await b.first().isVisible({ timeout: 1000 })) {
-                          await b.first().click({ timeout: 3000 });
+                        if (await b.count() > 0 && await b.first().isVisible({ timeout: 500 })) {
+                          await b.first().click({ timeout: 2000 });
                           console.log(`[SIGNUP-AUTO] Step 2 submit: "${btn2}"`);
-                          await signupPagePost.waitForTimeout(3000);
+                          await signupPagePost.waitForTimeout(2000);
                           break;
                         }
                       } catch { /* next */ }
@@ -3612,7 +3596,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             } catch { /* non-critical */ }
 
             // Step 7: Wait and check for verification email
-            await signupPagePost.waitForTimeout(5000);
+            await signupPagePost.waitForTimeout(3000);
 
             // Check post-submit page state
             const postUrl = signupPagePost.url();
