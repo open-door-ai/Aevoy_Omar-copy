@@ -482,6 +482,21 @@ export async function runVisionAgent(
       }
 
       if (action.type === 'fail') {
+        // Don't accept FAIL on an error page in early steps — force navigate instead
+        const currentUrl = page.url();
+        const onErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl.startsWith('about:') || steps < 2;
+        if (onErrorPage && steps < 3) {
+          // Extract URL from task and navigate there instead of giving up
+          const urlInTask = task.match(/https?:\/\/[^\s,)]+/)?.[0] ||
+            task.match(/\bon\s+(\w[\w.-]+\.(com|org|net|io|co))/i)?.[1];
+          const navUrl = urlInTask?.startsWith('http') ? urlInTask : urlInTask ? `https://www.${urlInTask}` : null;
+          if (navUrl) {
+            console.log(`[VISION-AGENT] FAIL on error page — forcing navigate to ${navUrl}`);
+            await page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+            await page.waitForTimeout(1000);
+            continue; // Try again after navigation
+          }
+        }
         console.log(`[VISION-AGENT] FAIL: ${action.result}`);
         return { success: false, error: action.result, steps: steps + 1, cost: totalCost, screenshots };
       }
