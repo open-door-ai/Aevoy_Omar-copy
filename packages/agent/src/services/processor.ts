@@ -3284,19 +3284,20 @@ Be specific and concise. 3-5 sentences max.`,
                 selector: string;
                 options: string;
               }> = [];
-              const inputs = document.querySelectorAll('input, textarea, select');
-              inputs.forEach((el, idx) => {
-                const input = el as HTMLInputElement;
+              const skipTypes = new Set(['hidden', 'submit', 'button', 'image', 'reset']);
+
+              function processInput(input: HTMLInputElement, idx: number, prefix: string) {
                 const rect = input.getBoundingClientRect();
+                // Allow fields that are technically visible but may have small dimensions (min 1px)
+                // Some sites use CSS transforms or opacity tricks
                 const isVisible = rect.width > 0 && rect.height > 0 &&
                   getComputedStyle(input).display !== 'none' &&
                   getComputedStyle(input).visibility !== 'hidden';
-                if (!isVisible) return;
-                // Skip hidden/submit/button inputs
-                const skipTypes = ['hidden', 'submit', 'button', 'image', 'reset'];
-                if (skipTypes.includes(input.type)) return;
+                // Also check opacity — some forms show fields with opacity:0 initially
+                const opacity = parseFloat(getComputedStyle(input).opacity || '1');
+                if (!isVisible && opacity <= 0) return;
+                if (skipTypes.has(input.type)) return;
 
-                // Find associated label
                 let labelText = '';
                 if (input.id) {
                   const labelEl = document.querySelector(`label[for="${input.id}"]`);
@@ -3306,22 +3307,23 @@ Be specific and concise. 3-5 sentences max.`,
                   const parent = input.closest('label');
                   if (parent) labelText = parent.textContent?.replace(input.value || '', '').trim() || '';
                 }
-                // Look for nearby text (preceding sibling, aria-label)
                 if (!labelText) labelText = input.getAttribute('aria-label') || '';
+                // Check data-testid and data-cy for React/Vue apps
+                if (!labelText) labelText = input.getAttribute('data-testid') || input.getAttribute('data-cy') || '';
 
-                // Build the most reliable selector
-                let selector = '';
+                let selector = prefix;
                 if (input.id) selector = `#${input.id}`;
                 else if (input.name) selector = `[name="${input.name}"]`;
+                else if (input.getAttribute('data-testid')) selector = `[data-testid="${input.getAttribute('data-testid')}"]`;
+                else if (input.type === 'email') selector = 'input[type="email"]';
+                else if (input.type === 'password') selector = 'input[type="password"]';
+                else if (input.placeholder) selector = `[placeholder="${input.placeholder}"]`;
                 else selector = `${input.tagName.toLowerCase()}:nth-of-type(${idx + 1})`;
 
-                // For <select> elements, extract available options
                 let options = '';
                 if (input.tagName === 'SELECT') {
                   const opts = Array.from((input as unknown as HTMLSelectElement).options)
-                    .map(o => o.text || o.value)
-                    .filter(o => o && o !== '')
-                    .slice(0, 15);
+                    .map(o => o.text || o.value).filter(o => o).slice(0, 15);
                   options = opts.join(', ');
                 }
 
@@ -3334,13 +3336,55 @@ Be specific and concise. 3-5 sentences max.`,
                   placeholder: input.placeholder || '',
                   value: input.value || '',
                   required: input.required,
-                  visible: true,
+                  visible: isVisible,
                   selector,
                   options,
                 });
-              });
+              }
+
+              // 1. Standard DOM query
+              const inputs = document.querySelectorAll('input, textarea, select');
+              inputs.forEach((el, idx) => processInput(el as HTMLInputElement, idx, ''));
+
+              // 2. Shadow DOM — search shadow roots for form fields
+              if (fields.length === 0) {
+                const allElements = document.querySelectorAll('*');
+                allElements.forEach((el) => {
+                  if (el.shadowRoot) {
+                    const shadowInputs = el.shadowRoot.querySelectorAll('input, textarea, select');
+                    shadowInputs.forEach((sEl, sIdx) => {
+                      processInput(sEl as HTMLInputElement, sIdx, `${el.tagName.toLowerCase()} >>> input:nth-of-type(${sIdx + 1})`);
+                    });
+                  }
+                });
+              }
+
+              // 3. Contenteditable divs (used by some modern frameworks as inputs)
+              if (fields.length === 0) {
+                const editables = document.querySelectorAll('[contenteditable="true"]');
+                editables.forEach((el, idx) => {
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width <= 0 || rect.height <= 0) return;
+                  const ariaLabel = el.getAttribute('aria-label') || el.getAttribute('role') || '';
+                  fields.push({
+                    tag: 'div',
+                    type: 'contenteditable',
+                    name: '',
+                    id: el.id || '',
+                    label: ariaLabel.substring(0, 60),
+                    placeholder: el.getAttribute('data-placeholder') || '',
+                    value: (el as HTMLElement).innerText?.trim() || '',
+                    required: false,
+                    visible: true,
+                    selector: el.id ? `#${el.id}` : `[contenteditable="true"]:nth-of-type(${idx + 1})`,
+                    options: '',
+                  });
+                });
+              }
+
               return fields;
             });
+            console.log(`[FORM-DETECT] Found ${formFields.length} form fields on page`);
 
             if (formFields.length > 0) {
               const emptyFields = formFields.filter(f => !f.value);
@@ -3363,6 +3407,29 @@ Be specific and concise. 3-5 sentences max.`,
                 if (selectFields.length > 0) {
                   formFieldsSection += `\n    - For DROPDOWN/SELECT fields (${selectFields.map(f => f.label || f.name || f.id).join(', ')}): Use [ACTION:select("selector", "option_text")] NOT fill()`;
                 }
+              }
+            } else {
+              // 0 fields detected — check if this is a signup/form page and inject common selectors
+              const pageUrl = (page.url() || '').toLowerCase();
+              const pageTitle = await page.title().catch(() => '') || '';
+              const isFormPage = /sign.?up|register|create.?account|login|log.?in|join|enroll/i.test(pageUrl + ' ' + pageTitle + ' ' + (pageText || '').substring(0, 500));
+              if (isFormPage) {
+                console.log(`[FORM-DETECT] 0 fields found on form page — injecting common selectors as fallback`);
+                formFieldsSection = `\n  ⚠️ FORM FIELDS NOT AUTO-DETECTED (page may use shadow DOM or custom components).
+  You MUST try these common selectors to fill the form:
+    [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
+    [ACTION:fill("input[type=password]", "{primary_password}")]
+    [ACTION:fill("input[type=text]", "${senderName || username}")]
+  If those don't work, try:
+    [ACTION:fill("[name*=email]", "${username}@aevoy.com")]
+    [ACTION:fill("[name*=pass]", "{primary_password}")]
+    [ACTION:fill("[placeholder*=email]", "${username}@aevoy.com")]
+    [ACTION:fill("[placeholder*=pass]", "{primary_password}")]
+    [ACTION:fill("[aria-label*=email]", "${username}@aevoy.com")]
+    [ACTION:fill("[data-testid*=email]", "${username}@aevoy.com")]
+  After filling, click the submit button:
+    [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Continue")]
+  If the page has "Continue with email" or "Sign up with email" link, CLICK IT FIRST to reveal form fields.`;
               }
             }
           } catch (formErr) {
