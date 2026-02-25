@@ -2229,6 +2229,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let currentIteration = 0;
     let isTaskComplete = false;
     let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
+    let signupAutoCompleted = false; // true when mechanical signup trigger filled form + completed task
     let totalAiCost = aiResponse.cost || 0;
     let totalTokens = aiResponse.tokensUsed || 0;
     let globalActionIndex = 0;
@@ -2489,6 +2490,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
               if (emailFilled) {
                 isTaskComplete = true;
                 aiSignaledComplete = true;
+                signupAutoCompleted = true; // Protect from quality gate + verification overwrite
                 break;
               }
             } else {
@@ -3334,45 +3336,34 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
           // Step 0: If we're not on a signup page, navigate there first
           if (!isOnSignupPage) {
-            // Try clicking "Sign up" button/link on the current page
-            for (const navText of ['Sign up', 'Sign Up', 'Create account', 'Create Account', 'Register', 'Get Started', 'Join']) {
-              try {
-                const navEl = signupPagePost.getByRole('link', { name: navText });
-                if (await navEl.count() > 0) {
-                  await navEl.first().click({ timeout: 5000 });
-                  console.log(`[SIGNUP-AUTO] Navigated to signup via "${navText}" link`);
-                  await signupPagePost.waitForTimeout(3000);
-                  break;
-                }
-              } catch { /* next */ }
-              try {
-                const navBtn = signupPagePost.getByRole('button', { name: navText });
-                if (await navBtn.count() > 0) {
-                  await navBtn.first().click({ timeout: 5000 });
-                  console.log(`[SIGNUP-AUTO] Navigated to signup via "${navText}" button`);
-                  await signupPagePost.waitForTimeout(3000);
-                  break;
-                }
-              } catch { /* next */ }
-            }
-            // Also try navigating to common signup URLs
-            const domain = new URL(currentPageUrl).origin;
-            const signupUrls = [`${domain}/signup`, `${domain}/register`, `${domain}/join`, `${domain}/create-account`];
-            const nowUrl = signupPagePost.url();
-            if (nowUrl === currentPageUrl) {
-              // None of the clicks worked — try navigating directly
-              for (const url of signupUrls) {
+            let navigated = false;
+            // Try clicking "Sign up" link or button on the current page — single locator for efficiency
+            try {
+              const signupLink = signupPagePost.locator('a, button, [role="button"]').filter({
+                hasText: /^(Sign\s*up|Create\s*(an?\s*)?account|Register|Get\s*Started|Join)$/i
+              });
+              if (await signupLink.count() > 0) {
+                await signupLink.first().click({ timeout: 3000 });
+                console.log(`[SIGNUP-AUTO] Clicked signup link/button`);
+                await signupPagePost.waitForTimeout(2000);
+                navigated = signupPagePost.url() !== currentPageUrl;
+              }
+            } catch { /* next strategy */ }
+            // Direct navigation to common signup URLs
+            if (!navigated) {
+              const domain = new URL(currentPageUrl).origin;
+              for (const path of ['/signup', '/register', '/join', '/create-account']) {
                 try {
-                  await signupPagePost.goto(url, { timeout: 10000, waitUntil: 'domcontentloaded' });
-                  const newUrl = signupPagePost.url();
-                  if (newUrl !== currentPageUrl) {
-                    console.log(`[SIGNUP-AUTO] Direct navigation to ${url} succeeded → ${newUrl}`);
+                  await signupPagePost.goto(`${domain}${path}`, { timeout: 8000, waitUntil: 'domcontentloaded' });
+                  if (signupPagePost.url() !== currentPageUrl) {
+                    console.log(`[SIGNUP-AUTO] Direct nav to ${domain}${path} → ${signupPagePost.url()}`);
+                    navigated = true;
                     break;
                   }
                 } catch { /* next */ }
               }
             }
-            await signupPagePost.waitForTimeout(2000);
+            await signupPagePost.waitForTimeout(1500);
           }
 
           // Step 1: Click through OAuth-first pages to reveal email form
@@ -3615,6 +3606,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             aiResponse.content = resultMsg;
             isTaskComplete = true;
             aiSignaledComplete = true;
+            signupAutoCompleted = true; // Protect this response from quality gate + verification overwrite
             console.log(`[SIGNUP-AUTO] Complete: ${resultMsg.substring(0, 100)}`);
             break;
           }
@@ -4290,7 +4282,8 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
     // POST-LOOP ADVICE REJECTION GATE: If user asked AI to DO something (sign up, create account,
     // book reservation, fill out form) but AI gave advice/instructions instead of acting, REJECT the
     // response and force browser re-execution. This is the #1 failure mode — AI acts like ChatGPT.
-    const isActionTask = /\b(sign up|signup|create (an? )?(account|profile|gmail|email)|register|make (an? )?(account|profile)|book (a |an )?(reservation|table|appointment|room)|fill (out |in )?(the |a |an )?(form|application|survey)|apply (for|to)|subscribe|enroll|open (an? )?(account|page))\b/i.test(taskTextLower);
+    // SKIP if signup-auto trigger already completed the task mechanically.
+    const isActionTask = !signupAutoCompleted && /\b(sign up|signup|create (an? )?(account|profile|gmail|email)|register|make (an? )?(account|profile)|book (a |an )?(reservation|table|appointment|room)|fill (out |in )?(the |a |an )?(form|application|survey)|apply (for|to)|subscribe|enroll|open (an? )?(account|page))\b/i.test(taskTextLower);
     // For signup/creation tasks, require FORM actions (fill/fill_form/submit) — just clicking isn't enough
     const hasFormCompletion = actionResults.some(r =>
       ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
@@ -4580,7 +4573,8 @@ After finding the number, call them:
     // Examples of BAD final responses: "I'll search for...", "Let me try...", "What I can do next..."
     // These are plans/narrations, not answers. The user expects an actual result.
     // SKIP quality gate for direct-injected results (read_email, check_calendar, etc.) — both success AND error are already user-facing
-    const hasDirectResultData = actionResults.some(r =>
+    // SKIP quality gate when signup-auto trigger completed the task — the response is our mechanical result, not AI narration
+    const hasDirectResultData = signupAutoCompleted || actionResults.some(r =>
       ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
       (aiResponse.content === r.result || aiResponse.content === r.error)
     );
@@ -4719,8 +4713,9 @@ After finding the number, call them:
 
     // 7e. AGI-LEVEL OUTCOME VERIFICATION: Verify REAL-WORLD outcome (not just "no errors")
     // Example: "Make me money" → Check bank balance increased, not just "tried to buy stock"
+    // SKIP for signup-auto — we mechanically filled the form, no AI verification needed
     let outcomeVerification = null;
-    if (isTaskComplete && aiResponse.content) {
+    if (isTaskComplete && aiResponse.content && !signupAutoCompleted) {
       try {
         const { outcomeVerifier } = await import("./outcome-verifier.js");
         outcomeVerification = await outcomeVerifier.verifyOutcome(
@@ -4788,8 +4783,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       ['search', 'browse', 'extract', 'wait', 'navigate'].includes(r.action?.type || '')
     );
     const isResearchTier = tier === 'research';
-    if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier)) && aiResponse.content) {
-      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : 'search-only research';
+    if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier) || signupAutoCompleted) && aiResponse.content) {
+      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : signupAutoCompleted ? 'signup-auto completed' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
@@ -4952,7 +4947,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // 11. Final narration guard — catches any narration set AFTER quality gate
     // (e.g. by outcome verifier, cascade, or other post-quality-gate code paths).
     // Normalizes apostrophes then checks for short plan-like openers.
-    if (aiResponse.content) {
+    // SKIP for signup-auto — our response is the mechanical result, not narration.
+    if (aiResponse.content && !signupAutoCompleted) {
       const _fn = aiResponse.content
         .replace(/[\u2018\u2019\u201B]/g, "'")
         .replace(/[\u201C\u201D]/g, '"')
@@ -5006,7 +5002,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const isConversationalSubject = ['hi', 'hello', 'thanks', 'thank you', 'ok', 'hey', 'good morning', 'good evening', 'sup', 'yo', 'what\'s up', 'how are you'].some(
       g => subject.toLowerCase().trim().startsWith(g) || (body || '').toLowerCase().trim().startsWith(g)
     );
-    if (rawCleanResponse && !isGarbageResponse(rawCleanResponse)) {
+    if (signupAutoCompleted && rawCleanResponse) {
+      // Signup-auto result — use directly, never overwrite with AI summary
+      cleanResponse = rawCleanResponse;
+    } else if (rawCleanResponse && !isGarbageResponse(rawCleanResponse)) {
       cleanResponse = rawCleanResponse;
     } else if (isConversationalSubject && rawCleanResponse && rawCleanResponse.length > 2) {
       // Short conversational response — valid, not garbage
