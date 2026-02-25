@@ -265,7 +265,7 @@ async function takeScreenshot(page: Page): Promise<string> {
 /**
  * Build the AI prompt: element list + current URL + task.
  */
-function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = ''): string {
+function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }): string {
   const elemLines = elements.map(e => {
     const parts = [`[${e.index}] ${e.tag.toUpperCase()}`];
     if (e.type && e.type !== 'text') parts.push(`type=${e.type}`);
@@ -288,9 +288,11 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
     ? `\nNOTE: The browser is on an error/blank page. The task requires you to navigate to a website. Extract the website URL from the TASK description and output NAVIGATE:"url" as your first action.\n`
     : '';
 
+  const vpNote = viewport ? `VIEWPORT: ${viewport.width}x${viewport.height}px (use these dimensions for CLICK_AT coordinates)\n` : '';
+
   return `TASK: ${task}
 URL: ${url}
-${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}
+${vpNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}
 INTERACTIVE ELEMENTS (reference by number):
 ${elemLines || '(none visible)'}
 
@@ -499,7 +501,8 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       }
 
       // REASON: Ask AI what to do
-      const prompt = buildObservePrompt(elements, url, task, history, taskPlan);
+      const viewport = page.viewportSize() || { width: 1280, height: 800 };
+      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport);
       let aiResponse: string;
       let stepCost = 0;
       try {
