@@ -3660,7 +3660,8 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine) {
         const visionPage = executionEngine.getPage?.();
         const visionPageUrl = visionPage?.url() || '';
-        if (visionPage && visionPageUrl && visionPageUrl !== 'about:blank' && !visionPage.isClosed()) {
+        const isValidPage = visionPageUrl && visionPageUrl !== 'about:blank' && !visionPageUrl.startsWith('chrome-error://') && !visionPageUrl.startsWith('chrome://') && !visionPageUrl.startsWith('about:');
+        if (visionPage && isValidPage && !visionPage.isClosed()) {
           let visionPassword = '';
           try {
             const { getAgentPasswords } = await import("./agent-passwords.js");
@@ -4423,7 +4424,8 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
               // After advice-gate browse, run vision agent to complete the task on the loaded page
               const advGatePage = executionEngine?.getPage?.();
               const advGateUrl = advGatePage?.url() || '';
-              if (advGatePage && advGateUrl && advGateUrl !== 'about:blank' && !advGatePage.isClosed()) {
+              const isAdvGatePageValid = advGateUrl && advGateUrl !== 'about:blank' && !advGateUrl.startsWith('chrome-error://') && !advGateUrl.startsWith('chrome://') && !advGateUrl.startsWith('about:');
+              if (advGatePage && isAdvGatePageValid && !advGatePage.isClosed()) {
                 console.log(`[ADVICE-GATE] Launching vision agent to complete task on ${advGateUrl.substring(0, 80)}`);
                 try {
                   let agPw = '';
@@ -4489,10 +4491,15 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
         // No phone found — ask AI to search for one
         console.log(`[CALL-GATE] No phone number in response — asking AI to find one`);
         try {
-          const callBusinessPrompt = `The user asked: "${subject}"
+          // Extract business name from body (more detailed) or subject
+          const taskFullText = `${subject} ${body}`.trim();
+          const businessNameMatch = taskFullText.match(/\bat\s+([A-Z][^,.\n]{2,40}(?:restaurant|cafe|bar|bistro|grill|kitchen|eatery|hotel|clinic|salon|spa)?)/i) ||
+            taskFullText.match(/\bat\s+([A-Z][^,.\n]{2,30})/i);
+          const businessName = businessNameMatch ? businessNameMatch[1].trim() : taskFullText.replace(/\b(call|book|reserve|make.*reservation.*at|appointment.*with)\b/gi, '').trim().substring(0, 50);
+          const callBusinessPrompt = `The user asked: "${taskFullText}"
 You found information but NO phone number. Search for the business phone number NOW.
-[ACTION:search("${subject.replace(/\b(call|phone|ring|dial|book|reserve|make a reservation at|make an appointment with)\s+(the|my|a|an|that)?\s*/i, '').trim()} phone number")]
-After finding the number, call them:
+[ACTION:search("${businessName} phone number reservation")]
+Extract the ACTUAL phone number from search results and call them:
 [ACTION:call_external("+1XXXXXXXXXX", "${body || subject}")]`;
           const callBizResponse = await generateResponse(
             memory, subject, callBusinessPrompt, username, "complex", userId, taskId, senderName
