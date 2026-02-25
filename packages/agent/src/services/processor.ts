@@ -391,9 +391,9 @@ async function tryScheduleFastPath(
   const lower = taskText.toLowerCase();
 
   // Pattern 1: "call me back at/in <time>" — capture ONLY the time expression (no trailing .*)
-  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at|in)\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)/i);
+  const callBackMatch = lower.match(/call\s+(?:me\s+)?(?:back\s+)?(?:at|in)\s+(?:exactly\s+|about\s+|roughly\s+|around\s+|like\s+)?(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)/i);
   // Pattern 2a: "remind me in <time> to <task>" or "remind me at <time>"
-  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
+  const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+(?:exactly\s+|about\s+|roughly\s+|around\s+|like\s+)?(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
   // Pattern 2b: "remind me to <task> in <time>" — task comes BEFORE the time
   const remindToMatch = !remindMatch ? lower.match(/remind\s+(?:me\s+)?(?:to|about|that)\s+(.+?)\s+in\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd]))/i) : null;
   // Pattern 3: "schedule <task> at/in <time>"
@@ -406,7 +406,10 @@ async function tryScheduleFastPath(
   if (callBackMatch) {
     action = 'call_user';
     timeStr = callBackMatch[1].trim();
-    description = 'call_user';
+    // Extract compound task: "call me back in 3 min AND tell me the weather"
+    const andMatch = lower.match(/(?:and|then|to)\s+(.+?)$/i);
+    const compoundTask = andMatch ? andMatch[1].trim() : '';
+    description = compoundTask ? `call_user:${compoundTask}` : 'call_user';
   } else if (remindMatch) {
     action = 'send_sms';
     timeStr = remindMatch[1].trim();
@@ -3640,6 +3643,54 @@ The user explicitly asked you to negotiate. That requires a phone call. DO IT NO
       aiResponse.content = aiResponse.content
         .replace(/[\u2018\u2019\u201B]/g, "'")  // curly single quotes → '
         .replace(/[\u201C\u201D]/g, '"');        // curly double quotes → "
+    }
+
+    // 7c-POST. MULTI-ACTION COMPLETION CHECK: If user asked "find X AND text/call me", verify the second action happened.
+    // The research gate handles data quality, but the delivery channel (SMS/call/email) often gets dropped.
+    const executedActionTypes = new Set(actionResults.map(r => r.action?.type).filter(Boolean) as string[]);
+    const multiActionChecks: Array<{ keywords: string[]; actionType: string; label: string }> = [
+      { keywords: ['text me', 'send me a text', 'by text', 'via text', 'sms me', 'by sms', 'send me their', 'send me the'],
+        actionType: 'send_sms', label: 'SMS' },
+      { keywords: ['call me', 'phone me', 'give me a call', 'call me back'],
+        actionType: 'call_user', label: 'phone call' },
+      { keywords: ['email me', 'send me an email', 'by email', 'via email'],
+        actionType: 'send_email', label: 'email' },
+    ];
+
+    for (const check of multiActionChecks) {
+      const userRequestedIt = check.keywords.some(kw => taskTextLower.includes(kw));
+      const wasExecuted = executedActionTypes.has(check.actionType);
+      if (userRequestedIt && !wasExecuted && aiResponse.content) {
+        console.warn(`[MULTI-ACTION] User asked for ${check.label} but it was never executed — injecting now`);
+        if (check.actionType === 'send_sms') {
+          try {
+            const { data: smsProf } = await getSupabaseClient()
+              .from('profiles').select('phone_number').eq('id', userId).single();
+            if (smsProf?.phone_number) {
+              const smsBody = aiResponse.content.replace(/\[ACTION:[^\]]*\]/g, '').replace(/\[TASK_COMPLETE\]/g, '').trim().substring(0, 1500);
+              const { sendSms } = await import("./twilio.js");
+              await sendSms({ userId, to: smsProf.phone_number, body: smsBody });
+              console.log(`[MULTI-ACTION] Sent SMS to ${smsProf.phone_number}`);
+              aiResponse.content += `\n\n(Sent to you via text message)`;
+            }
+          } catch (smsErr) { console.error(`[MULTI-ACTION] SMS injection failed:`, smsErr); }
+        } else if (check.actionType === 'call_user') {
+          try {
+            const { callUser } = await import("./twilio.js");
+            const callMsg = aiResponse.content.replace(/\[ACTION:[^\]]*\]/g, '').trim().substring(0, 200);
+            const { data: callProf } = await getSupabaseClient()
+              .from('profiles').select('phone_number').eq('id', userId).single();
+            if (callProf?.phone_number) {
+              await callUser({ userId, to: callProf.phone_number, message: callMsg });
+              console.log(`[MULTI-ACTION] Called user at ${callProf.phone_number}`);
+              aiResponse.content += `\n\n(Calling you now)`;
+            }
+          } catch (callErr) { console.error(`[MULTI-ACTION] Call injection failed:`, callErr); }
+        } else if (check.actionType === 'send_email') {
+          // Email is already sent as the default response channel — just note it
+          console.log(`[MULTI-ACTION] Email requested and will be sent as response`);
+        }
+      }
     }
 
     // 7d. RESPONSE QUALITY GATE: Detect plan-like/narration responses and re-prompt for concrete answer
