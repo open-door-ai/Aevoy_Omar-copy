@@ -445,6 +445,25 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
   } catch { /* planning is optional — continue without it */ }
 
   try {
+    // PRE-NAVIGATION: If page is blank/error, navigate to the target URL immediately
+    // Extract from task string or plan before wasting step 0 on it
+    const currentStartUrl = page.url();
+    const isBlankOrError = !currentStartUrl || currentStartUrl === 'about:blank' ||
+      currentStartUrl.startsWith('chrome-error://') || currentStartUrl.startsWith('about:');
+    if (isBlankOrError) {
+      const urlInTask = task.match(/https?:\/\/[^\s,)]+/)?.[0] ||
+        task.match(/\bon\s+([\w.-]+\.(com|org|net|io|co|app))/i)?.[1];
+      const planUrl = taskPlan.match(/https?:\/\/[^\s,)]+/)?.[0];
+      const startUrl = urlInTask?.startsWith('http') ? urlInTask
+        : urlInTask ? `https://www.${urlInTask}`
+        : planUrl?.startsWith('http') ? planUrl : null;
+      if (startUrl) {
+        console.log(`[VISION-AGENT] Pre-navigating to ${startUrl}`);
+        await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+      }
+    }
+
     for (steps = 0; steps < MAX_STEPS; steps++) {
       // Check total timeout
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
