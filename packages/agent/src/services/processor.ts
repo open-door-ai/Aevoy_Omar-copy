@@ -5538,7 +5538,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     return {
       taskId,
       success: true,
-      response: aiResponse.content,
+      response: cleanResponse, // Return the clean, processed response (not raw AI content with [THINKING] blocks)
       actions: actionResults,
     };
   } catch (error) {

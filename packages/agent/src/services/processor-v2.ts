@@ -17,6 +17,7 @@ import { getSupabaseClient } from "../utils/supabase.js";
 import { sendResponse } from "./email.js";
 import { classifyTask, generateResponse } from "./ai.js";
 import { loadMemory } from "./memory.js";
+import { processTask } from "./processor.js";
 
 interface TaskRequest {
   userId: string;
@@ -58,16 +59,13 @@ export class ProcessorV2 {
       const classification = await classifyTask(request.task);
       console.log(`[PROCESSOR-V2] Classification: ${classification.taskType}, needsBrowser=${classification.needsBrowser}`);
 
-      // Fast path for AI-only tasks (no browser needed)
-      if (!classification.needsBrowser) {
-        console.log("[PROCESSOR-V2] AI-only task detected, skipping browser");
-        const taskId = await this.createTaskRecord(request, "simple", "processing");
-        const result = await this.executeAIOnlyTask(request, classification.goal);
-        await this.finalizeTaskRecord(taskId, result, Date.now() - startTime);
-        return { ...result, planId: taskId };
-      }
+      // Route ALL tasks through main processor (handles both AI-only and browser tasks)
+      // Browser tasks also use the main processor since it has the full vision agent pipeline.
+      const result = await this.executeAIOnlyTask(request, classification.goal);
+      return result;
 
-      // STEP 1: PLANNING PHASE (for browser tasks)
+      // STEP 1: PLANNING PHASE (for browser tasks) — kept for future use
+      if (false) { // eslint-disable-line no-constant-condition
       const plan = await planningService.createPlan(request.userId, request.task);
 
       // Create task record linked to execution plan
@@ -90,9 +88,10 @@ export class ProcessorV2 {
       }
 
       // Auto-approved (simple task or settings allow)
-      const result = await this.executePlan(request, plan);
-      await this.finalizeTaskRecord(taskId, result, Date.now() - startTime);
-      return result;
+      const result2 = await this.executePlan(request, plan);
+      await this.finalizeTaskRecord(taskId, result2, Date.now() - startTime);
+      return result2;
+      } // end if (false)
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -102,35 +101,35 @@ export class ProcessorV2 {
   }
 
   /**
-   * Execute AI-only task (no browser needed)
+   * Execute any task (AI-only or browser) using the main processor.
+   * Delegates to processTask with suppressEmail=true so no email is sent —
+   * the clean response is returned directly to the web dashboard.
    */
-  private async executeAIOnlyTask(request: TaskRequest, goal: string): Promise<TaskResult> {
+  private async executeAIOnlyTask(request: TaskRequest, _goal: string): Promise<TaskResult> {
     try {
-      // UNIFIED MEMORY: Load user's memory for ALL channels (email/SMS/voice/web)
-      const memory = await loadMemory(request.userId);
-      console.log(`[PROCESSOR-V2] Loaded memory for ${request.username}`);
+      console.log(`[PROCESSOR-V2] Delegating to main processor for: ${request.task.substring(0, 80)}`);
 
-      const aiResponse = await generateResponse(
-        memory,
-        goal, // subject
-        request.task, // body
-        request.username,
-        "respond", // task type
-        request.userId
-      );
+      const result = await processTask({
+        userId: request.userId,
+        username: request.username,
+        from: request.email || `${request.username}@aevoy.com`,
+        subject: request.task,
+        body: '',
+        inputChannel: (request.channel as any) || 'web',
+        suppressEmail: true, // Web dashboard gets response directly — no email needed
+      });
 
-      const response = aiResponse.content || "I completed the task.";
-
-      console.log(`[PROCESSOR-V2] AI-only response: ${response.substring(0, 100)}...`);
+      console.log(`[PROCESSOR-V2] Main processor result: success=${result.success}, response=${result.response?.substring(0, 100)}`);
 
       return {
-        success: true,
-        response,
+        success: result.success,
+        response: result.response || "Task completed.",
+        planId: result.taskId,
       };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
-      console.error("[PROCESSOR-V2] AI-only task error:", errorMsg);
-      return { success: false, response: "", error: errorMsg };
+      console.error("[PROCESSOR-V2] Delegation error:", errorMsg);
+      return { success: false, response: "An error occurred while processing your task.", error: errorMsg };
     }
   }
 
