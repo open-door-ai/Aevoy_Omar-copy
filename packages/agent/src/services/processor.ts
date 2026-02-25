@@ -1951,10 +1951,24 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // Check if the expected action type is missing (either 0 actions total, or
     // the specific expected type isn't present after browser action stripping)
+    const DELIVERY_ACTIONS = ['send_sms', 'call_user', 'send_email'];
+    const RESEARCH_ACTIONS = ['search', 'browse', 'navigate', 'click', 'fill', 'extract', 'screenshot'];
     for (const pattern of expectedActionPatterns) {
       const matchesTask = pattern.keywords.some(kw => taskTextLower.includes(kw));
       const hasExpectedAction = aiResponse.actions.some(a => a.type === pattern.actionType);
       if (!matchesTask || hasExpectedAction) continue;
+
+      // COMPOUND TASK DETECTION: If this is a delivery action (text me/call me/email me)
+      // and the AI already generated research actions (search/browse), DON'T replace them.
+      // Let research complete first — the post-loop multi-action check (line 3648+) will
+      // inject the delivery action with the actual research results.
+      // Example: "Find sushi near me and text me" → let search run, then SMS with results.
+      const isDeliveryAction = DELIVERY_ACTIONS.includes(pattern.actionType);
+      const hasResearchActions = aiResponse.actions.some(a => RESEARCH_ACTIONS.includes(a.type));
+      if (isDeliveryAction && hasResearchActions) {
+        console.log(`[MISSING-ACTION] COMPOUND TASK: "${pattern.actionType}" requested but AI has research actions (${aiResponse.actions.map(a => a.type).join(', ')}) — deferring delivery to post-loop check`);
+        continue; // Skip — post-loop multi-action check handles delivery after research completes
+      }
 
       // Try re-prompt first (only if AI returned zero actions — otherwise injection is faster)
       let needsInjection = true;
@@ -3423,13 +3437,19 @@ ${searchCompletionHint}
 ${domainWarning}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
 ${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Wrap up: give your best answer from what you have and signal [TASK_COMPLETE].\n` : ''}${
-  // Phone nudge: for sourcing/negotiation tasks at round 5+, remind AI to call businesses
-  currentIteration >= 5 && /\b(source|sourcing|negotiate|dealership|dealer|find me a|get me a)\b/i.test(subject) &&
-  /\b(car|vehicle|auto|house|apartment|service|provider)\b/i.test(subject) &&
+  // Phone nudge: for call-business or sourcing/negotiation tasks at round 3+, remind AI to call
+  currentIteration >= 3 && (
+    // Original: negotiation/sourcing tasks
+    (/\b(source|sourcing|negotiate|dealership|dealer|find me a|get me a)\b/i.test(subject) &&
+     /\b(car|vehicle|auto|house|apartment|service|provider)\b/i.test(subject)) ||
+    // NEW: "call the dentist/florist/restaurant/doctor/plumber/etc."
+    /\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+\w+/i.test(subject) &&
+    !/(call me|call me back|give me a call)/i.test(subject)
+  ) &&
   !actionResults.some(r => ['call_external', 'call_user'].includes(r.action?.type || ''))
-    ? `\n📞 PHONE REMINDER: You have enough research data. NOW CALL the businesses you found!
-Use [ACTION:call_external("+phone_number", "your message")] to negotiate directly.
-A 2-minute phone call gets better results than 10 more rounds of browsing.\n`
+    ? `\n📞 PHONE REMINDER: The user asked you to CALL a business. You have search results — NOW CALL THEM!
+Use [ACTION:call_external("+phone_number", "your message")] with a real phone number from your search results.
+DO NOT just report findings. The user wants a PHONE CALL made, not a research report.\n`
     : ''
 }
 MANDATORY THINKING STEP — You MUST reason before acting:
@@ -3547,6 +3567,104 @@ The user explicitly asked you to negotiate. That requires a phone call. DO IT NO
         }
       } catch (phoneErr) {
         console.error(`[PHONE-GATE-POST] Phone gate failed:`, phoneErr);
+      }
+    }
+
+    // POST-LOOP ACCOUNT MANAGEMENT GATE: If user asked to cancel/manage an account
+    // and the AI gave advice instead of doing it, reject and force browser action.
+    const isAccountTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|manage|change plan|switch plan|update payment|change password|close account)\b/i.test(subject) &&
+      /\b(subscription|account|netflix|hulu|spotify|disney|amazon prime|youtube premium|apple music|hbo|paramount|peacock)\b/i.test(subject);
+    if (isAccountTask && aiResponse.content) {
+      const isAdviceOnly = /\b(go to|visit|navigate to|log in to|you can|you'll need to|here's how|follow these steps|you should)\b/i.test(aiResponse.content) &&
+        !actionResults.some(r => ['login', 'click', 'fill', 'submit'].includes(r.action?.type || '') && r.success);
+      if (isAdviceOnly) {
+        console.log(`[ACCOUNT-GATE] Task is account management but AI gave advice instead of acting — forcing browser action`);
+        // Don't mark as complete — re-prompt for browser action
+        aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '');
+        const serviceDomain = classification.domains?.[0] || 'the service website';
+        try {
+          const accountPrompt = `The user asked: "${subject}"
+
+You gave INSTRUCTIONS instead of DOING IT. That is WRONG. The user wants YOU to do this, not tell them how.
+
+YOU MUST:
+1. [ACTION:browse("https://${serviceDomain}")] — Go to the service
+2. [ACTION:login("https://${serviceDomain}")] — Log in using saved credentials
+3. Navigate to account/subscription settings (click links, don't describe them)
+4. Complete the requested action (cancel, downgrade, etc.)
+5. Confirm success
+
+If you cannot log in (no credentials saved), say EXACTLY: "I need your ${serviceDomain} login credentials. Please add them to Connected Apps in your Aevoy settings so I can manage your account."
+
+DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] tags.`;
+          const accountResponse = await generateResponse(
+            memory, subject, accountPrompt, username, "complex", userId, taskId, senderName
+          );
+          totalAiCost += accountResponse.cost || 0;
+          totalTokens += accountResponse.tokensUsed || 0;
+          if (accountResponse.actions && accountResponse.actions.length > 0) {
+            console.log(`[ACCOUNT-GATE] Got ${accountResponse.actions.length} browser actions, executing`);
+            for (const acctAction of accountResponse.actions) {
+              try {
+                const acctResult = await executeAction(acctAction, userId, username, executionEngine);
+                actionResults.push(acctResult);
+                if (acctResult.success) {
+                  aiResponse.content = accountResponse.content || aiResponse.content;
+                }
+              } catch (acctErr) {
+                console.error(`[ACCOUNT-GATE] ${acctAction.type} failed:`, acctErr);
+              }
+            }
+          } else if (accountResponse.content) {
+            // AI still couldn't act — probably no credentials. Use the credential request message.
+            aiResponse.content = accountResponse.content;
+          }
+        } catch (acctErr) {
+          console.error(`[ACCOUNT-GATE] Failed:`, acctErr);
+        }
+      }
+    }
+
+    // POST-LOOP CALL GATE: If user asked to "call the dentist/florist/restaurant/etc."
+    // and no call_external was executed, force the AI to search for the number and call.
+    const isCallBusinessTask = /\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+\w+/i.test(subject) &&
+      !/(call me|call me back|give me a call)/i.test(subject); // Exclude "call ME" requests
+    const hasCallExternalAction = actionResults.some(r => r.action?.type === 'call_external');
+    if (isCallBusinessTask && !hasCallExternalAction && currentIteration <= MAX_ITERATIONS) {
+      console.log(`[CALL-GATE] Task asks to call a business but no call_external was executed — forcing phone action`);
+      try {
+        const callBusinessPrompt = `The user asked: "${subject}"
+
+You researched but NEVER CALLED the business. The user wants you to CALL THEM, not just find information.
+
+Step 1: Use search results to find the phone number. If you already have it, skip to step 2.
+[ACTION:search("${subject.replace(/call\s+(the|my|a|an|that)\s+/i, '')} phone number")]
+
+Step 2: CALL the business with the user's request:
+[ACTION:call_external("+1XXXXXXXXXX", "Hi, ${body || subject}")]
+
+You MUST output a [ACTION:call_external(...)] tag with a real phone number. DO IT NOW.`;
+        const callBizResponse = await generateResponse(
+          memory, subject, callBusinessPrompt, username, "complex", userId, taskId, senderName
+        );
+        totalAiCost += callBizResponse.cost || 0;
+        totalTokens += callBizResponse.tokensUsed || 0;
+        if (callBizResponse.actions && callBizResponse.actions.length > 0) {
+          console.log(`[CALL-GATE] Got ${callBizResponse.actions.length} actions, executing`);
+          for (const callBizAction of callBizResponse.actions) {
+            try {
+              const callBizResult = await executeAction(callBizAction, userId, username, executionEngine);
+              actionResults.push(callBizResult);
+              if (callBizResult.success && callBizAction.type === 'call_external') {
+                aiResponse.content += `\n\nCalled the business: ${callBizResult.result || 'call placed'}`;
+              }
+            } catch (callBizErr) {
+              console.error(`[CALL-GATE] ${callBizAction.type} failed:`, callBizErr);
+            }
+          }
+        }
+      } catch (callBizErr) {
+        console.error(`[CALL-GATE] Failed:`, callBizErr);
       }
     }
 
