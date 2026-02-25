@@ -410,6 +410,10 @@ export async function runVisionAgent(
   const history: string[] = [];
   let totalCost = 0;
   let steps = 0;
+  let lastUrl = '';
+  let sameUrlCount = 0;
+  let lastActionKey = '';
+  let sameActionCount = 0;
 
   console.log(`[VISION-AGENT] Starting task: "${task.substring(0, 100)}"`);
 
@@ -445,6 +449,23 @@ export async function runVisionAgent(
       const url = page.url();
       console.log(`[VISION-AGENT] Step ${steps + 1}: ${url} — ${elements.length} elements`);
 
+      // STUCK DETECTION: Same URL for too long → force scroll to unstick
+      if (url === lastUrl) {
+        sameUrlCount++;
+        if (sameUrlCount === 4) {
+          console.log(`[VISION-AGENT] Stuck on same URL for 4 steps — forcing scroll down`);
+          await page.mouse.wheel(0, 600);
+          await page.waitForTimeout(400);
+        } else if (sameUrlCount === 7) {
+          console.log(`[VISION-AGENT] Stuck for 7 steps — scrolling back up`);
+          await page.mouse.wheel(0, -600);
+          await page.waitForTimeout(400);
+        }
+      } else {
+        lastUrl = url;
+        sameUrlCount = 0;
+      }
+
       // REASON: Ask AI what to do
       const prompt = buildObservePrompt(elements, url, task, history);
       let aiResponse: string;
@@ -471,6 +492,18 @@ export async function runVisionAgent(
 
       // ACT: Parse and execute
       const action = parseAction(aiResponse);
+
+      // REPEATED ACTION DETECTION: Same action 3+ times → add a stern hint to history
+      const actionKey = aiResponse.trim().split('\n')[0].trim();
+      if (actionKey === lastActionKey) {
+        sameActionCount++;
+        if (sameActionCount >= 3) {
+          history.push(`⚠️ You repeated "${actionKey}" ${sameActionCount} times. Try something DIFFERENT: SCROLL, FILL instead of TYPE, or NAVIGATE elsewhere.`);
+        }
+      } else {
+        lastActionKey = actionKey;
+        sameActionCount = 0;
+      }
       if (!action) {
         console.warn(`[VISION-AGENT] Could not parse action: "${aiResponse}"`);
         history.push(`Step ${steps + 1}: parse failed`);
