@@ -1183,6 +1183,41 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       return earlyEmailResult;
     }
 
+    // Weather fast path — instant weather via wttr.in API (<500ms)
+    const weatherText0 = subject + ' ' + (body || '');
+    const weatherMatch = weatherText0.match(/\bin\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
+      || weatherText0.match(/\bfor\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
+      || weatherText0.match(/\bat\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i);
+    const isWeatherQuery = /\b(weather|temperature|forecast|how (hot|cold|warm)|will it rain|is it raining|is it sunny)\b/i.test(weatherText0);
+    if (isWeatherQuery && weatherMatch?.[1]) {
+      const location = weatherMatch[1].trim().replace(/\s+/g, '+');
+      console.log(`[FAST-PATH-WEATHER] Fetching weather for: ${location}`);
+      try {
+        const weatherRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=4`, {
+          signal: AbortSignal.timeout(5000),
+          headers: { 'User-Agent': 'curl/7.68.0' },
+        });
+        if (weatherRes.ok) {
+          const weatherText = (await weatherRes.text()).trim();
+          if (weatherText && weatherText.length > 5 && !weatherText.includes('<')) {
+            const weatherResponse = `Current weather in ${weatherMatch[1].trim()}: ${weatherText}`;
+            console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
+            if (!task.suppressEmail) {
+              await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, weatherResponse);
+            }
+            await getSupabaseClient().from('tasks').update({
+              status: 'completed', response_text: weatherResponse,
+              completed_at: new Date().toISOString(), type: 'general',
+            }).eq('id', taskId);
+            clearTimeout(masterTimer);
+            return { taskId, success: true, response: weatherResponse, actions: [] };
+          }
+        }
+      } catch (weatherErr) {
+        console.warn(`[FAST-PATH-WEATHER] Failed (${weatherErr}), falling through to main processor`);
+      }
+    }
+
     // Scheduling fast path ("call me back at 5:10", "remind me in 2 hours")
     const earlyScheduleResult = await tryScheduleFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
     if (earlyScheduleResult) {
