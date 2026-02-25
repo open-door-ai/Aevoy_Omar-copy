@@ -490,6 +490,14 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   const senderEmail = email.from.toLowerCase().trim();
   const isKnownSender = user.email && senderEmail === user.email.toLowerCase().trim();
 
+  // SELF-EMAIL FILTER: Skip emails sent FROM *@aevoy.com — these are our OWN responses
+  // getting picked up by the IMAP poller. Processing them creates infinite loops and
+  // triggers false PIN challenges.
+  if (senderEmail.endsWith('@aevoy.com')) {
+    console.log(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Aevoy system email)`);
+    return;
+  }
+
   // SERVICE EMAIL BYPASS: Allow automated/noreply emails from known services through
   // without PIN. These are verification codes, receipts, newsletters, etc.
   // The agent reads them but never follows instructions blindly (content is sanitized).
