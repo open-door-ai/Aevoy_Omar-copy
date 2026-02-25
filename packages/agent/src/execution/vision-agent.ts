@@ -18,10 +18,11 @@
 import type { Page } from 'patchright';
 import { generateVisionResponse } from '../services/ai.js';
 import { handleCaptchaIfPresent } from './captcha.js';
+import { extractVerificationCode } from '../utils/email-code-extractor.js';
 
-const MAX_STEPS = 30;
-const STEP_TIMEOUT_MS = 12000;
-const TOTAL_TIMEOUT_MS = 180000; // 3 minutes
+const MAX_STEPS = 40;
+const STEP_TIMEOUT_MS = 15000;
+const TOTAL_TIMEOUT_MS = 480000; // 8 minutes — enough for Twitter signup + email verification
 
 export interface VisionAgentResult {
   success: boolean;
@@ -309,6 +310,7 @@ RESPOND WITH EXACTLY ONE LINE in this format:
 - NAVIGATE:"url"       (go to URL)
 - PRESS:Tab            (press keyboard key)
 - PRESS:Enter
+- PRESS:Escape         (close modal/dropdown)
 - WAIT                 (wait 2 seconds for page to load)
 - DONE:"result message" (task complete - describe what was accomplished)
 - FAIL:"reason"        (impossible to complete - explain why)
@@ -323,7 +325,10 @@ RULES:
 - If a CAPTCHA appears, output WAIT (it will be solved automatically).
 - If you see a success confirmation, output DONE.
 - If asked to sign up and you filled the email, that counts as progress — keep going.
-- If form has required fields with asterisks (*) fill ALL of them before submitting.`;
+- If form has required fields with asterisks (*) fill ALL of them before submitting.
+- If a cookie/privacy banner blocks the page, it is auto-dismissed — just proceed with your next action.
+- If a date of birth field appears, fill it: month first, then day, then year (or use SELECT for dropdowns).
+- For phone/email verification: output WAIT (the system will check email automatically).`;
 }
 
 /**
@@ -401,16 +406,18 @@ KEY RULES:
 /**
  * Run the vision-based browser agent on a task.
  *
- * @param page     - Playwright page (already initialized and navigated if needed)
- * @param task     - What to accomplish (e.g. "Sign up for Canva with email test@example.com")
- * @param userId   - For CAPTCHA solving cost tracking
- * @param taskId   - For logging
+ * @param page          - Playwright page (already initialized and navigated if needed)
+ * @param task          - What to accomplish (e.g. "Sign up for Canva with email test@example.com")
+ * @param userId        - For CAPTCHA solving cost tracking
+ * @param taskId        - For logging
+ * @param emailUsername - Username portion of @aevoy.com for auto-reading verification codes
  */
 export async function runVisionAgent(
   page: Page,
   task: string,
   userId?: string,
-  taskId?: string
+  taskId?: string,
+  emailUsername?: string
 ): Promise<VisionAgentResult> {
   const startTime = Date.now();
   const screenshots: string[] = [];
@@ -477,6 +484,32 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       // Handle CAPTCHAs automatically
       try {
         await handleCaptchaIfPresent(page, userId, taskId);
+      } catch { /* non-critical */ }
+
+      // Auto-dismiss cookie consent banners and modal overlays that block interaction
+      try {
+        await page.evaluate(() => {
+          // Common cookie consent / GDPR dismiss buttons
+          const dismissSelectors = [
+            '[id*="cookie"] button[class*="accept"], [id*="cookie"] button[class*="agree"]',
+            '[class*="cookie"] button[class*="accept"], [class*="cookie"] button[class*="agree"]',
+            '[id*="consent"] button[class*="accept"], [id*="gdpr"] button[class*="accept"]',
+            'button[id*="accept-all"], button[id*="acceptAll"], button[id*="accept_all"]',
+            'button[data-testid*="accept"], button[aria-label*="Accept all"]',
+            '.cc-accept, .cc-allow, #accept-cookies, #acceptCookies',
+          ];
+          for (const sel of dismissSelectors) {
+            const btn = document.querySelector(sel) as HTMLElement | null;
+            if (btn && btn.offsetParent !== null) { btn.click(); break; }
+          }
+          // Auto-close "X" close buttons on overlays/modals (but NOT the whole page)
+          const overlayClose = document.querySelector(
+            '[role="dialog"] button[aria-label*="Close"], [role="dialog"] button[aria-label*="close"], ' +
+            '.modal button.close, .modal button[aria-label="Close"], ' +
+            '[class*="overlay"] button[class*="close"], [class*="modal"] button[class*="close"]'
+          ) as HTMLElement | null;
+          if (overlayClose && overlayClose.offsetParent !== null) overlayClose.click();
+        });
       } catch { /* non-critical */ }
 
       // OBSERVE: Screenshot + extract elements
@@ -657,7 +690,37 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           }
 
           case 'wait': {
-            await page.waitForTimeout(2500);
+            // Check if page is waiting for email verification
+            const waitUrl = page.url();
+            const waitText = await page.textContent('body').catch(() => '') || '';
+            const isVerificationPage = /verif|confirm.*email|check.*inbox|code.*sent|enter.*code|otp|one.time/i.test(waitUrl + ' ' + waitText.substring(0, 500));
+
+            if (isVerificationPage && emailUsername) {
+              // Wait 20 seconds for the email to arrive then check inbox
+              console.log(`[VISION-AGENT] Verification page detected — waiting 20s then checking ${emailUsername}@aevoy.com`);
+              await page.waitForTimeout(20000);
+              try {
+                const { fetchRecentEmails } = await import('../services/inbox-poller.js');
+                const emails = await fetchRecentEmails(`${emailUsername}@aevoy.com`, 3, 5);
+                for (const email of emails) {
+                  const extracted = extractVerificationCode(email.body || email.subject || '');
+                  if (extracted.code) {
+                    history.push(`📧 EMAIL VERIFICATION CODE FOUND: "${extracted.code}" (from ${email.from}). Enter this code into the verification field now.`);
+                    console.log(`[VISION-AGENT] Found verification code: ${extracted.code}`);
+                    break;
+                  } else if (extracted.verifyLink) {
+                    history.push(`📧 EMAIL VERIFICATION LINK FOUND: NAVIGATE to "${extracted.verifyLink}" to verify.`);
+                    console.log(`[VISION-AGENT] Found verification link: ${extracted.verifyLink.substring(0, 80)}`);
+                    break;
+                  }
+                }
+              } catch (emailErr) {
+                console.warn(`[VISION-AGENT] Email check failed: ${emailErr}`);
+                // Fall through with normal wait
+              }
+            } else {
+              await page.waitForTimeout(2500);
+            }
             actionOk = true;
             break;
           }
