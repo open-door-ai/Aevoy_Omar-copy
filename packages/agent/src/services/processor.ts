@@ -3307,15 +3307,18 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         const signupPagePost = executionEngine.getPage?.();
         const currentPageUrl = signupPagePost?.url() || '';
         const currentPageTitle = await signupPagePost?.title().catch(() => '') || '';
-        // Broad match: signup/register pages OR any page from the target domain when task is account creation
+        // For signup tasks, don't require URL to match — the AI may have clicked through
+        // OAuth pages and the URL could be the homepage or a redirect. Just try to fill.
         const isOnSignupPage = /sign.?up|register|create.?account|join|get.?started|login|log.?in|onboarding/i.test(currentPageUrl + ' ' + currentPageTitle);
 
         // Debug: write progress to DB so we can trace what's happening
         void getSupabaseClient().from('tasks').update({
-          progress_message: `[SIGNUP-AUTO] isOnSignupPage=${isOnSignupPage}, url=${currentPageUrl.substring(0, 80)}, title=${(currentPageTitle || '').substring(0, 40)}`
+          progress_message: `[SIGNUP-AUTO] url=${currentPageUrl.substring(0, 80)}, title=${(currentPageTitle || '').substring(0, 40)}, isOnSignupPage=${isOnSignupPage}`
         }).eq('id', taskId).then(() => {});
 
-        if (isOnSignupPage && signupPagePost) {
+        // Always try for signup tasks — even if URL doesn't look like a signup page,
+        // there might be a signup form/modal on the current page
+        if (signupPagePost && currentPageUrl && currentPageUrl !== 'about:blank') {
           console.log(`[SIGNUP-AUTO] Detected signup page after browse (${currentPageUrl}). Filling form directly.`);
 
           // Resolve password
@@ -3329,8 +3332,50 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const autoEmail = `${username}@aevoy.com`;
           const autoName = senderName || username;
 
+          // Step 0: If we're not on a signup page, navigate there first
+          if (!isOnSignupPage) {
+            // Try clicking "Sign up" button/link on the current page
+            for (const navText of ['Sign up', 'Sign Up', 'Create account', 'Create Account', 'Register', 'Get Started', 'Join']) {
+              try {
+                const navEl = signupPagePost.getByRole('link', { name: navText });
+                if (await navEl.count() > 0) {
+                  await navEl.first().click({ timeout: 5000 });
+                  console.log(`[SIGNUP-AUTO] Navigated to signup via "${navText}" link`);
+                  await signupPagePost.waitForTimeout(3000);
+                  break;
+                }
+              } catch { /* next */ }
+              try {
+                const navBtn = signupPagePost.getByRole('button', { name: navText });
+                if (await navBtn.count() > 0) {
+                  await navBtn.first().click({ timeout: 5000 });
+                  console.log(`[SIGNUP-AUTO] Navigated to signup via "${navText}" button`);
+                  await signupPagePost.waitForTimeout(3000);
+                  break;
+                }
+              } catch { /* next */ }
+            }
+            // Also try navigating to common signup URLs
+            const domain = new URL(currentPageUrl).origin;
+            const signupUrls = [`${domain}/signup`, `${domain}/register`, `${domain}/join`, `${domain}/create-account`];
+            const nowUrl = signupPagePost.url();
+            if (nowUrl === currentPageUrl) {
+              // None of the clicks worked — try navigating directly
+              for (const url of signupUrls) {
+                try {
+                  await signupPagePost.goto(url, { timeout: 10000, waitUntil: 'domcontentloaded' });
+                  const newUrl = signupPagePost.url();
+                  if (newUrl !== currentPageUrl) {
+                    console.log(`[SIGNUP-AUTO] Direct navigation to ${url} succeeded → ${newUrl}`);
+                    break;
+                  }
+                } catch { /* next */ }
+              }
+            }
+            await signupPagePost.waitForTimeout(2000);
+          }
+
           // Step 1: Click through OAuth-first pages to reveal email form
-          // Try multiple strategies: getByText, getByRole, CSS selectors
           const revealTexts = ['Continue with email', 'Sign up with email', 'Continue another way', 'Use email instead', 'Other sign up options', 'Sign up with Email'];
           for (const linkText of revealTexts) {
             try {
