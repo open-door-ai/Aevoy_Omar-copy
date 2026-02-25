@@ -3656,7 +3656,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // (custom React components, SPA forms, booking flows, cancellations, etc.) —
       // run the vision agent. It sees the page visually and acts on any UI element.
       // Only fires when: task is not done yet + we have a live page + it's a browser task.
-      const isBrowserInteractionTask = /\b(sign.?up|signup|register|create\b.*\baccount|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in)\b/i.test(taskTextLower);
+      const isBrowserInteractionTask = /\b(sign.?up|signup|register|create\b.*\baccount|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account)\b/i.test(taskTextLower);
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine) {
         const visionPage = executionEngine.getPage?.();
         const visionPageUrl = visionPage?.url() || '';
