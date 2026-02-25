@@ -2294,7 +2294,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // SIGNUP COMPLETION GATE (independent of real actions):
         // If this is a signup/account creation task and AI signaled TASK_COMPLETE but never
         // filled any forms, it just browsed to the page and gave advice. REJECT.
-        const isSignupTask = /\b(sign ?up|signup|create (an? )?(account|profile|gmail|email)|register|enroll|open (an? )?account)\b/i.test(taskTextLower);
+        const isSignupTask = /\b(sign ?up|signup|create\b.*\baccount|create\b.*\bprofile|create\b.*\bgmail|create\b.*\bemail|register|enroll|open\b.*\baccount|make\b.*\baccount)\b/i.test(taskTextLower);
         const hasFormActions = actionResults.some(r =>
           ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
         );
@@ -3297,7 +3297,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // POST-ACTION SIGNUP DETECTION: After browsing to a signup page, immediately
       // fill the form using Playwright directly instead of waiting for the AI to
       // signal TASK_COMPLETE with advice. The AI can't fill forms — we do it mechanically.
-      const isSignupTaskPostAction = /\b(sign ?up|signup|create (an? )?(account|profile|gmail|email)|register|enroll|open (an? )?account)\b/i.test(taskTextLower);
+      const isSignupTaskPostAction = /\b(sign ?up|signup|create\b.*\baccount|create\b.*\bprofile|create\b.*\bgmail|create\b.*\bemail|register|enroll|open\b.*\baccount|make\b.*\baccount)\b/i.test(taskTextLower);
       // Check ALL rounds for browse (not just current), and check current page URL
       const hasBrowseEver = actionResults.some(r =>
         ['browse', 'navigate'].includes(r.action?.type || '') && r.success
@@ -4283,7 +4283,7 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
     // book reservation, fill out form) but AI gave advice/instructions instead of acting, REJECT the
     // response and force browser re-execution. This is the #1 failure mode — AI acts like ChatGPT.
     // SKIP if signup-auto trigger already completed the task mechanically.
-    const isActionTask = !signupAutoCompleted && /\b(sign up|signup|create (an? )?(account|profile|gmail|email)|register|make (an? )?(account|profile)|book (a |an )?(reservation|table|appointment|room)|fill (out |in )?(the |a |an )?(form|application|survey)|apply (for|to)|subscribe|enroll|open (an? )?(account|page))\b/i.test(taskTextLower);
+    const isActionTask = !signupAutoCompleted && /\b(sign ?up|signup|create\b.*\b(account|profile|gmail|email)|register|make\b.*\b(account|profile)|book\b.*\b(reservation|table|appointment|room)|fill\b.*\b(form|application|survey)|apply (for|to)|subscribe|enroll|open\b.*\b(account|page))\b/i.test(taskTextLower);
     // For signup/creation tasks, require FORM actions (fill/fill_form/submit) — just clicking isn't enough
     const hasFormCompletion = actionResults.some(r =>
       ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
