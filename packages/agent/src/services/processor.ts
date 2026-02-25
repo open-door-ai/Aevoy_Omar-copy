@@ -3491,11 +3491,15 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             }
           }
 
+          // Debug: report current state after all fill attempts
+          const postNavUrl = signupPagePost.url();
           if (autoEmailFilled) {
             actionResults.push({ action: { type: 'fill' as any, params: { selector: 'email', value: autoEmail } }, success: true, result: `Filled email: ${autoEmail}` });
+            void getSupabaseClient().from('tasks').update({
+              progress_message: `[SIGNUP-AUTO] EMAIL FILLED on ${postNavUrl.substring(0, 60)}`
+            }).eq('id', taskId).then(() => {});
           } else {
-            console.log(`[SIGNUP-AUTO] Could not find email field. Page URL: ${currentPageUrl}, Title: ${currentPageTitle}`);
-            // Debug: count visible inputs on page
+            console.log(`[SIGNUP-AUTO] Could not find email field. Page URL: ${postNavUrl}`);
             try {
               const inputCount = await signupPagePost.evaluate(() => {
                 const all = document.querySelectorAll('input');
@@ -3503,10 +3507,10 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                   const r = i.getBoundingClientRect();
                   return r.width > 0 && r.height > 0;
                 });
-                return { total: all.length, visible: visible.length, types: visible.map(i => `${i.type}|${i.name}|${i.placeholder}`).join(', ') };
+                return { total: all.length, visible: visible.length, types: visible.map(i => `${i.type}|${i.name}|${i.placeholder}|${i.id}`).join('; ') };
               });
               void getSupabaseClient().from('tasks').update({
-                progress_message: `[SIGNUP-AUTO] NO EMAIL FIELD. inputs: ${inputCount.visible}/${inputCount.total}, types: ${inputCount.types.substring(0, 200)}`
+                progress_message: `[SIGNUP-AUTO] NO EMAIL. url=${postNavUrl.substring(0, 50)} visible=${inputCount.visible}/${inputCount.total} [${inputCount.types.substring(0, 200)}]`
               }).eq('id', taskId).then(() => {});
             } catch { /* non-critical */ }
           }
