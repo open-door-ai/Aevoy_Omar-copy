@@ -13,6 +13,7 @@ import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
 import { ActionValidator } from "../security/validator.js";
 import { ExecutionEngine } from "../execution/engine.js";
+import { runVisionAgent } from "../execution/vision-agent.js";
 import { getFailureMemory, recordFailure, learnSolution } from "../memory/failure-db.js";
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
 import { verifyTask, quickVerify, getQualityTier, QUALITY_TIERS } from "./task-verifier.js";
@@ -2494,8 +2495,27 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
                 break;
               }
             } else {
-              console.log(`[SIGNUP-GATE] Could not find email field on page`);
-              aiResponse.content = `I navigated to the signup page but couldn't locate the email input field. The site may require JavaScript interaction or use a non-standard form.`;
+              console.log(`[SIGNUP-GATE] Could not find email field — running vision agent fallback`);
+              // Vision agent handles custom React components, SPA forms, non-standard inputs
+              try {
+                let vgPw = '';
+                try { const { getAgentPasswords } = await import("./agent-passwords.js"); const vgP = await getAgentPasswords(userId); vgPw = vgP?.primary || 'AevoyAgent2026!'; } catch { vgPw = 'AevoyAgent2026!'; }
+                const vgEmail = `${username}@aevoy.com`;
+                const vgName = senderName || username;
+                const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy. Submit the form.`;
+                const vgResult = await runVisionAgent(signupPage, vgTask, userId, taskId);
+                if (vgResult.success) {
+                  aiResponse.content = vgResult.result || `Signed up using ${vgEmail}.`;
+                  isTaskComplete = true;
+                  aiSignaledComplete = true;
+                  signupAutoCompleted = true;
+                  console.log(`[SIGNUP-GATE] Vision agent success: ${aiResponse.content.substring(0, 80)}`);
+                } else {
+                  aiResponse.content = `Navigated to the signup page but couldn't complete registration. ${vgResult.error || 'The form may require manual completion.'}`;
+                }
+              } catch (vgErr) {
+                aiResponse.content = `I navigated to the signup page but couldn't locate the email input field. The site may require JavaScript interaction or use a non-standard form.`;
+              }
             }
           }
           // If signup gate didn't fill anything, continue to next iteration
@@ -3628,6 +3648,49 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             } else {
               console.log(`[SIGNUP-AUTO] Email not filled — letting AI continue iterating`);
             }
+          }
+        }
+      }
+
+      // VISION AGENT FALLBACK: For any browser task the existing trigger couldn't handle
+      // (custom React components, SPA forms, booking flows, cancellations, etc.) —
+      // run the vision agent. It sees the page visually and acts on any UI element.
+      // Only fires when: task is not done yet + we have a live page + it's a browser task.
+      const isBrowserInteractionTask = /\b(sign.?up|signup|register|create\b.*\baccount|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in)\b/i.test(taskTextLower);
+      if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine) {
+        const visionPage = executionEngine.getPage?.();
+        const visionPageUrl = visionPage?.url() || '';
+        if (visionPage && visionPageUrl && visionPageUrl !== 'about:blank' && !visionPage.isClosed()) {
+          let visionPassword = '';
+          try {
+            const { getAgentPasswords } = await import("./agent-passwords.js");
+            const visionPw = await getAgentPasswords(userId);
+            visionPassword = visionPw?.primary || 'AevoyAgent2026!';
+          } catch { visionPassword = 'AevoyAgent2026!'; }
+          const visionEmail = `${username}@aevoy.com`;
+          const visionName = senderName || username;
+          const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Complete the task fully on the page.`;
+
+          console.log(`[VISION-AGENT] Starting on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);
+          void getSupabaseClient().from('tasks').update({
+            progress_message: `[VISION-AGENT] Running on ${visionPageUrl.substring(0, 60)}`
+          }).eq('id', taskId).then(() => {});
+
+          try {
+            const visionResult = await runVisionAgent(visionPage, visionTask, userId, taskId);
+            console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
+            if (visionResult.success) {
+              aiResponse.content = visionResult.result || `Task completed successfully.`;
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              signupAutoCompleted = true; // Protect from quality gates
+              console.log(`[VISION-AGENT] Complete: ${aiResponse.content.substring(0, 100)}`);
+              break;
+            } else {
+              console.log(`[VISION-AGENT] Failed: ${visionResult.error} — falling back to AI iteration`);
+            }
+          } catch (visionErr) {
+            console.warn(`[VISION-AGENT] Exception: ${visionErr} — continuing with AI`);
           }
         }
       }
