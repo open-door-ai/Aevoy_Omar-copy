@@ -3244,17 +3244,19 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // fill the form using Playwright directly instead of waiting for the AI to
       // signal TASK_COMPLETE with advice. The AI can't fill forms — we do it mechanically.
       const isSignupTaskPostAction = /\b(sign ?up|signup|create (an? )?(account|profile|gmail|email)|register|enroll|open (an? )?account)\b/i.test(taskTextLower);
-      const hasBrowseSuccess = iterationResults.some(r =>
+      // Check ALL rounds for browse (not just current), and check current page URL
+      const hasBrowseEver = actionResults.some(r =>
         ['browse', 'navigate'].includes(r.action?.type || '') && r.success
       );
       const hasFormActionsPostAction = actionResults.some(r =>
         ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
       );
-      if (isSignupTaskPostAction && hasBrowseSuccess && !hasFormActionsPostAction && executionEngine) {
+      if (isSignupTaskPostAction && hasBrowseEver && !hasFormActionsPostAction && executionEngine) {
         const signupPagePost = executionEngine.getPage?.();
         const currentPageUrl = signupPagePost?.url() || '';
         const currentPageTitle = await signupPagePost?.title().catch(() => '') || '';
-        const isOnSignupPage = /sign.?up|register|create.?account|join|get.?started/i.test(currentPageUrl + ' ' + currentPageTitle);
+        // Broad match: signup/register pages OR any page from the target domain when task is account creation
+        const isOnSignupPage = /sign.?up|register|create.?account|join|get.?started|login|log.?in|onboarding/i.test(currentPageUrl + ' ' + currentPageTitle);
 
         if (isOnSignupPage && signupPagePost) {
           console.log(`[SIGNUP-AUTO] Detected signup page after browse (${currentPageUrl}). Filling form directly.`);
