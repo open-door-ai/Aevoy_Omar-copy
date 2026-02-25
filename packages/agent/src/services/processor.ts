@@ -2336,25 +2336,77 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
               } catch { /* try next */ }
             }
 
-            // Step 2: Try all common email selectors
-            const emailSelectors = [
-              'input[type="email"]', '[name*="email"]', '[placeholder*="email" i]',
-              '[placeholder*="Email"]', '[aria-label*="email" i]', '[data-testid*="email"]',
-              '#email', '[name="email"]', 'input[autocomplete="email"]',
-            ];
+            // Step 2: Fill email — multi-strategy (CSS → Playwright locators → DOM injection)
             let emailFilled = false;
-            for (const sel of emailSelectors) {
+            // Strategy A: CSS selectors
+            for (const sel of ['input[type="email"]', '[name*="email"]', '[placeholder*="email" i]', '[aria-label*="email" i]', '[data-testid*="email"]', '#email', '[name="email"]', 'input[autocomplete="email"]', 'input[type="text"][name*="mail"]']) {
               try {
                 const el = signupPage.locator(sel).first();
-                if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+                if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
                   await el.click({ timeout: 2000 });
-                  await el.fill(email, { timeout: 3000 });
-                  console.log(`[SIGNUP-GATE] Filled email with selector: ${sel}`);
+                  await el.fill(email, { timeout: 5000 });
                   emailFilled = true;
-                  actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: email } }, success: true, result: `Filled email: ${email}` });
+                  console.log(`[SIGNUP-GATE] Email via CSS: ${sel}`);
                   break;
                 }
-              } catch { /* try next selector */ }
+              } catch { /* next */ }
+            }
+            // Strategy B: Playwright built-in locators
+            if (!emailFilled) {
+              for (const tryFn of [
+                () => signupPage.getByPlaceholder(/email/i),
+                () => signupPage.getByRole('textbox', { name: /email/i }),
+                () => signupPage.getByLabel(/email/i),
+              ]) {
+                try {
+                  const el = tryFn();
+                  if (await el.count() > 0) {
+                    await el.first().fill(email, { timeout: 5000 });
+                    emailFilled = true;
+                    console.log(`[SIGNUP-GATE] Email via Playwright locator`);
+                    break;
+                  }
+                } catch { /* next */ }
+              }
+            }
+            // Strategy C: DOM injection
+            if (!emailFilled) {
+              try {
+                emailFilled = await signupPage.evaluate((em: string) => {
+                  const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
+                  for (const inp of inputs) {
+                    const input = inp as HTMLInputElement;
+                    const rect = input.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0 && !input.value) {
+                      const hints = [input.type, input.name, input.placeholder, input.getAttribute('aria-label') || '', input.id].join(' ').toLowerCase();
+                      if (hints.includes('email') || hints.includes('mail') || input.type === 'email') {
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(input, em); else input.value = em;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                      }
+                    }
+                  }
+                  // Fallback: first empty visible text input
+                  for (const inp2 of inputs) {
+                    const input2 = inp2 as HTMLInputElement;
+                    const rect2 = input2.getBoundingClientRect();
+                    if (rect2.width > 0 && rect2.height > 0 && !input2.value && ['text', 'email', ''].includes(input2.type)) {
+                      const setter2 = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                      if (setter2) setter2.call(input2, em); else input2.value = em;
+                      input2.dispatchEvent(new Event('input', { bubbles: true }));
+                      input2.dispatchEvent(new Event('change', { bubbles: true }));
+                      return true;
+                    }
+                  }
+                  return false;
+                }, email);
+                if (emailFilled) console.log(`[SIGNUP-GATE] Email via DOM injection`);
+              } catch { /* non-critical */ }
+            }
+            if (emailFilled) {
+              actionResults.push({ action: { type: 'fill' as any, params: { selector: 'email', value: email } }, success: true, result: `Filled email: ${email}` });
             }
 
             // Step 3: Try all common password selectors
@@ -3273,54 +3325,161 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const autoName = senderName || username;
 
           // Step 1: Click through OAuth-first pages to reveal email form
-          for (const linkText of ['Continue with email', 'Sign up with email', 'Continue another way', 'Use email instead', 'Other sign up options']) {
+          // Try multiple strategies: getByText, getByRole, CSS selectors
+          const revealTexts = ['Continue with email', 'Sign up with email', 'Continue another way', 'Use email instead', 'Other sign up options', 'Sign up with Email'];
+          for (const linkText of revealTexts) {
             try {
               const el = signupPagePost.getByText(linkText, { exact: false });
               if (await el.count() > 0) {
                 await el.first().click({ timeout: 3000 });
                 console.log(`[SIGNUP-AUTO] Clicked "${linkText}"`);
-                await signupPagePost.waitForTimeout(2000);
+                await signupPagePost.waitForTimeout(3000);
                 break;
               }
             } catch { /* try next */ }
           }
+          // Also try clicking links/buttons with partial text match
+          try {
+            const emailLink = signupPagePost.locator('a, button, [role="button"]').filter({ hasText: /email|another way/i });
+            if (await emailLink.count() > 0) {
+              await emailLink.first().click({ timeout: 3000 });
+              console.log(`[SIGNUP-AUTO] Clicked email reveal via locator filter`);
+              await signupPagePost.waitForTimeout(3000);
+            }
+          } catch { /* non-critical */ }
 
-          // Step 2: Fill email
+          // Step 2: Fill email — 3 strategies: CSS selectors, Playwright locators, DOM injection
           let autoEmailFilled = false;
-          for (const sel of ['input[type="email"]', '[name*="email"]', '[placeholder*="email" i]', '[aria-label*="email" i]', '#email', '[name="email"]', 'input[autocomplete="email"]']) {
+
+          // Strategy A: CSS selectors
+          if (!autoEmailFilled) {
+            for (const sel of ['input[type="email"]', '[name*="email"]', '[placeholder*="email" i]', '[placeholder*="Email"]', '[aria-label*="email" i]', '[data-testid*="email"]', '#email', '[name="email"]', 'input[autocomplete="email"]', 'input[type="text"][name*="mail"]']) {
+              try {
+                const el = signupPagePost.locator(sel).first();
+                if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
+                  await el.click({ timeout: 2000 });
+                  await el.fill(autoEmail, { timeout: 5000 });
+                  autoEmailFilled = true;
+                  console.log(`[SIGNUP-AUTO] Email filled via CSS: ${sel}`);
+                  break;
+                }
+              } catch { /* next */ }
+            }
+          }
+
+          // Strategy B: Playwright built-in locators (handle React/dynamic content better)
+          if (!autoEmailFilled) {
             try {
-              const el = signupPagePost.locator(sel).first();
-              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
-                await el.click({ timeout: 2000 });
-                await el.fill(autoEmail, { timeout: 3000 });
+              const byPlaceholder = signupPagePost.getByPlaceholder(/email/i);
+              if (await byPlaceholder.count() > 0) {
+                await byPlaceholder.first().fill(autoEmail, { timeout: 5000 });
                 autoEmailFilled = true;
-                actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: autoEmail } }, success: true, result: `Filled email: ${autoEmail}` });
-                console.log(`[SIGNUP-AUTO] Email filled: ${sel}`);
-                break;
+                console.log(`[SIGNUP-AUTO] Email filled via getByPlaceholder`);
+              }
+            } catch { /* next */ }
+          }
+          if (!autoEmailFilled) {
+            try {
+              const byRole = signupPagePost.getByRole('textbox', { name: /email/i });
+              if (await byRole.count() > 0) {
+                await byRole.first().fill(autoEmail, { timeout: 5000 });
+                autoEmailFilled = true;
+                console.log(`[SIGNUP-AUTO] Email filled via getByRole`);
+              }
+            } catch { /* next */ }
+          }
+          if (!autoEmailFilled) {
+            try {
+              const byLabel = signupPagePost.getByLabel(/email/i);
+              if (await byLabel.count() > 0) {
+                await byLabel.first().fill(autoEmail, { timeout: 5000 });
+                autoEmailFilled = true;
+                console.log(`[SIGNUP-AUTO] Email filled via getByLabel`);
               }
             } catch { /* next */ }
           }
 
-          // Step 3: Fill password
+          // Strategy C: DOM injection fallback — find ANY visible text input and fill it
+          if (!autoEmailFilled) {
+            try {
+              autoEmailFilled = await signupPagePost.evaluate((email: string) => {
+                const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
+                for (const inp of inputs) {
+                  const input = inp as HTMLInputElement;
+                  const rect = input.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0 && !input.value) {
+                    const hints = [input.type, input.name, input.placeholder, input.getAttribute('aria-label') || '', input.id].join(' ').toLowerCase();
+                    if (hints.includes('email') || hints.includes('mail') || input.type === 'email') {
+                      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                      if (nativeInputValueSetter) nativeInputValueSetter.call(input, email);
+                      else input.value = email;
+                      input.dispatchEvent(new Event('input', { bubbles: true }));
+                      input.dispatchEvent(new Event('change', { bubbles: true }));
+                      input.dispatchEvent(new Event('blur', { bubbles: true }));
+                      return true;
+                    }
+                  }
+                }
+                // Fallback: fill the first empty visible text input
+                for (const inp of inputs) {
+                  const input = inp as HTMLInputElement;
+                  const rect = input.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0 && !input.value && (input.type === 'text' || input.type === 'email' || input.type === '')) {
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    if (nativeInputValueSetter) nativeInputValueSetter.call(input, email);
+                    else input.value = email;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                  }
+                }
+                return false;
+              }, autoEmail);
+              if (autoEmailFilled) console.log(`[SIGNUP-AUTO] Email filled via DOM injection`);
+            } catch (domErr) {
+              console.log(`[SIGNUP-AUTO] DOM injection failed: ${domErr}`);
+            }
+          }
+
+          if (autoEmailFilled) {
+            actionResults.push({ action: { type: 'fill' as any, params: { selector: 'email', value: autoEmail } }, success: true, result: `Filled email: ${autoEmail}` });
+          } else {
+            console.log(`[SIGNUP-AUTO] Could not find email field. Page URL: ${currentPageUrl}, Title: ${currentPageTitle}`);
+          }
+
+          // Step 3: Fill password — same multi-strategy approach
           let autoPasswordFilled = false;
           for (const sel of ['input[type="password"]', '[name*="pass"]', '[placeholder*="password" i]', '#password', '[name="password"]', 'input[autocomplete="new-password"]']) {
             try {
               const el = signupPagePost.locator(sel).first();
-              if (await el.count() > 0 && await el.isVisible({ timeout: 1000 })) {
+              if (await el.count() > 0 && await el.isVisible({ timeout: 2000 })) {
                 await el.click({ timeout: 2000 });
-                await el.fill(autoPassword, { timeout: 3000 });
+                await el.fill(autoPassword, { timeout: 5000 });
                 autoPasswordFilled = true;
-                actionResults.push({ action: { type: 'fill' as any, params: { selector: sel, value: '***' } }, success: true, result: 'Filled password' });
-                console.log(`[SIGNUP-AUTO] Password filled`);
+                console.log(`[SIGNUP-AUTO] Password filled: ${sel}`);
                 break;
               }
             } catch { /* next */ }
+          }
+          if (!autoPasswordFilled) {
+            try {
+              const pwByPlaceholder = signupPagePost.getByPlaceholder(/password/i);
+              if (await pwByPlaceholder.count() > 0) {
+                await pwByPlaceholder.first().fill(autoPassword, { timeout: 5000 });
+                autoPasswordFilled = true;
+                console.log(`[SIGNUP-AUTO] Password filled via getByPlaceholder`);
+              }
+            } catch { /* next */ }
+          }
+          if (autoPasswordFilled) {
+            actionResults.push({ action: { type: 'fill' as any, params: { selector: 'password', value: '***' } }, success: true, result: 'Filled password' });
           }
 
           // Step 4: Fill name fields
           for (const [sel, val] of [
             ['input[name="firstName"]', autoName], ['input[name="first_name"]', autoName],
             ['input[name="name"]', autoName], ['[placeholder*="name" i]', autoName],
+            ['[placeholder*="First" i]', autoName], ['[placeholder*="Last" i]', 'Aevoy'],
             ['input[name="lastName"]', 'Aevoy'], ['input[name="last_name"]', 'Aevoy'],
           ] as [string, string][]) {
             try {
@@ -3334,7 +3493,8 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
           // Step 5: Click submit
           if (autoEmailFilled) {
-            for (const btnText of ['Sign Up', 'Create Account', 'Register', 'Continue', 'Get Started', 'Join', 'Submit', 'Create', 'Next', 'Sign up']) {
+            const submitTexts = ['Sign Up', 'Create Account', 'Register', 'Continue', 'Get Started', 'Join', 'Submit', 'Create', 'Next', 'Sign up', 'Create my account', 'Agree and continue'];
+            for (const btnText of submitTexts) {
               try {
                 const btn = signupPagePost.getByRole('button', { name: btnText });
                 if (await btn.count() > 0 && await btn.first().isVisible({ timeout: 1000 })) {
@@ -3346,6 +3506,15 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 }
               } catch { /* next */ }
             }
+            // Fallback: click any visible submit-like button
+            try {
+              const anySubmit = signupPagePost.locator('button[type="submit"], input[type="submit"]').first();
+              if (await anySubmit.count() > 0 && await anySubmit.isVisible({ timeout: 1000 })) {
+                await anySubmit.click({ timeout: 3000 });
+                console.log(`[SIGNUP-AUTO] Clicked submit via type=submit`);
+                await signupPagePost.waitForTimeout(3000);
+              }
+            } catch { /* non-critical */ }
 
             // Step 6: Handle CAPTCHA
             try {
