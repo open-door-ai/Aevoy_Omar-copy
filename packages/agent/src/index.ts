@@ -2887,3 +2887,4 @@ server.listen(PORT, async () => {
     // Non-critical — skills will be seeded on next restart
   }
 });
+
