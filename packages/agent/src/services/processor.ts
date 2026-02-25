@@ -3680,6 +3680,70 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
       }
     }
 
+    // POST-LOOP ADVICE REJECTION GATE: If user asked AI to DO something (sign up, create account,
+    // book reservation, fill out form) but AI gave advice/instructions instead of acting, REJECT the
+    // response and force browser re-execution. This is the #1 failure mode — AI acts like ChatGPT.
+    const isActionTask = /\b(sign up|signup|create (an? )?(account|profile|gmail|email)|register|make (an? )?(account|profile)|book (a |an )?(reservation|table|appointment|room)|fill (out |in )?(the |a |an )?(form|application|survey)|apply (for|to)|subscribe|enroll|open (an? )?(account|page))\b/i.test(taskTextLower);
+    const hasBrowserCompletion = actionResults.some(r =>
+      ['fill', 'fill_form', 'submit', 'click', 'login'].includes(r.action?.type || '') && r.success
+    );
+    if (isActionTask && aiResponse.content && !hasBrowserCompletion && currentIteration <= MAX_ITERATIONS) {
+      const isAdviceResponse = /\b(you can|available at|accessible at|you('ll| will) need to|here's how|sign.?up page|registration (page|form)|visit|go to)\b/i.test(aiResponse.content) ||
+        /https?:\/\/\S+\.(com|org|net|io)/i.test(aiResponse.content); // Contains bare URLs = advice
+      if (isAdviceResponse) {
+        console.log(`[ADVICE-GATE] Task is "${subject.substring(0, 50)}" — AI gave advice instead of doing it. Forcing browser action.`);
+        // Extract the target URL from the advice response
+        const urlMatch = aiResponse.content.match(/https?:\/\/[^\s),]+/);
+        const targetUrl = urlMatch ? urlMatch[0] : classification.domains?.[0] ? `https://${classification.domains[0]}` : null;
+
+        if (targetUrl) {
+          try {
+            const actionPrompt = `The user asked: "${subject}"
+
+YOU GAVE ADVICE INSTEAD OF DOING IT. THAT IS WRONG.
+
+You said: "${aiResponse.content.substring(0, 200)}"
+
+The user wants YOU to COMPLETE this task using the browser. DO NOT describe what they should do.
+
+EXECUTE NOW:
+1. [ACTION:browse("${targetUrl}")] — Navigate to the target page
+2. [ACTION:screenshot_ocr({})] — See what's on the page
+3. Fill out ANY forms you see using [ACTION:fill("selector", "value")] or [ACTION:fill_form("url", {"field": "value"})]
+4. Click submit/register/book buttons using [ACTION:click("button text")]
+5. If email verification needed: wait 10s, then [ACTION:read_email()] to get the code
+
+Your email address is ${username}@aevoy.com. Use it for signups.
+You have access to user's agent passwords for form fields requiring passwords.
+
+DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
+
+            const actionResponse = await generateResponse(
+              memory, subject, actionPrompt, username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += actionResponse.cost || 0;
+            totalTokens += actionResponse.tokensUsed || 0;
+            if (actionResponse.actions && actionResponse.actions.length > 0) {
+              console.log(`[ADVICE-GATE] Got ${actionResponse.actions.length} browser actions, executing`);
+              for (const advAction of actionResponse.actions) {
+                try {
+                  const advResult = await executeAction(advAction, userId, username, executionEngine);
+                  actionResults.push(advResult);
+                  if (advResult.success) {
+                    aiResponse.content = actionResponse.content || aiResponse.content;
+                  }
+                } catch (advErr) {
+                  console.error(`[ADVICE-GATE] ${advAction.type} failed:`, advErr);
+                }
+              }
+            }
+          } catch (advErr) {
+            console.error(`[ADVICE-GATE] Failed:`, advErr);
+          }
+        }
+      }
+    }
+
     // POST-LOOP CALL GATE: If user asked to "call the dentist/florist/restaurant/etc."
     // and no call_external was executed, FORCE the call — extract phone from response if needed.
     const isCallBusinessTask = /\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+\w+/i.test(subject) &&
@@ -4322,7 +4386,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking')) return true;
       // Raw search/browse dump — contains search engine output or browser scraping fragments
       if (lc.startsWith('search results for') || lc.startsWith('browsed:') || lc.includes('duckduckgo') ||
-          lc.includes('region: ') || lc.includes('scrolled down') || lc.includes('waited ')) return true;
+          lc.includes('region: ') || lc.includes('scrolled down') || lc.includes('waited ') ||
+          lc.startsWith('done!\n\nwaited')) return true;
       // Contains leaked action tag fragments (mismatched brackets, escaped quotes)
       if (/\\"\)?]\s*$/.test(text.trim()) || /\)\]\s*$/.test(text.trim())) return true;
       return false;
@@ -4425,6 +4490,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       emailBody += `\n\nNote: I'd recommend double-checking these results as I wasn't fully able to verify them.`;
     }
 
+    // Humanize email subject — truncate long prompts so it doesn't look "creepy"
+    // "Find the cheapest flights from Vancouver to Toronto tomorrow morning" → "Re: Find the cheapest flights..."
+    const emailSubject = subject.length > 60
+      ? subject.substring(0, 57) + '...'
+      : subject;
+
     // Skip email sending for autonomous sub-tasks (they send one summary at the end)
     if (task.suppressEmail) {
       console.log(`[TASK] suppressEmail=true, skipping result email`);
@@ -4442,11 +4513,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         await sendSms({ userId, to: phone, body: smsBody });
         // Only send email if response was truncated (user needs full text)
         if (cleanResponse.length > 1500) {
-          await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+          await sendResponse({ to: email, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
         }
       } else {
         // No phone on file — single email only
-        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
       }
     } else if (channel === "voice") {
       // Voice: SMS summary to phone, email only if response was long
@@ -4457,15 +4528,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         await sendSms({ userId, to: phone, body: `[Aevoy] ${smsSummary}` });
         // Only email if SMS was truncated
         if (cleanResponse.length > 300) {
-          await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+          await sendResponse({ to: email, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
         }
       } else {
-        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+        await sendResponse({ to: email, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
       }
     } else {
       // Default: email
-      console.log(`[TASK] Sending reply email: to=${email}, from=${username}@aevoy.com, subject="${subject}"`);
-      const emailSent = await sendResponse({ to: email, from: `${username}@aevoy.com`, subject, body: emailBody });
+      console.log(`[TASK] Sending reply email: to=${email}, from=${username}@aevoy.com, subject="${emailSubject}"`);
+      const emailSent = await sendResponse({ to: email, from: `${username}@aevoy.com`, subject: emailSubject, body: emailBody });
       console.log(`[TASK] Reply email result: sent=${emailSent}`);
     }
     } // end suppressEmail else
