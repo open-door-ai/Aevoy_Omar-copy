@@ -350,7 +350,8 @@ async function callProvider(
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   switch (config.provider) {
     case 'deepseek': {
-      const response = await getDeepSeekClient().chat.completions.create({
+      // Always stream — prevents server-side idle timeout that kills long generation (portfolio HTML etc.)
+      const stream = await getDeepSeekClient().chat.completions.create({
         model: config.model,
         messages: [
           { role: "system", content: systemPrompt },
@@ -358,12 +359,20 @@ async function callProvider(
         ],
         max_tokens: maxTokens,
         temperature: 0.7,
+        stream: true,
+        stream_options: { include_usage: true },
       });
-      return {
-        content: response.choices[0]?.message?.content || "",
-        inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0,
-      };
+      let content = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+        if (chunk.usage) {
+          inputTokens = chunk.usage.prompt_tokens || 0;
+          outputTokens = chunk.usage.completion_tokens || 0;
+        }
+      }
+      return { content, inputTokens, outputTokens };
     }
 
     case 'kimi': {
@@ -418,7 +427,8 @@ async function callProvider(
     }
 
     case 'groq': {
-      const response = await getGroqClient().chat.completions.create({
+      // Always stream — fast streaming keeps connection alive, also handles large outputs reliably
+      const stream = await getGroqClient().chat.completions.create({
         model: config.model,
         messages: [
           { role: "system", content: systemPrompt },
@@ -426,12 +436,25 @@ async function callProvider(
         ],
         max_tokens: maxTokens,
         temperature: 0.7,
+        stream: true,
       });
-      return {
-        content: response.choices[0]?.message?.content || "",
-        inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0,
-      };
+      let content = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+        // Groq sends usage in the final chunk's x_groq field
+        const xGroqChunk = chunk as unknown as Record<string, unknown>;
+        if (xGroqChunk.x_groq) {
+          const xGroq = xGroqChunk.x_groq as Record<string, unknown>;
+          const usage = xGroq?.usage as Record<string, number> | undefined;
+          if (usage) {
+            inputTokens = usage.prompt_tokens || 0;
+            outputTokens = usage.completion_tokens || 0;
+          }
+        }
+      }
+      return { content, inputTokens, outputTokens };
     }
 
     case 'sonnet':
