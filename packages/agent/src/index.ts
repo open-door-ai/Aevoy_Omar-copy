@@ -2779,15 +2779,18 @@ server.listen(PORT, async () => {
   // Runs immediately on startup (catches Railway-restart orphans) then every 5 min.
   const runTaskWatchdog = async () => {
     try {
-      const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+      // Use updated_at (not started_at) so Railway-restart-killed tasks are caught quickly.
+      // 12 min gives the vision agent (8 min timeout) room to complete naturally,
+      // while catching Railway-killed tasks within 12 min of the kill (they stop updating at kill time).
+      const twelveMinutesAgo = new Date(Date.now() - 12 * 60 * 1000).toISOString();
       const { data: stuckTasks } = await getSupabaseClient()
         .from('tasks')
         .select('id, email_subject, input_channel, user_id')
         .eq('status', 'processing')
-        .lt('started_at', twentyMinutesAgo);
+        .lt('updated_at', twelveMinutesAgo);
 
       if (stuckTasks && stuckTasks.length > 0) {
-        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (>20 min) — resolving gracefully...`);
+        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >12 min) — resolving gracefully...`);
 
         // Gracefully complete each stuck task with a helpful message.
         // NEVER mark as "failed" — users should always see a usable response.
@@ -2820,7 +2823,7 @@ server.listen(PORT, async () => {
   // Run immediately on startup to catch tasks from previous server instance
   runTaskWatchdog();
   setInterval(runTaskWatchdog, 5 * 60 * 1000); // Then every 5 minutes
-  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 20min timeout, graceful recovery)');
+  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 12min updated_at threshold, graceful recovery)');
 
   // WEBHOOK SELF-HEALER — auto-repair phone numbers pointing to wrong URL
   const validateAndRepairWebhooks = async () => {
