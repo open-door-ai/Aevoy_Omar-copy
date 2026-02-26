@@ -5606,7 +5606,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // This is the "Apple principle": anticipate what the user needs before they ask.
     try {
       const hasFollowup = /\?/.test(cleanResponse.slice(-400)); // Already ends with a question
-      if (!hasFollowup && cleanResponse.length > 20 && !task.suppressEmail) {
+      // NOTE: suppressEmail means "don't send email" not "don't add follow-up to response"
+      // Always add follow-up to cleanResponse regardless of suppressEmail flag
+      if (!hasFollowup && cleanResponse.length > 20) {
         const followupPrompt = `User asked: "${(subject || '').substring(0, 150)}"
 Agent response: "${cleanResponse.substring(0, 300)}"
 
