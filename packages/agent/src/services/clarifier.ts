@@ -18,6 +18,10 @@ export interface UserSettings {
   agentCardLimitTransaction: number;
   agentCardLimitMonthly: number;
   virtualPhone: string | null;
+  clarificationTimeoutMs: number;
+  monitoringIntervalMs: number;
+  maxTaskIterations: number;
+  taskBudgetCents: number;
 }
 
 export interface StructuredIntent {
@@ -41,7 +45,11 @@ const DEFAULT_SETTINGS: UserSettings = {
   agentCardEnabled: false,
   agentCardLimitTransaction: 5000, // $50
   agentCardLimitMonthly: 20000, // $200
-  virtualPhone: null
+  virtualPhone: null,
+  clarificationTimeoutMs: 1200000, // 20 minutes
+  monitoringIntervalMs: 900000,    // 15 minutes
+  maxTaskIterations: 15,
+  taskBudgetCents: 500             // $5
 };
 
 /**
@@ -65,7 +73,11 @@ export async function getUserSettings(userId: string): Promise<UserSettings> {
       agentCardEnabled: data.agent_card_enabled || false,
       agentCardLimitTransaction: data.agent_card_limit_transaction || 5000,
       agentCardLimitMonthly: data.agent_card_limit_monthly || 20000,
-      virtualPhone: data.virtual_phone || null
+      virtualPhone: data.virtual_phone || null,
+      clarificationTimeoutMs: data.clarification_timeout_ms || 1200000,
+      monitoringIntervalMs: data.monitoring_interval_ms || 900000,
+      maxTaskIterations: data.max_task_iterations || 15,
+      taskBudgetCents: data.task_budget_cents || 500
     };
   } catch {
     return DEFAULT_SETTINGS;

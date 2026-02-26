@@ -2294,6 +2294,48 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // ============================================================
+    // AGENT TEAM: For complex multi-goal tasks, use parallel specialist agents
+    // ============================================================
+    {
+      const { getAgentTeam, isComplexTask } = await import('./agent-team.js');
+      if (isComplexTask(subject + ' ' + body) && !task.suppressEmail) {
+        try {
+          const teamResult = await getAgentTeam().executeWithTeam(
+            subject + ' ' + body,
+            userId,
+            username,
+            (memory as any).profile || ''
+          );
+          if (teamResult && teamResult.length > 50) {
+            // Update task and return team result directly
+            await getSupabaseClient()
+              .from('tasks')
+              .update({
+                status: 'completed',
+                response_text: teamResult,
+                completed_at: new Date().toISOString(),
+              })
+              .eq('id', taskId);
+            if (!task.suppressEmail) {
+              sendViaChannel(
+                task.inputChannel,
+                userId,
+                from,
+                `${username}@aevoy.com`,
+                `Re: ${subject}`,
+                teamResult
+              ).catch(() => {});
+            }
+            clearTimeout(masterTimer);
+            return { taskId, success: true, response: teamResult, actions: [] };
+          }
+        } catch (teamErr) {
+          console.warn('[AGENT-TEAM] Failed, falling through to main processor:', teamErr);
+        }
+      }
+    }
+
+    // ============================================================
     // ITERATIVE EXECUTION LOOP
     // Execute actions → observe results → re-prompt AI → repeat
     // until task is done, budget exceeded, or timeout hit.

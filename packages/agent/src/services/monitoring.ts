@@ -17,7 +17,8 @@
 
 import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
 import { sendResponse } from './email.js';
-import { sendSms, callUser } from './twilio.js';
+import { sendSms } from './twilio.js';
+import { quickValidate } from './ai.js';
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.MONITORING_INTERVAL_MS || '') || 15 * 60 * 1000;
 const DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -232,7 +233,7 @@ async function runJobCheck(job: MonitoringJob): Promise<void> {
     // Fetch user profile for notification routing
     const { data: profile } = await getSupabaseClient()
       .from('profiles')
-      .select('email, phone, telegram_chat_id, whatsapp_phone')
+      .select('email, phone_number, telegram_chat_id, whatsapp_phone')
       .eq('id', job.userId)
       .single();
 
@@ -251,8 +252,7 @@ async function runJobCheck(job: MonitoringJob): Promise<void> {
 
     const preferredChannel = settings?.proactive_channel || 'email';
 
-    // Call AI with monitoring context
-    const { quickValidate } = await import('./ai.js');
+    // Call AI with monitoring context (quickValidate imported at top-level)
     const prompt = `You are monitoring: "${job.description}"
 
 Last checked: ${job.lastCheckedAt ? new Date(job.lastCheckedAt).toLocaleString() : 'never (first check)'}
@@ -292,11 +292,11 @@ What do you find?`;
       } else if (preferredChannel === 'whatsapp' && profile.whatsapp_phone) {
         const { sendWhatsAppMessage } = await import('./whatsapp.js');
         await sendWhatsAppMessage(profile.whatsapp_phone, notificationMessage);
-      } else if ((preferredChannel === 'sms' || preferredChannel === 'voice') && profile.phone) {
+      } else if ((preferredChannel === 'sms' || preferredChannel === 'voice') && profile.phone_number) {
         const smsBody = notificationMessage.length > 1500
           ? notificationMessage.substring(0, 1500) + '...'
           : notificationMessage;
-        await sendSms({ userId: job.userId, to: profile.phone, body: smsBody });
+        await sendSms({ userId: job.userId, to: profile.phone_number as string, body: smsBody });
       } else {
         // Default: email
         await sendResponse({
