@@ -2283,6 +2283,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Context summarization: store round results for compression after round 5
     const roundHistory: { round: number; summary: string }[] = [];
     let compressedHistory = ''; // Compressed summary of rounds 1-N after round 5
+    let visionFailureNote = ''; // Context injected into next iteration when vision agent fails
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -3725,10 +3726,14 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               console.log(`[VISION-AGENT] Complete: ${aiResponse.content.substring(0, 100)}`);
               break;
             } else {
-              console.log(`[VISION-AGENT] Failed: ${visionResult.error} — falling back to AI iteration`);
+              const errMsg = visionResult.error || 'Unknown error';
+              console.log(`[VISION-AGENT] Failed: ${errMsg} — injecting failure context into AI iteration`);
+              // Inject failure context so next AI round knows what happened and tries differently
+              visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". DO NOT retry the same browser approach. Instead: use search() to find the information, or call_external() to phone the business directly, or report what you know from search results.]`;
             }
           } catch (visionErr) {
             console.warn(`[VISION-AGENT] Exception: ${visionErr} — continuing with AI`);
+            visionFailureNote = `[VISION-AGENT EXCEPTION: "${visionErr}". Fall back to search/call approach.]`;
           }
         }
       }
@@ -4169,6 +4174,26 @@ CRITICAL RULES:
         ? `\n⛔ BLOCKED DOMAINS (failed ${blockedDomains.length > 1 ? '2+' : '2'} times — DO NOT retry these):\n${blockedDomains.map(d => `  - ${d} → use [ACTION:search("your query site:${d}")] instead`).join('\n')}\n`
         : '';
 
+      // PROGRESS LEDGER (Magentic-One pattern): Every 5 iterations, check if we're making progress.
+      // If looping or stuck, force a replan before the AI wastes more rounds.
+      if (currentIteration > 0 && currentIteration % 5 === 0) {
+        try {
+          const recentHistory = roundHistory.slice(-5).map(r => r.summary).join('\n');
+          const progressCheck = await quickValidate(
+            `Task: "${subject}"\nLast 5 rounds:\n${recentHistory}\n\nAre we making meaningful progress toward completing the task? Reply with exactly:\n- PROGRESS: (yes/no/looping) — one word\n- REPLAN: (yes/no) — should we try a completely different strategy?`,
+            'You evaluate if an AI agent is making progress or stuck in a loop. Be decisive.'
+          ).catch(() => null);
+          if (progressCheck?.result) {
+            const isLooping = /looping|LOOPING|stuck|STUCK/i.test(progressCheck.result);
+            const needsReplan = /REPLAN:\s*yes/i.test(progressCheck.result);
+            if (isLooping || needsReplan) {
+              console.log(`[PROGRESS-LEDGER] Round ${currentIteration}: ${isLooping ? 'LOOPING DETECTED' : 'REPLAN REQUESTED'} — injecting strategy reset`);
+              visionFailureNote = `[PROGRESS LEDGER ALERT] You have been running for ${currentIteration} rounds${isLooping ? ' and appear to be looping' : ' without completing the task'}. STOP what you're doing. Completely change your approach. Try a fundamentally different strategy: call the business directly, use a different website, try a simpler search query, or accept partial results and answer from what you know.`;
+            }
+          }
+        } catch { /* non-critical */ }
+      }
+
       // CONTEXT SUMMARIZATION: After round 5, compress old rounds to prevent context bloat
       // This cuts context by ~60%, keeping AI focused on current state not old noise
       roundHistory.push({ round: currentIteration, summary: `Round ${currentIteration}: ${resultsSummary.substring(0, 200)}` });
@@ -4193,11 +4218,15 @@ CRITICAL RULES:
         }
       }
 
+      // Clear vision failure note after injecting into prompt (consumed once)
+      const capturedVisionFailureNote = visionFailureNote;
+      visionFailureNote = '';
+
       const iterativePrompt = `Original request: ${subject} ${body}
 ${historySection}
 ROUND ${currentIteration}/${MAX_ITERATIONS} RESULTS:
 ${resultsSummary}
-${pageStateSection}
+${capturedVisionFailureNote ? `\n⚠️ ${capturedVisionFailureNote}\n` : ''}${pageStateSection}
 ${strategyEnforcement}
 ${diversityEnforcement}
 ${retryEnforcement}
@@ -5570,6 +5599,37 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       });
     } catch {
       // Non-critical — engagement is bonus
+    }
+
+    // 16. PROACTIVE INTENT COMPLETION: If AI didn't include a follow-up question, add one.
+    // The AI should drive the conversation — after completing a task, always offer the obvious next step.
+    // This is the "Apple principle": anticipate what the user needs before they ask.
+    try {
+      const hasFollowup = /\?/.test(cleanResponse.slice(-400)); // Already ends with a question
+      if (!hasFollowup && cleanResponse.length > 20 && !task.suppressEmail) {
+        const followupPrompt = `User asked: "${(subject || '').substring(0, 150)}"
+Agent response: "${cleanResponse.substring(0, 300)}"
+
+Does this task naturally lead to a next action the agent should offer to do?
+Examples: found restaurant→offer reservation, found product→offer to order, wrote content→offer to post, found business→offer to call.
+
+Reply with EXACTLY ONE of:
+- NO (task is fully complete with no obvious next step)
+- YES:"<one direct question, max 15 words, ending the agent's response, e.g.: Want me to call and make a reservation? I just need date, time, and party size.>"`;
+
+        const followupResult = await quickValidate(followupPrompt, 'You detect natural next actions after AI task completion. Be decisive. Most research tasks DO have a next step.').catch(() => null);
+        if (followupResult?.result?.startsWith('YES:')) {
+          const followupQ = followupResult.result.replace(/^YES:"?/, '').replace(/"$/, '').trim();
+          if (followupQ.length > 5) {
+            cleanResponse = cleanResponse + '\n\n' + followupQ;
+            console.log(`[PROACTIVE] Added follow-up: "${followupQ}"`);
+            // Update the DB response with the follow-up included
+            await getSupabaseClient().from('tasks').update({ response_text: cleanResponse }).eq('id', taskId);
+          }
+        }
+      }
+    } catch {
+      // Non-critical — proactive follow-up is bonus
     }
 
     return {

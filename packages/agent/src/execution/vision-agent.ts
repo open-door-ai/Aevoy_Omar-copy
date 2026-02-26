@@ -580,14 +580,21 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       // ACT: Parse and execute
       const action = parseAction(aiResponse);
 
-      // REPEATED ACTION DETECTION: Same action 3+ times → add a stern hint to history
+      // LOOP DETECTION (Manus-style): Detect frozen loops, ping-pong oscillation, and retry loops
       const actionKey = aiResponse.trim().split('\n')[0].trim();
       if (actionKey === lastActionKey) {
         sameActionCount++;
         if (sameActionCount >= 3) {
-          history.push(`⚠️ You repeated "${actionKey}" ${sameActionCount} times. Try something DIFFERENT: SCROLL, FILL instead of TYPE, or NAVIGATE elsewhere.`);
+          history.push(`⚠️ FROZEN LOOP: You repeated "${actionKey}" ${sameActionCount} times. You MUST try a completely different approach. Options: (1) SCROLL to find different elements, (2) NAVIGATE to a different URL, (3) FILL instead of TYPE, (4) CLICK_AT coordinates instead of element index.`);
         }
       } else {
+        // Check for ping-pong: last 4 actions form A-B-A-B pattern
+        if (history.length >= 4) {
+          const recent = history.slice(-4).map(h => h.split(': ')[1] || h);
+          if (recent[0] === recent[2] && recent[1] === recent[3] && recent[0] !== recent[1]) {
+            history.push(`⚠️ PING-PONG LOOP: You keep alternating between "${recent[0]}" and "${recent[1]}". This oscillation won't complete the task. Try a third, different approach.`);
+          }
+        }
         lastActionKey = actionKey;
         sameActionCount = 0;
       }
@@ -651,14 +658,44 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
           case 'type': {
             actionOk = await typeByIndex(page, action.index!, action.text!);
-            if (actionOk) await page.waitForTimeout(300);
+            if (actionOk) {
+              await page.waitForTimeout(300);
+              // Verify text was actually entered (React/Vue might have cleared it)
+              const fieldVal = await page.evaluate(([idx, sel]: [number, string]) => {
+                const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+                  const r = el.getBoundingClientRect();
+                  const s = window.getComputedStyle(el);
+                  return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                });
+                const el = els[idx] as HTMLInputElement | undefined;
+                return el?.value || '';
+              }, [action.index!, INTERACTIVE_SELECTOR] as [number, string]).catch(() => '');
+              if (fieldVal.length === 0 && action.text!.length > 0) {
+                history.push(`⚠️ TYPE:${action.index} — text not in field after typing. Field is empty. Try FILL:${action.index}:"${action.text}" instead.`);
+              }
+            }
             break;
           }
 
           case 'fill': {
             // React-compatible fill — sets value directly via native setter
             actionOk = await fillByIndex(page, action.index!, action.text!);
-            if (actionOk) await page.waitForTimeout(300);
+            if (actionOk) {
+              await page.waitForTimeout(300);
+              // Verify fill actually set the value
+              const fieldVal = await page.evaluate(([idx, sel]: [number, string]) => {
+                const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+                  const r = el.getBoundingClientRect();
+                  const s = window.getComputedStyle(el);
+                  return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                });
+                const el = els[idx] as HTMLInputElement | undefined;
+                return el?.value || '';
+              }, [action.index!, INTERACTIVE_SELECTOR] as [number, string]).catch(() => '');
+              if (fieldVal.length === 0 && action.text!.length > 0) {
+                history.push(`⚠️ FILL:${action.index} — field still empty after inject. Try CLICK:${action.index} first then TYPE.`);
+              }
+            }
             break;
           }
 
@@ -676,9 +713,18 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           }
 
           case 'navigate': {
-            await page.goto(action.url!, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+            const navErr = await page.goto(action.url!, { waitUntil: 'domcontentloaded', timeout: 20000 })
+              .then(() => null)
+              .catch((e: Error) => e.message);
             await page.waitForTimeout(1000);
-            actionOk = true;
+            const landedUrl = page.url();
+            const isStillError = landedUrl.startsWith('chrome-error://') || landedUrl.startsWith('about:blank');
+            if (isStillError || navErr) {
+              history.push(`⚠️ NAVIGATE to ${action.url} failed (${navErr || 'error page'}). Try a different URL or use search instead.`);
+              actionOk = false;
+            } else {
+              actionOk = true;
+            }
             break;
           }
 
@@ -705,8 +751,32 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
                 for (const email of emails) {
                   const extracted = extractVerificationCode(email.body || email.subject || '');
                   if (extracted.code) {
-                    history.push(`📧 EMAIL VERIFICATION CODE FOUND: "${extracted.code}" (from ${email.from}). Enter this code into the verification field now.`);
-                    console.log(`[VISION-AGENT] Found verification code: ${extracted.code}`);
+                    console.log(`[VISION-AGENT] Found verification code: ${extracted.code} — auto-filling`);
+                    // Auto-fill: find the first visible code/OTP input and fill it
+                    const autoFilled = await page.evaluate((code: string) => {
+                      const selectors = [
+                        'input[name*="code"]', 'input[name*="otp"]', 'input[name*="token"]',
+                        'input[placeholder*="code"]', 'input[placeholder*="OTP"]', 'input[placeholder*="Code"]',
+                        'input[type="number"]', 'input[inputmode="numeric"]',
+                        'input[autocomplete*="one-time"]',
+                      ];
+                      for (const sel of selectors) {
+                        const el = document.querySelector(sel) as HTMLInputElement | null;
+                        if (el && el.offsetParent !== null) {
+                          el.focus();
+                          el.value = code;
+                          el.dispatchEvent(new Event('input', { bubbles: true }));
+                          el.dispatchEvent(new Event('change', { bubbles: true }));
+                          return true;
+                        }
+                      }
+                      return false;
+                    }, extracted.code).catch(() => false);
+                    if (autoFilled) {
+                      history.push(`📧 VERIFICATION CODE "${extracted.code}" auto-filled into OTP field. Now click Submit/Verify button.`);
+                    } else {
+                      history.push(`📧 EMAIL VERIFICATION CODE FOUND: "${extracted.code}". Find the code input field and TYPE:N:"${extracted.code}" into it.`);
+                    }
                     break;
                   } else if (extracted.verifyLink) {
                     history.push(`📧 EMAIL VERIFICATION LINK FOUND: NAVIGATE to "${extracted.verifyLink}" to verify.`);
