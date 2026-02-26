@@ -2442,7 +2442,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // SIGNUP COMPLETION GATE (independent of real actions):
         // If this is a signup/account creation task and AI signaled TASK_COMPLETE but never
         // filled any forms, it just browsed to the page and gave advice. REJECT.
-        const isSignupTask = /\b(sign ?up|signup|create\b.*\baccount|create\b.*\bprofile|create\b.*\bgmail|create\b.*\bemail|register|enroll|open\b.*\baccount|make\b.*\baccount)\b/i.test(taskTextLower);
+        const isSignupTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|create\b.*\bprofile|create\b.*\bgmail|create\b.*\bemail|register|enroll|open\b.*\baccount|make\b.*\baccount|make\s+me\s+an?\s+account)\b/i.test(taskTextLower);
         const hasFormActions = actionResults.some(r =>
           ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
         );
@@ -3804,7 +3804,13 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // run the vision agent. It sees the page visually and acts on any UI element.
       // Only fires when: task is not done yet + we have a live page + it's a browser task.
       // Guard: max 2 invocations to prevent 8min × N iterations = multi-hour lock-up.
-      const isBrowserInteractionTask = /\b(sign.?up|signup|register|create\b.*\baccount|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account)\b/i.test(taskTextLower);
+      // Broad detection: any task that requires interacting with a web page UI
+      // Covers "sign me up", "make an account", "make a design", "complete the form", etc.
+      const isBrowserInteractionTask = (
+        /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign)\b/i.test(taskTextLower)
+        // Also trigger if the AI already browsed and is clearly doing UI work (has form fills or clicks)
+        || (hasBrowseEver && actionResults.some(r => ['fill', 'fill_form', 'click', 'submit'].includes(r.action?.type || '') && !r.success))
+      );
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {
         const visionPage = executionEngine.getPage?.();
         const visionPageUrl = visionPage?.url() || '';
@@ -4543,7 +4549,7 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
     // book reservation, fill out form) but AI gave advice/instructions instead of acting, REJECT the
     // response and force browser re-execution. This is the #1 failure mode — AI acts like ChatGPT.
     // SKIP if signup-auto trigger already completed the task mechanically.
-    const isActionTask = !signupAutoCompleted && /\b(sign ?up|signup|create\b.*\b(account|profile|gmail|email)|register|make\b.*\b(account|profile)|book\b.*\b(reservation|table|appointment|room)|fill\b.*\b(form|application|survey)|apply (for|to)|subscribe|enroll|open\b.*\b(account|page))\b/i.test(taskTextLower);
+    const isActionTask = !signupAutoCompleted && /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\b(account|profile|gmail|email)|make\s+me\s+an?\s+account|register|make\b.*\b(account|profile)|book\b.*\b(reservation|table|appointment|room)|fill\b.*\b(form|application|survey)|apply (for|to)|subscribe|enroll|open\b.*\b(account|page)|make\b.*\b(design|logo)|create\b.*\b(design|logo))\b/i.test(taskTextLower);
     // For signup/creation tasks, require FORM actions (fill/fill_form/submit) — just clicking isn't enough
     const hasFormCompletion = actionResults.some(r =>
       ['fill', 'fill_form', 'submit', 'login'].includes(r.action?.type || '') && r.success
