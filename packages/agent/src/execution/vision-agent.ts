@@ -434,7 +434,14 @@ KEY RULES:
 - For "sign up for X free plan" tasks specifically: navigate to site, find free/basic plan, click it, fill the registration form completely, submit it, verify email if needed, DONE only when logged into the account
 - If TYPE does not work on a field (field stays empty): immediately switch to FILL — FILL uses React-native value injection and works on framework inputs that reject keyboard events
 - If a payment form appears and task is for a FREE plan: look for "Free", "Basic", "Starter" option or skip payment step
-- If CAPTCHA appears: output WAIT — the system solves it automatically`;
+- If CAPTCHA appears: output WAIT — the system solves it automatically
+
+ALTERNATIVE PATH INTELLIGENCE (when email signup is blocked):
+- If the email signup form fields won't accept input after 3 tries: CLICK the "Continue with Google" or "Continue with Apple" button — OAuth paths bypass bot detection
+- If "Continue with Google" appears in the element list or screenshot: try it FIRST before the email form
+- If stuck on a signup page for 5+ steps with no progress: NAVIGATE to the mobile version (prepend "m." to domain) or try a different signup URL
+- If all paths on one service fail: DONE:"{{service}} signup is bot-protected. Tried email form and OAuth. Recommend using {{alternative service}} instead to achieve the same goal."
+- If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever works)`;
 
 /**
  * Run the vision-based browser agent on a task.

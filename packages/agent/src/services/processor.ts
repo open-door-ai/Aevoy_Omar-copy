@@ -3880,7 +3880,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               const errMsg = visionResult.error || 'Unknown error';
               console.log(`[VISION-AGENT] Failed: ${errMsg} — injecting failure context into AI iteration`);
               // Inject failure context so next AI round knows what happened and tries differently
-              visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". DO NOT retry the same browser approach. Instead: use search() to find the information, or call_external() to phone the business directly, or report what you know from search results.]`;
+              visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". Think creatively — try 3 different approaches before giving up: (1) Try a DIFFERENT AUTH METHOD — "Continue with Google" or "Continue with Apple" OAuth bypasses bot detection on most sites. (2) Try an ALTERNATIVE SERVICE that achieves the same end goal (e.g., Canva blocked → Figma or Adobe Express; one job site blocked → try another). (3) Try mobile version of the site (m.site.com) or a different signup URL path. (4) If the task involves creating content (design, image, document) — use built-in tools like generate_image() directly. (5) search() for public APIs for this service. NEVER just report "couldn't sign up" — always offer a creative alternative that WILL work.]`;
             }
           } catch (visionErr) {
             console.warn(`[VISION-AGENT] Exception: ${visionErr} — continuing with AI`);
