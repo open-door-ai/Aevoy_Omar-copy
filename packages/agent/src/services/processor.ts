@@ -5810,11 +5810,17 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         if (_activeRewrite?.result && _activeRewrite.result.length > 20) {
           // Always accept the rewrite — even if it still has some mild passive patterns,
           // it will be better than the original since it has task context.
-          // Strip any trailing passive sentences (e.g. "Let me know if you need anything.")
+          // Strip ALL trailing passive sentences from the rewrite result — the model sometimes
+          // appends "Would you like to confirm?" or "Let me know if..." even when instructed not to.
           let rewriteResult = _activeRewrite.result.trim();
-          rewriteResult = rewriteResult.replace(/\.\s*(let me know if (you|that|this)[^.]*\.?|feel free to[^.]*\.?|please let me know[^.]*\.?)\s*$/i, '.');
-          cleanResponse = rewriteResult;
-          console.log(`[PASSIVE-GUARD] Passive response replaced (${cleanResponse.length} chars)`);
+          // Remove any trailing sentence containing passive/permission phrases
+          rewriteResult = rewriteResult.replace(/\s+[^.!?]*\b(would you like|want me to|shall i|do you want me to|let me know if|feel free to|please let me know|ready to proceed|can i proceed|i'm ready to|i'll need your)\b[^.!?]*[.!?]?\s*$/i, '').trim();
+          // Ensure it still ends with punctuation
+          if (rewriteResult && !/[.!?]$/.test(rewriteResult)) rewriteResult += '.';
+          if (rewriteResult.length > 15) {
+            cleanResponse = rewriteResult;
+            console.log(`[PASSIVE-GUARD] Passive response replaced (${cleanResponse.length} chars)`);
+          }
         }
       } catch (e) {
         console.warn('[PASSIVE-GUARD] Rewrite failed:', e);
@@ -5858,11 +5864,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const _pageDescribeOnly = /\b((?:the|[a-z']+s) (?:page|site|website|signup\s*page|sign-up\s*page|registration\s*(?:page|site)|login\s*page|form|portal) (?:is|are) (?:also )?(?:open|accessible|available|loaded|visible|now showing|currently showing|found (?:at|on))|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button)|(?:page|site|form) (?:is )?accessible at https?:)\b/i.test(cleanResponse)
         && !_completionWords.test(cleanResponse);
       // Pattern 2: "here are the findings/steps" — gives instructions instead of doing it
-      // Catches: "here are the findings", "here's how to", "you can book at", "direct links:"
+      // Catches: "here are the findings", "here's how to", "you can book at", "direct links:",
+      // and "page available at URL where you can create account" (giving link, not doing task)
       const _isTask = /\b(book|reserv|cancel|sign.?up|sign up|register|create|make|set.?up|buy|order|purchase|subscribe|account|join)\b/i.test(subject + ' ' + (body || ''));
       const _givesInstructions = _isTask && (
-        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book) (the|your|a)\b/i.test(cleanResponse) ||
-        /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse)
+        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book|sign|register|access|cancel|subscribe)\b/i.test(cleanResponse) ||
+        /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse) ||
+        // "page available at https://... where you can create/sign up" — giving a link to do it yourself
+        /https?:\/\/[^\s]{10,}\s.{0,60}\bwhere (you can|you'll|you should|you need to)\b/i.test(cleanResponse) ||
+        // "[service] page is available at https://..." — never do tasks by giving URLs
+        /\b(?:page|site|form|portal)\b.{0,30}https?:\/\//i.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
       // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
       const _gaveUp = _isTask && (
