@@ -2729,6 +2729,60 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           // If signup gate didn't fill anything, continue to next iteration
         }
 
+        // BOOKING COMPLETION GATE (INDEPENDENT — fires even when agent took search/browse actions)
+        // The gate inside !hasRealActions only catches lazy no-action responses.
+        // This one catches the common case: agent searched, found address, called it done.
+        {
+          const _blc = aiResponse.content.toLowerCase();
+          const _isBookingTask = classification.taskType === 'booking' ||
+            /\b(book|reserv(ation)?|table for|dinner.*reserv|reserv.*dinner)\b/i.test(taskTextLower);
+          const _hasBookingConf = (
+            /\b(confirmed|booked|reservation.*confirm|confirmation.*number|booking.*id|successfully.*booked|table.*reserved)\b/i.test(_blc) ||
+            /\b(called|phoned|spoke|reached)\b.*\b(restaurant|hostess|front desk)\b/i.test(_blc)
+          );
+          const _bookingHasRealActions = aiResponse.actions.some(a => !['wait', 'scroll'].includes(a.type));
+          const _isJustBookingInfo = !_hasBookingConf && (
+            !_bookingHasRealActions ||
+            /\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation|reservation page is found|contact information.*booking|available on their website|contact (them|the restaurant) (at|directly)|information for booking|view their menu|view the menu|you can.*reach)\b/i.test(_blc)
+          );
+          if (_isBookingTask && _isJustBookingInfo && currentIteration <= 4) {
+            console.warn(`[BOOKING-GATE-INDEPENDENT] REJECTED: AI gave restaurant info without booking (iter=${currentIteration}, hasActions=${_bookingHasRealActions})`);
+            aiResponse.content = '';
+            aiResponse.actions = [];
+            const _fbResp = await generateResponse(
+              memory, subject,
+              `Original request: ${subject} ${body}
+
+YOU DID NOT COMPLETE THE BOOKING. You returned the restaurant's address, phone, or URL.
+That is NOT what the user asked for. They said "book" or "reserve" — you must ACTUALLY DO IT.
+
+DO THIS NOW:
+1. Navigate to the restaurant's website or reservation page
+2. Check for OpenTable/Resy/Sevenrooms booking widget on their site
+3. Select date, time, and party size
+4. Fill in Name="${username}", Email="${username}@aevoy.com"
+5. Click Reserve/Book/Confirm and report the confirmation number
+
+If online booking fails → call them directly:
+[ACTION:call_external("+1THEIRPHONENUMBER", "I'd like to make a reservation")]
+
+DO NOT give me the address or URL again. COMPLETE THE BOOKING.`,
+              username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += _fbResp.cost || 0;
+            totalTokens += _fbResp.tokensUsed || 0;
+            aiResponse = _fbResp;
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+            console.log(`[BOOKING-GATE-INDEPENDENT] Re-prompted, got ${aiResponse.actions.length} actions`);
+            if (aiResponse.actions.length === 0) {
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Continue to action execution with the new booking actions
+          }
+        }
+
         // ADVICE-DETECTION QUALITY GATE: If AI completed with no REAL actions on round 1,
         // check if the response is advice (lists of suggestions) instead of results.
         // Treat wait-only or scroll-only as "no real actions" — the AI is being lazy.
@@ -7369,7 +7423,7 @@ async function executeAction(
           .single();
 
         if (!profile?.phone_number) {
-          return { action, success: false, error: "No phone number on file — ask the user for their number first" };
+          return { action, success: false, error: "I don't have a phone number on file for you. Please add your number in Settings at https://www.aevoy.com/dashboard?tab=settings and I'll call you right away." };
         }
 
         const { callUser: makeCall } = await import("./twilio.js");
