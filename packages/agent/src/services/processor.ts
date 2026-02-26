@@ -6277,9 +6277,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // This is the "Apple principle": anticipate what the user needs before they ask.
     try {
       const hasFollowup = /\?/.test(cleanResponse.slice(-400)); // Already ends with a question
+      // Skip follow-up for call/call_external actions — calling IS the terminal action
+      const _hasCallAction = actionResults.some(r => r.success && ['call_user', 'call_external'].includes(r.action.type));
       // NOTE: suppressEmail means "don't send email" not "don't add follow-up to response"
       // Always add follow-up to cleanResponse regardless of suppressEmail flag
-      if (!hasFollowup && cleanResponse.length > 20) {
+      if (!hasFollowup && cleanResponse.length > 20 && !_hasCallAction) {
         const followupPrompt = `User asked: "${(subject || '').substring(0, 150)}"
 Agent response: "${cleanResponse.substring(0, 300)}"
 
@@ -6296,16 +6298,21 @@ RULES:
 - If agent just called the restaurant → do NOT offer to call again. Offer to confirm the booking instead.
 - If agent just sent an email → do NOT offer to send again. Offer to follow up.
 - If agent completed the main action → consider if there's a NEXT step, not the same step.
-- Keep the question natural and conversational. Do NOT explain what info you need.`;
+- Keep the question natural and conversational. Do NOT explain what info you need.
+- NEVER start the follow-up with "Would you like me to", "Shall I", "Do you want me to" — these are passive. Use active short questions: "Want me to track your order?" or "Want me to book it?"`;
 
         const followupResult = await quickValidate(followupPrompt, 'You suggest the ONE natural next action after task completion. Never repeat what was just done. Be specific and brief.').catch(() => null);
         if (followupResult?.result?.startsWith('YES:')) {
           const followupQ = followupResult.result.replace(/^YES:"?/, '').replace(/"$/, '').trim();
-          if (followupQ.length > 5) {
+          // Reject passive follow-up questions — they make it sound like the agent hasn't acted yet
+          const _isPassiveFollowup = /^(would you like|shall i|do you want me to|want me to\s+confirm|i can help|i could)\b/i.test(followupQ);
+          if (!_isPassiveFollowup && followupQ.length > 5) {
             cleanResponse = cleanResponse + '\n\n' + followupQ;
             console.log(`[PROACTIVE] Added follow-up: "${followupQ}"`);
             // Update the DB response with the follow-up included
             await getSupabaseClient().from('tasks').update({ response_text: cleanResponse }).eq('id', taskId);
+          } else if (_isPassiveFollowup) {
+            console.log(`[PROACTIVE] Rejected passive follow-up: "${followupQ}"`);
           }
         }
       }
