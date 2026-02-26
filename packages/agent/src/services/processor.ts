@@ -2245,8 +2245,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 6c. CREDENTIAL-DEPENDENT TASK EARLY EXIT: If the task requires logging into a service
     // (cancel subscription, manage account) and we don't have stored credentials, respond
     // immediately instead of wasting 5+ minutes on doomed browser attempts.
-    const isCredentialTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|manage|change plan|switch plan|update payment|change password|close account|log.?in|sign.?in|get into)\b/i.test(taskTextLower) &&
-      /\b(subscription|account|netflix|hulu|spotify|disney|amazon prime|youtube premium|apple music|hbo|paramount|peacock|my account)\b/i.test(taskTextLower);
+    // Note: "get into" was removed — it matched "get into the developer portal" for CREATE tasks.
+    // "account" alone is too broad — must co-occur with a specific subscription service or "my account".
+    const isCredentialTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|manage|change plan|switch plan|update payment|change password|close account|log.?in|sign.?in)\b/i.test(taskTextLower) &&
+      /\b(subscription|netflix|hulu|spotify|disney|amazon prime|youtube premium|apple music|hbo|paramount|peacock|my account)\b/i.test(taskTextLower) &&
+      // EXCLUDE create/signup tasks — "create an account" is NOT a credential management task
+      !/\b(create|sign.?up|register|make.*account|open.*account|new.*account|get.*api|developer|portal)\b/i.test(taskTextLower);
     if (isCredentialTask) {
       // Check if we have stored credentials for this service
       const serviceDomain = classification.domains?.[0] || '';
