@@ -671,8 +671,19 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       }
     }
 
+    // BROWSER EXECUTION BYPASS: Tasks that need a human to click through a UI must go
+    // directly to processTask() + vision agent — NOT through autonomous planning.
+    // Autonomous planning decomposes into "research subtasks" that return advice ("here's how to sign up")
+    // instead of ACTUALLY doing the action. Browser tasks must bypass it entirely.
+    const directBrowserTaskText = `${subject} ${body || ''}`;
+    const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(a|an)?\s+(design|logo|post|graphic|image|banner|presentation))\b/i.test(directBrowserTaskText);
+    if (isDirectBrowserTask) {
+      console.log(`[BROWSER-BYPASS] Direct browser execution task — skipping autonomous planning, going to vision agent`);
+    }
+
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
-    if (await requiresAutonomousPlanning(subject, body)) {
+    // Browser execution tasks are excluded — they use the vision agent directly.
+    if (!isDirectBrowserTask && await requiresAutonomousPlanning(subject, body)) {
       console.log(`[AUTONOMOUS] Task requires autonomous workflow planning`);
       return handleAutonomousWorkflow({
         userId,
