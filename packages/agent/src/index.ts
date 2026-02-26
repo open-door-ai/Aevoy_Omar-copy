@@ -2725,9 +2725,22 @@ process.on("unhandledRejection", (reason, promise) => {
   }
 });
 
-process.on("SIGTERM", () => {
-  console.log("[SHUTDOWN] SIGTERM received, shutting down gracefully...");
-  process.exit(0);
+process.on("SIGTERM", async () => {
+  console.log("[SHUTDOWN] SIGTERM received — cleaning up in-flight tasks before exit...");
+  try {
+    await getSupabaseClient()
+      .from('tasks')
+      .update({
+        status: 'needs_review',
+        completed_at: new Date().toISOString(),
+        response_text: 'The service was restarted while processing this task. Please try again and I\'ll pick up right where we left off!',
+      })
+      .eq('status', 'processing');
+    console.log(`[SHUTDOWN] Marked in-flight tasks as needs_review`);
+  } catch (e) {
+    console.error("[SHUTDOWN] Failed to clean up tasks:", e);
+  }
+  setTimeout(() => process.exit(0), 1500);
 });
 
 process.on("SIGINT", () => {
