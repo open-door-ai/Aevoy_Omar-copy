@@ -255,6 +255,8 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
   ],
   vision: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
@@ -284,11 +286,15 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
   ],
   complex: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    // Safety net: if Kimi/DeepSeek keys not set or all fail, Haiku + Groq always work
+    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
   ],
 };
 
