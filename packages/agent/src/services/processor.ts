@@ -652,13 +652,18 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       const location = incomingWeatherMatch[1].trim().replace(/\s+/g, '+');
       console.log(`[FAST-PATH-WEATHER-INCOMING] Fetching weather for: ${location}`);
       try {
-        const wRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=4`, {
+        const wRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`, {
           signal: AbortSignal.timeout(5000),
-          headers: { 'User-Agent': 'curl/7.68.0' },
+          headers: { 'User-Agent': 'curl/7.68.0', 'Accept': 'application/json' },
         });
         if (wRes.ok) {
-          const wText = (await wRes.text()).trim();
-          if (wText && wText.length > 5 && !wText.includes('<')) {
+          let wText = '';
+          try {
+            const wJson = await wRes.json() as { current_condition?: Array<{ temp_C?: string; weatherDesc?: Array<{ value?: string }>; humidity?: string; windspeedKmph?: string }> };
+            const wCur = wJson.current_condition?.[0];
+            if (wCur) wText = `${wCur.weatherDesc?.[0]?.value || 'Unknown'}, ${wCur.temp_C}°C (humidity ${wCur.humidity}%, wind ${wCur.windspeedKmph} km/h)`;
+          } catch { wText = ''; }
+          if (wText && wText.length > 5) {
             const wResponse = `Current weather in ${incomingWeatherMatch[1].trim()}: ${wText}`;
             if (!task.suppressEmail) {
               sendResponse({ to: from, from: `${username}@aevoy.com`, subject: `Re: ${subject}`, body: wResponse }).catch(() => {});
@@ -1270,13 +1275,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const location = weatherMatch[1].trim().replace(/\s+/g, '+');
       console.log(`[FAST-PATH-WEATHER] Fetching weather for: ${location}`);
       try {
-        const weatherRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=4`, {
+        const weatherRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`, {
           signal: AbortSignal.timeout(5000),
-          headers: { 'User-Agent': 'curl/7.68.0' },
+          headers: { 'User-Agent': 'curl/7.68.0', 'Accept': 'application/json' },
         });
         if (weatherRes.ok) {
-          const weatherText = (await weatherRes.text()).trim();
-          if (weatherText && weatherText.length > 5 && !weatherText.includes('<')) {
+          let weatherText = '';
+          try {
+            const wJson = await weatherRes.json() as { current_condition?: Array<{ temp_C?: string; weatherDesc?: Array<{ value?: string }>; humidity?: string; windspeedKmph?: string }> };
+            const cur = wJson.current_condition?.[0];
+            if (cur) {
+              const desc = cur.weatherDesc?.[0]?.value || 'Unknown';
+              weatherText = `${desc}, ${cur.temp_C}°C (humidity ${cur.humidity}%, wind ${cur.windspeedKmph} km/h)`;
+            }
+          } catch { weatherText = ''; }
+          if (weatherText && weatherText.length > 5) {
             const weatherResponse = `Current weather in ${weatherMatch[1].trim()}: ${weatherText}`;
             console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
             // Update Supabase FIRST so task shows completed immediately
@@ -2337,7 +2350,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // ============================================================
     {
       const { getAgentTeam, isComplexTask } = await import('./agent-team.js');
-      if (isComplexTask(subject + ' ' + body) && !task.suppressEmail) {
+      // Use deduplicated text: if subject === body, don't double the word count
+      const _agentTeamText = body && body.trim() !== subject.trim() ? `${subject} ${body}` : subject;
+      // Skip agent team for browser/action tasks — these need the vision agent, not a research team
+      const _isActionTask = /\b(sign\s?up|signup|register|create.*account|cancel|book|reserv|buy|order|purchase|subscribe|log\s*in|fill.*form|unsubscribe|dispute)\b/i.test(_agentTeamText);
+      if (isComplexTask(_agentTeamText) && !task.suppressEmail && !_isActionTask) {
         try {
           const teamResult = await getAgentTeam().executeWithTeam(
             subject + ' ' + body,
@@ -5348,7 +5365,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       if (wordChars / text.length < 0.4) return true;
       // AI narration leak — starts with planning text, not results
       const lc = text.trim().toLowerCase();
-      if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking')) return true;
+      if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking') ||
+          lc.startsWith('the user is calling') || lc.startsWith('the user said') || lc.startsWith('they want me') ||
+          lc.startsWith('i need to navigate') || lc.startsWith('i should navigate') || lc.startsWith('i need to go to') ||
+          lc.startsWith('let me navigate') || lc.startsWith("let's navigate") || lc.startsWith("let's go to") ||
+          lc.startsWith("let me start by") || lc.startsWith("let me go to") ||
+          (lc.startsWith('i need to') && text.length < 300) || // Short "I need to X" is planning, not response
+          lc.startsWith('so, the task is') || lc.startsWith('ok, the task') || lc.startsWith('alright, the task')) return true;
       // Raw search/browse dump — contains search engine output or browser scraping fragments
       if (lc.startsWith('search results for') || lc.startsWith('browsed:') || lc.includes('duckduckgo') ||
           lc.includes('region: ') || lc.includes('scrolled down') || lc.includes('waited ') ||
@@ -5452,7 +5475,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
     // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
     const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b)/i;
-    const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 ||
+    // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
+    // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
+    // without ever attempting to browse/click/fill anything
+    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login)\b/i.test(subject + ' ' + (body || ''));
+    const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
     // vs. a passive "should I start?" response for our own signup
@@ -5483,23 +5510,37 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // ── RESPONSE QUALITY CONFIDENCE GATE (90% threshold) ─────────────────
-    // For browser/action tasks: if response only describes page state without
-    // stating completion or next action, upgrade it. This is the "hive mind
-    // vetting" step that ensures we ship 90%-confidence responses, not 60%.
+    // For browser/action tasks: if response only describes page state OR gives
+    // instructions/links instead of doing the action, upgrade it.
+    // This is the "hive mind vetting" step — ensures 90%-confidence responses.
     if (_isBrowserActionTask && !signupAutoCompleted && cleanResponse && cleanResponse.length > 20) {
+      const _completionWords = /\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created|reservation made|subscription cancelled|reserved|called|emailed|sent|purchased|ordered)\b/i;
+      // Pattern 1: "the page is open/accessible" — describes state without acting
       const _pageDescribeOnly = /\b(the (?:page|site|website|signup page|login page|form) is (?:open|accessible|available|loaded|visible|now showing|currently showing)|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button))\b/i.test(cleanResponse)
-        && !/\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created|reservation made|subscription cancelled)\b/i.test(cleanResponse);
-      if (_pageDescribeOnly) {
-        console.log('[QUALITY-GATE] Response is page-description only — upgrading to action-oriented');
+        && !_completionWords.test(cleanResponse);
+      // Pattern 2: "here are the findings/steps" — gives instructions instead of doing it
+      // Catches: "here are the findings", "here's how to", "you can book at", "direct links:"
+      const _isTask = /\b(book|reserv|cancel|sign.?up|register|buy|order|purchase|subscribe)\b/i.test(subject + ' ' + (body || ''));
+      const _givesInstructions = _isTask && (
+        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book) (the|your|a)\b/i.test(cleanResponse) ||
+        /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse)
+      ) && !_completionWords.test(cleanResponse);
+
+      if (_pageDescribeOnly || _givesInstructions) {
+        const gateType = _pageDescribeOnly ? 'page-description only' : 'gives-instructions instead of acting';
+        console.log(`[QUALITY-GATE] Response is ${gateType} — upgrading to action-oriented`);
         try {
           const { quickValidate } = await import("./ai.js");
           const _upgraded = await quickValidate(
-            `Task: "${subject.substring(0, 200)}"\nCurrent response (weak): "${cleanResponse.substring(0, 300)}"\n\nThis response just says "the page is open/accessible" without completing anything. Rewrite it to:\n1. Acknowledge what was reached\n2. STATE the next specific action being taken NOW (fill the form, click submit, etc.)\n3. End with what will happen after (account created, reservation booked, etc.)\nDo NOT say "want me to" or ask permission. State what IS being done.`,
-            'Rewrite as a concrete action statement. Short, active, specific.'
+            `Task: "${subject.substring(0, 200)}"\nCurrent response (FAILED — giving advice instead of DOING): "${cleanResponse.substring(0, 400)}"\n\nThis response gives instructions or links instead of COMPLETING the task. Rewrite it to:\n1. Confirm what was ACCOMPLISHED (navigated to the site, found the booking page, etc.)\n2. STATE you are NOW PROCEEDING to complete it (filling the form, clicking book, etc.)\n3. What you will report when done\nDo NOT give links or instructions. Do NOT say "you can visit" or "you can book". The AI DOES it, not tells the user to do it.\nKeep it 2-3 sentences. Active voice. First person (I navigated / I found / I am booking).`,
+            'Rewrite as a first-person action statement. The AI is completing the task, not advising the user.'
           );
-          if (_upgraded?.result && _upgraded.result.length > 20) {
+          if (_upgraded?.result && _upgraded.result.length > 20 && !_givesInstructions) {
             cleanResponse = _upgraded.result;
             console.log('[QUALITY-GATE] Response upgraded to action-oriented');
+          } else if (_upgraded?.result && _upgraded.result.length > 20) {
+            cleanResponse = _upgraded.result;
+            console.log('[QUALITY-GATE] Response upgraded from instructions to action');
           }
         } catch { /* keep original */ }
       }
