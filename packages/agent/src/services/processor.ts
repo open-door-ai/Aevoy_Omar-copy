@@ -2753,20 +2753,22 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
               memory, subject,
               `Original request: ${subject} ${body}
 
-YOU DID NOT COMPLETE THE BOOKING. You returned the restaurant's address, phone, or URL.
-That is NOT what the user asked for. They said "book" or "reserve" — you must ACTUALLY DO IT.
+YOU DID NOT COMPLETE THE BOOKING. You found the restaurant's info — now BOOK IT.
 
-DO THIS NOW:
-1. Navigate to the restaurant's website or reservation page
-2. Check for OpenTable/Resy/Sevenrooms booking widget on their site
-3. Select date, time, and party size
-4. Fill in Name="${username}", Email="${username}@aevoy.com"
-5. Click Reserve/Book/Confirm and report the confirmation number
+FASTEST STRATEGY (pick ONE based on what you already know):
 
-If online booking fails → call them directly:
-[ACTION:call_external("+1THEIRPHONENUMBER", "I'd like to make a reservation")]
+OPTION A — Use phone number (FASTEST, most reliable):
+If you already have the restaurant's phone number → call them NOW:
+[ACTION:call_external("+1PHONENUMBER", "Hi, I'd like to make a reservation for [date] at [time] for [party size] please. Name: ${username}.")]
+Replace +1PHONENUMBER with the ACTUAL phone number from your search results.
 
-DO NOT give me the address or URL again. COMPLETE THE BOOKING.`,
+OPTION B — Try OpenTable/Resy directly:
+[ACTION:search("${subject.substring(0, 60)} OpenTable OR Resy reservation")]
+Then browse the direct OpenTable/Resy page URL from results.
+Select date/time/party size, fill Name="${username}", Email="${username}@aevoy.com", confirm.
+
+DO NOT navigate back to the restaurant's homepage. Do NOT give me the URL again.
+DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
               username, "complex", userId, taskId, senderName
             );
             totalAiCost += _fbResp.cost || 0;
