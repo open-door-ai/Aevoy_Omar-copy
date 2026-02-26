@@ -718,7 +718,9 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             ]);
             if (actionOk) {
               await page.waitForLoadState('domcontentloaded').catch(() => {});
-              await page.waitForTimeout(800);
+              // Wait 1500ms (up from 800ms) so SPA frameworks (React/Vue) have time
+              // to render the next step after form submission (e.g. Canva email→password step)
+              await page.waitForTimeout(1500);
             }
             break;
           }
@@ -729,7 +731,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             const y = parseInt(action.text!);
             await page.mouse.click(x, y);
             await page.waitForLoadState('domcontentloaded').catch(() => {});
-            await page.waitForTimeout(800);
+            await page.waitForTimeout(1500);
             actionOk = true;
             break;
           }

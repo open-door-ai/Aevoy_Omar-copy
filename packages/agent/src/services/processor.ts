@@ -1346,11 +1346,39 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // Scheduling fast path ("call me back at 5:10", "remind me in 2 hours")
-    const earlyScheduleResult = await tryScheduleFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
-    if (earlyScheduleResult) {
-      clearTimeout(masterTimer);
-      return earlyScheduleResult;
+    // [Scheduled] task handling: when the scheduler fires a previously-created task,
+    // DO NOT re-schedule it. For "Reminder:" tasks, just notify the user and complete.
+    // For action tasks ([Scheduled] Buy milk), fall through to AI loop but skip
+    // the schedule fast path so it doesn't create another scheduled job.
+    const _isScheduledTrigger = /^\[Scheduled\]/i.test(subject);
+    if (_isScheduledTrigger) {
+      const _isReminderNotification = /^\[Scheduled\]\s*Reminder\s*[:\-]?\s*/i.test(subject);
+      if (_isReminderNotification) {
+        const reminderText = subject.replace(/^\[Scheduled\]\s*Reminder\s*[:\-]?\s*/i, '').trim() || body;
+        const notifyMsg = `⏰ Reminder: ${reminderText}`;
+        console.log(`[FAST-PATH] Scheduled reminder notification: "${reminderText}"`);
+        await getSupabaseClient().from('tasks').update({
+          status: 'completed', completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime, response_text: notifyMsg,
+          action_count: 0, action_success_count: 0,
+        }).eq('id', taskId);
+        if (!task.suppressEmail) {
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, notifyMsg);
+        }
+        clearTimeout(masterTimer);
+        return { taskId, success: true, response: notifyMsg, actions: [] };
+      }
+      // For non-reminder scheduled tasks: fall through to the AI loop.
+      // The AI response will have schedule actions stripped (done after generateResponse).
+      // The EXECUTION CONTEXT injected into effectiveBody tells the AI not to re-schedule.
+      // Skip the schedule fast path below — the task is already scheduled, don't re-schedule
+    } else {
+      // Scheduling fast path ("call me back at 5:10", "remind me in 2 hours")
+      const earlyScheduleResult = await tryScheduleFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
+      if (earlyScheduleResult) {
+        clearTimeout(masterTimer);
+        return earlyScheduleResult;
+      }
     }
 
     // Conversational greeting fast path — instant response for hi/hello/thanks
@@ -2040,8 +2068,23 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Detect pure writing/generation tasks → use 'generate' chain which is tuned for content output
     const _isWritingTask = !forceCheapModel && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
     const aiTaskType = forceCheapModel ? "validate" as const : (_isWritingTask ? "generate" as const : undefined);
-    const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
+    // For [Scheduled] tasks that aren't reminders: inject execution context so AI
+    // doesn't schedule again — it must EXECUTE the task and report the result.
+    let effectiveBody = body;
+    if (_isScheduledTrigger) {
+      const _scheduledTask = subject.replace(/^\[Scheduled\]\s*/i, '').trim();
+      effectiveBody = `${body || _scheduledTask}\n\n[EXECUTION CONTEXT: This task was previously scheduled and is NOW FIRING. Execute "${_scheduledTask}" immediately. Do NOT use schedule/remind actions — the task is already triggered. Complete it and report the outcome to the user.]`;
+    }
+    const bodyWithLearnings = learningsHint ? `${effectiveBody}${learningsHint}` : effectiveBody;
     let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
+
+    // For [Scheduled] tasks: strip any 'schedule' actions the AI generated.
+    // The task is ALREADY executing — the AI must not create another scheduled job.
+    if (_isScheduledTrigger && aiResponse.actions.some(a => a.type === 'schedule')) {
+      const before = aiResponse.actions.length;
+      aiResponse.actions = aiResponse.actions.filter(a => a.type !== 'schedule');
+      console.log(`[SCHEDULED-TRIGGER] Stripped ${before - aiResponse.actions.length} re-schedule action(s) from AI response`);
+    }
 
     // Diagnostic: if all models failed, store error details in task for debugging
     const _diagErrors = (aiResponse as import('../types/index.js').AIResponse & { _providerErrors?: string[] })._providerErrors;
@@ -2138,6 +2181,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const DELIVERY_ACTIONS = ['send_sms', 'call_user', 'send_email'];
     const RESEARCH_ACTIONS = ['search', 'browse', 'navigate', 'click', 'fill', 'extract', 'screenshot'];
     for (const pattern of expectedActionPatterns) {
+      // Never inject a schedule action for already-scheduled tasks — they must EXECUTE, not re-schedule
+      if (pattern.actionType === 'schedule' && /^\[Scheduled\]/i.test(subject)) continue;
       const matchesTask = pattern.keywords.some(kw => taskTextLower.includes(kw));
       const hasExpectedAction = aiResponse.actions.some(a => a.type === pattern.actionType);
       if (!matchesTask || hasExpectedAction) continue;
@@ -5694,6 +5739,21 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       } catch (e) {
         console.warn('[PASSIVE-GUARD] Rewrite failed:', e);
       }
+    }
+
+    // ── SIGNUP CREDENTIAL REQUEST — clear reply format ───────────────────
+    // When agent legitimately needs a password to complete a signup, give the user
+    // a clear reply format so they know exactly what to send back.
+    // This replaces the passive "I'll need a password..." AI response with an
+    // actionable message that creates a clean follow-up task when the user replies.
+    if (_isLegitCredentialRequest && _isActionTaskByType) {
+      const _credService = [subject, cleanResponse].join(' ')
+        .match(/\b(canva|notion|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay)\b/i)?.[1]
+        || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[ 1] || 'the service';
+      const _credEmail = cleanResponse.match(/(?:email[:\s]+|using\s+|with\s+)([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i)?.[1] || '';
+      const _emailNote = _credEmail ? ` (I already filled in ${_credEmail})` : '';
+      cleanResponse = `I reached the ${_credService} signup form${_emailNote}. To complete your account, reply with the password you want to use.\n\nReply with: "Complete ${_credService} signup with password [yourpassword]"`;
+      console.log(`[CREDENTIAL-REQUEST] Replaced passive credential ask with clear reply format for ${_credService}`);
     }
 
     // ── WRONG CREDENTIAL RESPONSE FIX ────────────────────────────────────
