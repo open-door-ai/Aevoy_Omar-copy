@@ -438,10 +438,10 @@ KEY RULES:
 
 ALTERNATIVE PATH INTELLIGENCE (when email signup is blocked):
 - If the email signup form fields won't accept input after 3 tries: CLICK the "Continue with Google" or "Continue with Apple" button — OAuth paths bypass bot detection
-- If "Continue with Google" appears in the element list or screenshot: try it FIRST before the email form
-- If stuck on a signup page for 5+ steps with no progress: NAVIGATE to the mobile version (prepend "m." to domain) or try a different signup URL
-- If all paths on one service fail: DONE:"{{service}} signup is bot-protected. Tried email form and OAuth. Recommend using {{alternative service}} instead to achieve the same goal."
-- If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever works)`;
+- If "Continue with Google" or "Continue with Apple" appears in the element list: try it FIRST before the email form
+- If stuck on a signup page for 5+ steps with no progress: NAVIGATE to the mobile version (prepend "m." to domain) or try a different signup URL path
+- If all paths fail: DONE:"Signup bot-protected. Tried email form and OAuth. Search for a free alternative service that achieves the same goal."
+- If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever the site offers)`;
 
 /**
  * Run the vision-based browser agent on a task.
