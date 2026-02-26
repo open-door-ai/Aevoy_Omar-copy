@@ -15,7 +15,7 @@ import { createMultiUserBrowser, MultiUserBrowserService } from "./multi-user-br
 import { qualityChecker } from "./quality-checker.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { sendResponse } from "./email.js";
-import { classifyTask, generateResponse } from "./ai.js";
+import { generateResponse } from "./ai.js";
 import { loadMemory } from "./memory.js";
 import { processTask } from "./processor.js";
 
@@ -55,13 +55,10 @@ export class ProcessorV2 {
         };
       }
 
-      // STEP 0: CLASSIFY TASK (check if browser needed)
-      const classification = await classifyTask(request.task);
-      console.log(`[PROCESSOR-V2] Classification: ${classification.taskType}, needsBrowser=${classification.needsBrowser}`);
-
-      // Route ALL tasks through main processor (handles both AI-only and browser tasks)
-      // Browser tasks also use the main processor since it has the full vision agent pipeline.
-      const result = await this.executeAIOnlyTask(request, classification.goal);
+      // Route ALL tasks through main processor (handles both AI-only and browser tasks).
+      // Skipping pre-classification — processTask has its own fast paths (weather, greeting,
+      // schedule, email send) that run before any AI call. classifyTask() result was unused anyway.
+      const result = await this.executeAIOnlyTask(request, request.task);
       return result;
 
       // STEP 1: PLANNING PHASE (for browser tasks) — kept for future use

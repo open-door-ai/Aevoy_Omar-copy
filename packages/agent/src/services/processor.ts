@@ -643,6 +643,34 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       return { taskId: greetTaskId, success: true, response: greetResponse, actions: [] };
     }
 
+    // Fast path: Weather — intercept before expensive AI calls (requiresAutonomousPlanning, etc.)
+    const incomingWeatherText = (subject + ' ' + (body || '')).trim();
+    const incomingWeatherMatch = incomingWeatherText.match(/\bin\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
+      || incomingWeatherText.match(/\bfor\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i);
+    const isIncomingWeather = /\b(weather|temperature|forecast|how (hot|cold|warm)|will it rain|is it raining|is it sunny)\b/i.test(incomingWeatherText);
+    if (isIncomingWeather && incomingWeatherMatch?.[1]) {
+      const location = incomingWeatherMatch[1].trim().replace(/\s+/g, '+');
+      console.log(`[FAST-PATH-WEATHER-INCOMING] Fetching weather for: ${location}`);
+      try {
+        const wRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=4`, {
+          signal: AbortSignal.timeout(5000),
+          headers: { 'User-Agent': 'curl/7.68.0' },
+        });
+        if (wRes.ok) {
+          const wText = (await wRes.text()).trim();
+          if (wText && wText.length > 5 && !wText.includes('<')) {
+            const wResponse = `Current weather in ${incomingWeatherMatch[1].trim()}: ${wText}`;
+            if (!task.suppressEmail) {
+              sendResponse({ to: from, from: `${username}@aevoy.com`, subject: `Re: ${subject}`, body: wResponse }).catch(() => {});
+            }
+            return { taskId: '', success: true, response: wResponse, actions: [] };
+          }
+        }
+      } catch {
+        // Fall through to main pipeline
+      }
+    }
+
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
     if (await requiresAutonomousPlanning(subject, body)) {
       console.log(`[AUTONOMOUS] Task requires autonomous workflow planning`);
