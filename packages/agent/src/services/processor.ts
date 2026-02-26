@@ -2029,7 +2029,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     if (sendFastPathResult) return sendFastPathResult;
 
     // 6. Generate AI response (use cheapest model if over budget)
-    const aiTaskType = forceCheapModel ? "validate" as const : undefined;
+    // Detect pure writing/generation tasks → use 'generate' chain which is tuned for content output
+    const _isWritingTask = !forceCheapModel && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
+    const aiTaskType = forceCheapModel ? "validate" as const : (_isWritingTask ? "generate" as const : undefined);
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
     let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
 
@@ -2390,7 +2392,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const _agentTeamText = body && body.trim() !== subject.trim() ? `${subject} ${body}` : subject;
       // Skip agent team for browser/action tasks — these need the vision agent, not a research team
       const _isActionTask = /\b(sign\s?up|signup|register|create.*account|cancel|book|reserv|buy|order|purchase|subscribe|log\s*in|fill.*form|unsubscribe|dispute)\b/i.test(_agentTeamText);
-      if (isComplexTask(_agentTeamText) && !task.suppressEmail && !_isActionTask) {
+      // Skip agent team for pure generation/writing tasks — the AI should produce content directly
+      const _isGenerationTask = /\b(write me|create me|make me|build me|html code|full html|complete html|the html|css code|javascript code|portfolio website|landing page|one.page|a website for|a webpage for|source code|the code|return the|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|write.*function|write.*script|write.*program|write.*essay|write.*email|write.*letter|draft.*email|draft.*letter)\b/i.test(_agentTeamText);
+      if (isComplexTask(_agentTeamText) && !task.suppressEmail && !_isActionTask && !_isGenerationTask) {
         try {
           const teamResult = await getAgentTeam().executeWithTeam(
             subject + ' ' + body,

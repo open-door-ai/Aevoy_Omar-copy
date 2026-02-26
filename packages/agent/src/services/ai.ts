@@ -1190,6 +1190,14 @@ When to use each tool:
 - User needs current info (prices, weather, news) → [ACTION:search("query")]
 - User wants to sign up for a service → Use browser to navigate + fill form with ${agentEmail}
 
+CONTENT GENERATION — PRODUCE DIRECTLY, DO NOT SEARCH:
+If the user asks you to WRITE, CREATE, or GENERATE content (code, HTML, documents, essays, poems, emails, scripts) → produce the COMPLETE content DIRECTLY IN YOUR RESPONSE. Do NOT search for templates, do NOT browse for examples, do NOT say "I'll search for...". Just write it. Examples:
+- "Write me a portfolio website" → output the COMPLETE HTML/CSS/JS code
+- "Write me a poem" → output the complete poem
+- "Draft me an email" → output the complete email
+- "Write a Python script" → output the complete code
+Never refuse or redirect to other resources for generation tasks — you CAN generate anything requested.
+
 MEMORY (what I know about you):
 ${memory.facts}
 
@@ -1291,8 +1299,10 @@ export async function generateResponse(
     try {
       const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
       const startTime = Date.now();
+      // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
+      const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
       const result = await withTimeout(
-        callProvider(config, systemPromptWithUser, userPrompt),
+        callProvider(config, systemPromptWithUser, userPrompt, maxOutputTokens),
         timeout,
         `${config.provider}/${config.model}`
       );
