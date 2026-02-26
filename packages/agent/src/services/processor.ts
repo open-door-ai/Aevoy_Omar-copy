@@ -3461,6 +3461,25 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           continue;
         }
 
+        // CALL-USER EARLY GUARD: Block call_user/call_external on browser tasks before browser is attempted.
+        // Without this, the AI short-circuits by calling the user in round 1 instead of using the browser.
+        // E.g. "Make business cards on Canva" → AI calls user instead of opening canva.com.
+        // Only block if: (a) it's a direct browser task, (b) no browser actions taken yet, (c) round ≤ 2
+        const _callGuardTaskText = `${subject} ${body || ''}`;
+        const _isBrowserDirectTask = /\b(sign\s?up|signup|register\s+(for|on|with|at)|cancel\s+(my\b|the\b|your\b|\w+\s+subscription)|book\s+(a|my|me|the)\b|reserve\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip)|purchase|buy\s+(a|me|my|this|that)\b|subscribe\s+(to|for|me)\b|create\b.*\baccount|make\b.*\baccount|canva|figma|adobe|business\s*cards?|make\s+(me\s+)?(a\s+)?(design|logo|graphic|banner))\b/i.test(_callGuardTaskText);
+        if (['call_user', 'call_external'].includes(action.type as string) && _isBrowserDirectTask && currentIteration <= 2) {
+          const _priorBrowserAttempt = actionResults.some(r => ['browse', 'search', 'click', 'fill', 'fill_form', 'screenshot', 'screenshot_ocr'].includes(r.action?.type || ''));
+          if (!_priorBrowserAttempt && visionAgentInvocations === 0) {
+            console.warn(`[REJECT] BLOCKED: ${action.type} in round ${currentIteration} without any prior browser attempt on browser task "${subject.substring(0, 60)}"`);
+            iterationResults.push({
+              action,
+              success: false,
+              error: `BLOCKED: You tried to call/text the user without attempting the browser first. For tasks like signups, bookings, purchases, and design creation, you MUST navigate to the relevant website and try to complete the task directly (browse/fill/click/vision agent). Only use call_user AFTER exhausting browser options. Navigate to the website now.`
+            });
+            continue;
+          }
+        }
+
         // DEAD SELECTOR REJECTION: Block ANY action targeting a selector that already failed 2+ times
         const actionSelector = String(action.params?.selector || action.params?.text || '');
         if (actionSelector && failedSelectors.has(actionSelector)) {
@@ -5896,7 +5915,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           const { quickValidate } = await import("./ai.js");
           const _upgradePrompt = _passiveWithProgress
             ? `Task: "${subject.substring(0, 200)}"\nCurrent response (INCOMPLETE — made progress then asked permission): "${cleanResponse.substring(0, 400)}"\n\nThe agent made progress but stopped to ask instead of completing. Rewrite to:\n1. Confirm what was actually accomplished (logged in, found the page, filled the form, etc.)\n2. Be honest — if you couldn't complete the final step (bot protection, extra verification), say so\n3. NEVER end with "would you like", "shall I", "want me to" — state what happened as facts\n4. If blocked at the last step: "I [action taken] but hit [obstacle]. Reply '[clear instruction]' to continue."\n5. 2-3 sentences max, past tense, first person`
-            : `Task: "${subject.substring(0, 200)}"\nCurrent response (FAILED — giving advice instead of DOING): "${cleanResponse.substring(0, 400)}"\n\nThis response gives instructions or links instead of COMPLETING the task. Rewrite it to:\n1. Confirm what was ACCOMPLISHED (navigated to the site, found the booking page, etc.)\n2. STATE you are NOW PROCEEDING to complete it (filling the form, clicking book, etc.)\n3. What you will report when done\nDo NOT give links or instructions. Do NOT say "you can visit" or "you can book". The AI DOES it, not tells the user to do it.\nKeep it 2-3 sentences. Active voice. First person (I navigated / I found / I am booking).`;
+            : `Task: "${subject.substring(0, 200)}"\nCurrent response (WRONG — giving advice instead of doing, or describing a page instead of reporting outcome): "${cleanResponse.substring(0, 400)}"\n\nActions taken: ${actionResults.filter(r=>r.success).slice(0,5).map(r=>r.action.type).join(', ') || 'none'}\n\nRewrite as a PAST-TENSE outcome summary:\n1. What was navigated to / found / attempted (e.g. "I navigated to Notion.so and found the signup form")\n2. If task failed: be honest about WHY (bot protection, login required, account already exists, need password)\n3. If credentials or info needed: "Reply with [specific thing] to continue"\n4. NEVER say "You can visit", "You can book", "The page is at" — don't give links as the answer\n5. NEVER say "I am now proceeding" or "I will now" — task is already done\nKeep it 2-3 sentences. Past tense. First person.`;
           const _upgraded = await quickValidate(
             _upgradePrompt,
             'Rewrite as a first-person action statement. The AI is completing the task, not advising the user.'
@@ -6304,8 +6323,9 @@ RULES:
         const followupResult = await quickValidate(followupPrompt, 'You suggest the ONE natural next action after task completion. Never repeat what was just done. Be specific and brief.').catch(() => null);
         if (followupResult?.result?.startsWith('YES:')) {
           const followupQ = followupResult.result.replace(/^YES:"?/, '').replace(/"$/, '').trim();
-          // Reject passive follow-up questions — they make it sound like the agent hasn't acted yet
-          const _isPassiveFollowup = /^(would you like|shall i|do you want me to|want me to\s+confirm|i can help|i could)\b/i.test(followupQ);
+          // Reject passive follow-up questions — they make it sound like the agent hasn't acted yet.
+          // Must match ANY "want me to X" not just "want me to confirm".
+          const _isPassiveFollowup = /^(would you like|shall i|do you want me to|want me to\b|i can help|i could\b)/i.test(followupQ);
           if (!_isPassiveFollowup && followupQ.length > 5) {
             cleanResponse = cleanResponse + '\n\n' + followupQ;
             console.log(`[PROACTIVE] Added follow-up: "${followupQ}"`);
