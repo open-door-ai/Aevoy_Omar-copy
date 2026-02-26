@@ -1265,45 +1265,73 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       return earlyEmailResult;
     }
 
-    // Weather fast path — instant weather via wttr.in API (<500ms)
+    // Weather fast path — instant weather via Open-Meteo (cloud-friendly) + wttr.in fallback
     const weatherText0 = subject + ' ' + (body || '');
-    const weatherMatch = weatherText0.match(/\bin\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
-      || weatherText0.match(/\bfor\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
-      || weatherText0.match(/\bat\s+([A-Za-z][a-zA-Z ]+?)(?:\s+right now|\s+today|\s+now|\?|$)/i);
+    const weatherMatch = weatherText0.match(/\b(?:in|for|at)\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
+      || weatherText0.match(/weather\s+(?:in|for|at)?\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+right now|\s+today|\s+now|\?|$)/i);
     const isWeatherQuery = /\b(weather|temperature|forecast|how (hot|cold|warm)|will it rain|is it raining|is it sunny)\b/i.test(weatherText0);
     if (isWeatherQuery && weatherMatch?.[1]) {
-      const location = weatherMatch[1].trim().replace(/\s+/g, '+');
-      console.log(`[FAST-PATH-WEATHER] Fetching weather for: ${location}`);
+      const rawLocation = weatherMatch[1].trim();
+      console.log(`[FAST-PATH-WEATHER] Fetching weather for: ${rawLocation}`);
       try {
-        const weatherRes = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`, {
-          signal: AbortSignal.timeout(5000),
-          headers: { 'User-Agent': 'curl/7.68.0', 'Accept': 'application/json' },
-        });
-        if (weatherRes.ok) {
-          let weatherText = '';
-          try {
-            const wJson = await weatherRes.json() as { current_condition?: Array<{ temp_C?: string; weatherDesc?: Array<{ value?: string }>; humidity?: string; windspeedKmph?: string }> };
+        // Primary: wttr.in JSON API (fast, no key needed)
+        let weatherText = '';
+        try {
+          const wRes = await fetch(`https://wttr.in/${encodeURIComponent(rawLocation)}?format=j1`, {
+            signal: AbortSignal.timeout(4000),
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AevoyAgent/1.0)', 'Accept': 'application/json' },
+          });
+          if (wRes.ok) {
+            const wJson = await wRes.json() as { current_condition?: Array<{ temp_C?: string; weatherDesc?: Array<{ value?: string }>; humidity?: string; windspeedKmph?: string }> };
             const cur = wJson.current_condition?.[0];
-            if (cur) {
-              const desc = cur.weatherDesc?.[0]?.value || 'Unknown';
-              weatherText = `${desc}, ${cur.temp_C}°C (humidity ${cur.humidity}%, wind ${cur.windspeedKmph} km/h)`;
+            if (cur && cur.temp_C) {
+              const desc = cur.weatherDesc?.[0]?.value || '';
+              weatherText = desc ? `${cur.temp_C}°C, ${desc}` : `${cur.temp_C}°C`;
+              if (cur.humidity) weatherText += ` (humidity ${cur.humidity}%)`;
+            }
+          }
+        } catch { weatherText = ''; }
+
+        // Fallback: Open-Meteo (geocode city → lat/lon → weather, very cloud-friendly)
+        if (!weatherText) {
+          try {
+            const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(rawLocation)}&count=1&language=en&format=json`, {
+              signal: AbortSignal.timeout(4000),
+            });
+            if (geoRes.ok) {
+              const geoJson = await geoRes.json() as { results?: Array<{ latitude: number; longitude: number; name: string; country: string }> };
+              const geo = geoJson.results?.[0];
+              if (geo) {
+                const meteoRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${geo.latitude}&longitude=${geo.longitude}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&wind_speed_unit=kmh`, {
+                  signal: AbortSignal.timeout(4000),
+                });
+                if (meteoRes.ok) {
+                  const meteoJson = await meteoRes.json() as { current?: { temperature_2m?: number; relative_humidity_2m?: number; wind_speed_10m?: number; weather_code?: number } };
+                  const cur = meteoJson.current;
+                  if (cur && cur.temperature_2m !== undefined) {
+                    const wmoDesc: Record<number, string> = { 0: 'Clear', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Foggy', 48: 'Icy fog', 51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 80: 'Showers', 81: 'Rain showers', 82: 'Heavy showers', 95: 'Thunderstorm', 99: 'Thunderstorm with hail' };
+                    const desc = wmoDesc[cur.weather_code ?? 0] || '';
+                    weatherText = `${cur.temperature_2m}°C${desc ? ', ' + desc : ''}`;
+                    if (cur.relative_humidity_2m) weatherText += ` (humidity ${cur.relative_humidity_2m}%)`;
+                  }
+                }
+              }
             }
           } catch { weatherText = ''; }
-          if (weatherText && weatherText.length > 5) {
-            const weatherResponse = `Current weather in ${weatherMatch[1].trim()}: ${weatherText}`;
-            console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
-            // Update Supabase FIRST so task shows completed immediately
-            await getSupabaseClient().from('tasks').update({
-              status: 'completed', response_text: weatherResponse,
-              completed_at: new Date().toISOString(), type: 'general',
-            }).eq('id', taskId);
-            // Send email async — fire-and-forget, don't block the response
-            if (!task.suppressEmail) {
-              sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, weatherResponse).catch(() => {});
-            }
-            clearTimeout(masterTimer);
-            return { taskId, success: true, response: weatherResponse, actions: [] };
+        }
+
+        if (weatherText && weatherText.length > 3) {
+          const weatherResponse = `Current weather in ${rawLocation}: ${weatherText}`;
+          console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed', response_text: weatherResponse,
+            completed_at: new Date().toISOString(), type: 'general',
+          }).eq('id', taskId);
+          if (!task.suppressEmail) {
+            sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, weatherResponse).catch(() => {});
           }
+          clearTimeout(masterTimer);
+          return { taskId, success: true, response: weatherResponse, actions: [] };
         }
       } catch (weatherErr) {
         console.warn(`[FAST-PATH-WEATHER] Failed (${weatherErr}), falling through to main processor`);
@@ -2721,14 +2749,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           );
 
           // BOOKING COMPLETION GATE: If task is "booking" and response is just address/phone, reject it
-          const isBookingTask = classification.taskType === 'booking';
+          const isBookingTask = classification.taskType === 'booking' ||
+            /\b(book|reserv(ation)?|table for|dinner.*reserv|reserv.*dinner)\b/i.test(taskTextLower);
           const hasBookingConfirmation = (
             /\b(confirmed|booked|reservation.*confirm|confirmation.*number|booking.*id|successfully.*booked|table.*reserved)\b/i.test(lowerContent) ||
             /\b(called|phoned|spoke|reached)\b.*\b(restaurant|hostess|front desk)\b/i.test(lowerContent)
           );
-          const isJustInfo = (
-            !hasBookingConfirmation &&
-            (/\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation)\b/i.test(lowerContent))
+          // For booking tasks with NO real actions: if no confirmation → it's just info (always)
+          // Specific patterns also catch partial matches when hasRealActions
+          const isJustInfo = !hasBookingConfirmation && (
+            !hasRealActions ||  // No browse/click/call means agent just gave info — always reject
+            /\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation|reservation page is found|contact information.*booking|available on their website|contact (them|the restaurant) (at|directly)|information for booking)\b/i.test(lowerContent)
           );
 
           if (isBookingTask && isJustInfo && currentIteration <= 4) {
@@ -5512,6 +5543,17 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       } catch (e) {
         console.warn('[PASSIVE-GUARD] Rewrite failed:', e);
       }
+    }
+
+    // ── WRONG CREDENTIAL RESPONSE FIX ────────────────────────────────────
+    // Detect responses that tell the user to "add to Connected Apps" or "go to Settings"
+    // when the system prompt says to use call_user to collect credentials directly.
+    // This is always wrong — the agent should CALL the user, not send them to settings.
+    if (cleanResponse && /\b(connected apps|agent passwords|settings.*agent|vault|add.*login|add.*account)\b/i.test(cleanResponse)) {
+      const _serviceMatch = subject.match(/\b(netflix|hulu|spotify|disney\+?|amazon prime|apple tv|youtube premium|crave|paramount|peacock|max hbo|tidal|deezer|pandora|crunchyroll)\b/i);
+      const _serviceName = _serviceMatch?.[1] || 'the service';
+      cleanResponse = `To cancel your ${_serviceName} subscription, I need your login credentials. Reply with your ${_serviceName} email address and password and I'll log in and cancel it immediately.`;
+      console.log('[CREDENTIAL-FIX] Replaced "Connected Apps" response with direct credential request');
     }
 
     // ── RESPONSE QUALITY CONFIDENCE GATE (90% threshold) ─────────────────

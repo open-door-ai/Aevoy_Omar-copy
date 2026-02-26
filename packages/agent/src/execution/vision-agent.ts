@@ -441,11 +441,23 @@ STEP 1 (FIRST): When you land on a signup page, IMMEDIATELY look for "Continue w
 STEP 2 (fallback): If no OAuth button visible after scanning the full page, use the email form. Fill with provided credentials.
 STEP 3 (multi-step forms): If you fill an email field but NO password field is visible on the same page — this is a multi-step form. Look for a "Continue", "Next", "Sign up", "Proceed" button and CLICK IT. The password field appears on the NEXT page. NEVER call DONE just because password was not found — click Continue first.
 STEP 4 (if email form fails): Try TYPE, if empty try FILL (React native setter). If still empty after 2 tries each: go back to OAuth.
-STEP 5 (if Google OAuth needs a Google account): NAVIGATE to accounts.google.com/signup and create a Gmail account using the pattern from the provided email (e.g., tess@aevoy.com → tess.aevoy2026@gmail.com), then return to the original site.
-STEP 6 (if all fail): DONE:"Signup bot-protected on [site]. Tried OAuth and email form. Search for a free alternative service."
+STEP 5 (if Google OAuth page needs you to sign in): Enter the agent email from AGENT CREDENTIALS below. If asked for password, enter the agent password. If "Create account" or "No account found": NAVIGATE to accounts.google.com/signup, create a Google account using the agent email pattern (e.g., test-e2e@aevoy.com → test.e2e.aevoy@gmail.com), complete the phone verification if required by entering WAIT (for manual solve), then return to the original site.
+STEP 6 (if Google account creation fails due to phone verification): Try a DIFFERENT OAuth provider visible on the page (Apple, Microsoft, GitHub, Facebook). If none available, fall back to email form.
+STEP 7 (if all fail): DONE:"Signup bot-protected on [site]. Tried all OAuth providers and email form. Recommend user signs up manually."
 
-CAPTCHA HANDLING: If a CAPTCHA or "I'm not a robot" challenge appears, output WAIT — the system solves it automatically. Do NOT try to click CAPTCHA manually.
-GOOGLE OAUTH FLOW: After clicking "Continue with Google", you will see a Google account chooser or sign-in page. If asked to sign in: use the credentials in AGENT CREDENTIALS below. If asked to choose an account: select the agent's email. If "Another account": type the agent email.
+CAPTCHA HANDLING: If a CAPTCHA, "I'm not a robot", or image challenge appears: output WAIT — the system solves it automatically. Do NOT attempt to solve it manually. After WAIT, continue with next action.
+
+GOOGLE OAUTH FLOW (critical — follow exactly):
+1. Click "Continue with Google" / "Sign in with Google"
+2. Google shows an account chooser or sign-in form
+3. If account chooser shows the agent email: CLICK it
+4. If no account or "Use another account": TYPE the agent email into the email field, PRESS:Enter
+5. If password requested: TYPE the agent password, PRESS:Enter
+6. If "This Google Account doesn't exist": you need to create it first (see STEP 5)
+7. If 2FA requested: output WAIT — the system retrieves the OTP code from email automatically
+8. After Google login: you'll be redirected back to the original site, logged in via OAuth
+
+VERIFICATION EMAIL HANDLING: After submitting any signup form, if the page says "Check your email" or "Verify your email": output WAIT — the system automatically fetches the verification code from the agent's inbox and fills it in. You do NOT need to manually fetch the code.
 
 CROSS-SERVICE CHAINING: You can navigate to OTHER websites mid-task to complete prerequisites. You have 40 steps — use them across multiple sites. Example flow: Canva → Google OAuth → Gmail creation → back to Canva → signed in.
 
