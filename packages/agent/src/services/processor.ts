@@ -5335,8 +5335,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       ['search', 'browse', 'extract', 'wait', 'navigate'].includes(r.action?.type || '')
     );
     const isResearchTier = tier === 'research';
-    if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier) || signupAutoCompleted) && aiResponse.content) {
-      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : signupAutoCompleted ? 'signup-auto completed' : 'search-only research';
+    // If the agent is correctly waiting for user credentials (password), auto-pass — task did its job
+    const _awaitingCredentials = /\b(i'?ll need (a|your) password|need (a|your) password to|what password (would|do) you|provide (a|your) password|password to (complete|create|finish|register|sign)|i need your password)\b/i.test(aiResponse.content || '');
+
+    if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
+      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : signupAutoCompleted ? 'signup-auto completed' : _awaitingCredentials ? 'awaiting user credentials' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
@@ -5657,11 +5660,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
     // vs. a passive "should I start?" response for our own signup
-    const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) &&
-      /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription|account|login|password|credentials?)\b/i.test(cleanResponse) &&
-      /\b(need|require|provide|send|your (email|password|login|credentials))\b/i.test(cleanResponse) &&
-      // Only legitimate if asking for an EXTERNAL service credential, not our signup
-      !/\b(name|sign.?up|create.*account|register)\b/i.test(cleanResponse.substring(0, 100));
+    const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) && (
+      // Classic: asking for existing account credentials (login to external service)
+      (
+        /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription)\b/i.test(cleanResponse) &&
+        /\b(need|require|provide|your (email|password|login|credentials))\b/i.test(cleanResponse)
+      ) ||
+      // Signup: agent reached the signup page and specifically needs a PASSWORD to complete it
+      // This is ALWAYS legitimate — can't create account without user's desired password
+      /\b(i'?ll need (a|your) password|need (a|your) password to|what password (would|do) you|provide (a|your) password|password to (complete|create|finish|register|sign))\b/i.test(cleanResponse)
+    );
 
     if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted && !_isLegitCredentialRequest) {
       console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
