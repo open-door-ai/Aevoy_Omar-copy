@@ -1297,7 +1297,10 @@ export async function generateResponse(
     }
 
     try {
-      const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
+      const baseTimeout = MODEL_TIMEOUTS[config.provider] || 30000;
+      // For generation/complex tasks, allow more time — large code/HTML outputs can take 60-90s
+      // (5000 tokens ÷ 75 tokens/s ≈ 67s for DeepSeek; Groq is faster at ~200 tokens/s but still needs room)
+      const timeout = (taskType === 'generate' || taskType === 'complex') ? Math.max(baseTimeout, 120000) : baseTimeout;
       const startTime = Date.now();
       // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
       const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
