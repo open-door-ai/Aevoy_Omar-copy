@@ -264,9 +264,20 @@ async function takeScreenshot(page: Page): Promise<string> {
 }
 
 /**
+ * Extract credentials from the task string so they can be injected into every step prompt.
+ */
+function extractTaskCredentials(task: string): { email: string; password: string; name: string } {
+  return {
+    email: task.match(/email=([^\s,\n;]+)/)?.[1] || '',
+    password: task.match(/password=([^\s,\n;]+)/)?.[1] || '',
+    name: task.match(/name=([^\s,\n;]+)/)?.[1] || '',
+  };
+}
+
+/**
  * Build the AI prompt: element list + current URL + task.
  */
-function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }): string {
+function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }, creds?: { email: string; password: string; name: string }): string {
   const elemLines = elements.map(e => {
     const parts = [`[${e.index}] ${e.tag.toUpperCase()}`];
     if (e.type && e.type !== 'text') parts.push(`type=${e.type}`);
@@ -291,9 +302,14 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
 
   const vpNote = viewport ? `VIEWPORT: ${viewport.width}x${viewport.height}px (use these dimensions for CLICK_AT coordinates)\n` : '';
 
+  // Credentials block — injected prominently so AI never asks for what's already provided
+  const credNote = (creds?.email)
+    ? `\n⚡ CREDENTIALS (USE THESE — DO NOT ASK): email=${creds.email}${creds.password ? ` | password=${creds.password}` : ''}${creds.name ? ` | name=${creds.name}` : ''}\n`
+    : '';
+
   return `TASK: ${task}
 URL: ${url}
-${vpNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}
+${vpNote}${credNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}
 INTERACTIVE ELEMENTS (reference by number):
 ${elemLines || '(none visible)'}
 
@@ -394,6 +410,18 @@ const SYSTEM_PROMPT = `You are a browser automation agent. You control a real we
 Your job is to COMPLETE tasks — not describe them, not navigate to a page and stop. ACTUALLY EXECUTE the full task.
 Be direct and efficient. One action per response. No explanations.
 
+CREDENTIALS RULE (CRITICAL):
+- If the prompt shows "⚡ CREDENTIALS: email=... | password=..." — USE THEM. Do NOT ask the user for credentials. They are provided.
+- The TASK string itself also contains credentials (email=..., password=...). READ THE TASK and use them.
+- NEVER say "I'll need a password" or "please provide credentials" when they're already in the prompt. That is a FAILURE.
+
+DONE RULES (CRITICAL):
+- DONE only when task is FULLY COMPLETE: form submitted, account created, booking confirmed, design saved.
+- NEVER output DONE just because you reached a page — you must have DONE the action.
+- NEVER output DONE after a WAIT unless the page changed and shows completion (dashboard, welcome, success).
+- NEVER output DONE with passive phrases like "want me to", "I'll need", "would you like", "shall I", "let me know", "I need your", "please provide". Those mean you HAVE NOT completed the task. Keep going.
+- NEVER describe what you COULD do. DO IT. DONE is only for confirmed completion.
+
 KEY RULES:
 - If you see a 404, "page not found", or error page: NAVIGATE to the base domain (e.g. NAVIGATE:"https://example.com")
 - If the signup/register URL fails: try NAVIGATE:"https://example.com/register" then NAVIGATE:"https://example.com/join" then NAVIGATE:"https://example.com" and find signup link
@@ -401,14 +429,12 @@ KEY RULES:
 - For date pickers: CLICK the date field, then CLICK the correct date in the calendar
 - For dropdowns/selects not in list: CLICK the visible dropdown element, then CLICK the option
 - If stuck on same page for 3+ steps: SCROLL:down to find more elements, or NAVIGATE to a different approach
-- DONE only when task is FULLY COMPLETE: form submitted, account created, booking confirmed, design saved, etc.
-- NEVER output DONE just because you reached a page — you must have DONE the action (filled+submitted a form, clicked the button, completed the signup, etc.)
-- NEVER output DONE after a WAIT unless the page has changed and shows completion (dashboard, success message, etc.)
 - If you see a signup form: FILL ALL FIELDS then CLICK the submit button. Do not stop after filling one field.
 - For account creation tasks: fill email → fill password → fill name (if required) → click submit → handle email verification → DONE only when dashboard/welcome screen is visible
 - For "sign up for X free plan" tasks specifically: navigate to site, find free/basic plan, click it, fill the registration form completely, submit it, verify email if needed, DONE only when logged into the account
-- If you need to create an account and you have no credentials, use these defaults: email from task, password=Aevoy2024! name=Aevoy User
-- If a payment form appears and task is for a FREE plan: look for "Free", "Basic", "Starter" option or skip payment step`;
+- If TYPE does not work on a field (field stays empty): immediately switch to FILL — FILL uses React-native value injection and works on framework inputs that reject keyboard events
+- If a payment form appears and task is for a FREE plan: look for "Free", "Basic", "Starter" option or skip payment step
+- If CAPTCHA appears: output WAIT — the system solves it automatically`;
 
 /**
  * Run the vision-based browser agent on a task.
@@ -437,6 +463,12 @@ export async function runVisionAgent(
   let sameActionCount = 0;
 
   console.log(`[VISION-AGENT] Starting task: "${task.substring(0, 100)}"`);
+
+  // Extract credentials from the task string so they're always visible in every step prompt
+  const taskCreds = extractTaskCredentials(task);
+  if (taskCreds.email) {
+    console.log(`[VISION-AGENT] Credentials extracted: email=${taskCreds.email}, password=${taskCreds.password ? '***' : '(none)'}`);
+  }
 
   // PRE-PLANNING STEP (Manus-style): Generate a structured plan before touching the browser.
   // This gives the AI a north star to follow even when individual steps fail.
@@ -561,7 +593,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
       // REASON: Ask AI what to do
       const viewport = page.viewportSize() || { width: 1280, height: 800 };
-      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport);
+      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport, taskCreds);
       let aiResponse: string;
       let stepCost = 0;
       try {
@@ -612,8 +644,20 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       }
 
       if (action.type === 'done') {
-        console.log(`[VISION-AGENT] DONE after ${steps + 1} steps: ${action.result}`);
-        return { success: true, result: action.result, steps: steps + 1, cost: totalCost, screenshots };
+        const doneResult = action.result || '';
+        // PASSIVE DONE REJECTION: If DONE says "want me to", "I'll need", etc.
+        // it means the AI described what it COULD do instead of DOING it. Force continue.
+        const isPassiveDone = /want me to|i['']ll need|would you like|shall i|let me know|i need your|please provide|do you want|can i proceed|should i|could you|please tell me/i.test(doneResult);
+        if (isPassiveDone) {
+          const credHint = taskCreds.email
+            ? ` Credentials already provided: email=${taskCreds.email}, password=${taskCreds.password}. USE THEM.`
+            : '';
+          console.log(`[VISION-AGENT] REJECTED passive DONE at step ${steps + 1}: "${doneResult.substring(0, 80)}"`);
+          history.push(`⚠️ PASSIVE DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint} Fill ALL form fields and submit. NEVER output DONE with "want me to", "I'll need", or any passive phrase.`);
+          continue; // Force the loop to keep going
+        }
+        console.log(`[VISION-AGENT] DONE after ${steps + 1} steps: ${doneResult}`);
+        return { success: true, result: doneResult, steps: steps + 1, cost: totalCost, screenshots };
       }
 
       if (action.type === 'fail') {
