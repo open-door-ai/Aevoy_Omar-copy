@@ -2043,6 +2043,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const bodyWithLearnings = learningsHint ? `${body}${learningsHint}` : body;
     let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
 
+    // Diagnostic: if all models failed, store error details in task for debugging
+    const _diagErrors = (aiResponse as import('../types/index.js').AIResponse & { _providerErrors?: string[] })._providerErrors;
+    if (_diagErrors && _diagErrors.length > 0 && aiResponse.cost === 0 && aiResponse.tokensUsed === 0) {
+      const errSummary = `[AI-CHAIN-FAIL] taskType=${aiTaskType || 'understand'} | ${_diagErrors.join(' | ')}`;
+      console.error(errSummary);
+      void getSupabaseClient().from('tasks').update({ stuck_reason: errSummary.substring(0, 500) }).eq('id', taskId);
+    }
+
     // If we have a matching template, inject the learned steps as actions
     if (templateMatch && templateMatch.steps.length > 0) {
       const substitutedSteps = substituteVariables(

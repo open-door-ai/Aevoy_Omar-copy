@@ -1284,8 +1284,11 @@ export async function generateResponse(
     }
   }
 
+  const providerErrors: string[] = [];
+
   for (const config of chain) {
     if (!isProviderAvailable(config.provider, config)) {
+      providerErrors.push(`${config.provider}: unavailable (no API key)`);
       continue;
     }
 
@@ -1293,6 +1296,7 @@ export async function generateResponse(
     const cb = getCircuitBreaker(config.provider);
     if (!cb.canExecute()) {
       console.log(`[AI] ${config.provider} circuit breaker open, skipping`);
+      providerErrors.push(`${config.provider}: circuit breaker open`);
       continue;
     }
 
@@ -1301,6 +1305,7 @@ export async function generateResponse(
       // For generation/complex tasks, allow more time — large code/HTML outputs can take 60-90s
       // (5000 tokens ÷ 75 tokens/s ≈ 67s for DeepSeek; Groq is faster at ~200 tokens/s but still needs room)
       const timeout = (taskType === 'generate' || taskType === 'complex') ? Math.max(baseTimeout, 120000) : baseTimeout;
+      console.log(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms | maxTokens=${(taskType === 'generate' || taskType === 'complex') ? 8192 : 4096}`);
       const startTime = Date.now();
       // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
       const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
@@ -1351,7 +1356,12 @@ export async function generateResponse(
       return aiResponse;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.log(`[AI] ${config.provider}/${config.model} failed: ${errorMessage}`);
+      const errorStatus = (error as Record<string, unknown>)?.status;
+      const errorCode = (error as Record<string, unknown>)?.code;
+      const errorType = error instanceof Error ? error.constructor.name : 'unknown';
+      const errorDetail = `${config.provider}/${config.model}: [${errorType}${errorStatus ? ' ' + errorStatus : ''}${errorCode ? '/' + errorCode : ''}] ${errorMessage.substring(0, 200)}`;
+      console.error(`[AI-FAIL] ${errorDetail}`);
+      providerErrors.push(errorDetail);
 
       // Handle 429 rate limit: check Retry-After header
       if (errorMessage.includes('429') || errorMessage.includes('rate limit')) {
@@ -1389,14 +1399,15 @@ export async function generateResponse(
   }
 
   // All models failed — return a generic helpful response (never expose internals)
-  console.error("[AI] All models in chain failed for task type:", taskType);
+  console.error(`[AI] All models in chain failed for taskType=${taskType}. Errors: ${providerErrors.join(' | ')}`);
   return {
     content: `I'm processing your request about "${taskSubject}". This is taking longer than expected — I'll follow up shortly with results.`,
     actions: [],
     tokensUsed: 0,
     cost: 0,
     model: "fallback",
-  };
+    _providerErrors: providerErrors, // diagnostic field, stripped before user-facing response
+  } as AIResponse & { _providerErrors: string[] };
 }
 
 /**
