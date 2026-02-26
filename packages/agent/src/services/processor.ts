@@ -5500,8 +5500,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           `Task: "${subject.substring(0, 200)}"\nAgent identity: email=${username}@aevoy.com (agent already has email + password — never ask user for these)\nContext: ${_browserCtx}\nCurrent (passive) response: "${cleanResponse.substring(0, 300)}"\n\nRewrite this response to be PROACTIVE and ACTION-TAKING:\n- State what was accomplished (even if partial, e.g. "I reached the signup page...")\n- State the NEXT concrete action NOW without asking — just DO it\n- Agent has email ${username}@aevoy.com and a password — NEVER ask user for their email or password for signing up\n- If signup form was bot-protected: "I hit bot protection on the signup form — switching to Google OAuth / searching for an alternative service"\n- If the task is IMPOSSIBLE without external credentials (cancel Netflix subscription): say "Reply with your Netflix email and password to proceed"\n- Never use "want me to", "shall I", "would you like", "I'll need your email", "I need a password" — active voice only\n- Keep it 2-3 sentences max`,
           'You are a proactive AI assistant. The agent has its own email and password for new signups. Only ask the user for credentials for THEIR existing accounts (Netflix login, Hulu login, etc.). Rewrite passive responses into direct action statements.'
         );
-        if (_activeRewrite?.result && _activeRewrite.result.length > 20 && !_passivePatterns.test(_activeRewrite.result)) {
-          cleanResponse = _activeRewrite.result;
+        if (_activeRewrite?.result && _activeRewrite.result.length > 20) {
+          // Always accept the rewrite — even if it still has some mild passive patterns,
+          // it will be better than the original since it has task context.
+          // Strip any trailing passive sentences (e.g. "Let me know if you need anything.")
+          let rewriteResult = _activeRewrite.result.trim();
+          rewriteResult = rewriteResult.replace(/\.\s*(let me know if (you|that|this)[^.]*\.?|feel free to[^.]*\.?|please let me know[^.]*\.?)\s*$/i, '.');
+          cleanResponse = rewriteResult;
           console.log(`[PASSIVE-GUARD] Passive response replaced (${cleanResponse.length} chars)`);
         }
       } catch (e) {
@@ -5520,14 +5525,19 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         && !_completionWords.test(cleanResponse);
       // Pattern 2: "here are the findings/steps" — gives instructions instead of doing it
       // Catches: "here are the findings", "here's how to", "you can book at", "direct links:"
-      const _isTask = /\b(book|reserv|cancel|sign.?up|register|buy|order|purchase|subscribe)\b/i.test(subject + ' ' + (body || ''));
+      const _isTask = /\b(book|reserv|cancel|sign.?up|sign up|register|create|make|set.?up|buy|order|purchase|subscribe|account|join)\b/i.test(subject + ' ' + (body || ''));
       const _givesInstructions = _isTask && (
         /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book) (the|your|a)\b/i.test(cleanResponse) ||
         /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
+      // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
+      const _gaveUp = _isTask && (
+        /\b(check the page|password not found|field not found|could not find (the )?(password|field|button|form|element)|unable to (find|locate|complete)|check for (any )?errors|next steps|please (check|verify|try|visit))\b/i.test(cleanResponse) ||
+        /\b(email filled|form filled|navigated to)\b.{0,100}\b(not found|could not|unable|check|next step)/is.test(cleanResponse)
+      ) && !_completionWords.test(cleanResponse);
 
-      if (_pageDescribeOnly || _givesInstructions) {
-        const gateType = _pageDescribeOnly ? 'page-description only' : 'gives-instructions instead of acting';
+      if (_pageDescribeOnly || _givesInstructions || _gaveUp) {
+        const gateType = _pageDescribeOnly ? 'page-description only' : _gaveUp ? 'gave-up mid-task' : 'gives-instructions instead of acting';
         console.log(`[QUALITY-GATE] Response is ${gateType} — upgrading to action-oriented`);
         try {
           const { quickValidate } = await import("./ai.js");
@@ -5907,11 +5917,19 @@ Agent response: "${cleanResponse.substring(0, 300)}"
 Does this task naturally lead to a next action the agent should offer to do?
 Examples: found restaurant→offer reservation, found product→offer to order, wrote content→offer to post, found business→offer to call.
 
-Reply with EXACTLY ONE of:
-- NO (task is fully complete with no obvious next step)
-- YES:"<one direct question, max 15 words, ending the agent's response, e.g.: Want me to call and make a reservation? I just need date, time, and party size.>"`;
+Actions already taken: ${actionResults.filter(r => r.success).map(r => r.action.type).join(', ') || 'none'}
 
-        const followupResult = await quickValidate(followupPrompt, 'You detect natural next actions after AI task completion. Be decisive. Most research tasks DO have a next step.').catch(() => null);
+Reply with EXACTLY ONE of:
+- NO (task is fully complete with no obvious next step OR action was already taken)
+- YES:"<specific follow-up question under 15 words — must be different from what was just done>"
+
+RULES:
+- If agent just called the restaurant → do NOT offer to call again. Offer to confirm the booking instead.
+- If agent just sent an email → do NOT offer to send again. Offer to follow up.
+- If agent completed the main action → consider if there's a NEXT step, not the same step.
+- Keep the question natural and conversational. Do NOT explain what info you need.`;
+
+        const followupResult = await quickValidate(followupPrompt, 'You suggest the ONE natural next action after task completion. Never repeat what was just done. Be specific and brief.').catch(() => null);
         if (followupResult?.result?.startsWith('YES:')) {
           const followupQ = followupResult.result.replace(/^YES:"?/, '').replace(/"$/, '').trim();
           if (followupQ.length > 5) {
