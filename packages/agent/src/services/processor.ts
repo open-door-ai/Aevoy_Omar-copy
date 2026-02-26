@@ -5449,11 +5449,20 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // the MAIN AI LOOP (not the vision agent loop — that has its own guard).
     // These passive responses appear when the vision agent fails and the main
     // AI loop takes over but asks permission instead of acting.
+    // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
+    // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
     const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b)/i;
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
+    // Detect if this is a LEGITIMATE credential request (external service login required)
+    // vs. a passive "should I start?" response for our own signup
+    const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) &&
+      /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription|account|login|password|credentials?)\b/i.test(cleanResponse) &&
+      /\b(need|require|provide|send|your (email|password|login|credentials))\b/i.test(cleanResponse) &&
+      // Only legitimate if asking for an EXTERNAL service credential, not our signup
+      !/\b(name|sign.?up|create.*account|register)\b/i.test(cleanResponse.substring(0, 100));
 
-    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted) {
+    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted && !_isLegitCredentialRequest) {
       console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
       try {
         const { quickValidate } = await import("./ai.js");
