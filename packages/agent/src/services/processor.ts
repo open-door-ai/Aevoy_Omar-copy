@@ -2392,6 +2392,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const roundHistory: { round: number; summary: string }[] = [];
     let compressedHistory = ''; // Compressed summary of rounds 1-N after round 5
     let visionFailureNote = ''; // Context injected into next iteration when vision agent fails
+    let visionAgentInvocations = 0; // Guard: max 2 vision agent runs per task (prevents 8min × 15 iteration waste)
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -3802,8 +3803,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // (custom React components, SPA forms, booking flows, cancellations, etc.) —
       // run the vision agent. It sees the page visually and acts on any UI element.
       // Only fires when: task is not done yet + we have a live page + it's a browser task.
+      // Guard: max 2 invocations to prevent 8min × N iterations = multi-hour lock-up.
       const isBrowserInteractionTask = /\b(sign.?up|signup|register|create\b.*\baccount|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account)\b/i.test(taskTextLower);
-      if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine) {
+      if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {
         const visionPage = executionEngine.getPage?.();
         const visionPageUrl = visionPage?.url() || '';
         const isValidPage = visionPageUrl && visionPageUrl !== 'about:blank';
@@ -3818,7 +3820,8 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const visionName = senderName || username;
           const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Complete the task fully on the page.`;
 
-          console.log(`[VISION-AGENT] Starting on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);
+          visionAgentInvocations++;
+          console.log(`[VISION-AGENT] Starting (invocation ${visionAgentInvocations}/2) on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);
           void getSupabaseClient().from('tasks').update({
             progress_message: `[VISION-AGENT] Running on ${visionPageUrl.substring(0, 60)}`
           }).eq('id', taskId).then(() => {});

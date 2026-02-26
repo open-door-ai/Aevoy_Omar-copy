@@ -474,7 +474,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
     for (steps = 0; steps < MAX_STEPS; steps++) {
       // Check total timeout
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
-        return { success: false, error: 'Timeout: 3 minutes exceeded', steps, cost: totalCost, screenshots };
+        return { success: false, error: 'Timeout: 8 minutes exceeded — task took too long', steps, cost: totalCost, screenshots };
       }
 
       // Wait for page to settle
