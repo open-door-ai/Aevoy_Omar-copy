@@ -3847,7 +3847,30 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             const visionResult = await runVisionAgent(visionPage, visionTask, userId, taskId, username);
             console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
             if (visionResult.success) {
-              aiResponse.content = visionResult.result || `Task completed successfully.`;
+              const rawVisionResult = visionResult.result || 'Task completed successfully.';
+              // If the vision agent returned a trivial/technical string, generate a proper
+              // user-facing summary via AI instead of showing the raw output.
+              const isTrivialResult = rawVisionResult.trim().length < 60
+                || /^(done!?|waited\s*\d+|ok\.?|completed?\.?\s*$|success\.?\s*$)/i.test(rawVisionResult.trim());
+              if (isTrivialResult) {
+                try {
+                  const { quickValidate } = await import("./ai.js");
+                  const summary = await quickValidate(
+                    `A browser automation agent just completed this task: "${subject.substring(0, 200)}".\n` +
+                    `The agent navigated the website (URL: ${visionPage?.url() || 'unknown'}) and reported: "${rawVisionResult}".\n` +
+                    `Write a 1-2 sentence summary for the user explaining what was accomplished. ` +
+                    `Be specific. If a form was filled or account created, say so. If it reached a specific page, mention that. ` +
+                    `End with a proactive follow-up question if there's a natural next step.`,
+                    'You are summarizing a completed web automation task. Be clear, specific, and proactive.'
+                  );
+                  aiResponse.content = summary?.result || `I've completed the task on the website.`;
+                  console.log(`[VISION-AGENT] Generated proper summary for trivial result: ${aiResponse.content.substring(0, 100)}`);
+                } catch {
+                  aiResponse.content = `I've completed the task on the website (${visionPage?.url() || 'canva.com'}).`;
+                }
+              } else {
+                aiResponse.content = rawVisionResult;
+              }
               isTaskComplete = true;
               aiSignaledComplete = true;
               signupAutoCompleted = true; // Protect from quality gates

@@ -391,7 +391,7 @@ function parseAction(response: string): { type: string; index?: number; text?: s
 }
 
 const SYSTEM_PROMPT = `You are a browser automation agent. You control a real web browser.
-Your job is to complete tasks by observing the page screenshot and list of interactive elements.
+Your job is to COMPLETE tasks — not describe them, not navigate to a page and stop. ACTUALLY EXECUTE the full task.
 Be direct and efficient. One action per response. No explanations.
 
 KEY RULES:
@@ -401,7 +401,14 @@ KEY RULES:
 - For date pickers: CLICK the date field, then CLICK the correct date in the calendar
 - For dropdowns/selects not in list: CLICK the visible dropdown element, then CLICK the option
 - If stuck on same page for 3+ steps: SCROLL:down to find more elements, or NAVIGATE to a different approach
-- DONE only when task is fully complete with confirmation visible. FAIL only if truly impossible.`;
+- DONE only when task is FULLY COMPLETE: form submitted, account created, booking confirmed, design saved, etc.
+- NEVER output DONE just because you reached a page — you must have DONE the action (filled+submitted a form, clicked the button, completed the signup, etc.)
+- NEVER output DONE after a WAIT unless the page has changed and shows completion (dashboard, success message, etc.)
+- If you see a signup form: FILL ALL FIELDS then CLICK the submit button. Do not stop after filling one field.
+- For account creation tasks: fill email → fill password → fill name (if required) → click submit → handle email verification → DONE only when dashboard/welcome screen is visible
+- For "sign up for X free plan" tasks specifically: navigate to site, find free/basic plan, click it, fill the registration form completely, submit it, verify email if needed, DONE only when logged into the account
+- If you need to create an account and you have no credentials, use these defaults: email from task, password=Aevoy2024! name=Aevoy User
+- If a payment form appears and task is for a FREE plan: look for "Free", "Basic", "Starter" option or skip payment step`;
 
 /**
  * Run the vision-based browser agent on a task.
