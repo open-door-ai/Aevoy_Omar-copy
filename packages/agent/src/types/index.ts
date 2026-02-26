@@ -82,6 +82,8 @@ export interface TaskRequest {
   suppressEmail?: boolean;
   /** Session hint for browser continuity between sub-tasks — restores cookies/localStorage */
   sessionHint?: { userId: string; domain: string };
+  /** Optional text to prepend to the final response (e.g. clarification timeout notice) */
+  responsePrefix?: string;
 }
 
 export interface Attachment {

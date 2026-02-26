@@ -11,6 +11,7 @@ import { compressOldMemories, decayMemories } from './memory.js';
 import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
 import { detectPatterns } from './pattern-detector.js';
 import { CronExpressionParser } from 'cron-parser';
+import { startMonitoringService } from './monitoring.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -70,6 +71,10 @@ export function startScheduler(): void {
   }).catch((error: Error) => {
     console.error('[SCHEDULER] Could not start inbox manager:', error);
   });
+
+  // Start persistent task heartbeat monitor (every 15 minutes)
+  startMonitoringService();
+  console.log('[SCHEDULER] Monitoring service started');
 }
 
 /**

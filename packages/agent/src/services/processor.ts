@@ -708,7 +708,45 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
         clarified.structuredIntent.goal,
         confirmationMessage
       );
-      
+
+      // Load user settings for dynamic timeout
+      const timeoutSettings = await getUserSettings(userId);
+      const clarificationTimeoutMs = timeoutSettings.clarificationTimeoutMs;
+      const clarificationTimeoutMinutes = Math.round(clarificationTimeoutMs / 60000);
+
+      // CLARIFICATION TIMEOUT: If user doesn't reply within their configured timeout, execute with best guess
+      const clarificationTimeout = setTimeout(async () => {
+        try {
+          const { data: currentTask } = await getSupabaseClient()
+            .from('tasks')
+            .select('status, input_text, email_subject')
+            .eq('id', taskId)
+            .single();
+
+          if (currentTask?.status === 'awaiting_confirmation') {
+            console.log(`[CLARIFICATION-TIMEOUT] Task ${taskId} timed out after ${clarificationTimeoutMinutes}min — executing with best guess`);
+            await getSupabaseClient().from('tasks').update({ status: 'pending' }).eq('id', taskId);
+
+            // Execute with best-guess subject from structured intent and prepend timeout notice
+            await processTask({
+              userId,
+              username,
+              from,
+              subject: clarified.structuredIntent.goal || subject,
+              body,
+              taskId,
+              inputChannel: task.inputChannel || 'email',
+              responsePrefix: `You didn't reply to my clarification within ${clarificationTimeoutMinutes} minutes, so I went ahead with my best understanding. Here's what I did:`,
+            });
+          }
+        } catch (err) {
+          console.error(`[CLARIFICATION-TIMEOUT] Error auto-executing task ${taskId}:`, err);
+        }
+      }, clarificationTimeoutMs);
+
+      // Don't let this timer prevent process from exiting cleanly
+      clarificationTimeout.unref();
+
       return {
         taskId,
         success: true,
@@ -5263,6 +5301,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const totalActions = actionResults.length;
 
     let emailBody = cleanResponse;
+    // Prepend any response prefix (e.g. clarification timeout notice)
+    if (task.responsePrefix) {
+      emailBody = `${task.responsePrefix}\n\n${emailBody}`;
+    }
     // Only mention action counts if there were actions AND some succeeded
     if (totalActions > 0 && successCount > 0 && successCount < totalActions) {
       // Partial success — don't mention failures, just show what was done
@@ -5834,6 +5876,18 @@ async function executeAction(
     case "remember": {
       const fact = action.params.fact as string;
       await updateMemoryWithFact(userId, fact);
+
+      // MONITOR: tag — register an ongoing monitoring job if the fact starts with MONITOR:
+      try {
+        const { extractMonitorTag, registerMonitoringJob: registerMonJob } = await import('./monitoring.js');
+        const monitorDescription = extractMonitorTag(fact);
+        if (monitorDescription) {
+          console.log(`[MONITORING] Detected MONITOR: tag — registering job: "${monitorDescription.substring(0, 80)}"`);
+          await registerMonJob(userId, username, monitorDescription);
+        }
+      } catch (monErr) {
+        console.warn('[MONITORING] Failed to register monitor job from remember action:', monErr);
+      }
 
       // Hive Mind: Share technique/API discoveries with all users (PII-scrubbed)
       // Only shares learnings about tools/techniques, NOT personal data
