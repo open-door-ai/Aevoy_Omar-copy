@@ -681,7 +681,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     // Autonomous planning decomposes into "research subtasks" that return advice ("here's how to sign up")
     // instead of ACTUALLY doing the action. Browser tasks must bypass it entirely.
     const directBrowserTaskText = `${subject} ${body || ''}`;
-    const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(a\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes))\b/i.test(directBrowserTaskText);
+    const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes))\b/i.test(directBrowserTaskText);
 
     // GENERATION BYPASS: Writing/coding/generation tasks must also skip autonomous planning.
     // Autonomous planning decomposes "write me HTML" into research sub-tasks which never generate code.
@@ -2525,8 +2525,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           } catch { /* non-critical */ }
         })();
       } else if (liveViewUrl) {
-        await sendProgressEmail(from, `${username}@aevoy.com`, subject,
-          `Working on your request...\n\nWatch live: ${liveViewUrl}\nOpen this link on any device to see what I'm doing in real time.`, taskId);
+        // Progress email suppressed — live view link included in final result email instead
+        console.log(`[PROGRESS] Live view available (not emailed): ${liveViewUrl}`);
       }
     }
 
@@ -5788,7 +5788,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) && !_alreadyProgressed && (
       // Classic: asking for existing account credentials (login to external service)
       (
-        /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription)\b/i.test(cleanResponse) &&
+        /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription|uber|lyft|doordash|grubhub|instacart|airbnb|booking\.com|expedia|twitter|x\.com|linkedin|instagram|facebook|paypal|venmo)\b/i.test(cleanResponse) &&
         /\b(need|require|provide|your (email|password|login|credentials))\b/i.test(cleanResponse)
       ) ||
       // Signup: agent reached the signup page and specifically needs a PASSWORD to complete it

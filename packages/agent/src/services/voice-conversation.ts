@@ -179,6 +179,19 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   const isOnboardingSetup = callType === "onboarding_setup";
   console.log(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}${isDemo ? " (DEMO)" : ""}${isInterview ? " (INTERVIEW)" : ""}${isOnboardingSetup ? " (ONBOARDING)" : ""}`);
 
+  // ── RACE-CONDITION FIX ────────────────────────────────────────────────────
+  // Register a placeholder session BEFORE any async DB work.
+  // welcomeGreeting in TwiML plays immediately when the call connects, so the
+  // user can respond before our DB queries finish. Without this, handlePrompt
+  // finds session=undefined and silently drops the user's first message.
+  const placeholderSession: VoiceSession = {
+    sessionId, callSid: callSid || '', userId, userName: 'there', userEmail: '',
+    botName: 'Aevoy', greetingStyle: 'casual', timezone: 'America/Los_Angeles',
+    conversationHistory: [], state: 'setup', pinAttempts: 0, pinDigits: '',
+    ws, startedAt: Date.now(), lastActivityAt: Date.now(), callType, memoryContext: '', userProfile: '',
+  };
+  activeSessions.set(sessionId, placeholderSession);
+
   // Load user profile
   let userName = (isDemo || isInterview || isOnboardingSetup) ? "there" : "there";
   let userEmail = "";
@@ -347,29 +360,20 @@ RULES:
     console.log(`[VOICE-WS] Loaded context for ${userId.slice(0, 8)}: profile=${userProfile.length}ch, memory=${memoryContext.length}ch`);
   }
 
-  const session: VoiceSession = {
-    sessionId,
-    callSid: callSid || "",
-    userId,
-    userName,
-    userEmail,
-    botName,
-    greetingStyle,
-    timezone,
-    conversationHistory: [],
-    state: needsPin ? "awaiting_pin" : "ready",
-    pinAttempts: 0,
-    pinDigits: "",
-    ws,
-    startedAt: Date.now(),
-    lastActivityAt: Date.now(),
-    callType,
-    memoryContext,
-    userProfile,
-  };
+  // Update the placeholder session with fully loaded data (in-place, preserving the Map entry)
+  const session = activeSessions.get(sessionId)!;
+  session.callSid = callSid || "";
+  session.userId = userId;
+  session.userName = userName;
+  session.userEmail = userEmail;
+  session.botName = botName;
+  session.greetingStyle = greetingStyle;
+  session.timezone = timezone;
+  session.state = needsPin ? "awaiting_pin" : "ready";
+  session.memoryContext = memoryContext;
+  session.userProfile = userProfile;
 
-  activeSessions.set(sessionId, session);
-  console.log(`[VOICE-WS] Session created: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
+  console.log(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
 
   if (needsPin) {
     ws.send(JSON.stringify({
@@ -386,6 +390,14 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   if (!voicePrompt || !last) return; // Wait for complete utterance
 
   session.lastActivityAt = Date.now();
+
+  // If session is still loading (race condition: user responded before handleSetup finished)
+  // Just acknowledge — once state becomes "ready", the normal conversation flow continues.
+  if (session.state === "setup") {
+    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} prompt received during setup — holding`);
+    session.ws.send(JSON.stringify({ type: "text", token: "Just a moment while I get ready for you.", last: true }));
+    return;
+  }
 
   // If awaiting PIN via voice (spoken digits)
   if (session.state === "awaiting_pin") {
