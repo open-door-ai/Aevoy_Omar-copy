@@ -681,7 +681,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     // Autonomous planning decomposes into "research subtasks" that return advice ("here's how to sign up")
     // instead of ACTUALLY doing the action. Browser tasks must bypass it entirely.
     const directBrowserTaskText = `${subject} ${body || ''}`;
-    const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon))\b/i.test(directBrowserTaskText);
+    const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(a\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes))\b/i.test(directBrowserTaskText);
 
     // GENERATION BYPASS: Writing/coding/generation tasks must also skip autonomous planning.
     // Autonomous planning decomposes "write me HTML" into research sub-tasks which never generate code.
@@ -2405,6 +2405,23 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           hasCredentials = !!(vaultCreds && vaultCreds.length > 0);
         }
       } catch { /* continue with browser attempt */ }
+
+      if (!hasCredentials) {
+        // INLINE CREDENTIAL CHECK: Before asking the user, check if they already included
+        // credentials in the message body (e.g. "my Netflix login is X password Y").
+        // If found, inject them into the body as structured credentials and proceed.
+        const _inlineCredMatch = (body || '').match(
+          /(?:login|email|username)[:\s]+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\s+(?:pass(?:word)?|pwd)[:\s]+(\S+)/i
+        ) || (body || '').match(
+          /(?:my\s+\w+\s+login\s+is\s+|credentials?[:\s]+)([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\s+(?:pass(?:word)?|pwd)[:\s]*(\S+)/i
+        ) || (body || '').match(
+          /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})\s+(?:pass(?:word)?|pwd)[:\s]+(\S+)/i
+        );
+        if (_inlineCredMatch) {
+          console.log(`[CREDENTIAL-GATE] Inline credentials found in body — proceeding with task`);
+          hasCredentials = true; // skip the "ask for credentials" path, let AI handle with body context
+        }
+      }
 
       if (!hasCredentials) {
         console.log(`[CREDENTIAL-GATE] Task requires credentials for ${serviceDomain || 'service'} but none found — asking user directly`);
@@ -5763,8 +5780,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
-    // vs. a passive "should I start?" response for our own signup
-    const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) && (
+    // vs. a passive "should I start?" response for our own signup.
+    // IMPORTANT: If the agent already LOGGED IN or completed work, it is NOT a legit credential
+    // request — it already has credentials. Block the legit-credential exemption in that case
+    // so the passive guard fires and produces a proactive response instead.
+    const _alreadyProgressed = /(logged in|completed|signed up|created|confirmed|cancelled|reserved|called|emailed)\b/i.test(cleanResponse);
+    const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) && !_alreadyProgressed && (
       // Classic: asking for existing account credentials (login to external service)
       (
         /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription)\b/i.test(cleanResponse) &&
@@ -5848,14 +5869,25 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         /\b(check the page|password not found|field not found|could not find (the )?(password|field|button|form|element)|unable to (find|locate|complete)|check for (any )?errors|next steps|please (check|verify|try|visit))\b/i.test(cleanResponse) ||
         /\b(email filled|form filled|navigated to)\b.{0,100}\b(not found|could not|unable|check|next step)/is.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
+      // Pattern 4: Made progress (completion words present) but stopped to ask permission.
+      // Safety net for cases where the passive-guard was bypassed (e.g. _isLegitCredentialRequest
+      // blocked it). Example: "I logged in to Netflix. Would you like me to cancel?" — just cancel!
+      // Unlike patterns 1-3, this fires EVEN WHEN completion words exist.
+      const _passiveWithProgress = _completionWords.test(cleanResponse) && _passivePatterns.test(cleanResponse);
 
-      if (_pageDescribeOnly || _givesInstructions || _gaveUp) {
-        const gateType = _pageDescribeOnly ? 'page-description only' : _gaveUp ? 'gave-up mid-task' : 'gives-instructions instead of acting';
+      if (_pageDescribeOnly || _givesInstructions || _gaveUp || _passiveWithProgress) {
+        const gateType = _pageDescribeOnly ? 'page-description only'
+          : _gaveUp ? 'gave-up mid-task'
+          : _passiveWithProgress ? 'passive-after-progress'
+          : 'gives-instructions instead of acting';
         console.log(`[QUALITY-GATE] Response is ${gateType} — upgrading to action-oriented`);
         try {
           const { quickValidate } = await import("./ai.js");
+          const _upgradePrompt = _passiveWithProgress
+            ? `Task: "${subject.substring(0, 200)}"\nCurrent response (INCOMPLETE — made progress then asked permission): "${cleanResponse.substring(0, 400)}"\n\nThe agent made progress but stopped to ask instead of completing. Rewrite to:\n1. Confirm what was actually accomplished (logged in, found the page, filled the form, etc.)\n2. Be honest — if you couldn't complete the final step (bot protection, extra verification), say so\n3. NEVER end with "would you like", "shall I", "want me to" — state what happened as facts\n4. If blocked at the last step: "I [action taken] but hit [obstacle]. Reply '[clear instruction]' to continue."\n5. 2-3 sentences max, past tense, first person`
+            : `Task: "${subject.substring(0, 200)}"\nCurrent response (FAILED — giving advice instead of DOING): "${cleanResponse.substring(0, 400)}"\n\nThis response gives instructions or links instead of COMPLETING the task. Rewrite it to:\n1. Confirm what was ACCOMPLISHED (navigated to the site, found the booking page, etc.)\n2. STATE you are NOW PROCEEDING to complete it (filling the form, clicking book, etc.)\n3. What you will report when done\nDo NOT give links or instructions. Do NOT say "you can visit" or "you can book". The AI DOES it, not tells the user to do it.\nKeep it 2-3 sentences. Active voice. First person (I navigated / I found / I am booking).`;
           const _upgraded = await quickValidate(
-            `Task: "${subject.substring(0, 200)}"\nCurrent response (FAILED — giving advice instead of DOING): "${cleanResponse.substring(0, 400)}"\n\nThis response gives instructions or links instead of COMPLETING the task. Rewrite it to:\n1. Confirm what was ACCOMPLISHED (navigated to the site, found the booking page, etc.)\n2. STATE you are NOW PROCEEDING to complete it (filling the form, clicking book, etc.)\n3. What you will report when done\nDo NOT give links or instructions. Do NOT say "you can visit" or "you can book". The AI DOES it, not tells the user to do it.\nKeep it 2-3 sentences. Active voice. First person (I navigated / I found / I am booking).`,
+            _upgradePrompt,
             'Rewrite as a first-person action statement. The AI is completing the task, not advising the user.'
           );
           if (_upgraded?.result && _upgraded.result.length > 20 && !_givesInstructions) {
@@ -5867,6 +5899,19 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           }
         } catch { /* keep original */ }
       }
+    }
+
+    // ── HALLUCINATION GUARD ──────────────────────────────────────────────────
+    // Detect when AI describes a design/creation WITHOUT actually doing it via browser.
+    // E.g. task: "Make business cards on Canva" → AI describes "The design features blue..."
+    // without ever navigating to Canva. Flag as fabrication and tell user to retry.
+    const _designOrCreateTask = /\b(canva|figma|adobe|crello|visme|snappa|business\s*cards?|design (me|a|some|your)|make.*design|create.*design|make.*business card)\b/i.test(subject + ' ' + (body || ''));
+    const _noBrowserUsed = visionAgentInvocations === 0 && !lastVisionFailed
+      && !actionResults.some(r => ['browse', 'click', 'fill', 'fill_form', 'submit', 'screenshot', 'screenshot_ocr'].includes(r.action.type));
+    const _fabricatedDesign = /\b(the design (features?|includes?|showcases?|has|consists?|incorporates?)|i (created?|designed?|made?) (a|an|the|your) (professional |custom |unique |beautiful |stunning )?(design|business card|logo|banner|card)|features? (a|an|professional|clean|modern|elegant|sleek|minimalist)|design (includes?|displays?|shows?|presents?))\b/i.test(cleanResponse);
+    if (_designOrCreateTask && _noBrowserUsed && _fabricatedDesign) {
+      console.log('[HALLUCINATION-GUARD] AI described a design without browser — flagging as incomplete');
+      cleanResponse = `I wasn't able to access the design tool to create this for you. The browser wasn't used, so no actual design was made — I described what it would look like instead, which isn't helpful. Please resend the task and I'll navigate directly to Canva (or similar) to build your design.`;
     }
 
     const successCount = actionResults.filter(r => r.success).length;
