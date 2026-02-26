@@ -2271,8 +2271,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       } catch { /* continue with browser attempt */ }
 
       if (!hasCredentials) {
-        console.log(`[CREDENTIAL-GATE] Task requires credentials for ${serviceDomain || 'service'} but none found — responding immediately`);
-        const credResponse = `I'd love to help you with that, but I need your login credentials first.\n\nPlease add your ${serviceDomain || 'account'} login to **Connected Apps** in your Aevoy settings (Settings → Agent Passwords), and then ask me again. I'll log in and handle it for you.\n\nAlternatively, you can share your username and password securely through the Agent Passwords section of your settings.`;
+        console.log(`[CREDENTIAL-GATE] Task requires credentials for ${serviceDomain || 'service'} but none found — asking user directly`);
+        // Extract service name from the task (e.g. "Cancel my Netflix" → "Netflix")
+        const serviceNameMatch = subject.match(/\b(netflix|hulu|spotify|disney\+?|amazon prime|apple (?:tv|music)|youtube premium|hbo|paramount\+?|peacock|crave|tidal|deezer|pandora|crunchyroll|twitch|patreon|dropbox|adobe|microsoft 365|office 365)\b/i);
+        const serviceName = serviceNameMatch?.[1] || (serviceDomain ? serviceDomain.replace('.com', '').replace('.ca', '') : 'the service');
+        // Ask the user to REPLY with their credentials — never send them to Settings
+        const credResponse = `To ${taskTextLower.includes('cancel') ? 'cancel your' : 'manage your'} ${serviceName} ${taskTextLower.includes('subscription') ? 'subscription' : 'account'}, I need your login credentials.\n\nReply with your ${serviceName} email address and password and I'll log in and handle it immediately.`;
 
         await getSupabaseClient().from("tasks").update({
           status: "completed",
