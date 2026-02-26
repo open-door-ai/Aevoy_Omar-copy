@@ -2059,7 +2059,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // but ALWAYS keep search actions since they're lightweight and essential.
     const BROWSER_ACTION_TYPES = ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
     const HEAVY_BROWSER_TYPES = ['fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'];
-    if (!classification.needsBrowser && aiResponse.actions.some(a => HEAVY_BROWSER_TYPES.includes(a.type))) {
+
+    // GENERATION TASK ACTION STRIP: For writing/generation tasks, the AI should produce content
+    // directly in its text response. Strip ALL search/browse actions so the text IS the output.
+    // The AI tends to search for examples/templates instead of just writing the content itself.
+    if (_isWritingTask && aiResponse.actions.some(a => ['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type))) {
+      // Keep only non-browser actions (send_email, remember, generate_image, etc.)
+      const nonBrowserActions = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type));
+      const stripped = aiResponse.actions.length - nonBrowserActions.length;
+      console.log(`[GENERATION-STRIP] Writing task — stripped ${stripped} search/browse actions so AI text response is the output`);
+      aiResponse.actions = nonBrowserActions;
+    } else if (!classification.needsBrowser && aiResponse.actions.some(a => HEAVY_BROWSER_TYPES.includes(a.type))) {
       const before = aiResponse.actions.length;
       // Keep search and browse actions — they're lightweight and critical for quality
       aiResponse.actions = aiResponse.actions.filter(a => !HEAVY_BROWSER_TYPES.includes(a.type));
