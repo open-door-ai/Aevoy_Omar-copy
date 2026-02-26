@@ -682,13 +682,21 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     // instead of ACTUALLY doing the action. Browser tasks must bypass it entirely.
     const directBrowserTaskText = `${subject} ${body || ''}`;
     const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon))\b/i.test(directBrowserTaskText);
-    if (isDirectBrowserTask) {
-      console.log(`[BROWSER-BYPASS] Direct browser execution task — skipping autonomous planning, going to vision agent`);
+
+    // GENERATION BYPASS: Writing/coding/generation tasks must also skip autonomous planning.
+    // Autonomous planning decomposes "write me HTML" into research sub-tasks which never generate code.
+    // These tasks should go straight to the main AI pipeline with the 'generate' model chain.
+    const isDirectGenerationTask = /\b(write me|create me|make me|build me|generate me|give me|show me|produce|draft me|compose me)\b.{0,60}\b(html|css|javascript|python|code|script|function|poem|essay|story|email template|letter|website|webpage|portfolio|landing page|api|program|app)\b/i.test(directBrowserTaskText) ||
+      /\b(write (a|an|the|me a|me an|me the)|create (a|an|the)|draft (a|an|the)|generate (a|an|the)|code (a|an|the)|build (a|an|the))\b.{0,40}\b(website|webpage|html|css|javascript|python|function|script|program|poem|story|email|letter|essay|app|api|portfolio)\b/i.test(directBrowserTaskText) ||
+      /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText);
+
+    if (isDirectBrowserTask || isDirectGenerationTask) {
+      console.log(`[BYPASS] ${isDirectGenerationTask ? 'Generation' : 'Browser'} task — skipping autonomous planning`);
     }
 
     // AUTONOMOUS WORKFLOW DETECTION: Check if this requires AGI-level planning
-    // Browser execution tasks are excluded — they use the vision agent directly.
-    if (!isDirectBrowserTask && await requiresAutonomousPlanning(subject, body)) {
+    // Browser execution tasks and generation tasks are excluded — they use direct processing.
+    if (!isDirectBrowserTask && !isDirectGenerationTask && await requiresAutonomousPlanning(subject, body)) {
       console.log(`[AUTONOMOUS] Task requires autonomous workflow planning`);
       return handleAutonomousWorkflow({
         userId,
