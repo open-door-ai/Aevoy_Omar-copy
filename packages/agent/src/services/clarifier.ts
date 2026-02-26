@@ -22,6 +22,10 @@ export interface UserSettings {
   monitoringIntervalMs: number;
   maxTaskIterations: number;
   taskBudgetCents: number;
+  // Full Send Mode — autonomous email management
+  fullSendMode: boolean;
+  fullSendAutoReply: boolean;
+  fullSendDraftThreshold: 'all' | 'medium' | 'high';
 }
 
 export interface StructuredIntent {
@@ -49,7 +53,11 @@ const DEFAULT_SETTINGS: UserSettings = {
   clarificationTimeoutMs: 1200000, // 20 minutes
   monitoringIntervalMs: 900000,    // 15 minutes
   maxTaskIterations: 15,
-  taskBudgetCents: 500             // $5
+  taskBudgetCents: 500,            // $5
+  // Full Send Mode defaults — off by default, opt-in
+  fullSendMode: false,
+  fullSendAutoReply: true,
+  fullSendDraftThreshold: 'medium',
 };
 
 /**
@@ -77,7 +85,11 @@ export async function getUserSettings(userId: string): Promise<UserSettings> {
       clarificationTimeoutMs: data.clarification_timeout_ms || 1200000,
       monitoringIntervalMs: data.monitoring_interval_ms || 900000,
       maxTaskIterations: data.max_task_iterations || 15,
-      taskBudgetCents: data.task_budget_cents || 500
+      taskBudgetCents: data.task_budget_cents || 500,
+      // Full Send Mode
+      fullSendMode: data.full_send_mode || false,
+      fullSendAutoReply: data.full_send_auto_reply !== false, // default true
+      fullSendDraftThreshold: (data.full_send_draft_threshold as 'all' | 'medium' | 'high') || 'medium',
     };
   } catch {
     return DEFAULT_SETTINGS;

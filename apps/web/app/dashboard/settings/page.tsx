@@ -47,6 +47,10 @@ interface UserSettings {
   iterative_deepening?: boolean;
   monthly_budget?: number;
   report_frequency?: string;
+  // Full Send Mode — autonomous email management
+  full_send_mode?: boolean;
+  full_send_auto_reply?: boolean;
+  full_send_draft_threshold?: "all" | "medium" | "high";
 }
 
 interface AgentCard {
@@ -87,6 +91,11 @@ export default function SettingsPage() {
 
   // Report frequency
   const [reportFrequency, setReportFrequency] = useState<string>("weekly");
+
+  // Full Send Mode state
+  const [fullSendMode, setFullSendMode] = useState(false);
+  const [fullSendAutoReply, setFullSendAutoReply] = useState(true);
+  const [fullSendDraftThreshold, setFullSendDraftThreshold] = useState<"all" | "medium" | "high">("medium");
 
   // Phone provisioning state
   const [phone, setPhone] = useState<string | null>(null);
@@ -196,6 +205,9 @@ export default function SettingsPage() {
           setProactiveLimit(data.proactive_daily_limit ?? 10);
           setProactiveChannel(data.proactive_channel ?? "sms");
           setReportFrequency(data.report_frequency ?? "weekly");
+          setFullSendMode(data.full_send_mode ?? false);
+          setFullSendAutoReply(data.full_send_auto_reply ?? true);
+          setFullSendDraftThreshold(data.full_send_draft_threshold ?? "medium");
         }
       } catch (error) {
         console.error("Failed to load settings:", error);
@@ -421,6 +433,9 @@ export default function SettingsPage() {
           proactive_daily_limit: proactiveLimit,
           proactive_channel: proactiveChannel,
           report_frequency: reportFrequency,
+          full_send_mode: fullSendMode,
+          full_send_auto_reply: fullSendAutoReply,
+          full_send_draft_threshold: fullSendDraftThreshold,
         }),
       });
 
@@ -1291,6 +1306,86 @@ export default function SettingsPage() {
                   <p className="text-sm text-muted-foreground">Your agent gets an anonymous identity (e.g. Aevoy-7K2) and can vent about dark patterns it encounters</p>
                 </div>
               </label>
+            </div>
+
+            {/* Full Send Mode */}
+            <div className="space-y-3 border-t pt-6">
+              <div className="flex items-center gap-2">
+                <Label className="font-semibold text-base">Full Send Mode</Label>
+                {fullSendMode && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">Active</span>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Your AI automatically manages all incoming emails by priority — no more inbox noise. Newsletters and spam are silently filtered. Low-priority emails get a quick acknowledgement. Important emails get a full reply and you&apos;re notified via SMS.
+              </p>
+              <label className="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={fullSendMode}
+                  onChange={(e) => setFullSendMode(e.target.checked)}
+                  className="mt-1 w-4 h-4 rounded"
+                />
+                <div>
+                  <p className="font-medium">Enable Full Send Mode</p>
+                  <p className="text-sm text-muted-foreground">Let your AI handle incoming email autonomously based on priority</p>
+                </div>
+              </label>
+
+              {fullSendMode && (
+                <div className="space-y-4 pl-1">
+                  {/* Auto-reply toggle */}
+                  <label className="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={fullSendAutoReply}
+                      onChange={(e) => setFullSendAutoReply(e.target.checked)}
+                      className="mt-1 w-4 h-4 rounded"
+                    />
+                    <div>
+                      <p className="font-medium">Auto-send replies</p>
+                      <p className="text-sm text-muted-foreground">AI drafts and sends replies automatically (not just saves drafts)</p>
+                    </div>
+                  </label>
+
+                  {/* Reply threshold */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Reply threshold</Label>
+                    <p className="text-xs text-muted-foreground">Which emails should get a full AI-written reply?</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { value: "all", label: "All emails", desc: "Every email gets a reply" },
+                        { value: "medium", label: "Medium+", desc: "Personal & urgent emails (recommended)" },
+                        { value: "high", label: "High priority only", desc: "Only flagged urgent or action-required" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setFullSendDraftThreshold(opt.value as "all" | "medium" | "high")}
+                          className={`p-3 rounded-lg border text-left transition-colors ${
+                            fullSendDraftThreshold === opt.value
+                              ? "border-primary bg-primary/10"
+                              : "border-border hover:bg-muted/50"
+                          }`}
+                        >
+                          <p className="font-medium text-sm">{opt.label}</p>
+                          <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Priority breakdown */}
+                  <div className="bg-muted/30 p-3 rounded-lg border text-xs space-y-1.5">
+                    <p className="font-semibold text-sm mb-2">How emails are handled:</p>
+                    <div className="flex items-start gap-2"><span className="text-red-500 font-bold w-20 shrink-0">Spam</span><span className="text-muted-foreground">Silently filtered — no reply, no task created</span></div>
+                    <div className="flex items-start gap-2"><span className="text-orange-500 font-bold w-20 shrink-0">Newsletter</span><span className="text-muted-foreground">Silently filtered — no reply, no task created</span></div>
+                    <div className="flex items-start gap-2"><span className="text-yellow-600 font-bold w-20 shrink-0">Notification</span><span className="text-muted-foreground">Brief &quot;Got it&quot; acknowledgement sent, logged to activity</span></div>
+                    <div className="flex items-start gap-2"><span className="text-blue-500 font-bold w-20 shrink-0">Medium</span><span className="text-muted-foreground">Full reply drafted and sent (if threshold allows)</span></div>
+                    <div className="flex items-start gap-2"><span className="text-purple-600 font-bold w-20 shrink-0">High/Urgent</span><span className="text-muted-foreground">Full reply sent + you get an SMS alert immediately</span></div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Hive Mind Learning Uploads */}

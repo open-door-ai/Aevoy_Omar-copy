@@ -45,6 +45,9 @@ export async function GET() {
     dashboard_tour_seen: false,
     report_frequency: "weekly",
     health_disclaimer_acknowledged: false,
+    full_send_mode: false,
+    full_send_auto_reply: true,
+    full_send_draft_threshold: "medium",
   };
 
   return NextResponse.json(response);
@@ -142,6 +145,17 @@ export async function PUT(request: Request) {
       updatePayload.proactive_channel = body.proactive_channel;
     }
     if (body.proactive_enabled !== undefined) updatePayload.proactive_enabled = body.proactive_enabled;
+
+    // Full Send Mode
+    if (body.full_send_mode !== undefined) updatePayload.full_send_mode = !!body.full_send_mode;
+    if (body.full_send_auto_reply !== undefined) updatePayload.full_send_auto_reply = !!body.full_send_auto_reply;
+    if (body.full_send_draft_threshold !== undefined) {
+      const validThresholds = ["all", "medium", "high"];
+      if (!validThresholds.includes(body.full_send_draft_threshold)) {
+        return NextResponse.json({ error: "Invalid full_send_draft_threshold" }, { status: 400 });
+      }
+      updatePayload.full_send_draft_threshold = body.full_send_draft_threshold;
+    }
 
     // Upsert settings
     const { data, error } = await supabase

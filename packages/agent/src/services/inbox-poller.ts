@@ -403,6 +403,155 @@ async function sendPinReply(toEmail: string, username: string, originalSubject: 
 }
 
 // ---------------------------------------------------------------------------
+// Full Send Mode — email priority categorization
+// ---------------------------------------------------------------------------
+
+export type EmailPriority = 'spam' | 'newsletter' | 'notification' | 'low' | 'medium' | 'high' | 'urgent';
+
+/**
+ * Use Groq (fast, cheap) to classify an incoming email by priority.
+ * Returns one of: spam | newsletter | notification | low | medium | high | urgent
+ */
+async function categorizePriority(
+  from: string,
+  subject: string,
+  body: string
+): Promise<EmailPriority> {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) {
+    // No Groq key — default to medium so nothing is silently dropped
+    return 'medium';
+  }
+
+  try {
+    const OpenAI = (await import("openai")).default;
+    const groq = new OpenAI({
+      apiKey: groqKey,
+      baseURL: "https://api.groq.com/openai/v1",
+    });
+
+    const snippet = body.substring(0, 600);
+    const prompt = `Classify this email by priority. Reply with EXACTLY one word from: spam, newsletter, notification, low, medium, high, urgent
+
+From: ${from}
+Subject: ${subject}
+Body (first 600 chars): ${snippet}
+
+Rules:
+- spam: unsolicited ads, phishing, junk mail
+- newsletter: subscribed newsletters, marketing blasts, digest emails
+- notification: automated system notifications (GitHub, Stripe, bank alerts, order confirmations)
+- low: casual FYI emails, mailing list, social notifications
+- medium: regular personal emails, general business correspondence, replies that don't require immediate action
+- high: emails from known contacts requesting action, meetings, deadlines
+- urgent: time-sensitive (today/ASAP), emergency, flagged urgent by sender, critical alerts requiring immediate response
+
+Reply with one word only:`;
+
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant', // Fast, cheap 8B model
+      messages: [
+        { role: 'system', content: 'You are an email classifier. Reply with exactly one word.' },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 10,
+      temperature: 0,
+    });
+
+    const raw = response.choices[0]?.message?.content?.trim().toLowerCase() || 'medium';
+    const valid: EmailPriority[] = ['spam', 'newsletter', 'notification', 'low', 'medium', 'high', 'urgent'];
+    const priority = valid.find(p => raw.startsWith(p)) || 'medium';
+    console.log(`[FULL-SEND] categorizePriority from="${from}" subject="${subject.substring(0, 60)}" → ${priority}`);
+    return priority;
+  } catch (err) {
+    console.error('[FULL-SEND] categorizePriority error:', err);
+    return 'medium'; // Safe default — don't silently drop
+  }
+}
+
+/**
+ * Send an auto-reply from the user's @aevoy.com address (Full Send Mode).
+ * Keeps the tone natural and brief — not robotic.
+ */
+async function sendAutoReply(
+  toEmail: string,
+  fromUsername: string,
+  originalSubject: string,
+  replyBody: string
+): Promise<void> {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) return;
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: `${fromUsername}@aevoy.com`,
+        to: toEmail,
+        subject: originalSubject.startsWith("Re:") ? originalSubject : `Re: ${originalSubject}`,
+        text: `${replyBody}\n\n— ${fromUsername}'s AI assistant`,
+      }),
+    });
+    console.log(`[FULL-SEND] Auto-reply sent to ${maskEmail(toEmail)}`);
+  } catch (err) {
+    console.error("[FULL-SEND] Auto-reply failed:", err);
+  }
+}
+
+/**
+ * Generate a natural-sounding auto-reply using Groq given email context.
+ * Falls back to a generic acknowledgement if AI is unavailable.
+ */
+async function generateAutoReplyText(
+  subject: string,
+  body: string,
+  priority: EmailPriority,
+  senderName: string
+): Promise<string> {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) {
+    return "Got it — thanks for reaching out. I'll pass this along.";
+  }
+
+  try {
+    const OpenAI = (await import("openai")).default;
+    const groq = new OpenAI({
+      apiKey: groqKey,
+      baseURL: "https://api.groq.com/openai/v1",
+    });
+
+    const toneGuide =
+      priority === 'notification' || priority === 'low'
+        ? 'Write a brief, casual 1-sentence acknowledgement (e.g. "Got it, thanks!" or "Noted, cheers!").'
+        : 'Write a friendly 2-3 sentence reply that acknowledges the email and addresses its main point concisely.';
+
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.1-8b-instant',
+      messages: [
+        {
+          role: 'system',
+          content: `You are an AI email assistant writing on behalf of a user. ${toneGuide} Be natural, not robotic. No sign-off needed (it is added separately). Reply only with the email body text.`,
+        },
+        {
+          role: 'user',
+          content: `Email subject: ${subject}\nEmail body:\n${body.substring(0, 800)}\nSender: ${senderName}`,
+        },
+      ],
+      max_tokens: 150,
+      temperature: 0.7,
+    });
+
+    return response.choices[0]?.message?.content?.trim() || "Got it — thanks!";
+  } catch {
+    return "Got it — thanks for reaching out.";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Route email to the correct processor
 // ---------------------------------------------------------------------------
 
@@ -591,6 +740,133 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     email.subject = email.subject.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || email.subject;
     email.body = email.body.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || email.body;
     console.log(`[INBOX-POLLER] PIN verified for ${maskEmail(senderEmail)} → ${username}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // FULL SEND MODE: Autonomously handle incoming email by priority
+  // Only applies to new incoming emails — NOT confirmation/verification replies
+  // ---------------------------------------------------------------------------
+  const { data: fsUserSettings } = await getSupabaseClient()
+    .from("user_settings")
+    .select("full_send_mode, full_send_auto_reply, full_send_draft_threshold")
+    .eq("user_id", user.id)
+    .single();
+
+  const fullSendEnabled = fsUserSettings?.full_send_mode === true;
+
+  if (fullSendEnabled) {
+    // Only apply full send mode to genuine new emails (not replies/confirmations)
+    const isLikelyReply =
+      email.subject.toLowerCase().includes("confirm:") ||
+      email.subject.toLowerCase().includes("verification code") ||
+      email.subject.toLowerCase().includes("plan approval:") ||
+      /Task ID:\s*[a-f0-9-]+/i.test(email.body);
+
+    if (!isLikelyReply) {
+      const priority = await categorizePriority(email.from, email.subject, email.body);
+      const autoReplyEnabled = fsUserSettings?.full_send_auto_reply !== false;
+      const threshold = (fsUserSettings?.full_send_draft_threshold as 'all' | 'medium' | 'high') || 'medium';
+
+      const senderDisplayName = email.from.split('@')[0] || 'there';
+
+      // spam / newsletter: silently skip — no task, no reply
+      if (priority === 'spam' || priority === 'newsletter') {
+        console.log(`[FULL-SEND] Dropping ${priority} email from ${maskEmail(email.from)} — subject: "${email.subject.substring(0, 60)}"`);
+        return; // skip processing entirely
+      }
+
+      // notification / low: auto-reply with brief acknowledgement + mark handled
+      if (priority === 'notification' || priority === 'low') {
+        if (autoReplyEnabled) {
+          const replyText = await generateAutoReplyText(email.subject, email.body, priority, senderDisplayName);
+          await sendAutoReply(email.from, username, email.subject, replyText);
+        }
+        // Log as a handled task in DB so user can see it in activity
+        await getSupabaseClient().from("tasks").insert({
+          user_id: user.id,
+          subject: `[Auto-handled] ${email.subject.substring(0, 200)}`,
+          body: `From: ${email.from}\n\nPriority: ${priority}\n\n${email.body.substring(0, 500)}`,
+          input_channel: "email",
+          status: "completed",
+          response_text: `Auto-handled: ${priority} priority email from ${email.from}. ${autoReplyEnabled ? "Brief acknowledgement sent." : "No reply sent (auto-reply disabled)."}`,
+          completed_at: new Date().toISOString(),
+          action_count: autoReplyEnabled ? 1 : 0,
+        });
+        console.log(`[FULL-SEND] ${priority} email auto-handled (reply=${autoReplyEnabled}) from ${maskEmail(email.from)}`);
+        return;
+      }
+
+      // medium: draft + send reply autonomously (if threshold allows)
+      const shouldAutoReplyMedium = threshold === 'all' || threshold === 'medium';
+      if (priority === 'medium' && shouldAutoReplyMedium) {
+        if (autoReplyEnabled) {
+          const replyText = await generateAutoReplyText(email.subject, email.body, priority, senderDisplayName);
+          await sendAutoReply(email.from, username, email.subject, replyText);
+          // Log task
+          await getSupabaseClient().from("tasks").insert({
+            user_id: user.id,
+            subject: `[Full Send] ${email.subject.substring(0, 200)}`,
+            body: `From: ${email.from}\n\nPriority: medium\n\n${email.body.substring(0, 500)}`,
+            input_channel: "email",
+            status: "completed",
+            response_text: `Full Send Mode: medium-priority email from ${email.from} — reply drafted and sent automatically.`,
+            completed_at: new Date().toISOString(),
+            action_count: 1,
+          });
+          console.log(`[FULL-SEND] medium email auto-replied to ${maskEmail(email.from)}`);
+          return;
+        }
+        // auto-reply off but medium threshold — fall through to normal processing
+      }
+
+      // high / urgent: reply AND notify user via SMS
+      if (priority === 'high' || priority === 'urgent') {
+        const shouldAutoReplyHigh = threshold === 'all' || threshold === 'medium' || threshold === 'high';
+        if (autoReplyEnabled && shouldAutoReplyHigh) {
+          const replyText = await generateAutoReplyText(email.subject, email.body, priority, senderDisplayName);
+          await sendAutoReply(email.from, username, email.subject, replyText);
+        }
+
+        // Notify user via SMS if they have a phone number
+        try {
+          const { data: userProfile } = await getSupabaseClient()
+            .from("profiles")
+            .select("phone_number")
+            .eq("id", user.id)
+            .single();
+
+          if (userProfile?.phone_number) {
+            const { sendSms } = await import("./twilio.js");
+            const urgentLabel = priority === 'urgent' ? 'URGENT' : 'High-priority';
+            await sendSms({
+              userId: user.id,
+              to: userProfile.phone_number,
+              body: `[Aevoy] ${urgentLabel} email from ${email.from}: "${email.subject.substring(0, 80)}" — replied on your behalf. Check your inbox.`,
+            });
+            console.log(`[FULL-SEND] SMS alert sent for ${priority} email`);
+          }
+        } catch (smsErr) {
+          console.error("[FULL-SEND] SMS notification failed:", smsErr);
+        }
+
+        // Also create a task so the user can see it in activity
+        await getSupabaseClient().from("tasks").insert({
+          user_id: user.id,
+          subject: `[Full Send - ${priority.toUpperCase()}] ${email.subject.substring(0, 200)}`,
+          body: `From: ${email.from}\n\nPriority: ${priority}\n\n${email.body.substring(0, 500)}`,
+          input_channel: "email",
+          status: "needs_review",
+          response_text: `Full Send Mode: ${priority} priority email from ${email.from}. ${autoReplyEnabled && shouldAutoReplyHigh ? "Reply sent automatically. " : ""}User notified via SMS.`,
+          completed_at: new Date().toISOString(),
+          action_count: (autoReplyEnabled && shouldAutoReplyHigh ? 1 : 0) + 1,
+        });
+        console.log(`[FULL-SEND] ${priority} email handled — reply sent + user notified`);
+        return;
+      }
+
+      // If we get here, threshold excluded this priority level → fall through to normal processing
+      console.log(`[FULL-SEND] priority=${priority} below threshold="${threshold}" — routing to normal processor`);
+    }
   }
 
   // Detect email type and route
