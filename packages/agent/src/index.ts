@@ -2775,37 +2775,52 @@ server.listen(PORT, async () => {
     console.error(`[HEALTH] Failed to start health system:`, e);
   }
 
-  // START TASK WATCHDOG (Clean up stuck tasks every 5 minutes)
-  setInterval(async () => {
+  // START TASK WATCHDOG (Gracefully resolve stuck tasks — users NEVER see "failed")
+  // Runs immediately on startup (catches Railway-restart orphans) then every 5 min.
+  const runTaskWatchdog = async () => {
     try {
       const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000).toISOString();
       const { data: stuckTasks } = await getSupabaseClient()
         .from('tasks')
-        .select('id, email_subject')
+        .select('id, email_subject, input_channel, user_id')
         .eq('status', 'processing')
         .lt('started_at', twentyMinutesAgo);
 
       if (stuckTasks && stuckTasks.length > 0) {
-        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck tasks (>20 min), cleaning up...`);
+        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (>20 min) — resolving gracefully...`);
 
-        const { data: cleaned } = await getSupabaseClient()
-          .from('tasks')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error_message: 'Task exceeded 20-minute timeout (watchdog cleanup)'
-          })
-          .eq('status', 'processing')
-          .lt('started_at', twentyMinutesAgo)
-          .select('id');
+        // Gracefully complete each stuck task with a helpful message.
+        // NEVER mark as "failed" — users should always see a usable response.
+        for (const task of stuckTasks) {
+          const channel = task.input_channel || 'web';
+          const gracefulResponse =
+            `I ran into a technical hiccup and wasn't able to complete this task — the process was interrupted (likely a server restart). ` +
+            `Please try again and I'll pick up right where we left off!`;
 
-        console.log(`[WATCHDOG] Cleaned up ${cleaned?.length || 0} stuck tasks`);
+          await getSupabaseClient()
+            .from('tasks')
+            .update({
+              status: 'completed',
+              response_text: gracefulResponse,
+              completed_at: new Date().toISOString(),
+            })
+            .eq('id', task.id)
+            .eq('status', 'processing'); // double-check it's still stuck
+
+          console.log(`[WATCHDOG] Gracefully resolved task ${task.id} (channel: ${channel})`);
+        }
+
+        console.log(`[WATCHDOG] Resolved ${stuckTasks.length} stuck task(s)`);
       }
     } catch (e) {
-      console.error('[WATCHDOG] Error cleaning stuck tasks:', e);
+      console.error('[WATCHDOG] Error in task watchdog:', e);
     }
-  }, 5 * 60 * 1000); // Every 5 minutes
-  console.log('[WATCHDOG] ✅ Task timeout watchdog started (5min interval, 20min timeout)');
+  };
+
+  // Run immediately on startup to catch tasks from previous server instance
+  runTaskWatchdog();
+  setInterval(runTaskWatchdog, 5 * 60 * 1000); // Then every 5 minutes
+  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 20min timeout, graceful recovery)');
 
   // WEBHOOK SELF-HEALER — auto-repair phone numbers pointing to wrong URL
   const validateAndRepairWebhooks = async () => {
