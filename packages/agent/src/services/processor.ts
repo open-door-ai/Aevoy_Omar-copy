@@ -2797,6 +2797,47 @@ DO NOT just give me the address again. COMPLETE THE BOOKING.`;
             }
             // Continue to action execution
 
+          // SIGNUP INFO GATE: If task is "sign up" and AI gave page URL without signing up → force signup
+          const isSignupInfoTask = /\b(sign.?up|signup|register|create.*account|make.*account|join)\b/i.test(taskTextLower);
+          const hasSignupConfirmation = /\b(signed up|created.*account|account.*created|registration.*complete|successfully.*registered|logged in|welcome.*to|verify.*email)\b/i.test(lowerContent);
+          const isSignupJustInfo = isSignupInfoTask && !hasSignupConfirmation && !hasRealActions &&
+            /\b(page is accessible|page.*available|registration.*available|sign.?up.*page|accessible at https?:|available at https?:)\b/i.test(lowerContent);
+
+          if (isSignupInfoTask && isSignupJustInfo && currentIteration <= 3) {
+            console.warn(`[SIGNUP-INFO-GATE] REJECTED: AI gave signup page URL without signing up. Forcing signup.`);
+            aiResponse.content = '';
+            aiResponse.actions = [];
+            const forceSignupPrompt = `Original request: ${subject} ${body}
+
+YOU DID NOT COMPLETE THE SIGNUP. You just returned the signup page URL.
+The user asked you to SIGN THEM UP — you must ACTUALLY CREATE THE ACCOUNT.
+
+DO THIS NOW:
+1. Navigate to the signup page
+2. Look for "Continue with Google" button — click it FIRST (OAuth is most reliable)
+3. If no Google button: fill email="${username}@aevoy.com", fill password, fill name="${senderName || username}"
+4. Click Submit / Create Account
+5. Handle any email verification (the system auto-fills verification codes)
+6. Report: "Signed up for [service] using [method]. Account is ready."
+
+DO NOT give me the URL again. CREATE THE ACCOUNT NOW.`;
+
+            const forcedSignup = await generateResponse(
+              memory, subject, forceSignupPrompt, username, "complex", userId, taskId, senderName
+            );
+            totalAiCost += forcedSignup.cost || 0;
+            totalTokens += forcedSignup.tokensUsed || 0;
+            aiResponse = forcedSignup;
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+            console.log(`[SIGNUP-INFO-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
+            if (aiResponse.actions.length === 0) {
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Continue to action execution
+          }
+
           // (Signup gate now runs independently above, before the !hasRealActions check)
 
           // LAZY DATA GATE: AI says "check the website" or "prices fluctuate" for a data lookup task
@@ -5563,7 +5604,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     if (_isBrowserActionTask && !signupAutoCompleted && cleanResponse && cleanResponse.length > 20) {
       const _completionWords = /\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created|reservation made|subscription cancelled|reserved|called|emailed|sent|purchased|ordered)\b/i;
       // Pattern 1: "the page is open/accessible" — describes state without acting
-      const _pageDescribeOnly = /\b(the (?:page|site|website|signup page|login page|form) is (?:open|accessible|available|loaded|visible|now showing|currently showing)|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button))\b/i.test(cleanResponse)
+      // Catches: "the signup page is accessible", "Etsy's sign-up page is accessible", "the site is available"
+      const _pageDescribeOnly = /\b((?:the|[a-z']+s) (?:page|site|website|signup\s*page|sign-up\s*page|registration\s*(?:page|site)|login\s*page|form|portal) (?:is|are) (?:also )?(?:open|accessible|available|loaded|visible|now showing|currently showing|found (?:at|on))|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button)|(?:page|site|form) (?:is )?accessible at https?:)\b/i.test(cleanResponse)
         && !_completionWords.test(cleanResponse);
       // Pattern 2: "here are the findings/steps" — gives instructions instead of doing it
       // Catches: "here are the findings", "here's how to", "you can book at", "direct links:"
