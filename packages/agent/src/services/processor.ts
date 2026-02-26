@@ -2374,6 +2374,31 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       break; // Only fix the first matching pattern
     }
 
+    // 6b2. BROWSER TASK BROWSE INJECTION: If the task is a known browser task (Canva, Notion,
+    // signup, booking, etc.) but the AI produced 0 browser actions (typically because
+    // cleanResponseForEmail stripped the "I'll navigate to..." planning text), inject a
+    // search or browse action so the task doesn't fall through to the generic fallback.
+    const _browseInjText = `${subject} ${body || ''}`;
+    const _needsBrowseInject = /\b(canva|figma|adobe|visme|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|card)|sign\s*up|signup|register\s+(for|on|at)|book\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub))\b/i.test(_browseInjText);
+    const _hasBrowseInAction = aiResponse.actions.some(a => ['browse', 'search', 'navigate', 'screenshot'].includes(a.type));
+    if (_needsBrowseInject && !_hasBrowseInAction && aiResponse.actions.length === 0) {
+      // Map well-known services to direct URLs; fall back to search for others
+      let _injectUrl = '';
+      if (/\bcanva\b/i.test(_browseInjText)) _injectUrl = 'https://www.canva.com/create/business-cards/';
+      else if (/\bfigma\b/i.test(_browseInjText)) _injectUrl = 'https://www.figma.com';
+      else if (/\bnotion\b/i.test(_browseInjText)) _injectUrl = 'https://www.notion.so/signup';
+      else if (/\buber\b/i.test(_browseInjText)) _injectUrl = 'https://www.uber.com/ride/';
+      else if (/\blyft\b/i.test(_browseInjText)) _injectUrl = 'https://www.lyft.com';
+      else if (/\bdoordash\b/i.test(_browseInjText)) _injectUrl = 'https://www.doordash.com';
+      else if (/\bgrubhub\b/i.test(_browseInjText)) _injectUrl = 'https://www.grubhub.com';
+      const _injectAction = _injectUrl
+        ? { type: 'browse' as any, params: { url: _injectUrl } }
+        : { type: 'search' as any, params: { query: subject.substring(0, 100) } };
+      aiResponse.actions = [_injectAction];
+      aiResponse.content = (aiResponse.content || '') + `\nNavigating to complete the task.`;
+      console.log(`[BROWSE-INJECT] Browser task with 0 actions — injected ${_injectUrl ? `browse(${_injectUrl})` : `search("${subject.substring(0, 60)}")`}`);
+    }
+
     // 6c. CREDENTIAL-DEPENDENT TASK EARLY EXIT: If the task requires logging into a service
     // (cancel subscription, manage account) and we don't have stored credentials, respond
     // immediately instead of wasting 5+ minutes on doomed browser attempts.
@@ -5795,7 +5820,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
-    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login)\b/i.test(subject + ' ' + (body || ''));
+    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card))\b/i.test(subject + ' ' + (body || ''));
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
