@@ -3945,14 +3945,22 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               resultMsg = `Attempted signup on ${postUrl} using ${autoEmail}. Email ${autoEmailFilled ? 'filled' : 'not found'}, password ${autoPasswordFilled ? 'filled' : 'not found'}. Check the page for any errors or next steps.`;
             }
 
-            // Only complete task if we actually filled the email — otherwise let AI iterate
-            if (autoEmailFilled) {
+            // Only complete task if BOTH email AND password were filled (or success indicators)
+            // If email filled but password not found: it's a multi-step form (Twitter, Atlassian, etc.)
+            // Fall through to vision agent which will handle the remaining steps visually
+            if (autoEmailFilled && (autoPasswordFilled || signupSuccess)) {
               aiResponse.content = resultMsg;
               isTaskComplete = true;
               aiSignaledComplete = true;
               signupAutoCompleted = true; // Protect this response from quality gate + verification overwrite
               console.log(`[SIGNUP-AUTO] Complete: ${resultMsg.substring(0, 100)}`);
               break;
+            } else if (autoEmailFilled && !autoPasswordFilled) {
+              // Multi-step form: email on page 1, password on page 2+
+              // Don't complete — let vision agent take over from current page state
+              console.log(`[SIGNUP-AUTO] Email filled but no password field found — falling through to vision agent for multi-step handling`);
+              aiResponse.content = `Reached signup page and filled email. The form has multiple steps — continuing...`;
+              // isTaskComplete stays false → vision agent fires at line ~3975
             } else {
               console.log(`[SIGNUP-AUTO] Email not filled — letting AI continue iterating`);
             }
