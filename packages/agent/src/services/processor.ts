@@ -3836,7 +3836,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           } catch { visionPassword = 'AevoyAgent2026!'; }
           const visionEmail = `${username}@aevoy.com`;
           const visionName = senderName || username;
-          const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Complete the task fully on the page.`;
+          // Inject Hive Mind learnings into vision agent task — agent starts with knowledge of what worked/failed for this domain
+          const visionLearnings = learningsHint ? `\n\nHIVE MIND INTELLIGENCE (from past tasks on this site):\n${learningsHint.substring(0, 600)}` : '';
+          const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Complete the task fully on the page.${visionLearnings}`;
 
           visionAgentInvocations++;
           console.log(`[VISION-AGENT] Starting (invocation ${visionAgentInvocations}/2) on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);
@@ -3876,11 +3878,39 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               aiSignaledComplete = true;
               signupAutoCompleted = true; // Protect from quality gates
               console.log(`[VISION-AGENT] Complete: ${aiResponse.content.substring(0, 100)}`);
+              // Record SUCCESS to Hive Mind — future tasks on this domain start with this knowledge
+              try {
+                const successDomain = new URL(visionPageUrl).hostname.replace('www.', '');
+                void getSupabaseClient().from('learnings').upsert({
+                  service: successDomain,
+                  task_type: classification.taskType || 'browser',
+                  title: `${successDomain}: ${subject.substring(0, 80)}`,
+                  steps: ['Browser automation succeeded', `Completed in ${visionResult.steps} steps`],
+                  gotchas: [],
+                  success_rate: 100,
+                  times_used: 1,
+                  updated_at: new Date().toISOString(),
+                }, { onConflict: 'service,task_type' });
+              } catch { /* non-critical */ }
               break;
             } else {
               const errMsg = visionResult.error || 'Unknown error';
               console.log(`[VISION-AGENT] Failed: ${errMsg} — injecting failure context into AI iteration`);
               lastVisionFailed = true;
+              // Record failure to Hive Mind so future tasks on this domain start smarter
+              try {
+                const failDomain = new URL(visionPageUrl).hostname.replace('www.', '');
+                void getSupabaseClient().from('learnings').upsert({
+                  service: failDomain,
+                  task_type: classification.taskType || 'browser',
+                  title: `${failDomain}: vision agent failed — ${errMsg.substring(0, 100)}`,
+                  gotchas: [errMsg.substring(0, 200)],
+                  steps: ['Try OAuth (Continue with Google/Apple) FIRST', 'Email form may be bot-protected'],
+                  success_rate: 0,
+                  times_used: 1,
+                  updated_at: new Date().toISOString(),
+                }, { onConflict: 'service,task_type' });
+              } catch { /* non-critical */ }
               // Inject failure context so next AI round knows what happened and tries differently
               visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". Think creatively — try 3 different approaches before giving up: (1) DIFFERENT AUTH: Try "Continue with Google" or "Continue with Apple" OAuth — bypasses bot detection. (2) ALTERNATIVE: search("free alternatives to [service]") and try one that works. (3) BUILT-IN TOOLS: If goal is content creation (design, image, doc), use generate_image() or create_word() directly — no signup needed. (4) MOBILE SITE: Try m.site.com or a different URL path. (5) PUBLIC API: search("[service] free API") — programmatic access is often easier. NEVER just report "couldn't sign up" — achieve the USER'S GOAL by any available means.]`;
             }
