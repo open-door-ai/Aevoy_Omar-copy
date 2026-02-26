@@ -103,53 +103,110 @@ const INTERACTIVE_SELECTOR =
   '[contenteditable="true"]';
 
 /**
+ * Get interactive element count (for post-action change detection).
+ */
+async function getInteractiveCount(page: Page): Promise<number> {
+  return page.evaluate((sel: string) => {
+    return Array.from(document.querySelectorAll(sel)).filter(el => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0 &&
+        window.getComputedStyle(el).display !== 'none' &&
+        window.getComputedStyle(el).visibility !== 'hidden';
+    }).length;
+  }, INTERACTIVE_SELECTOR).catch(() => 0);
+}
+
+/**
+ * Wait for SPA DOM to stabilize after a click/navigation.
+ * Polls element count every 200ms — stops when stable or timeout reached.
+ * Much more reliable than a fixed 1500ms sleep for React/Vue SPAs (Canva, Notion, etc.)
+ */
+async function waitForSpaStable(page: Page, maxMs = 2500): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  let prevCount = -1;
+  let stableRounds = 0;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(200);
+    const count = await getInteractiveCount(page);
+    if (count === prevCount && count > 0) {
+      stableRounds++;
+      if (stableRounds >= 2) break; // Stable for 2 consecutive polls (400ms) → settled
+    } else {
+      stableRounds = 0;
+    }
+    prevCount = count;
+  }
+}
+
+/**
  * Click an element by its numeric index.
- * Scrolls element into view first so clicks work on elements below the fold.
+ * 3-strategy cascade (browser-use style):
+ *   1. Playwright mouse.click() at center coordinates — fires all native mouse events
+ *   2. JavaScript element.click() — fires synthetic click, works when coords fail
+ *   3. History warning injected if page is unchanged after both strategies
  */
 async function clickByIndex(page: Page, index: number): Promise<boolean> {
+  // Get element position (scroll into view first)
+  const pos = await page.evaluate(([idx, sel]: [number, string]) => {
+    const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      const s = window.getComputedStyle(el);
+      return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+    });
+    const el = interactive[idx] as HTMLElement | undefined;
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const rect = el.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => null);
+
+  if (!pos) {
+    // Element coordinates unavailable — try JS click directly
+    return page.evaluate(([idx, sel]: [number, string]) => {
+      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+      });
+      const el = els[idx] as HTMLElement | undefined;
+      if (!el) return false;
+      el.click();
+      return true;
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
+  }
+
+  await page.waitForTimeout(150);
+
+  // Strategy 1: Playwright mouse click (fires mouseenter, mousedown, mouseup, click events)
   try {
-    // Scroll into view first
-    await page.evaluate(([idx, sel]: [number, string]) => {
-      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) return false;
-        const s = window.getComputedStyle(el);
-        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
-      });
-      const el = interactive[idx] as HTMLElement | undefined;
-      if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
-    }, [index, INTERACTIVE_SELECTOR] as [number, string]);
-
-    await page.waitForTimeout(150);
-
-    const result = await page.evaluate(([idx, sel]: [number, string]) => {
-      const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) return false;
-        const s = window.getComputedStyle(el);
-        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
-      });
-      const el = interactive[idx] as HTMLElement | undefined;
-      if (!el) return { ok: false as const };
-      const rect = el.getBoundingClientRect();
-      return { ok: true as const, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    }, [index, INTERACTIVE_SELECTOR] as [number, string]);
-
-    if (!result.ok) return false;
-    await page.mouse.click(result.x!, result.y!);
+    await page.mouse.click(pos.x, pos.y);
     return true;
   } catch {
-    return false;
+    // Strategy 2: JavaScript .click() (fires synthetic click — bypasses coordinate issues)
+    return page.evaluate(([idx, sel]: [number, string]) => {
+      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+      });
+      const el = els[idx] as HTMLElement | undefined;
+      if (!el) return false;
+      el.click();
+      return true;
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
   }
 }
 
 /**
  * Type text into an element by its numeric index.
- * Scrolls into view, clicks to focus, clears, then types with keyboard.
+ * Clicks to focus, clears with triple-click+Delete (browser-use strategy),
+ * then types with 25ms delay. Falls back to FILL if field stays empty.
  */
 async function typeByIndex(page: Page, index: number, text: string): Promise<boolean> {
   try {
-    // Scroll into view + get position
     const pos = await page.evaluate(([idx, sel]: [number, string]) => {
       const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
         const r = el.getBoundingClientRect();
@@ -167,13 +224,22 @@ async function typeByIndex(page: Page, index: number, text: string): Promise<boo
     if (!pos) return false;
     await page.waitForTimeout(150);
 
+    // Click to focus
     await page.mouse.click(pos.x, pos.y);
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(150);
 
-    // Clear existing value then type
+    // Clear with triple-click + Delete (browser-use strategy — works on React controlled inputs)
+    await page.mouse.click(pos.x, pos.y, { clickCount: 3 });
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(50);
+
+    // Also try Ctrl+A + Delete as belt-and-suspenders
     await page.keyboard.press('Control+a');
-    await page.keyboard.press('Backspace');
-    await page.keyboard.type(text, { delay: 30 });
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(50);
+
+    // Type with 25ms delay per character (browser-use uses 18ms — we use 25ms for stability)
+    await page.keyboard.type(text, { delay: 25 });
     return true;
   } catch {
     return false;
@@ -277,9 +343,10 @@ function extractTaskCredentials(task: string): { email: string; password: string
 /**
  * Build the AI prompt: element list + current URL + task.
  */
-function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }, creds?: { email: string; password: string; name: string }): string {
+function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }, creds?: { email: string; password: string; name: string }, newElemIndices?: Set<number>): string {
   const elemLines = elements.map(e => {
-    const parts = [`[${e.index}] ${e.tag.toUpperCase()}`];
+    const isNew = newElemIndices && newElemIndices.has(e.index);
+    const parts = [isNew ? `★NEW [${e.index}] ${e.tag.toUpperCase()}` : `[${e.index}] ${e.tag.toUpperCase()}`];
     if (e.type && e.type !== 'text') parts.push(`type=${e.type}`);
     if (e.role) parts.push(`role=${e.role}`);
     if (e.name) parts.push(`name="${e.name}"`);
@@ -307,10 +374,15 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
     ? `\n⚡ CREDENTIALS (USE THESE — DO NOT ASK): email=${creds.email}${creds.password ? ` | password=${creds.password}` : ''}${creds.name ? ` | name=${creds.name}` : ''}\n`
     : '';
 
+  const hasNewElems = newElemIndices && newElemIndices.size > 0;
+  const newElemNote = hasNewElems
+    ? `\n★NEW elements (appeared after your last action — these are the consequence of what you just did):\n${elements.filter(e => newElemIndices!.has(e.index)).map(e => `  [${e.index}] ${e.tag.toUpperCase()}${e.placeholder ? ` placeholder="${e.placeholder}"` : ''}${e.text ? ` "${e.text}"` : ''}`).join('\n')}\n`
+    : '';
+
   return `TASK: ${task}
 URL: ${url}
-${vpNote}${credNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}
-INTERACTIVE ELEMENTS (reference by number):
+${vpNote}${credNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}${newElemNote}
+INTERACTIVE ELEMENTS (reference by number, ★NEW = appeared after last action):
 ${elemLines || '(none visible)'}
 
 Look at the screenshot and the element list. Choose ONE action to take next.
@@ -488,6 +560,10 @@ export async function runVisionAgent(
   let sameUrlCount = 0;
   let lastActionKey = '';
   let sameActionCount = 0;
+  // Track element signatures to highlight elements that are NEW this step (appeared after last action)
+  let prevElementSigs = new Set<string>();
+  const getElemSig = (e: ElementInfo) =>
+    `${e.tag}|${e.type ?? ''}|${e.name ?? ''}|${e.placeholder ?? ''}|${e.text ?? ''}`.toLowerCase();
 
   console.log(`[VISION-AGENT] Starting task: "${task.substring(0, 100)}"`);
 
@@ -594,6 +670,16 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       const url = page.url();
       console.log(`[VISION-AGENT] Step ${steps + 1}: ${url} — ${elements.length} elements`);
 
+      // Compute which elements are NEW this step (appeared after the last action)
+      const currSigs = new Set(elements.map(getElemSig));
+      const newElemIndices = prevElementSigs.size > 0
+        ? new Set(elements.filter(e => !prevElementSigs.has(getElemSig(e))).map(e => e.index))
+        : new Set<number>(); // First step: nothing is "new"
+      prevElementSigs = currSigs;
+      if (newElemIndices.size > 0) {
+        console.log(`[VISION-AGENT] ${newElemIndices.size} new elements appeared since last action`);
+      }
+
       // STUCK DETECTION: Same URL for too long → force scroll to unstick
       if (url === lastUrl) {
         sameUrlCount++;
@@ -620,7 +706,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
       // REASON: Ask AI what to do
       const viewport = page.viewportSize() || { width: 1280, height: 800 };
-      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport, taskCreds);
+      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport, taskCreds, newElemIndices);
       let aiResponse: string;
       let stepCost = 0;
       try {
@@ -712,15 +798,50 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       try {
         switch (action.type) {
           case 'click': {
+            const urlBeforeClick = page.url();
+            const countBeforeClick = elements.length;
+
             actionOk = await Promise.race([
               clickByIndex(page, action.index!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
+
             if (actionOk) {
               await page.waitForLoadState('domcontentloaded').catch(() => {});
-              // Wait 1500ms (up from 800ms) so SPA frameworks (React/Vue) have time
-              // to render the next step after form submission (e.g. Canva email→password step)
-              await page.waitForTimeout(1500);
+              // SPA-stable wait: poll until DOM settles rather than fixed sleep.
+              // Handles React/Vue pages (Canva, Notion, etc.) that render new form steps
+              // asynchronously after clicks — no page navigation event fires.
+              await waitForSpaStable(page, 2500);
+
+              // Post-click verification: if URL and element count unchanged, the click
+              // may have been intercepted/blocked. Try JS .click() as secondary strategy.
+              const urlAfterClick = page.url();
+              const countAfterClick = await getInteractiveCount(page);
+              if (urlAfterClick === urlBeforeClick && Math.abs(countAfterClick - countBeforeClick) < 2) {
+                console.log(`[VISION-AGENT] Post-click: page unchanged — trying JS click fallback`);
+                const jsOk = await page.evaluate(([idx, sel]: [number, string]) => {
+                  const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) return false;
+                    const s = window.getComputedStyle(el);
+                    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+                  });
+                  const el = els[idx] as HTMLElement | undefined;
+                  if (!el) return false;
+                  el.click();
+                  return true;
+                }, [action.index!, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
+
+                if (jsOk) {
+                  await waitForSpaStable(page, 1500);
+                  const countAfterJs = await getInteractiveCount(page);
+                  if (Math.abs(countAfterJs - countBeforeClick) < 2 && page.url() === urlBeforeClick) {
+                    history.push(`⚠️ CLICK:${action.index} — page unchanged after mouse click AND JS click. The button may be disabled, covered by an overlay, or require scroll. Try: SCROLL:down to find the button, or CLICK_AT with exact pixel coordinates from screenshot.`);
+                  }
+                } else {
+                  history.push(`⚠️ CLICK:${action.index} — element not found for JS fallback. Use CLICK_AT:x,y with coordinates from the screenshot instead.`);
+                }
+              }
             }
             break;
           }
@@ -731,7 +852,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             const y = parseInt(action.text!);
             await page.mouse.click(x, y);
             await page.waitForLoadState('domcontentloaded').catch(() => {});
-            await page.waitForTimeout(1500);
+            await waitForSpaStable(page, 2000);
             actionOk = true;
             break;
           }
