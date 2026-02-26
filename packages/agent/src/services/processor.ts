@@ -4376,6 +4376,7 @@ CRITICAL RULES:
       visionFailureNote = '';
 
       const iterativePrompt = `Original request: ${subject} ${body}
+⚡ YOUR IDENTITY FOR THIS TASK: email=${username}@aevoy.com | Use this email for ALL signups, logins, and form fields. Verification codes for this email are auto-fetched via read_email() — call it after clicking "Verify" or "Confirm".
 ${historySection}
 ROUND ${currentIteration}/${MAX_ITERATIONS} RESULTS:
 ${resultsSummary}
@@ -5480,7 +5481,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     }
 
     // Add soft disclaimer if verification had low confidence (no raw numbers)
-    if (verificationResult && !verificationResult.passed && verificationResult.confidence < 50) {
+    // Threshold raised to 75 — with 90% quality gates in place, anything below 75 is genuinely uncertain
+    if (verificationResult && !verificationResult.passed && verificationResult.confidence < 75) {
       emailBody += `\n\nNote: I'd recommend double-checking these results as I wasn't fully able to verify them.`;
     }
 

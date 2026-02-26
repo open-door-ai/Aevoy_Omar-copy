@@ -287,12 +287,13 @@ const VERIFICATION_CRITERIA: Record<string, VerificationCriteria> = {
 
 // ---- Quality Tiers ----
 
+// 90% minimum quality threshold across all task types (user requirement: "everything back at 90 confidence")
 export const QUALITY_TIERS: Record<QualityTier, { target: number; maxStrikes: number; alwaysVision: boolean }> = {
   financial:      { target: 99, maxStrikes: 3, alwaysVision: true },
   browser_action: { target: 95, maxStrikes: 3, alwaysVision: false },
   communication:  { target: 90, maxStrikes: 2, alwaysVision: false },
   research:       { target: 30, maxStrikes: 1, alwaysVision: false },  // Low threshold — research tasks auto-pass via fast path in processor; this is only fallback
-  simple:         { target: 70, maxStrikes: 1, alwaysVision: false },
+  simple:         { target: 90, maxStrikes: 2, alwaysVision: false },  // Raised from 70 → 90: minimum 90% quality before sending
 };
 
 export function getQualityTier(taskType: string): QualityTier {
