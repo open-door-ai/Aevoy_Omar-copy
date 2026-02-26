@@ -436,12 +436,16 @@ KEY RULES:
 - If a payment form appears and task is for a FREE plan: look for "Free", "Basic", "Starter" option or skip payment step
 - If CAPTCHA appears: output WAIT — the system solves it automatically
 
-ALTERNATIVE PATH INTELLIGENCE (when email signup is blocked):
-- If the email signup form fields won't accept input after 3 tries: CLICK the "Continue with Google" or "Continue with Apple" button — OAuth paths bypass bot detection
-- If "Continue with Google" or "Continue with Apple" appears in the element list: try it FIRST before the email form
-- If stuck on a signup page for 5+ steps with no progress: NAVIGATE to the mobile version (prepend "m." to domain) or try a different signup URL path
-- If all paths fail: DONE:"Signup bot-protected. Tried email form and OAuth. Search for a free alternative service that achieves the same goal."
-- If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever the site offers)`;
+SIGNUP PAGE STRATEGY — DO THIS IN ORDER:
+STEP 1 (FIRST): When you land on a signup page, IMMEDIATELY look for "Continue with Google", "Continue with Apple", "Sign in with Google", or "Use Google" buttons. If visible in elements or screenshot: CLICK IT FIRST. OAuth is more reliable than email forms. Do NOT go to the email form first.
+STEP 2 (fallback): If no OAuth button visible, use the email form. Fill with provided credentials.
+STEP 3 (if email form fails): Try TYPE, if empty try FILL (React native setter). If still empty after 2 tries each: go back to OAuth.
+STEP 4 (if Google OAuth needs an account): NAVIGATE to accounts.google.com/signup and create a Gmail account using the pattern from the provided email (e.g., tess@aevoy.com → tess.aevoy2026@gmail.com), then return to the original site.
+STEP 5 (if all fail): DONE:"Signup bot-protected on [site]. Tried OAuth and email form. Search for a free alternative service."
+
+CROSS-SERVICE CHAINING: You can navigate to OTHER websites mid-task to complete prerequisites. You have 40 steps — use them across multiple sites. Example flow: Canva → Google OAuth → Gmail creation → back to Canva → signed in.
+
+If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever the site offers)`;
 
 /**
  * Run the vision-based browser agent on a task.

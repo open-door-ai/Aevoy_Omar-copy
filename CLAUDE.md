@@ -172,6 +172,48 @@ This is enforced in:
 1. `ai.ts` system prompt: PROACTIVE INTENT COMPLETION section
 2. `processor.ts`: post-completion quickValidate check appends follow-up question
 
+## AGI Testing Philosophy (CRITICAL — Read Every Session)
+
+> "This is not luck, this is a science. As such, you are going to get it right because it is a science. Do not break something; do not do the same thing over and over again. Everything that you do will have a science."
+
+### Core Rules
+1. **NEVER pre-program per-task logic** — no hardcoded flows for specific sites/services
+2. **NEVER test the same thing twice** — rotate tests constantly. Repeating a test = cheating
+3. **Generic intelligence only** — fixes must work across all sites, not just the tested one
+4. **Science not luck** — every fix has a root cause; understand it, fix it correctly
+
+### AGI Test Gauntlet (30 whack prompts — rotate, never repeat)
+These are examples of what to test. Each hits unexpected snags; agent must solve creatively:
+- "Get me my morning coffee from Tim Hortons" → website → call → build app if needed
+- "Book me a reso at X restaurant" (no time specified → ask user via SMS/email/call)
+- "Cancel my Netflix subscription"
+- "Cancel my Disney+ subscription"
+- "Make a Google spreadsheet of my customer data"
+- "Figure out how to get me customers for Aevoy"
+- "Do your own marketing — get me paying customers"
+- "Make me a portfolio website"
+- "Sign me up for [any random service]"
+- "Make money online"
+- "Book a flight to [destination]"
+- "Set up a Twitter account and get me followers"
+Each must: hit snags → solve them generically → never give up → deliver the outcome.
+
+### What "Genius Human" Means
+An agent as smart as a resourceful human who:
+- Tries Google/Apple OAuth when email signup fails (without being told)
+- Creates a Google account first if OAuth needs one (multi-step chaining)
+- Searches for alternatives when the first service is blocked
+- Uses built-in tools (generate_image, create_word) when no signup is needed
+- Calls the business directly if the website fails
+- Sends the user a clarifying question (SMS/email/call) if info is missing
+
+### Test Protocol
+- Run tests on diverse task types: signup, booking, research, financial, creative, communication
+- NEVER push code during a test (kills the running task)
+- Wait for Railway deploy to confirm before testing
+- Check results via Supabase SQL — look at response_text, not just status
+- A "passing" test has: completed/needs_review status + specific non-passive response
+
 ## Common Pitfalls
 - **AGENT_URL on Vercel**: Must be Railway URL, not old dead VPS IP
 - **Twilio webhooks**: Must point to Railway (not localhost/VPS)

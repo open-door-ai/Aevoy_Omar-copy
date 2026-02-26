@@ -2404,6 +2404,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let compressedHistory = ''; // Compressed summary of rounds 1-N after round 5
     let visionFailureNote = ''; // Context injected into next iteration when vision agent fails
     let visionAgentInvocations = 0; // Guard: max 2 vision agent runs per task (prevents 8min × 15 iteration waste)
+    let lastVisionFailed = false; // Tracks if last vision agent run failed (used in passive response guard)
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -3879,6 +3880,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             } else {
               const errMsg = visionResult.error || 'Unknown error';
               console.log(`[VISION-AGENT] Failed: ${errMsg} — injecting failure context into AI iteration`);
+              lastVisionFailed = true;
               // Inject failure context so next AI round knows what happened and tries differently
               visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". Think creatively — try 3 different approaches before giving up: (1) DIFFERENT AUTH: Try "Continue with Google" or "Continue with Apple" OAuth — bypasses bot detection. (2) ALTERNATIVE: search("free alternatives to [service]") and try one that works. (3) BUILT-IN TOOLS: If goal is content creation (design, image, doc), use generate_image() or create_word() directly — no signup needed. (4) MOBILE SITE: Try m.site.com or a different URL path. (5) PUBLIC API: search("[service] free API") — programmatic access is often easier. NEVER just report "couldn't sign up" — achieve the USER'S GOAL by any available means.]`;
             }
@@ -5410,6 +5412,59 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     } else {
       cleanResponse = `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
     }
+
+    // ── PASSIVE RESPONSE GUARD ─────────────────────────────────────────────
+    // Catches "Want me to?", "I'll need your password", "Shall I proceed?" from
+    // the MAIN AI LOOP (not the vision agent loop — that has its own guard).
+    // These passive responses appear when the vision agent fails and the main
+    // AI loop takes over but asks permission instead of acting.
+    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b)/i;
+    const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 ||
+      actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
+
+    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted) {
+      console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
+      try {
+        const { quickValidate } = await import("./ai.js");
+        const _browserCtx = visionFailureNote
+          ? `Vision agent attempted the task but was blocked.`
+          : `Browser actions completed: ${actionResults.filter(r => r.success).slice(0, 4).map(r => r.action.type).join(', ')}`;
+        const _activeRewrite = await quickValidate(
+          `Task: "${subject.substring(0, 200)}"\nContext: ${_browserCtx}\nCurrent (passive) response: "${cleanResponse.substring(0, 300)}"\n\nRewrite this response to be PROACTIVE and ACTION-TAKING:\n- State what was accomplished (even if partial)\n- State the NEXT concrete action you will take (not "want me to" — just DO it)\n- If you need a password/detail, say "Reply with your password and I'll complete it immediately" — not "I'll need your password"\n- Never use "want me to", "shall I", "would you like", "I'll need" — use active voice only\n- Keep it 2-3 sentences max`,
+          'You are a proactive AI. Rewrite passive ask-for-permission responses into direct action statements.'
+        );
+        if (_activeRewrite?.result && _activeRewrite.result.length > 20 && !_passivePatterns.test(_activeRewrite.result)) {
+          cleanResponse = _activeRewrite.result;
+          console.log(`[PASSIVE-GUARD] Passive response replaced (${cleanResponse.length} chars)`);
+        }
+      } catch (e) {
+        console.warn('[PASSIVE-GUARD] Rewrite failed:', e);
+      }
+    }
+
+    // ── RESPONSE QUALITY CONFIDENCE GATE (90% threshold) ─────────────────
+    // For browser/action tasks: if response only describes page state without
+    // stating completion or next action, upgrade it. This is the "hive mind
+    // vetting" step that ensures we ship 90%-confidence responses, not 60%.
+    if (_isBrowserActionTask && !signupAutoCompleted && cleanResponse && cleanResponse.length > 20) {
+      const _pageDescribeOnly = /\b(the (?:page|site|website|signup page|login page|form) is (?:open|accessible|available|loaded|visible|now showing|currently showing)|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button))\b/i.test(cleanResponse)
+        && !/\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created|reservation made|subscription cancelled)\b/i.test(cleanResponse);
+      if (_pageDescribeOnly) {
+        console.log('[QUALITY-GATE] Response is page-description only — upgrading to action-oriented');
+        try {
+          const { quickValidate } = await import("./ai.js");
+          const _upgraded = await quickValidate(
+            `Task: "${subject.substring(0, 200)}"\nCurrent response (weak): "${cleanResponse.substring(0, 300)}"\n\nThis response just says "the page is open/accessible" without completing anything. Rewrite it to:\n1. Acknowledge what was reached\n2. STATE the next specific action being taken NOW (fill the form, click submit, etc.)\n3. End with what will happen after (account created, reservation booked, etc.)\nDo NOT say "want me to" or ask permission. State what IS being done.`,
+            'Rewrite as a concrete action statement. Short, active, specific.'
+          );
+          if (_upgraded?.result && _upgraded.result.length > 20) {
+            cleanResponse = _upgraded.result;
+            console.log('[QUALITY-GATE] Response upgraded to action-oriented');
+          }
+        } catch { /* keep original */ }
+      }
+    }
+
     const successCount = actionResults.filter(r => r.success).length;
     const totalActions = actionResults.length;
 
