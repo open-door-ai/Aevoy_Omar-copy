@@ -4,7 +4,7 @@
  */
 
 let activeBrowserTasks = 0;
-const MAX_CONCURRENT_BROWSER_TASKS = 10; // Increased from 3 to prevent deadlocks on complex task batches
+const MAX_CONCURRENT_BROWSER_TASKS = 2; // Railway memory limit ~512MB-2GB — each Chromium uses 300-500MB
 
 // Per-user browser context tracking
 const userBrowserContexts = new Map<string, number>();

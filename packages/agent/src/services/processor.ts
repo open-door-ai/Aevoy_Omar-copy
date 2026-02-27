@@ -2504,6 +2504,37 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // 6d. ORDERING TASK ADDRESS CHECK: Delivery orders need an address. Check memory/task first.
+    // Skip if address is already in the task or memory — only ask when genuinely missing.
+    const isDeliveryOrderTask = /\b(order|deliver|get me|send me).{0,40}(food|lunch|dinner|breakfast|coffee|pizza|burger|sushi|chinese|thai|mexican|indian|japanese|greek|italian|delivered|delivery)\b/i.test(taskTextLower) &&
+      /\bdelivery|delivered|deliver to\b/i.test(taskTextLower);
+    if (isDeliveryOrderTask && !task.suppressEmail) {
+      // Check if address is in the task itself
+      const taskHasAddress = /\d+\s+[A-Za-z][a-zA-Z\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Pl|Place)\b/i.test(`${subject} ${body}`) ||
+        /[A-Z]\d[A-Z]\s?\d[A-Z]\d/i.test(`${subject} ${body}`); // Canadian postal code
+      // Check if address is in user memory
+      const memText = ((memory as any)?.profile || '') + ' ' + ((memory as any)?.working || '') + ' ' + ((memory as any)?.longTerm || '');
+      const memHasAddress = /delivery.address|home.address|my.address|lives.at|residing.at|i.live.at|located.at/i.test(memText) &&
+        /\d+\s+[A-Za-z][a-zA-Z\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln)/i.test(memText);
+      if (!taskHasAddress && !memHasAddress) {
+        console.log(`[ORDERING-GATE] Delivery task requires address — asking user first`);
+        const addressReq = `I'm ready to order delivery for you. Quick question — what's your delivery address? Once you send it, I'll find the best options and place the order immediately.`;
+        await getSupabaseClient().from("tasks").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime,
+          response_text: addressReq,
+          action_count: 0,
+          action_success_count: 0,
+        }).eq("id", taskId);
+        if (!task.suppressEmail) {
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, addressReq);
+        }
+        clearTimeout(masterTimer);
+        return { taskId, success: true, response: addressReq, actions: [] };
+      }
+    }
+
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
 
