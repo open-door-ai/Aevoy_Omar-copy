@@ -2692,6 +2692,16 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let isTaskComplete = false;
     let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
     let signupAutoCompleted = false; // true when mechanical signup trigger filled form + completed task
+
+    // GENERATION FAST-PATH: For writing/generation tasks (HTML, code, essays), the first
+    // generateResponse already produced the complete answer using GENERATE_SYSTEM_PROMPT.
+    // Entering the iteration loop would overwrite the HTML with a "complex" re-prompt that
+    // causes the AI to search for website builders (Wix/Squarespace) instead of returning HTML.
+    if (_isWritingTask && aiResponse.content && aiResponse.content.length > 100 && aiResponse.actions.length === 0) {
+      console.log('[GENERATE] Writing task produced direct content — skipping iteration loop');
+      isTaskComplete = true;
+      aiSignaledComplete = true;
+    }
     let totalAiCost = aiResponse.cost || 0;
     let totalTokens = aiResponse.tokensUsed || 0;
     let globalActionIndex = 0;
@@ -5461,7 +5471,7 @@ Extract the ACTUAL phone number from search results and call them:
     // These are plans/narrations, not answers. The user expects an actual result.
     // SKIP quality gate for direct-injected results (read_email, check_calendar, etc.) — both success AND error are already user-facing
     // SKIP quality gate when signup-auto trigger completed the task — the response is our mechanical result, not AI narration
-    const hasDirectResultData = signupAutoCompleted || actionResults.some(r =>
+    const hasDirectResultData = signupAutoCompleted || _isWritingTask || actionResults.some(r =>
       ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
       (aiResponse.content === r.result || aiResponse.content === r.error)
     );
