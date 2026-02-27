@@ -5508,8 +5508,10 @@ Extract the ACTUAL phone number from search results and call them:
         responseLC.includes('you can view the full search results at') ||
         responseLC.includes('you can check the full results at') ||
         responseLC.includes('you can find the results at') ||
-        // "X results are available at https://..." — sending user to URL instead of giving results
-        (/(?:results?|listings?|data|information)\s+(?:is|are)\s+available\s+at\s+https?:\/\//i.test(responseLC)) ||
+        // "X results are available at/on [site] at https://..." — sending user to URL instead of giving results
+        (/(?:results?|listings?|data|information|jobs?)\s+(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(responseLC)) ||
+        // "job listings are available on Indeed" — redirect to job board without actual results
+        (/(?:results?|listings?|data|information|jobs?)\s+(?:is|are)\s+available\s+on\s+(?:indeed|linkedin|glassdoor|monster|ziprecruiter|google|amazon|bing)\b/i.test(responseLC)) ||
         (/(?:currently\s+being\s+displayed|displayed)\s+(?:on|at)\s+[a-z]+(?:duck|google|bing|yahoo|search)/i.test(responseLC)) ||
         (/(?:search|query)\s+(?:was|has been)\s+(?:completed|run|executed|performed)[^.]*but[^.]*(?:not provided|not included|not available|not returned)/i.test(responseLC)) ||
         (/(?:specific results?|detailed results?|full results?)\s+(?:are|were)\s+not\s+(?:provided|included|available|returned)/i.test(responseLC)) ||
