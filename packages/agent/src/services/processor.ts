@@ -1877,9 +1877,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
         const successText = successApiResults.map(r => `Done: ${JSON.stringify(r.result)}`).join("\n");
 
-        // Update task record
+        // Update task record — use needs_review (not failed) so users always see a response
         await getSupabaseClient().from("tasks").update({
-          status: allSuccess ? "completed" : "failed",
+          status: allSuccess ? "completed" : "needs_review",
           completed_at: new Date().toISOString(),
           execution_time_ms: Date.now() - startTime,
           cost_usd: plan.estimatedCost,
