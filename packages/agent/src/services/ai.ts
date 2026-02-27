@@ -782,15 +782,18 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
   [ACTION:screenshot_ocr({})] to take a screenshot and read it with AI vision. Vision can read anything on screen.
 - WEATHER SHORTCUT: For weather queries, browse("https://wttr.in/CITY?format=4") returns plain-text weather data
   instantly (no JS needed). Example: [ACTION:browse("https://wttr.in/West+Vancouver?format=4")]
-- DIRECT NAVIGATION FIRST: For tasks on SPECIFIC sites (Amazon, Craigslist, Yelp, etc.), go DIRECTLY to the site
-  instead of searching. [ACTION:browse("https://www.amazon.com")] is faster and more reliable than searching.
-  Search engines often BLOCK automated access. Direct navigation works better.
+- DIRECT NAVIGATION FIRST: For tasks on SPECIFIC sites (Craigslist, Yelp, etc.), go DIRECTLY to the site
+  instead of searching. When you know the TARGET SITE, construct the search URL directly.
   Examples:
-  * "Find price on Amazon" → [ACTION:browse("https://www.amazon.com/s?k=MacBook+Pro+16+M4+Pro")] — use Amazon's search URL
-  * "Find restaurant on Yelp" → [ACTION:browse("https://www.yelp.com/search?find_desc=Italian&find_loc=Downtown+Toronto")] — use Yelp's search URL
-  * "Search Craigslist" → [ACTION:browse("https://newyork.craigslist.org/search/sss?query=laptop&max_price=500")] — use Craigslist's search URL
+  * "Find restaurant on Yelp" → [ACTION:browse("https://www.yelp.com/search?find_desc=Italian&find_loc=Downtown+Toronto")]
+  * "Search Craigslist" → [ACTION:browse("https://newyork.craigslist.org/search/sss?query=laptop&max_price=500")]
   * "Check flight prices" → [ACTION:browse("https://www.google.com/flights")] — go directly to Google Flights
-  When you know the TARGET SITE, construct the search URL directly. Don't go through DuckDuckGo/Google first.
+- AMAZON/ECOMMERCE STRATEGY: Amazon blocks direct browser automation. Use search() to find products:
+  * "Find price on Amazon" → [ACTION:search("MacBook Pro 16 M4 Pro amazon price")] — DDG returns Amazon prices without bot detection
+  * "Find cheapest laptop under $400 on Amazon" → [ACTION:search("best laptop under 400 amazon 2026")]
+  * Only use browse("amazon.com/...") as a FALLBACK if search() returns nothing useful.
+  * NEVER use screenshot_ocr on Amazon — it just captures the bot-detection page, not products.
+- screenshot_ocr IS FOR: physical documents, scanned PDFs, images with text, receipts. NOT for reading regular web pages — use browse() for that.
 - BE RESOURCEFUL: If one approach fails, try a COMPLETELY different approach. Use APIs, plain-text websites,
   mobile versions of sites (m.site.com), or cached pages. Figure it out — don't give up.
 - JOBS/MONEY/FREELANCE STRATEGY: Never go directly to Upwork/Fiverr/Freelancer homepages (they block bots).
