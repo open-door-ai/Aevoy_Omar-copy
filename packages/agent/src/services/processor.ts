@@ -4650,9 +4650,22 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       );
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {
         const visionPage = executionEngine.getPage?.();
-        const visionPageUrl = visionPage?.url() || '';
-        const isValidPage = visionPageUrl && visionPageUrl !== 'about:blank';
-        if (visionPage && isValidPage && !visionPage.isClosed()) {
+        let visionPageUrl = visionPage?.url() || '';
+        const isErrorPage = visionPageUrl.startsWith('chrome-error://') || visionPageUrl.startsWith('about:');
+        const isValidPage = visionPageUrl && visionPageUrl !== 'about:blank' && !isErrorPage;
+        // If on error/blank page, try to navigate to target URL before starting vision agent
+        if (visionPage && !visionPage.isClosed() && isErrorPage) {
+          const _targetUrl = (subject + ' ' + (body || '')).match(/https?:\/\/[^\s,)]+/)?.[0]
+            || (subject + ' ' + (body || '')).match(/\b([\w.-]+\.(com|org|net|io|ca|co\.uk))\b/i)?.[1];
+          const _navTarget = _targetUrl?.startsWith('http') ? _targetUrl : _targetUrl ? `https://www.${_targetUrl}` : null;
+          if (_navTarget) {
+            console.log(`[VISION-AGENT] Pre-navigating from error page to ${_navTarget}`);
+            await visionPage.goto(_navTarget, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+            await visionPage.waitForTimeout(1000);
+            visionPageUrl = visionPage.url();
+          }
+        }
+        if (visionPage && (isValidPage || (!visionPage.url().startsWith('chrome-error://') && visionPage.url() !== 'about:blank')) && !visionPage.isClosed()) {
           let visionPassword = '';
           try {
             const { getAgentPasswords } = await import("./agent-passwords.js");
