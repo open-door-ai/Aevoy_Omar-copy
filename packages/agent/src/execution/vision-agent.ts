@@ -518,7 +518,16 @@ function parseAction(response: string): { type: string; index?: number; text?: s
 
 const SYSTEM_PROMPT = `You are a browser automation agent. You control a real web browser.
 Your job is to COMPLETE tasks — not describe them, not navigate to a page and stop. ACTUALLY EXECUTE the full task.
-Be direct and efficient. One action per response. No explanations.
+Be direct and efficient. You can return UP TO 5 actions per response (one per line). Execute related actions together to be faster.
+Example multi-action response for filling a form:
+FILL:3:"john@example.com"
+FILL:5:"MyPassword123"
+CLICK:7
+
+For navigation + scroll:
+NAVIGATE:"https://example.com/signup"
+
+Single complex actions that change page state should be alone. Group form fills and clicks together.
 
 CREDENTIALS RULE (CRITICAL):
 - If the prompt shows "⚡ CREDENTIALS: email=... | password=..." — USE THEM. Do NOT ask the user for credentials. They are provided.
@@ -894,8 +903,16 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
         }
       }
 
-      // ACT: Parse and execute
-      const action = parseAction(aiResponse);
+      // ACT: Parse and execute — support BATCH actions (up to 5 per AI response)
+      // Split multi-line responses into individual actions, filter blanks
+      const actionLines = aiResponse.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const parsedActions = actionLines.map(l => parseAction(l)).filter(a => a !== null);
+      // Use first action for loop detection, execute all in sequence
+      const action = parsedActions[0] || null;
+      const batchSize = parsedActions.length;
+      if (batchSize > 1) {
+        console.log(`[VISION-AGENT] BATCH: ${batchSize} actions in one response`);
+      }
 
       // LOOP DETECTION (Manus-style): Detect frozen loops, ping-pong oscillation, and retry loops
       const actionKey = aiResponse.trim().split('\n')[0].trim();
@@ -1194,6 +1211,78 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       }
 
       console.log(`[VISION-AGENT] ${action.type}${action.index !== undefined ? ':' + action.index : ''} → ${actionOk ? 'ok' : 'FAIL'}`);
+
+      // BATCH EXECUTION: If AI returned multiple actions, execute remaining ones
+      // Skip batch if first action failed, was navigation (page changed), or was done/fail
+      if (batchSize > 1 && actionOk && !['navigate', 'done', 'fail', 'scroll', 'wait', 'switch_tab'].includes(action.type)) {
+        for (let bi = 1; bi < parsedActions.length && bi < 5; bi++) {
+          const batchAction = parsedActions[bi]!;
+          if (!batchAction || batchAction.type === 'done' || batchAction.type === 'fail' || batchAction.type === 'navigate') break;
+          try {
+            let bOk = false;
+            switch (batchAction.type) {
+              case 'fill': {
+                bOk = await activePage.evaluate(([idx, val, sel]: [number, string, string]) => {
+                  const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                  });
+                  const el = els[idx] as HTMLInputElement | undefined;
+                  if (!el) return false;
+                  el.focus();
+                  const nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                  )?.set || Object.getOwnPropertyDescriptor(
+                    window.HTMLTextAreaElement.prototype, 'value'
+                  )?.set;
+                  if (nativeSetter) nativeSetter.call(el, val);
+                  else el.value = val;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                  return true;
+                }, [batchAction.index!, batchAction.text!, INTERACTIVE_SELECTOR] as [number, string, string]).catch(() => false);
+                break;
+              }
+              case 'type': {
+                bOk = await typeByIndex(activePage, batchAction.index!, batchAction.text!);
+                break;
+              }
+              case 'click': {
+                bOk = await clickByIndex(activePage, batchAction.index!);
+                break;
+              }
+              case 'click_at': {
+                const bx = batchAction.index!;
+                const by = parseInt(batchAction.text!);
+                await activePage.mouse.click(bx, by);
+                bOk = true;
+                break;
+              }
+              case 'press': {
+                await activePage.keyboard.press(batchAction.text || 'Enter');
+                bOk = true;
+                break;
+              }
+              default:
+                break;
+            }
+            if (bOk) {
+              history.push(`  ↳ batch ${batchAction.type}:${batchAction.index ?? ''} → ok`);
+              console.log(`[VISION-AGENT] BATCH ${bi}: ${batchAction.type}:${batchAction.index ?? ''} → ok`);
+            } else {
+              console.log(`[VISION-AGENT] BATCH ${bi}: ${batchAction.type}:${batchAction.index ?? ''} → FAIL, stopping batch`);
+              break;
+            }
+            await activePage.waitForTimeout(200); // Brief pause between batch actions
+          } catch (batchErr) {
+            console.warn(`[VISION-AGENT] Batch action ${bi} failed: ${batchErr}`);
+            break;
+          }
+        }
+        // Wait for page to settle after batch
+        await waitForSpaStable(activePage, 1500);
+      }
     }
 
     return { success: false, error: `Max steps (${MAX_STEPS}) reached — task is too complex or site is bot-blocking`, steps, cost: totalCost, screenshots };
