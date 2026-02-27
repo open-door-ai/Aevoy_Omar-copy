@@ -3272,17 +3272,10 @@ For "${subject}":
               break;
             }
             // Fall through to execute the new actions
-          } else {
-            isTaskComplete = true;
-            aiSignaledComplete = true;
-            break;
-          }
-        } else if (!hasRealActions) {
-          // DOCUMENT ACTION GATE: AI signaled TASK_COMPLETE and described a document but never
-          // called create_word/create_excel/etc. Force a re-prompt with explicit action tag instruction.
-          const _hasDocAction = actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || ''));
-          if (_isDocumentAction && !_hasDocAction && currentIteration < MAX_ITERATIONS - 1 && aiResponse.model !== 'fallback') {
-            console.warn(`[DOC-ACTION-GATE] REJECTED: AI completed without calling create action. Re-prompting with explicit instruction.`);
+          } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && currentIteration < MAX_ITERATIONS - 1 && aiResponse.model !== 'fallback') {
+            // DOCUMENT ACTION GATE (rounds 1-2): AI completed without calling create action.
+            // Force a re-prompt with explicit action tag instruction.
+            console.warn(`[DOC-ACTION-GATE] REJECTED: AI completed without calling create action (round ${currentIteration}). Re-prompting.`);
             const _docAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
               : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
               : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf'
@@ -3303,12 +3296,32 @@ Use your training knowledge to fill in rich, detailed content for each section. 
             aiResponse = _docForcedResp;
             aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
             if (aiResponse.actions.length === 0) {
-              // Still no actions — give up
               isTaskComplete = true;
               aiSignaledComplete = true;
               break;
             }
             // Fall through — execute the create action
+          } else {
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            break;
+          }
+        } else if (!hasRealActions) {
+          // DOCUMENT ACTION GATE (rounds 3+): same gate for later iterations.
+          const _hasDocActionLate = actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || ''));
+          if (_isDocumentAction && !_hasDocActionLate && currentIteration < MAX_ITERATIONS - 1 && aiResponse.model !== 'fallback') {
+            console.warn(`[DOC-ACTION-GATE] REJECTED (late round ${currentIteration}): Re-prompting.`);
+            const _docActL = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+              : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+              : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
+            const _docExtL = _docActL === 'create_excel' ? 'xlsx' : _docActL === 'create_powerpoint' ? 'pptx' : _docActL === 'create_pdf' ? 'pdf' : 'docx';
+            const _docForceLate = `[DOC-ACTION-GATE] You MUST call [ACTION:${_docActL}("document.${_docExtL}", [...])] [TASK_COMPLETE] — output ONLY the ACTION tag with content from your training knowledge.`;
+            const _docRespLate = await generateResponse(memory, subject, _docForceLate, username, "complex", userId, taskId, senderName);
+            totalAiCost += _docRespLate.cost || 0;
+            totalTokens += _docRespLate.tokensUsed || 0;
+            aiResponse = _docRespLate;
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+            if (aiResponse.actions.length === 0) { isTaskComplete = true; aiSignaledComplete = true; break; }
           } else {
             isTaskComplete = true;
             aiSignaledComplete = true;
