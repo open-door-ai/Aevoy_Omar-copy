@@ -6109,7 +6109,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // "[service] page is available at https://..." — never do tasks by giving URLs
         /\b(?:page|site|form|portal)\b.{0,30}https?:\/\//i.test(cleanResponse) ||
         // "You can view the current listings here: [url]" — common instructional research pattern
-        /\byou can (view|see|check|browse|look at) (the |current |all |those |these |their )?(listing|result|option|posting|job|price|deal|offer)/i.test(cleanResponse)
+        /\byou can (view|see|check|browse|look at) (the |current |all |those |these |their )?(listing|result|option|posting|job|price|deal|offer)/i.test(cleanResponse) ||
+        // "I recommend calling directly" — agent tells user to call instead of calling themselves
+        // System prompt says: "NEVER say 'you should call them' — YOU call them. You're the agent."
+        /\b(i recommend (you |that you )?(calling|visiting|checking|going|using|trying|booking|making))\b/i.test(cleanResponse) ||
+        /\b(i suggest (you |that you )?(call|visit|check|go|use|try|book|make))\b/i.test(cleanResponse) ||
+        /\b(you should (call|visit|check|go|contact|phone|try calling) (them|it|directly|the ))/i.test(cleanResponse) ||
+        /\b(for (availability|reservations?|a table), (call|contact|phone|try calling|you can call))\b/i.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
       // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
       const _gaveUp = _isTask && (
