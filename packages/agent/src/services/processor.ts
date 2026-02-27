@@ -5027,7 +5027,11 @@ RIGHT: [ACTION:fill("email", "tess@aevoy.com")]
 - If FORM FIELDS DETECTED is shown above, use the exact selectors listed. Fill every EMPTY field before clicking submit.
 - If the page shows an error or unexpected state, adapt your approach.
 - If more steps are needed, include the next 2-3 actions (focused, not scattered).
-- NEVER give up. Always find a way.`;
+- NEVER give up. Always find a way.${_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) ? `
+
+🚨 DOCUMENT CREATION REQUIRED: You MUST emit the ACTION tag to create the file this round.
+[ACTION:${/\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel' : /\b(powerpoint|pptx|presentation)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint' : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word'}("filename", [...])] [TASK_COMPLETE]
+Use training knowledge for all content. Do NOT search for templates. Just output the ACTION tag.` : ''}`;
 
       console.log(`[ITERATE] Re-prompting AI with page observation for round ${currentIteration + 1}...`);
       console.log(`[DEBUG-ITER] About to call generateResponse (THIS IS THE SUSPECTED HANG POINT)`);
@@ -5590,7 +5594,13 @@ Extract the ACTUAL phone number from search results and call them:
       const isAllModelsFailed = aiResponse.model === "fallback";
 
       let qualityGateHaikuFired = false;
-      if (isPlanLike || isNarration || isAdviceList || isAllModelsFailed) {
+      // Skip generateForcedDirectAnswer for document action tasks — it can't emit create_word/excel/ppt/pdf
+      // action tags, so it produces narration about Microsoft Word/Google Docs instead.
+      // For these tasks, continue the iteration loop so the AI retries with the document action instruction.
+      if (_isDocumentAction && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && (isPlanLike || isNarration || isAdviceList)) {
+        console.log(`[QUALITY] Document action task — skipping generateForcedDirectAnswer, will re-prompt with action tag instruction`);
+        // Don't set qualityGateHaikuFired — let the iteration loop continue and re-prompt the AI
+      } else if (isPlanLike || isNarration || isAdviceList || isAllModelsFailed) {
         console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : isAllModelsFailed ? 'all-models-failed' : 'narration'} — going straight to Haiku direct answer`);
         try {
           // Skip DeepSeek/Groq refinement (they also produce narration) — go straight to Haiku
