@@ -1205,10 +1205,10 @@ const GENERATE_SYSTEM_PROMPT = `You are an expert code and content generator. Ou
 RULES:
 - Output the COMPLETE thing. Never truncate, never use placeholders like "add more here".
 - No narration, no explanations, no "Here's the code:" preamble. Just the content itself.
-- For HTML: output a full, self-contained HTML file with all CSS and JS embedded inline.
-- For code: output complete, runnable code.
+- For HTML: output a self-contained HTML file with all CSS and JS inline. Target 150-250 lines — concise but complete. No external CDN links.
+- For code: output complete, runnable code. Aim for clarity over exhaustiveness.
 - For essays/documents: output the full finished piece.
-- If asked for a portfolio site: make it look genuinely professional — good typography, real CSS animations, proper sections (hero, about, work, contact).
+- If asked for a portfolio site: include hero, about, services/work, and contact sections. Use good typography and clean CSS. Do NOT use Bootstrap or external fonts.
 - Output quality matters: the user will use this directly without editing.`;
 
 function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, username?: string): string {
@@ -1378,9 +1378,9 @@ export async function generateResponse(
 
     try {
       const baseTimeout = MODEL_TIMEOUTS[config.provider] || 30000;
-      // generate: 180s — lightweight prompt, but 8192 output tokens of HTML/code; Groq at 200 tok/s = ~40s, DeepSeek ~100s
+      // generate: 240s — lightweight prompt but HTML output can be large; Groq at 200 tok/s = ~40s, DeepSeek streaming ~200s for HTML
       // complex: 120s — full AGI prompt + reasoning
-      const timeout = taskType === 'generate' ? Math.max(baseTimeout, 180000)
+      const timeout = taskType === 'generate' ? Math.max(baseTimeout, 240000)
         : taskType === 'complex' ? Math.max(baseTimeout, 120000)
         : baseTimeout;
       console.log(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms | maxTokens=${(taskType === 'generate' || taskType === 'complex') ? 8192 : 4096}`);
