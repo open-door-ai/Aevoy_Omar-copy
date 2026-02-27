@@ -2102,6 +2102,16 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI
     // doesn't schedule again — it must EXECUTE the task and report the result.
     let effectiveBody = body;
+    // For document action tasks: inject mandatory execution context to force action tag usage.
+    // DeepSeek often generates prose descriptions instead of calling create_word/excel/ppt/pdf.
+    // This explicit instruction overrides that tendency.
+    if (_isDocumentAction && !forceCheapModel) {
+      const _docAction = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+        : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+        : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf'
+        : 'create_word';
+      effectiveBody = `${body || subject}\n\n[EXECUTION CONTEXT: You MUST emit [ACTION:${_docAction}("filename", [...])] to create the file. Use your training knowledge to fill in the content — do NOT search for templates online. Output only the ACTION tag + [TASK_COMPLETE]. Do not describe the document or mention external tools.]`;
+    }
     if (_isScheduledTrigger) {
       const _scheduledTask = subject.replace(/^\[Scheduled\]\s*/i, '').trim();
       effectiveBody = `${body || _scheduledTask}\n\n[EXECUTION CONTEXT: This task was previously scheduled and is NOW FIRING. Execute "${_scheduledTask}" immediately. Do NOT use schedule/remind actions — the task is already triggered. Complete it and report the outcome to the user.]`;
