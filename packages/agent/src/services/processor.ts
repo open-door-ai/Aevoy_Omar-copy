@@ -3721,6 +3721,45 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
       const iterationResults: ActionResult[] = [];
 
+      // DOCUMENT ACTION INJECTOR: Universal safety net for document creation tasks.
+      // Fires at the start of every round's action execution. If this is a document task
+      // and NO document creation action has been generated or executed yet, synthesize one
+      // and inject it into aiResponse.actions (alongside any browse/search actions).
+      // This handles ALL cases: AI with no actions, AI with only browse, AI ignoring action tags.
+      const _docActionTypes = ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'];
+      const _docAlreadyDone = actionResults.some(r => _docActionTypes.includes(r.action?.type || '') && r.success);
+      const _docInCurrentActions = aiResponse.actions.some(a => _docActionTypes.includes(a.type));
+      if (_isDocumentAction && !_docAlreadyDone && !_docInCurrentActions && aiResponse.model !== 'fallback') {
+        try {
+          console.log(`[DOC-INJECTOR] Round ${currentIteration}: Synthesizing doc action (AI generated ${aiResponse.actions.length} actions but no doc action)`);
+          const _dActI = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+            : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+            : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
+          const _dExtI = _dActI === 'create_excel' ? 'xlsx' : _dActI === 'create_powerpoint' ? 'pptx' : _dActI === 'create_pdf' ? 'pdf' : 'docx';
+          const _dFileI = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_dExtI}`;
+          const _cRespI = await generateResponse(memory, subject, `Write detailed content for: ${subject}. Include all relevant sections with rich, complete information. Format with clear section headings.`, username, "generate", userId, taskId, senderName);
+          totalAiCost += _cRespI.cost || 0;
+          totalTokens += _cRespI.tokensUsed || 0;
+          const _rawI = (_cRespI.content || '').trim();
+          if (_rawI && _rawI.length > 100) {
+            const _secsI = _rawI.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
+              const t = s.trim().replace(/^\*+|\*+$/g, '').trim();
+              const h1 = t.match(/^#{1}\s+(.+)/); if (h1) return { type: 'heading', text: h1[1].trim(), level: 1 };
+              const h2 = t.match(/^#{2}\s+(.+)/); if (h2) return { type: 'heading', text: h2[1].trim(), level: 2 };
+              const h3 = t.match(/^#{3,}\s+(.+)/); if (h3) return { type: 'heading', text: h3[1].trim(), level: 3 };
+              if (t.length < 70 && !t.endsWith('.') && !t.endsWith(',') && /^[A-Z\d]/.test(t)) return { type: 'heading', text: t, level: 2 };
+              return { type: 'paragraph', text: t };
+            });
+            // Replace all AI actions (browse/search) with just the doc action — don't execute bad browse actions
+            aiResponse.actions = [{ type: _dActI as any, params: { filename: _dFileI, sections: _secsI } }];
+            aiResponse.content = '';
+            console.log(`[DOC-INJECTOR] Injected ${_dActI} with ${_secsI.length} sections (replaced ${aiResponse.actions.length} other actions)`);
+          }
+        } catch (_injErr) {
+          console.warn('[DOC-INJECTOR] Content synthesis failed, continuing with AI actions:', _injErr);
+        }
+      }
+
       for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
         // Per-task budget check: $5 cap gives headroom for multi-step autonomous tasks
         const taskCostSoFar = totalAiCost + (executionEngine?.getTotalCost() || 0);
