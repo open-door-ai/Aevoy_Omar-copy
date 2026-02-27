@@ -3272,56 +3272,86 @@ For "${subject}":
               break;
             }
             // Fall through to execute the new actions
-          } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && currentIteration < MAX_ITERATIONS - 1 && aiResponse.model !== 'fallback') {
+          } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
             // DOCUMENT ACTION GATE (rounds 1-2): AI completed without calling create action.
-            // Force a re-prompt with explicit action tag instruction.
-            console.warn(`[DOC-ACTION-GATE] REJECTED: AI completed without calling create action (round ${currentIteration}). Re-prompting.`);
+            // AI can't reliably produce [ACTION:create_word(...)] tags — bypass and synthesize directly:
+            // 1. Use generate task type to get plain document content from the AI
+            // 2. Inject the create action directly into aiResponse.actions (no action tag parsing needed)
+            console.warn(`[DOC-ACTION-GATE] REJECTED: AI completed without calling create action (round ${currentIteration}). Synthesizing action directly.`);
             const _docAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
               : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
               : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf'
               : 'create_word';
             const _docExt = _docAct === 'create_excel' ? 'xlsx' : _docAct === 'create_powerpoint' ? 'pptx' : _docAct === 'create_pdf' ? 'pdf' : 'docx';
-            const _docForcePrompt = `[DOC-ACTION-GATE REJECTION — PREVIOUS RESPONSE IGNORED]
-
-Your previous response was REJECTED because you described a document but did NOT call the action to create it.
-
-YOU MUST output ONLY this action tag (with actual content filled in):
-[ACTION:${_docAct}("document.${_docExt}", ["Section 1 content", "Section 2 content", ...])] [TASK_COMPLETE]
-
-User asked: "${subject}"
-Use your training knowledge to fill in rich, detailed content for each section. Do NOT search, do NOT browse, do NOT describe the document. Just output the ACTION tag with the content inline.`;
-            const _docForcedResp = await generateResponse(memory, subject, _docForcePrompt, username, "complex", userId, taskId, senderName);
-            totalAiCost += _docForcedResp.cost || 0;
-            totalTokens += _docForcedResp.tokensUsed || 0;
-            aiResponse = _docForcedResp;
-            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
-            if (aiResponse.actions.length === 0) {
+            const _docFilename = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_docExt}`;
+            try {
+              // Get content using generate task type (tuned for content output, not action tags)
+              const _contentPrompt = `Write detailed content for: ${subject}. Include all relevant sections with rich, complete information. Format with clear section headings.`;
+              const _contentResp = await generateResponse(memory, subject, _contentPrompt, username, "generate", userId, taskId, senderName);
+              totalAiCost += _contentResp.cost || 0;
+              totalTokens += _contentResp.tokensUsed || 0;
+              const _rawContent = (_contentResp.content || '').trim();
+              if (_rawContent && _rawContent.length > 100) {
+                // Convert plain text into {type, text, level} section objects expected by create_word
+                const _sections = _rawContent.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
+                  const t = s.trim().replace(/^\*+|\*+$/g, '').trim(); // strip markdown bold
+                  const h1 = t.match(/^#{1}\s+(.+)/); if (h1) return { type: 'heading', text: h1[1].trim(), level: 1 };
+                  const h2 = t.match(/^#{2}\s+(.+)/); if (h2) return { type: 'heading', text: h2[1].trim(), level: 2 };
+                  const h3 = t.match(/^#{3,}\s+(.+)/); if (h3) return { type: 'heading', text: h3[1].trim(), level: 3 };
+                  if (t.length < 70 && !t.endsWith('.') && !t.endsWith(',') && /^[A-Z\d]/.test(t)) return { type: 'heading', text: t, level: 2 };
+                  return { type: 'paragraph', text: t };
+                });
+                // Directly inject the create action — no action tag parsing required
+                aiResponse.actions = [{ type: _docAct as any, params: { filename: _docFilename, sections: _sections } }];
+                aiResponse.content = '';
+                console.log(`[DOC-ACTION-GATE] Synthesized ${_docAct} action with ${_sections.length} sections`);
+                // Fall through — the loop will execute this action
+              } else {
+                console.warn('[DOC-ACTION-GATE] Content generation returned empty — completing with narration');
+                isTaskComplete = true;
+                aiSignaledComplete = true;
+                break;
+              }
+            } catch (_docErr) {
+              console.error('[DOC-ACTION-GATE] Content synthesis failed:', _docErr);
               isTaskComplete = true;
               aiSignaledComplete = true;
               break;
             }
-            // Fall through — execute the create action
           } else {
             isTaskComplete = true;
             aiSignaledComplete = true;
             break;
           }
         } else if (!hasRealActions) {
-          // DOCUMENT ACTION GATE (rounds 3+): same gate for later iterations.
+          // DOCUMENT ACTION GATE (rounds 3+): same direct synthesis approach.
           const _hasDocActionLate = actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || ''));
-          if (_isDocumentAction && !_hasDocActionLate && currentIteration < MAX_ITERATIONS - 1 && aiResponse.model !== 'fallback') {
-            console.warn(`[DOC-ACTION-GATE] REJECTED (late round ${currentIteration}): Re-prompting.`);
+          if (_isDocumentAction && !_hasDocActionLate && aiResponse.model !== 'fallback') {
+            console.warn(`[DOC-ACTION-GATE] Late round ${currentIteration}: Synthesizing doc action directly.`);
             const _docActL = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
               : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
               : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
             const _docExtL = _docActL === 'create_excel' ? 'xlsx' : _docActL === 'create_powerpoint' ? 'pptx' : _docActL === 'create_pdf' ? 'pdf' : 'docx';
-            const _docForceLate = `[DOC-ACTION-GATE] You MUST call [ACTION:${_docActL}("document.${_docExtL}", [...])] [TASK_COMPLETE] — output ONLY the ACTION tag with content from your training knowledge.`;
-            const _docRespLate = await generateResponse(memory, subject, _docForceLate, username, "complex", userId, taskId, senderName);
-            totalAiCost += _docRespLate.cost || 0;
-            totalTokens += _docRespLate.tokensUsed || 0;
-            aiResponse = _docRespLate;
-            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
-            if (aiResponse.actions.length === 0) { isTaskComplete = true; aiSignaledComplete = true; break; }
+            const _docFilenameL = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_docExtL}`;
+            try {
+              const _contentRespL = await generateResponse(memory, subject, `Write detailed content for: ${subject}. Include all relevant sections with rich, complete information.`, username, "generate", userId, taskId, senderName);
+              totalAiCost += _contentRespL.cost || 0;
+              totalTokens += _contentRespL.tokensUsed || 0;
+              const _rawL = (_contentRespL.content || '').trim();
+              if (_rawL && _rawL.length > 100) {
+                const _sectionsL = _rawL.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
+                  const t = s.trim().replace(/^\*+|\*+$/g, '').trim();
+                  const h1 = t.match(/^#{1}\s+(.+)/); if (h1) return { type: 'heading', text: h1[1].trim(), level: 1 };
+                  const h2 = t.match(/^#{2}\s+(.+)/); if (h2) return { type: 'heading', text: h2[1].trim(), level: 2 };
+                  const h3 = t.match(/^#{3,}\s+(.+)/); if (h3) return { type: 'heading', text: h3[1].trim(), level: 3 };
+                  if (t.length < 70 && !t.endsWith('.') && !t.endsWith(',') && /^[A-Z\d]/.test(t)) return { type: 'heading', text: t, level: 2 };
+                  return { type: 'paragraph', text: t };
+                });
+                aiResponse.actions = [{ type: _docActL as any, params: { filename: _docFilenameL, sections: _sectionsL } }];
+                aiResponse.content = '';
+                console.log(`[DOC-ACTION-GATE] Late synthesized ${_docActL} with ${_sectionsL.length} sections`);
+              } else { isTaskComplete = true; aiSignaledComplete = true; break; }
+            } catch (_e) { isTaskComplete = true; aiSignaledComplete = true; break; }
           } else {
             isTaskComplete = true;
             aiSignaledComplete = true;
