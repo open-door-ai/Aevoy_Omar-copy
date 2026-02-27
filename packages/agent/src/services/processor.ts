@@ -2176,7 +2176,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     const bodyWithLearnings = learningsHint ? `${effectiveBody}${learningsHint}` : effectiveBody;
-    let aiResponse = await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
+    // DOC tasks: skip the initial AI call to avoid rate-limiting the DOC-FAST-PATH's content generation.
+    // Both calls use Groq first — two rapid calls = second one hits TPM limit → fallback garbage.
+    // The DOC-FAST-PATH makes ONE dedicated "generate" call, which is all we need.
+    let aiResponse = (_isDocumentAction && !forceCheapModel)
+      ? { content: '', actions: [] as import('../types/index.js').Action[], cost: 0, tokensUsed: 0, model: 'doc-bypass', sessionId: null as string | null }
+      : await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
 
     // For [Scheduled] tasks: strip any 'schedule' actions the AI generated.
     // The task is ALREADY executing — the AI must not create another scheduled job.
@@ -2725,9 +2730,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         const _dfpExt = _dfpAct === 'create_excel' ? 'xlsx' : _dfpAct === 'create_powerpoint' ? 'pptx' : _dfpAct === 'create_pdf' ? 'pdf' : 'docx';
         const _dfpFile = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_dfpExt}`;
         const _dfpTypeName = _dfpAct === 'create_excel' ? 'spreadsheet' : _dfpAct === 'create_powerpoint' ? 'presentation' : _dfpAct === 'create_pdf' ? 'PDF' : 'Word document';
-        // Generate rich content for the document
-        const _dfpContent = await generateResponse(memory, subject, `Write detailed, complete content for: "${subject}". Include all relevant sections with comprehensive information. Format with clear headings using ## for sections and ### for subsections.`, username, "generate", userId, taskId, senderName);
-        const _dfpRaw = (_dfpContent.content || '').trim();
+        // Use initial AI response content if it's substantive (avoids second model call + rate limits)
+        // The initial response is typically 200-500+ chars of relevant narration we can use as content
+        const _dfpInitial = (aiResponse.content || '').replace(/\[TASK_COMPLETE\]/g, '').trim();
+        const _dfpRaw = _dfpInitial.length > 100
+          ? _dfpInitial
+          : await generateResponse(memory, subject, `Write detailed, complete content for: "${subject}". Include all relevant sections with comprehensive information. Format with clear headings using ## for sections and ### for subsections.`, username, "generate", userId, taskId, senderName).then(r => (r.content || '').trim());
         if (_dfpRaw && _dfpRaw.length > 100) {
           // Parse markdown into sections
           const _dfpSecs = _dfpRaw.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
