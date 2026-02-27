@@ -283,12 +283,12 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   generate: [
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },          // FREE, fast, no rate-limit issues
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },     // Quality code gen
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },  // ~200 tok/s — fastest for large HTML/code
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },         // High quality code gen
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },              // FREE, fast
     { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 }, // Best quality fallback
+    { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
   ],
   complex: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
@@ -1173,6 +1173,20 @@ HOW TO SOUND HUMAN:
 - Never narrate your process: don't say "I'm going to search for X" — just do it and report the outcome.
 - Short responses are almost always better than long ones. Don't over-explain.`;
 
+// Lightweight system prompt for generate tasks — skips the 11k-token AGI action prompt
+// which massively inflates input tokens and causes timeout on code/HTML generation.
+// Pure generation tasks don't need action tags, tool lists, or AGI reasoning chains.
+const GENERATE_SYSTEM_PROMPT = `You are an expert code and content generator. Output complete, production-ready content directly.
+
+RULES:
+- Output the COMPLETE thing. Never truncate, never use placeholders like "add more here".
+- No narration, no explanations, no "Here's the code:" preamble. Just the content itself.
+- For HTML: output a full, self-contained HTML file with all CSS and JS embedded inline.
+- For code: output complete, runnable code.
+- For essays/documents: output the full finished piece.
+- If asked for a portfolio site: make it look genuinely professional — good typography, real CSS animations, proper sections (hero, about, work, contact).
+- Output quality matters: the user will use this directly without editing.`;
+
 function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, username?: string): string {
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1268,15 +1282,26 @@ export async function generateResponse(
     return generateMockResponse(username, taskSubject, taskBody);
   }
 
-  // Use personality system for system prompt — ALWAYS includes AGI base prompt
-  const systemPromptWithUser = await getCompiledPrompt(
-    userId || "anonymous",
-    username,
-    memory,
-    senderName,
-    SYSTEM_PROMPT
-  );
-  const userPrompt = buildUserPrompt(memory, taskSubject, taskBody, username);
+  // For generate tasks, use lightweight system prompt — avoids sending the 11k-token AGI
+  // action prompt, which causes timeout on code/HTML generation with DeepSeek/Groq.
+  let systemPromptWithUser: string;
+  let userPrompt: string;
+  if (taskType === 'generate') {
+    systemPromptWithUser = GENERATE_SYSTEM_PROMPT;
+    const safeSubject = taskSubject.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const safeBody = taskBody.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    userPrompt = safeBody ? `${safeSubject}\n\n${safeBody}` : safeSubject;
+  } else {
+    // Use personality system for system prompt — ALWAYS includes AGI base prompt
+    systemPromptWithUser = await getCompiledPrompt(
+      userId || "anonymous",
+      username,
+      memory,
+      senderName,
+      SYSTEM_PROMPT
+    );
+    userPrompt = buildUserPrompt(memory, taskSubject, taskBody, username);
+  }
 
   // Check response cache (skip for vision/complex types)
   if (taskType !== "vision" && taskType !== "complex") {
@@ -1329,9 +1354,11 @@ export async function generateResponse(
 
     try {
       const baseTimeout = MODEL_TIMEOUTS[config.provider] || 30000;
-      // For generation/complex tasks, allow more time — large code/HTML outputs can take 60-90s
-      // (5000 tokens ÷ 75 tokens/s ≈ 67s for DeepSeek; Groq is faster at ~200 tokens/s but still needs room)
-      const timeout = (taskType === 'generate' || taskType === 'complex') ? Math.max(baseTimeout, 120000) : baseTimeout;
+      // generate: 180s — lightweight prompt, but 8192 output tokens of HTML/code; Groq at 200 tok/s = ~40s, DeepSeek ~100s
+      // complex: 120s — full AGI prompt + reasoning
+      const timeout = taskType === 'generate' ? Math.max(baseTimeout, 180000)
+        : taskType === 'complex' ? Math.max(baseTimeout, 120000)
+        : baseTimeout;
       console.log(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms | maxTokens=${(taskType === 'generate' || taskType === 'complex') ? 8192 : 4096}`);
       const startTime = Date.now();
       // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
