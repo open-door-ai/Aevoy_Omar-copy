@@ -646,6 +646,10 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
     }
 
     // Bot wall detection counters
+    // Ordering/booking/food tasks bail after 2 bot wall attempts — call the business is faster.
+    // Other tasks (signup, research, etc.) get 4 attempts before bail.
+    const isOrderingOrBookingTask = /\b(order|reserve|book|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*coffee|get.*sushi|call.*for)\b/i.test(task);
+    const BOT_WALL_BAIL_ATTEMPTS = isOrderingOrBookingTask ? 2 : 4;
     let botWallCount = 0;
     let lastBotWallUrl = '';
 
@@ -695,9 +699,12 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             // Second hit: try reloading with a different user agent via headers
             history.push(`⚠️ BOT WALL DETECTED (attempt ${botWallCount}): Site is blocking automated access. Waiting for challenge to resolve. If stuck, try NAVIGATE to a different path on the same site or NAVIGATE to a backup search result.`);
             await activePage.waitForTimeout(4000);
-          } else if (botWallCount >= 4) {
-            // Persistent bot wall: bail out for CALL-GATE
-            return { success: false, error: `Bot wall: ${wallUrl} — blocked by anti-bot system after ${botWallCount} attempts. CALL-GATE will call the business directly.`, steps, cost: totalCost, screenshots };
+          } else if (botWallCount >= BOT_WALL_BAIL_ATTEMPTS) {
+            // Persistent bot wall: bail out so processor can escalate to phone call
+            const bailReason = isOrderingOrBookingTask
+              ? `Bot wall: ${wallUrl} — CALL-GATE: site blocked automated access. Call the business directly.`
+              : `Bot wall: ${wallUrl} — blocked by anti-bot system after ${botWallCount} attempts. CALL-GATE will call the business directly.`;
+            return { success: false, error: bailReason, steps, cost: totalCost, screenshots };
           }
         } else {
           botWallCount = 0;

@@ -2427,12 +2427,15 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 6c. CREDENTIAL-DEPENDENT TASK EARLY EXIT: If the task requires logging into a service
     // (cancel subscription, manage account) and we don't have stored credentials, respond
     // immediately instead of wasting 5+ minutes on doomed browser attempts.
-    // Note: "get into" was removed — it matched "get into the developer portal" for CREATE tasks.
-    // "account" alone is too broad — must co-occur with a specific subscription service or "my account".
-    const isCredentialTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|manage|change plan|switch plan|update payment|change password|close account|log.?in|sign.?in)\b/i.test(taskTextLower) &&
-      /\b(subscription|netflix|hulu|spotify|disney|amazon prime|youtube premium|apple music|hbo|paramount|peacock|my account)\b/i.test(taskTextLower) &&
+    // GENERIC detection — no hardcoded service names. Works for any streaming/subscription service.
+    // Research tasks ("find out how to cancel", "what are the steps") are EXCLUDED — they can browse without login.
+    const isResearchTask = /\b(how to|how do|find out|what are|steps to|just (navigate|find|look|check|show)|report back|tell me (how|if|what)|show me how|do not (cancel|do|execute|place|submit|actually)|don'?t (actually|really)|without (canceling|actually))\b/i.test(taskTextLower);
+    const isCredentialTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|change plan|switch plan|update payment|change password|close account)\b/i.test(taskTextLower) &&
+      /\b(subscription|account|membership|plan|billing)\b/i.test(taskTextLower) &&
       // EXCLUDE create/signup tasks — "create an account" is NOT a credential management task
-      !/\b(create|sign.?up|register|make.*account|open.*account|new.*account|get.*api|developer|portal)\b/i.test(taskTextLower);
+      !/\b(create|sign.?up|register|make.*account|open.*account|new.*account|get.*api|developer|portal)\b/i.test(taskTextLower) &&
+      // EXCLUDE research tasks — "find out how to cancel" doesn't need login
+      !isResearchTask;
     if (isCredentialTask) {
       // Check if we have stored credentials for this service
       const serviceDomain = classification.domains?.[0] || '';
@@ -2475,11 +2478,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
       if (!hasCredentials) {
         console.log(`[CREDENTIAL-GATE] Task requires credentials for ${serviceDomain || 'service'} but none found — asking user directly`);
-        // Extract service name from the task (e.g. "Cancel my Netflix" → "Netflix")
-        const serviceNameMatch = subject.match(/\b(netflix|hulu|spotify|disney\+?|amazon prime|apple (?:tv|music)|youtube premium|hbo|paramount\+?|peacock|crave|tidal|deezer|pandora|crunchyroll|twitch|patreon|dropbox|adobe|microsoft 365|office 365)\b/i);
-        const serviceName = serviceNameMatch?.[1] || (serviceDomain ? serviceDomain.replace('.com', '').replace('.ca', '') : 'the service');
+        // Infer service name generically from the task text (any proper noun after "cancel/manage my X")
+        const serviceNameMatch = subject.match(/\b(?:cancel|unsubscribe|manage|pause|delete|close)\s+(?:my\s+)?([A-Z][a-zA-Z0-9+\s]{1,30}?)(?:\s+(?:subscription|account|membership|plan)|\s*$)/i) ||
+          subject.match(/\b(?:on|from|at|to)\s+([A-Z][a-zA-Z0-9+\s]{1,30}?)(?:\s*$|[\s,.])/i);
+        const serviceName = serviceNameMatch?.[1]?.trim() || (serviceDomain ? serviceDomain.replace('www.', '').replace('.com', '').replace('.ca', '') : 'the service');
+        const verb = taskTextLower.includes('cancel') ? 'cancel your' : taskTextLower.includes('delete') ? 'delete your' : 'manage your';
+        const noun = taskTextLower.includes('subscription') ? 'subscription' : 'account';
         // Ask the user to REPLY with their credentials — never send them to Settings
-        const credResponse = `To ${taskTextLower.includes('cancel') ? 'cancel your' : 'manage your'} ${serviceName} ${taskTextLower.includes('subscription') ? 'subscription' : 'account'}, I need your login credentials.\n\nReply with your ${serviceName} email address and password and I'll log in and handle it immediately.`;
+        const credResponse = `To ${verb} ${serviceName} ${noun}, I need your login credentials.\n\nReply with your ${serviceName} email address and password and I'll log in and handle it immediately.`;
 
         await getSupabaseClient().from("tasks").update({
           status: "completed",
@@ -4273,6 +4279,28 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                   updated_at: new Date().toISOString(),
                 }, { onConflict: 'service,task_type' });
               } catch { /* non-critical */ }
+
+              // AUTO-SAVE CREDENTIALS: If the vision task included an email/password, save to
+              // credential_vault so future "cancel/manage X account" tasks can log in automatically.
+              try {
+                const credsInTask = visionTask.match(/email=([^\s,\n;]+)/)?.[1];
+                const passInTask = visionTask.match(/password=([^\s,\n;]+)/)?.[1];
+                if (credsInTask && passInTask) {
+                  const { encryptWithServerKey } = await import('../security/encryption.js');
+                  const credService = new URL(visionPageUrl).hostname.replace('www.', '').split('.')[0]; // e.g. "canva"
+                  const encryptedPass = await encryptWithServerKey(passInTask);
+                  void getSupabaseClient().from('credential_vault').upsert({
+                    user_id: userId,
+                    service_name: credService,
+                    service_url: new URL(visionPageUrl).origin,
+                    username: credsInTask,
+                    encrypted_password: encryptedPass,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                  }, { onConflict: 'user_id,service_name' });
+                  console.log(`[VISION-AGENT] Auto-saved credentials for ${credService} (${credsInTask})`);
+                }
+              } catch { /* non-critical */ }
               break;
             } else {
               const errMsg = visionResult.error || 'Unknown error';
@@ -4292,8 +4320,26 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                   updated_at: new Date().toISOString(),
                 }, { onConflict: 'service,task_type' });
               } catch { /* non-critical */ }
-              // Inject failure context so next AI round knows what happened and tries differently
-              visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". Think creatively — try 3 different approaches before giving up: (1) DIFFERENT AUTH: Try "Continue with Google" or "Continue with Apple" OAuth — bypasses bot detection. (2) ALTERNATIVE: search("free alternatives to [service]") and try one that works. (3) BUILT-IN TOOLS: If goal is content creation (design, image, doc), use generate_image() or create_word() directly — no signup needed. (4) MOBILE SITE: Try m.site.com or a different URL path. (5) PUBLIC API: search("[service] free API") — programmatic access is often easier. NEVER just report "couldn't sign up" — achieve the USER'S GOAL by any available means.]`;
+              // BOT WALL → PHONE ESCALATION: If the website blocked access and the task is
+              // ordering/booking/calling, pivot to phone immediately instead of retrying browser.
+              const isBotWallError = /CALL-GATE|bot-blocking|bot wall|anti-bot|blocked by|access denied/i.test(errMsg);
+              const isOrderOrBookingTask = /\b(order|reserve|book|buy|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*sushi)\b/i.test(taskTextLower);
+              if (isBotWallError && isOrderOrBookingTask) {
+                const cleanTaskForSearch = `${subject} ${body}`.replace(/\b(go to|navigate to|check|find|order from|can you|please)\b/gi, '').replace(/['"]/g, '').trim().substring(0, 60);
+                visionFailureNote = `[BOT WALL — PHONE ESCALATION REQUIRED] The website blocked automated access. DO NOT retry the browser. CALL THE BUSINESS DIRECTLY — this is faster and more reliable than fighting their bot detection.
+
+STEP 1: Search for their phone number:
+[ACTION:search("${cleanTaskForSearch} phone number address")]
+
+STEP 2: After search returns results, extract the phone number and call them:
+[ACTION:call_external("+1XXXXXXXXXX", "${subject.substring(0, 100)}")]
+
+DO NOT attempt another browser action. Use search → call_external now.`;
+                console.log(`[BOT-WALL-PHONE] Pivoting to phone escalation for ordering task`);
+              } else {
+                // Inject failure context so next AI round knows what happened and tries differently
+                visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". Think creatively — try 3 different approaches before giving up: (1) DIFFERENT AUTH: Try "Continue with Google" or "Continue with Apple" OAuth — bypasses bot detection. (2) ALTERNATIVE: search("free alternatives to [service]") and try one that works. (3) BUILT-IN TOOLS: If goal is content creation (design, image, doc), use generate_image() or create_word() directly — no signup needed. (4) MOBILE SITE: Try m.site.com or a different URL path. (5) PUBLIC API: search("[service] free API") — programmatic access is often easier. NEVER just report "couldn't sign up" — achieve the USER'S GOAL by any available means.]`;
+              }
             }
           } catch (visionErr) {
             console.warn(`[VISION-AGENT] Exception: ${visionErr} — continuing with AI`);
@@ -5082,14 +5128,20 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
       }
     }
 
-    // POST-LOOP CALL GATE: If user asked to "call the dentist/florist/restaurant/etc."
-    // and no call_external was executed, FORCE the call — extract phone from response if needed.
+    // POST-LOOP CALL GATE: If user asked to call/order/book and no call_external was executed,
+    // FORCE the call — extract phone from response if needed.
     const isCallBusinessTask = /\b(call|phone|ring|dial)\s+(the|my|a|an|that)\s+\w+/i.test(subject) &&
       !/(call me|call me back|give me a call)/i.test(subject); // Exclude "call ME" requests
-    // Also detect implicit call tasks: "book a reservation at X", "make an appointment with X"
+    // Also detect implicit call tasks: "book a reservation", "order from X", "get me X from Y"
     const isBookingTask = /\b(book|reserve|make (a|an) (reservation|appointment|booking))\b/i.test(subject);
+    const isOrderingFromTask = /\b(order|get me|pickup|delivery from)\b.{0,40}\b(restaurant|pizza|burger|sushi|coffee|food|dominos?|mcdonalds?|starbucks?|a&w|tim hortons?|denny'?s?|wendy'?s?|taco bell)\b/i.test(`${subject} ${body}`) ||
+      /\b(order|get me)\b.{0,30}\bfrom\b/i.test(`${subject} ${body}`);
+    // Also fire CALL-GATE if vision agent failed with bot-wall on ordering task AND phone not tried
+    const visionBotWalledOrdering = actionResults.some(r =>
+      r.action?.type === 'browse' && !r.success && typeof r.result === 'string' && /CALL-GATE|bot wall|bot-blocking/i.test(r.result)
+    ) && isOrderingFromTask;
     const hasCallExternalAction = actionResults.some(r => r.action?.type === 'call_external');
-    if ((isCallBusinessTask || isBookingTask) && !hasCallExternalAction && currentIteration <= MAX_ITERATIONS) {
+    if ((isCallBusinessTask || isBookingTask || isOrderingFromTask || visionBotWalledOrdering) && !hasCallExternalAction && currentIteration <= MAX_ITERATIONS) {
       console.log(`[CALL-GATE] Task requires calling a business but no call_external was executed`);
 
       // Step 1: Try to extract phone number from existing response/action results
