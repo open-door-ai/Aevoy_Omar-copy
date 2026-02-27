@@ -3278,9 +3278,42 @@ For "${subject}":
             break;
           }
         } else if (!hasRealActions) {
-          isTaskComplete = true;
-          aiSignaledComplete = true;
-          break;
+          // DOCUMENT ACTION GATE: AI signaled TASK_COMPLETE and described a document but never
+          // called create_word/create_excel/etc. Force a re-prompt with explicit action tag instruction.
+          const _hasDocAction = actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || ''));
+          if (_isDocumentAction && !_hasDocAction && currentIteration < MAX_ITERATIONS - 1 && aiResponse.model !== 'fallback') {
+            console.warn(`[DOC-ACTION-GATE] REJECTED: AI completed without calling create action. Re-prompting with explicit instruction.`);
+            const _docAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+              : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+              : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf'
+              : 'create_word';
+            const _docExt = _docAct === 'create_excel' ? 'xlsx' : _docAct === 'create_powerpoint' ? 'pptx' : _docAct === 'create_pdf' ? 'pdf' : 'docx';
+            const _docForcePrompt = `[DOC-ACTION-GATE REJECTION — PREVIOUS RESPONSE IGNORED]
+
+Your previous response was REJECTED because you described a document but did NOT call the action to create it.
+
+YOU MUST output ONLY this action tag (with actual content filled in):
+[ACTION:${_docAct}("document.${_docExt}", ["Section 1 content", "Section 2 content", ...])] [TASK_COMPLETE]
+
+User asked: "${subject}"
+Use your training knowledge to fill in rich, detailed content for each section. Do NOT search, do NOT browse, do NOT describe the document. Just output the ACTION tag with the content inline.`;
+            const _docForcedResp = await generateResponse(memory, subject, _docForcePrompt, username, "complex", userId, taskId, senderName);
+            totalAiCost += _docForcedResp.cost || 0;
+            totalTokens += _docForcedResp.tokensUsed || 0;
+            aiResponse = _docForcedResp;
+            aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+            if (aiResponse.actions.length === 0) {
+              // Still no actions — give up
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              break;
+            }
+            // Fall through — execute the create action
+          } else {
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            break;
+          }
         } else {
           // If round 1 has search/browse actions, DON'T mark complete yet — let the search
           // run and re-prompt the AI with ACTUAL results so it can give a data-driven answer
