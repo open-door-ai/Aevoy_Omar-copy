@@ -1709,6 +1709,25 @@ export async function quickValidate(
     }
   }
 
+  // Try Groq (llama-3.1-8b-instant — fast, available on Railway, no Anthropic/Google key needed)
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const response = await getGroqClient().chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        max_tokens: 256,
+        messages: [
+          { role: "system", content: sys },
+          { role: "user", content: prompt },
+        ],
+      });
+      const content = response.choices[0]?.message?.content || "";
+      const cost = ((response.usage?.prompt_tokens || 0) * 0.05 + (response.usage?.completion_tokens || 0) * 0.08) / 1_000_000;
+      return { result: content.trim(), cost };
+    } catch {
+      // Fall through
+    }
+  }
+
   // Try Claude Haiku
   if (process.env.ANTHROPIC_API_KEY) {
     try {
