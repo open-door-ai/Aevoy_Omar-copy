@@ -5553,7 +5553,11 @@ Extract the ACTUAL phone number from search results and call them:
         // "All models failed" fallback placeholder — treat as narration so quality gate retries
         responseLC.includes('taking longer than expected') ||
         responseLC.includes('follow up shortly with results') ||
-        responseLC.includes("i'm processing your request about")
+        responseLC.includes("i'm processing your request about") ||
+        // "can be created using templates from [Company] website at https://..." — sending to external site instead of creating locally
+        (/can be (?:created|found|downloaded|accessed) using (?:templates?|tools?|software) (?:from|at|on) (?:\w+['\u2019]?s )?website at https?:\/\//i.test(responseLC)) ||
+        // "is the most commonly used word processing software for creating..." — describing what to use vs. doing it
+        (/is the most commonly used (?:word processing|spreadsheet|presentation) software for\b/i.test(responseLC))
       );
 
       // Detect advice-style numbered lists: "Here are N ways...", "1. ... 2. ... 3. ..."
