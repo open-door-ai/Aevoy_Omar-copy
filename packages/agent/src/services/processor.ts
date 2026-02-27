@@ -6497,7 +6497,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         }
       }
     } else {
-      cleanResponse = `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
+      // Last resort: check if we have ANY partial data from action results
+      const _partialActionData = actionResults
+        .filter(r => r.success && r.result && typeof r.result === 'string' && String(r.result).length > 20)
+        .map(r => String(r.result).substring(0, 300));
+      if (_partialActionData.length > 0) {
+        cleanResponse = `Here's what I found:\n\n${_partialActionData.join('\n\n')}`;
+      } else {
+        cleanResponse = `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
+      }
     }
 
     // ── PASSIVE RESPONSE GUARD ─────────────────────────────────────────────

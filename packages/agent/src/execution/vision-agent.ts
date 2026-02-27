@@ -198,7 +198,7 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
 
   // Human-like mouse movement before click (bezier curve path)
   try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
-  await page.waitForTimeout(80 + Math.floor(Math.random() * 120)); // 80-200ms aim delay
+  await page.waitForTimeout(30 + Math.floor(Math.random() * 50)); // 30-80ms aim delay (speed optimized)
 
   // Strategy 1: Playwright mouse click (fires mouseenter, mousedown, mouseup, click events)
   try {
@@ -243,24 +243,24 @@ async function typeByIndex(page: Page, index: number, text: string): Promise<boo
     }, [index, INTERACTIVE_SELECTOR] as [number, string]);
 
     if (!pos) return false;
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(60);
 
     // Click to focus
     await page.mouse.click(pos.x, pos.y);
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(60);
 
     // Clear with triple-click + Delete (browser-use strategy — works on React controlled inputs)
     await page.mouse.click(pos.x, pos.y, { clickCount: 3 });
     await page.keyboard.press('Delete');
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(30);
 
     // Also try Ctrl+A + Delete as belt-and-suspenders
     await page.keyboard.press('Control+a');
     await page.keyboard.press('Delete');
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(30);
 
-    // Type with 25ms delay per character (browser-use uses 18ms — we use 25ms for stability)
-    await page.keyboard.type(text, { delay: 25 });
+    // Type with 18ms delay per character (browser-use standard speed)
+    await page.keyboard.type(text, { delay: 18 });
     return true;
   } catch {
     return false;
@@ -346,7 +346,7 @@ async function selectByIndex(page: Page, index: number, value: string): Promise<
  * Take a JPEG screenshot for vision AI (quality 70).
  */
 async function takeScreenshot(page: Page): Promise<string> {
-  const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
+  const buf = await page.screenshot({ type: 'jpeg', quality: 50 });
   return buf.toString('base64');
 }
 
@@ -379,7 +379,7 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
   }).join('\n');
 
   const historyText = history.length > 0
-    ? `\nPREVIOUS STEPS:\n${history.slice(-8).join('\n')}\n`
+    ? `\nPREVIOUS STEPS:\n${history.slice(-6).join('\n')}\n`
     : '';
 
   // If on an error page, tell the agent explicitly
@@ -406,9 +406,9 @@ ${vpNote}${credNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${h
 INTERACTIVE ELEMENTS (reference by number, ★NEW = appeared after last action):
 ${elemLines || '(none visible)'}
 
-Look at the screenshot and the element list. Choose ONE action to take next.
+Look at the screenshot and the element list. Output 3-5 actions to execute in sequence (one per line). BATCH all form fills together.
 
-RESPOND WITH EXACTLY ONE LINE in this format:
+RESPOND WITH ACTIONS in this format (one per line, 3-5 preferred):
 - CLICK:N              (click element N from the list above)
 - CLICK_AT:x,y        (click at pixel coordinates — use when element is not in the list but visible in screenshot)
 - TYPE:N:"text"        (keyboard-type text into element N — clears first)
@@ -426,9 +426,9 @@ RESPOND WITH EXACTLY ONE LINE in this format:
 - FAIL:"reason"        (impossible to complete - explain why)
 
 RULES:
-- One action only. No explanation. Just the action line.
-- If you need to fill a form, fill ONE field at a time.
-- After typing in a field, use PRESS:Tab to move to the next field.
+- Output 3-5 actions per response (one per line). No explanation text — just action lines.
+- Fill ALL visible form fields in ONE response (FILL:N + FILL:M + CLICK:submit).
+- Do NOT fill one field then wait — batch all fields together.
 - If TYPE does not work on a field (no text appears after 2 tries), use FILL instead.
 - After filling all fields, CLICK the submit button.
 - If a CAPTCHA appears, output WAIT (it will be solved automatically).
@@ -518,16 +518,18 @@ function parseAction(response: string): { type: string; index?: number; text?: s
 
 const SYSTEM_PROMPT = `You are a browser automation agent. You control a real web browser.
 Your job is to COMPLETE tasks — not describe them, not navigate to a page and stop. ACTUALLY EXECUTE the full task.
-Be direct and efficient. You can return UP TO 5 actions per response (one per line). Execute related actions together to be faster.
-Example multi-action response for filling a form:
-FILL:3:"john@example.com"
-FILL:5:"MyPassword123"
-CLICK:7
 
-For navigation + scroll:
-NAVIGATE:"https://example.com/signup"
-
-Single complex actions that change page state should be alone. Group form fills and clicks together.
+SPEED IS CRITICAL — BATCH ACTIONS (MANDATORY):
+Return 3-5 actions per response. One action per line. The system executes them in order.
+- ALWAYS batch form fills together (fill ALL visible fields at once + click submit):
+  FILL:3:"john@example.com"
+  FILL:5:"MyPassword123"
+  FILL:8:"John Smith"
+  CLICK:12
+- After navigation loads, batch next logical actions:
+  SCROLL:down
+- SINGLE action only when: navigating to a new URL, after DONE/FAIL, or for WAIT/SWITCH_TAB.
+- Returning only 1 action when multiple fields are visible is SLOW and WASTEFUL. Batch them.
 
 CREDENTIALS RULE (CRITICAL):
 - If the prompt shows "⚡ CREDENTIALS: email=... | password=..." — USE THEM. Do NOT ask the user for credentials. They are provided.
@@ -666,25 +668,19 @@ export async function runVisionAgent(
     console.log(`[VISION-AGENT] Credentials extracted: email=${taskCreds.email}, password=${taskCreds.password ? '***' : '(none)'}`);
   }
 
-  // PRE-PLANNING STEP (Manus-style): Generate a structured plan before touching the browser.
-  // This gives the AI a north star to follow even when individual steps fail.
+  // PRE-PLANNING STEP: Only for complex tasks (signups, bookings, multi-step flows).
+  // Skip for simple research/lookup tasks to save 3-5s.
   let taskPlan = '';
-  try {
-    const planPrompt = `TASK: ${task}
-
-You are a browser automation planner. Output a concise execution plan as 3-5 bullet points:
-1. What URL to navigate to first
-2. What form fields to fill (if any)
-3. What button to click to submit
-4. What success looks like
-5. Fallback if the primary approach fails
-
-Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
-    const planResult = await generateVisionResponse(planPrompt, '', SYSTEM_PROMPT);
-    taskPlan = planResult.content.substring(0, 500);
-    totalCost += planResult.cost;
-    console.log(`[VISION-AGENT] Plan: ${taskPlan.substring(0, 200)}`);
-  } catch { /* planning is optional — continue without it */ }
+  const isComplexBrowserTask = /\b(sign\s*up|register|create.*account|book|reserve|order|purchase|checkout|apply|subscribe)\b/i.test(task);
+  if (isComplexBrowserTask) {
+    try {
+      const planPrompt = `TASK: ${task}\n\nOutput a concise execution plan as 3-5 bullet points: URL, fields to fill, submit button, success criteria, fallback. Max 100 words.`;
+      const planResult = await generateVisionResponse(planPrompt, '', SYSTEM_PROMPT);
+      taskPlan = planResult.content.substring(0, 400);
+      totalCost += planResult.cost;
+      console.log(`[VISION-AGENT] Plan: ${taskPlan.substring(0, 150)}`);
+    } catch { /* planning is optional — continue without it */ }
+  }
 
   try {
     // PRE-NAVIGATION: If page is blank/error, navigate to the target URL immediately
@@ -744,14 +740,16 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
         popupPage = null; // consumed — will be re-populated if another opens
       }
 
-      // Wait for page to settle
+      // Wait for page to settle (250ms — fast enough for most SPAs, saves ~350ms/step)
       await activePage.waitForLoadState('domcontentloaded').catch(() => {});
-      await activePage.waitForTimeout(600);
+      await activePage.waitForTimeout(250);
 
-      // Handle CAPTCHAs automatically
-      try {
-        await handleCaptchaIfPresent(activePage, userId, taskId);
-      } catch { /* non-critical */ }
+      // Handle CAPTCHAs automatically (every 3 steps to save ~100ms/step on non-CAPTCHA pages)
+      if (steps % 3 === 0) {
+        try {
+          await handleCaptchaIfPresent(activePage, userId, taskId);
+        } catch { /* non-critical */ }
+      }
 
       // BOT WALL DETECTION: Cloudflare, DataDome, PerimeterX block pages
       // Detected by: checking for challenge/blocked page content
@@ -787,8 +785,8 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
         }
       } catch { /* non-critical */ }
 
-      // Auto-dismiss cookie consent banners and modal overlays that block interaction
-      try {
+      // Auto-dismiss cookie consent banners and modal overlays (only first 5 steps — banners appear on first load)
+      if (steps < 5) try {
         await activePage.evaluate(() => {
           const dismissSelectors = [
             '[id*="cookie"] button[class*="accept"], [id*="cookie"] button[class*="agree"]',
@@ -1025,7 +1023,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
             if (actionOk) {
               await activePage.waitForLoadState('domcontentloaded').catch(() => {});
-              await waitForSpaStable(activePage, 2500);
+              await waitForSpaStable(activePage, 1500);
 
               // Post-click verification: if URL and element count unchanged, the click
               // may have been intercepted/blocked. Try JS .click() as secondary strategy.
@@ -1066,7 +1064,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             try { await humanMouseMove(activePage, x, y); } catch { /* non-critical */ }
             await activePage.mouse.click(x, y);
             await activePage.waitForLoadState('domcontentloaded').catch(() => {});
-            await waitForSpaStable(activePage, 2000);
+            await waitForSpaStable(activePage, 1200);
             actionOk = true;
             break;
           }
@@ -1074,7 +1072,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           case 'type': {
             actionOk = await typeByIndex(activePage, action.index!, action.text!);
             if (actionOk) {
-              await activePage.waitForTimeout(300);
+              await activePage.waitForTimeout(100);
               const fieldVal = await activePage.evaluate(([idx, sel]: [number, string]) => {
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                   const r = el.getBoundingClientRect();
@@ -1094,7 +1092,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           case 'fill': {
             actionOk = await fillByIndex(activePage, action.index!, action.text!);
             if (actionOk) {
-              await activePage.waitForTimeout(300);
+              await activePage.waitForTimeout(100);
               const fieldVal = await activePage.evaluate(([idx, sel]: [number, string]) => {
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                   const r = el.getBoundingClientRect();
@@ -1128,7 +1126,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             const navErr = await activePage.goto(action.url!, { waitUntil: 'domcontentloaded', timeout: 20000 })
               .then(() => null)
               .catch((e: Error) => e.message);
-            await activePage.waitForTimeout(1000);
+            await activePage.waitForTimeout(500);
             const landedUrl = activePage.url();
             const isStillError = landedUrl.startsWith('chrome-error://') || landedUrl.startsWith('about:blank');
             if (isStillError || navErr) {
@@ -1142,7 +1140,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
           case 'press': {
             await activePage.keyboard.press(action.key!);
-            await activePage.waitForTimeout(300);
+            await activePage.waitForTimeout(100);
             actionOk = true;
             break;
           }
@@ -1215,7 +1213,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       // BATCH EXECUTION: If AI returned multiple actions, execute remaining ones
       // Skip batch if first action failed, was navigation (page changed), or was done/fail
       if (batchSize > 1 && actionOk && !['navigate', 'done', 'fail', 'scroll', 'wait', 'switch_tab'].includes(action.type)) {
-        for (let bi = 1; bi < parsedActions.length && bi < 5; bi++) {
+        for (let bi = 1; bi < parsedActions.length && bi < 8; bi++) {
           const batchAction = parsedActions[bi]!;
           if (!batchAction || batchAction.type === 'done' || batchAction.type === 'fail' || batchAction.type === 'navigate') break;
           try {
@@ -1274,7 +1272,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
               console.log(`[VISION-AGENT] BATCH ${bi}: ${batchAction.type}:${batchAction.index ?? ''} → FAIL, stopping batch`);
               break;
             }
-            await activePage.waitForTimeout(200); // Brief pause between batch actions
+            await activePage.waitForTimeout(100); // Brief pause between batch actions
           } catch (batchErr) {
             console.warn(`[VISION-AGENT] Batch action ${bi} failed: ${batchErr}`);
             break;
