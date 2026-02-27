@@ -438,11 +438,12 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
       ? `Here's what I did for "${subject}":\n\n${summaryParts.join("\n\n")}\n\n${successCount}/${allResults.length} steps completed.`
       : `I wasn't able to complete "${subject}" — I'll learn from this and do better next time.`;
 
-    // Update task record
+    // Update task record — always set response_text so users see output, never use "failed"
     await getSupabaseClient()
       .from("tasks")
       .update({
-        status: allSucceeded ? "completed" : (successCount > 0 ? "partial" : "failed"),
+        status: allSucceeded ? "completed" : "needs_review",
+        response_text: resultMessage,
         completed_at: new Date().toISOString(),
         execution_time_ms: Date.now() - workflowStart,
       })
@@ -466,17 +467,33 @@ export async function handleAutonomousWorkflow(task: TaskRequest): Promise<TaskR
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error('[AGI] Workflow error:', errorMsg);
 
-    await sendResponse({
-      to: from,
-      from: `${username}@aevoy.com`,
-      subject: `Re: ${subject}`,
-      body: "I ran into an issue, but I'm learning from it. Let me try a different approach — send your request again.",
-    });
+    const catchMsg = "I ran into an issue working on this, but I'm learning from it. Let me try a different approach — send your request again.";
+
+    // Always update task so users see a response (not null)
+    if (taskId) {
+      await getSupabaseClient()
+        .from("tasks")
+        .update({
+          status: "needs_review",
+          response_text: catchMsg,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", taskId);
+    }
+
+    if (!task.suppressEmail) {
+      await sendResponse({
+        to: from,
+        from: `${username}@aevoy.com`,
+        subject: `Re: ${subject}`,
+        body: catchMsg,
+      });
+    }
 
     return {
       taskId: taskId || "",
       success: false,
-      response: "",
+      response: catchMsg,
       actions: [],
       error: errorMsg,
     };
