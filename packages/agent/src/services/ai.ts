@@ -1106,9 +1106,13 @@ Step-by-step:
    [ACTION:search("{{industry}} companies {{city}} email contact")]
    [ACTION:search("{{title}} at {{company type}} email site:linkedin.com OR site:apollo.io")]
 3. BROWSE the top results to extract: name, company, email, recent news (something to personalize)
+   If LinkedIn won't give you emails directly → browse their company WEBSITE and look for "Contact" page.
+   If no email found → try guessing: info@domain.com, hello@domain.com, contact@domain.com.
+   NEVER stop at "couldn't find email" — guess a common pattern and send anyway.
 4. SEND personalized emails — use extracted details:
    [ACTION:send_email("ceo@company.com", "quick thought about [their specific product]", "[personalized 3-sentence pitch]")]
    Do this for MINIMUM 3 prospects per task run.
+   If you can only find one company, send to their generic email (hello@domain.com) AND find 2 more companies.
 5. REMEMBER what you did: [ACTION:remember("MONITOR:Check for replies to outreach I sent on {{date}} to {{names}}. Notify user of any response.")]
 6. REPORT: "Sent outreach to 3 prospects. [Name 1 at Company 1] — referenced [specific thing]. [Name 2]... Monitoring for replies."
 

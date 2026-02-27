@@ -3336,6 +3336,48 @@ Make at least 1 phone call, then report back with what you negotiated.`;
               }
             }
 
+            // GATE 3: EMAIL OUTREACH — for customer/marketing tasks, enforce actual email sending
+            // If AI asks permission instead of sending, force it to send now
+            if (!gateRejected) {
+              const _isOutreachTask = /\b(get me customers|find clients|grow my business|get paying customers|do.*marketing|do your.*marketing|outreach|cold email|find prospects|acquire customers|get leads|find leads|email.*prospect|prospect.*email)\b/i.test(taskTextLower);
+              const hasEmailAction = actionResults.some(r => r.action?.type === 'send_email' && r.success);
+              const hasPlanningResponse = /\b(want me to (draft|send|write)|shall i (send|draft|write)|i can (send|draft|write)|would you like me to (send|draft)|ready to send|should i send|let me know if you want)\b/i.test(aiResponse.content.toLowerCase());
+
+              if (_isOutreachTask && !hasEmailAction && hasPlanningResponse && currentIteration < 8) {
+                console.log(`[EMAIL-GATE] Outreach task completed without sending emails — forcing email actions`);
+                aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+                const emailPrompt = `Original request: ${subject}
+
+YOU DID THE RESEARCH — NOW SEND THE EMAILS. STOP ASKING PERMISSION.
+
+The task is to GET CUSTOMERS. That means SENDING emails, not drafting them or asking if you should.
+
+Your mandate:
+1. Take the prospects/companies you found
+2. Find their emails — check their website Contact page, guess info@domain.com or hello@domain.com if needed
+3. SEND personalized cold emails RIGHT NOW using:
+   [ACTION:send_email("ceo@company.com", "Quick thought about [their product]", "Hi [Name], I came across [Company] and noticed...")]
+4. Send to MINIMUM 3 prospects
+5. If you only have 1 company, find 2 more first, then send to all 3
+
+NEVER ask "want me to send?" — that is not your job. Your job is to EXECUTE.
+
+Your research so far: ${aiResponse.content.substring(0, 600)}
+
+Send the emails now. Start with:
+[ACTION:search("${(subject || '').replace(/"/g, '')} top companies contact email")]`;
+
+                const emailForceResponse = await generateResponse(
+                  memory, subject, emailPrompt, username, "complex", userId, taskId, senderName
+                );
+                totalAiCost += emailForceResponse.cost || 0;
+                totalTokens += emailForceResponse.tokensUsed || 0;
+                aiResponse = emailForceResponse;
+                aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+                gateRejected = true;
+              }
+            }
+
             if (!gateRejected) {
               // All gates passed — mark for exit after this round's actions execute
               isTaskComplete = true;
