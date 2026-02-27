@@ -5508,6 +5508,12 @@ Extract the ACTUAL phone number from search results and call them:
         responseLC.includes('you can view the full search results at') ||
         responseLC.includes('you can check the full results at') ||
         responseLC.includes('you can find the results at') ||
+        // "you can view the search interface at" / "you can view results at"
+        /you can (?:view|see|access|check|find) the (?:search|results?|listings?|interface|page)\b/i.test(responseLC) ||
+        // "returned a generic [site] search page" / "returned a generic DuckDuckGo search page"
+        /returned a (?:generic|standard|basic|plain|regular|default)\s+\w+\s+(?:search|results?|page)/i.test(responseLC) ||
+        // "only returned a search page / results page" — got a page not data
+        /only\s+returned\s+a\s+(?:search|results?|generic|standard)/i.test(responseLC) ||
         // "X results are available at/on [site] at https://..." — sending user to URL instead of giving results
         (/(?:results?|listings?|data|information|jobs?)\s+(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(responseLC)) ||
         // "job listings are available on Indeed" — redirect to job board without actual results
