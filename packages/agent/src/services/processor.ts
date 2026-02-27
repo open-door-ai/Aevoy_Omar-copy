@@ -426,6 +426,26 @@ async function tryScheduleFastPath(
     description = scheduleMatch[1].trim();
     timeStr = scheduleMatch[2].trim();
     action = 'task';
+    // Post-process: strip trailing "to <task>" / "for <task>" from timeStr that belongs to description
+    // e.g. "schedule a reminder tomorrow at 9am to call the dentist"
+    //       → timeStr="9am to call the dentist" → strip → timeStr="9am", description="call the dentist"
+    const trailingTaskMatch = timeStr.match(/^(.+?)\s+(?:to|for|and)\s+(.{5,})$/i);
+    if (trailingTaskMatch) {
+      const potentialTime = trailingTaskMatch[1].trim();
+      const potentialTask = trailingTaskMatch[2].trim();
+      if (/\b(?:\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?|noon|midnight|tomorrow|tonight|morning|evening|afternoon)\b/i.test(potentialTime)) {
+        timeStr = potentialTime;
+        if (/^(a\s+)?reminder\s+(for\s+me\s+)?/i.test(description) || description.length < 20) {
+          description = potentialTask;
+        }
+      }
+    }
+    // Also handle "remind me tomorrow at 9am to call X" where description="a reminder for me tomorrow"
+    // Extract day/time from description if timeStr is just a time
+    const dayInDesc = description.match(/\b(tomorrow|tonight|this\s+(?:morning|afternoon|evening)|next\s+\w+)\b/i);
+    if (dayInDesc && !/\b(tomorrow|tonight|this\s+(?:morning|afternoon|evening))\b/i.test(timeStr)) {
+      timeStr = `${dayInDesc[1]} at ${timeStr}`;
+    }
   }
 
   if (!action || !timeStr) return null;
@@ -536,7 +556,8 @@ async function tryScheduleFastPath(
     const { data: prof } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
     if (prof?.timezone) userTz = prof.timezone;
   } catch { /* use default */ }
-  const humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: userTz });
+  let humanTime = '9:00 AM';
+  try { humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: userTz }); } catch { /* fallback */ }
   const responseText = action === 'call_user'
     ? `Got it — I'll call you at ${humanTime}`
     : action === 'send_sms'
@@ -7160,7 +7181,8 @@ async function executeAction(
         const { data: tzProf } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
         if (tzProf?.timezone) schedTz = tzProf.timezone;
       } catch { /* use default */ }
-      const humanTime = new Date(nextRun).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: schedTz });
+      let humanTime = '9:00 AM';
+      try { humanTime = new Date(nextRun).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: schedTz }); } catch { /* fallback */ }
       return {
         action,
         success: !error,
@@ -7807,6 +7829,33 @@ function calculateNextRun(cron: string): string {
 
   // ---- Relative time support ----
   // "in 2 minutes", "in 30 seconds", "in 1 hour", "5 minutes", "2m", "1h", etc.
+  // ---- Tomorrow / Tonight / This morning/afternoon/evening ----
+  // "tomorrow at 9am", "tomorrow morning", "tonight at 8", "this evening"
+  const tomorrowMatch = lower.match(/^(?:(tomorrow|tonight)\s+(?:at\s+)?|this\s+(morning|afternoon|evening)\s*(?:at\s+)?)(.+)?$/i);
+  if (tomorrowMatch || /^(tomorrow|tonight|this\s+(?:morning|afternoon|evening))$/i.test(lower)) {
+    const base = new Date(now);
+    const isTonight = /tonight/i.test(lower);
+    const isTomorrow = /tomorrow/i.test(lower);
+    if (isTomorrow || isTonight) base.setDate(base.getDate() + 1);
+    const timePart = (tomorrowMatch?.[3] || '').trim();
+    // Set hour based on keyword or time string
+    if (!timePart || /morning/i.test(lower)) base.setHours(9, 0, 0, 0);
+    else if (/afternoon/i.test(lower) && !/\d/.test(timePart)) base.setHours(14, 0, 0, 0);
+    else if (/evening|night/i.test(lower) && !/\d/.test(timePart)) base.setHours(19, 0, 0, 0);
+    else {
+      const hm = timePart.match(/(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?/i);
+      if (hm) {
+        let h = parseInt(hm[1]);
+        const m = parseInt(hm[2] || '0');
+        const ap = (hm[3] || '').replace(/\./g, '').toLowerCase();
+        if (ap === 'pm' && h !== 12) h += 12;
+        if (ap === 'am' && h === 12) h = 0;
+        base.setHours(h, m, 0, 0);
+      } else base.setHours(9, 0, 0, 0);
+    }
+    return base.toISOString();
+  }
+
   // Also handles embedded patterns: "call me back in 5 minutes", "remind me in 2 hours"
   const relativeMatch = lower.match(/(?:in\s+)?(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?|d|days?)\b/);
   if (relativeMatch) {
