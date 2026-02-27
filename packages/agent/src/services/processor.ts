@@ -2094,7 +2094,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // 6. Generate AI response (use cheapest model if over budget)
     // Detect pure writing/generation tasks → use 'generate' chain which is tuned for content output
-    const _isWritingTask = !forceCheapModel && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
+    // EXCLUDE: document/spreadsheet tasks that must use action tags (create_excel, create_word, etc.)
+    // Those need the full SYSTEM_PROMPT where [ACTION:] tags are defined — not GENERATE_SYSTEM_PROMPT
+    const _isDocumentAction = /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`);
+    const _isWritingTask = !forceCheapModel && !_isDocumentAction && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
     const aiTaskType = forceCheapModel ? "validate" as const : (_isWritingTask ? "generate" as const : undefined);
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI
     // doesn't schedule again — it must EXECUTE the task and report the result.
