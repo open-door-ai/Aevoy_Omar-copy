@@ -1686,6 +1686,73 @@ export async function generateVisionResponse(
     }
   }
 
+  // 4. DeepSeek text-only fallback — CRITICAL for Railway where no vision model keys are set.
+  // The buildObservePrompt already contains full DOM text, form fields, current URL, and history.
+  // DeepSeek can make accurate browser automation decisions from text alone (no screenshot needed).
+  // Without this, the vision agent cycles 150 steps × 2-3s each = 5-7 min of doing nothing.
+  if (process.env.DEEPSEEK_API_KEY) {
+    try {
+      const stream = await withTimeout(getDeepSeekClient().chat.completions.create({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemPrompt || 'You are a browser automation expert. Analyze the page state and output the next action.' },
+          { role: 'user', content: `${prompt}\n\n[Note: No screenshot available — decide from the text context above.]` },
+        ],
+        max_tokens: 256,
+        temperature: 0.3,
+        stream: true,
+        stream_options: { include_usage: true },
+      }), 25000);
+
+      let content = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+        if (chunk.usage) {
+          inputTokens = chunk.usage.prompt_tokens || 0;
+          outputTokens = chunk.usage.completion_tokens || 0;
+        }
+      }
+
+      if (content.length > 5) {
+        const cost = (inputTokens * 0.27 + outputTokens * 1.10) / 1_000_000;
+        console.log(`[AI] Vision (DeepSeek text-fallback) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] Vision (DeepSeek text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // 5. Groq text-only fallback — fastest text model, good for rapid vision decisions
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const stream = await withTimeout(getGroqClient().chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt || 'You are a browser automation expert. Analyze the page state and output the next action.' },
+          { role: 'user', content: `${prompt}\n\n[Note: No screenshot available — decide from the text context above.]` },
+        ],
+        max_tokens: 256,
+        temperature: 0.3,
+        stream: true,
+      }), 15000);
+
+      let content = '';
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+      }
+
+      if (content.length > 5) {
+        console.log(`[AI] Vision (Groq text-fallback) | Cost: ~$0 | ${content.length} chars`);
+        return { content, cost: 0 };
+      }
+    } catch (error) {
+      console.warn(`[AI] Vision (Groq text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   return { content: "", cost: 0 };
 }
 
