@@ -78,7 +78,7 @@ export async function createPDF(params: PDFParams): Promise<PDFResult> {
         : `${params.filename}-${timestamp}.pdf`;
 
       // Save to temp directory
-      const outputDir = path.join(process.cwd(), 'temp', 'pdf');
+      const outputDir = path.join('/tmp', 'aevoy-files', 'pdf');
       await fsPromises.mkdir(outputDir, { recursive: true });
 
       const filepath = path.join(outputDir, filename);
@@ -255,7 +255,7 @@ export async function createPDF(params: PDFParams): Promise<PDFResult> {
           resolve({
             success: true,
             filepath,
-            url: `/temp/pdf/${filename}`,
+            url: `/files/pdf/${filename}`,
             pageCount,
             fileSize: stats.size
           });

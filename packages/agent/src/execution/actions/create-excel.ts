@@ -175,7 +175,7 @@ export async function createExcelFile(
       : `${params.filename}-${timestamp}.xlsx`;
 
     // Save to temp directory
-    const outputDir = path.join(process.cwd(), 'temp', 'excel');
+    const outputDir = path.join('/tmp', 'aevoy-files', 'excel');
     await fs.mkdir(outputDir, { recursive: true });
 
     const filepath = path.join(outputDir, filename);
@@ -189,7 +189,7 @@ export async function createExcelFile(
     return {
       success: true,
       filepath,
-      url: `/temp/excel/${filename}`, // Relative URL for download
+      url: `/files/excel/${filename}`, // Relative URL for download
       rowCount: totalRows,
       sheetCount: params.sheets.length,
       fileSize: stats.size

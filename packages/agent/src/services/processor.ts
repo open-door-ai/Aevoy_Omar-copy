@@ -2761,15 +2761,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             aiResponse.actions = [{ type: _dfpAct as any, params: { filename: _dfpFile, sections: _dfpSecs } }];
             console.log(`[DOC-FAST-PATH] ${_dfpTypeName} created: ${_dfpFullUrl}`);
           } else {
-            console.warn('[DOC-FAST-PATH] File creation failed:', _dfpResult.error);
-            // Fall through to iteration loop as last resort
+            const _dfpErrMsg = _dfpResult.error || 'unknown';
+            console.warn('[DOC-FAST-PATH] File creation failed:', _dfpErrMsg);
+            // Surface error in task record for debugging
+            void getSupabaseClient().from('tasks').update({ stuck_reason: `[DOC-FAST-PATH] File creation failed: ${_dfpErrMsg.substring(0, 300)}` }).eq('id', taskId);
           }
         } else {
           console.warn('[DOC-FAST-PATH] Content generation returned < 100 chars, falling back');
+          void getSupabaseClient().from('tasks').update({ stuck_reason: `[DOC-FAST-PATH] Content too short: "${_dfpRaw.substring(0, 100)}"` }).eq('id', taskId);
         }
       } catch (_dfpErr) {
-        console.error('[DOC-FAST-PATH] Error:', _dfpErr);
-        // Fall through to iteration loop
+        const _dfpErrStr = _dfpErr instanceof Error ? _dfpErr.message : String(_dfpErr);
+        console.error('[DOC-FAST-PATH] Error:', _dfpErrStr);
+        // Surface error in task record for debugging
+        void getSupabaseClient().from('tasks').update({ stuck_reason: `[DOC-FAST-PATH] Exception: ${_dfpErrStr.substring(0, 300)}` }).eq('id', taskId);
       }
     }
 

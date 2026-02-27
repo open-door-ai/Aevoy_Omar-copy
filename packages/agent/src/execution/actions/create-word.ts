@@ -234,7 +234,7 @@ export async function createWordDocument(
       : `${params.filename}-${timestamp}.docx`;
 
     // Save to temp directory
-    const outputDir = path.join(process.cwd(), 'temp', 'word');
+    const outputDir = path.join('/tmp', 'aevoy-files', 'word');
     await fs.mkdir(outputDir, { recursive: true });
 
     const filepath = path.join(outputDir, filename);
@@ -249,7 +249,7 @@ export async function createWordDocument(
     return {
       success: true,
       filepath,
-      url: `/temp/word/${filename}`,
+      url: `/files/word/${filename}`,
       sectionCount: params.sections.length,
       fileSize: stats.size
     };

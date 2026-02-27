@@ -253,7 +253,7 @@ export async function createPowerPoint(
       : `${params.filename}-${timestamp}.pptx`;
 
     // Save to temp directory
-    const outputDir = path.join(process.cwd(), 'temp', 'powerpoint');
+    const outputDir = path.join('/tmp', 'aevoy-files', 'powerpoint');
     await fs.mkdir(outputDir, { recursive: true });
 
     const filepath = path.join(outputDir, filename);
@@ -267,7 +267,7 @@ export async function createPowerPoint(
     return {
       success: true,
       filepath,
-      url: `/temp/powerpoint/${filename}`,
+      url: `/files/powerpoint/${filename}`,
       slideCount: params.slides.length,
       fileSize: stats.size
     };

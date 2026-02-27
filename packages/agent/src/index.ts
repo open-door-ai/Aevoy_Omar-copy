@@ -235,9 +235,10 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(globalLimiter);
 
-// Serve generated documents and files from the temp directory
-// This allows create_word/excel/pptx/pdf actions to return downloadable URLs
-app.use('/temp', express.static(path.join(process.cwd(), 'temp'), {
+// Serve generated documents and files from the /tmp/aevoy-files directory
+// Using /tmp ensures writability in all containerized environments (Railway, Docker, etc.)
+// Files are served at /files/word/name.docx, /files/excel/name.xlsx, etc.
+app.use('/files', express.static(path.join('/tmp', 'aevoy-files'), {
   setHeaders: (res, filePath) => {
     // Force download for Office documents
     if (filePath.endsWith('.docx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
