@@ -2633,7 +2633,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Use deduplicated text: if subject === body, don't double the word count
       const _agentTeamText = body && body.trim() !== subject.trim() ? `${subject} ${body}` : subject;
       // Skip agent team for browser/action tasks — these need the vision agent, not a research team
-      const _isActionTask = /\b(sign\s?up|signup|register|create.*account|cancel|book|reserv|buy|order|purchase|subscribe|log\s*in|fill.*form|unsubscribe|dispute)\b/i.test(_agentTeamText);
+      // Also skip for outreach tasks — agent team runs with suppressEmail=true so emails can't be sent
+      const _isActionTask = /\b(sign\s?up|signup|register|create.*account|cancel|book|reserv|buy|order|purchase|subscribe|log\s*in|fill.*form|unsubscribe|dispute)\b/i.test(_agentTeamText) ||
+        /\b(send.*email|cold.*email|outreach|email.*prospect|contact.*prospect|reach.*out.*email|personali[sz]ed.*email|email.*introduc|introduc.*email|email.*pitch|pitch.*email|email.*from\s+\w+@)\b/i.test(_agentTeamText);
       // Skip agent team for pure generation/writing tasks — the AI should produce content directly
       const _isGenerationTask = /\b(write me|create me|make me|build me|html code|full html|complete html|the html|css code|javascript code|portfolio website|landing page|one.page|a website for|a webpage for|source code|the code|return the|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|write.*function|write.*script|write.*program|write.*essay|write.*email|write.*letter|draft.*email|draft.*letter)\b/i.test(_agentTeamText);
       // Skip agent team for factual lookups — single-goal queries that just need a search
