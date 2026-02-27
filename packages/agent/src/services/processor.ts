@@ -3576,6 +3576,41 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               break;
             }
             // Fall through to execute the phone actions
+          } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
+            // DOCUMENT ACTION GATE (no-actions path): AI returned no actions for a doc task.
+            // Synthesize the create action directly — bypasses action tag parsing entirely.
+            console.warn(`[DOC-ACTION-GATE] No-action path (round ${currentIteration}): Synthesizing document action directly.`);
+            const _docActN = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+              : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+              : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
+            const _docExtN = _docActN === 'create_excel' ? 'xlsx' : _docActN === 'create_powerpoint' ? 'pptx' : _docActN === 'create_pdf' ? 'pdf' : 'docx';
+            const _docFilenameN = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_docExtN}`;
+            try {
+              const _cRespN = await generateResponse(memory, subject, `Write detailed content for: ${subject}. Include all relevant sections with rich, complete information. Format with clear section headings.`, username, "generate", userId, taskId, senderName);
+              totalAiCost += _cRespN.cost || 0;
+              totalTokens += _cRespN.tokensUsed || 0;
+              const _rawN = (_cRespN.content || '').trim();
+              if (_rawN && _rawN.length > 100) {
+                const _secsN = _rawN.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
+                  const t = s.trim().replace(/^\*+|\*+$/g, '').trim();
+                  const h1 = t.match(/^#{1}\s+(.+)/); if (h1) return { type: 'heading', text: h1[1].trim(), level: 1 };
+                  const h2 = t.match(/^#{2}\s+(.+)/); if (h2) return { type: 'heading', text: h2[1].trim(), level: 2 };
+                  const h3 = t.match(/^#{3,}\s+(.+)/); if (h3) return { type: 'heading', text: h3[1].trim(), level: 3 };
+                  if (t.length < 70 && !t.endsWith('.') && !t.endsWith(',') && /^[A-Z\d]/.test(t)) return { type: 'heading', text: t, level: 2 };
+                  return { type: 'paragraph', text: t };
+                });
+                aiResponse.actions = [{ type: _docActN as any, params: { filename: _docFilenameN, sections: _secsN } }];
+                aiResponse.content = '';
+                console.log(`[DOC-ACTION-GATE] No-action synthesized ${_docActN} with ${_secsN.length} sections — continuing to execute`);
+                // Fall through — the loop will execute this action normally
+              } else {
+                console.warn('[DOC-ACTION-GATE] Content generation empty — completing as-is');
+                isTaskComplete = true; aiSignaledComplete = true; break;
+              }
+            } catch (_en) {
+              console.error('[DOC-ACTION-GATE] Content synthesis error:', _en);
+              isTaskComplete = true; aiSignaledComplete = true; break;
+            }
           } else {
             console.log('[ITERATE] No actions in this round, task complete');
             isTaskComplete = true;
