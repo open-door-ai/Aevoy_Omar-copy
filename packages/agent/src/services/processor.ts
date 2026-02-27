@@ -4114,11 +4114,21 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
       // DOC-COMPLETION: If a document action succeeded this round, mark task complete immediately.
       // Without this check the loop continues to round 2+ where the AI narrates instead of completing.
-      const _docCompletedThisRound = iterationResults.some(r =>
+      // Also sets aiResponse.content to a clear download message so rawCleanResponse is non-empty.
+      const _docCompletedThisRound = iterationResults.find(r =>
         ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '') && r.success
       );
       if (_docCompletedThisRound) {
-        console.log(`[DOC-COMPLETE] Document created successfully this round — marking task complete`);
+        const _dtName = _docCompletedThisRound.action.type === 'create_excel' ? 'spreadsheet'
+          : _docCompletedThisRound.action.type === 'create_powerpoint' ? 'presentation'
+          : _docCompletedThisRound.action.type === 'create_pdf' ? 'PDF'
+          : 'Word document';
+        const _dtFile = String(_docCompletedThisRound.action.params?.filename || 'document');
+        const _dtUrl = String(_docCompletedThisRound.result || '');
+        const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+        const _dtFullUrl = _dtUrl.startsWith('http') ? _dtUrl : `${_agBase}${_dtUrl}`;
+        aiResponse.content = `Your ${_dtName} is ready!\n\n**File:** ${_dtFile}\n**Download:** ${_dtFullUrl}`;
+        console.log(`[DOC-COMPLETE] ${_dtName} created — marking task complete, URL: ${_dtFullUrl}`);
         isTaskComplete = true;
       }
 
