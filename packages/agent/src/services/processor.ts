@@ -8260,10 +8260,38 @@ async function executeAction(
     case "create_excel":
     case "create_powerpoint":
     case "create_word":
-    case "create_pdf":
+    case "create_pdf": {
+      // Local file operations — no browser required. Call action functions directly.
+      try {
+        let fileResult: { success: boolean; filepath?: string; url?: string; error?: string } = { success: false, error: 'Unknown doc type' };
+        const p = action.params as Record<string, unknown>;
+        if (action.type === 'create_word') {
+          const { createWordDocument } = await import('../execution/actions/create-word.js');
+          fileResult = await createWordDocument({ filename: p.filename as string, sections: p.sections as any[], title: p.title as string | undefined, author: p.author as string | undefined });
+        } else if (action.type === 'create_excel') {
+          const { createExcelFile } = await import('../execution/actions/create-excel.js');
+          fileResult = await createExcelFile({ filename: p.filename as string, sheets: (p.sheets as any[]) || [], title: p.title as string | undefined, author: p.author as string | undefined });
+        } else if (action.type === 'create_powerpoint') {
+          const { createPowerPoint } = await import('../execution/actions/create-powerpoint.js');
+          fileResult = await createPowerPoint({ filename: p.filename as string, slides: (p.slides as any[]) || [], title: p.title as string | undefined, author: p.author as string | undefined, theme: p.theme as any });
+        } else if (action.type === 'create_pdf') {
+          const { createPDF } = await import('../execution/actions/create-pdf.js');
+          fileResult = await createPDF({ filename: p.filename as string, content: (p.content as any[]) || [], title: p.title as string | undefined, author: p.author as string | undefined });
+        }
+        return {
+          action,
+          success: fileResult.success,
+          result: fileResult.success ? (fileResult.url || fileResult.filepath || `${action.type} completed`) : undefined,
+          error: fileResult.error,
+        };
+      } catch (docErr) {
+        console.error(`[ACTION:${action.type}] Failed:`, docErr);
+        return { action, success: false, error: `Could not complete ${action.type} right now` };
+      }
+    }
     case "screenshot_ocr": {
       if (!executionEngine) {
-        return { action, success: false, error: `${action.type} requires a browser session — try asking me to browse a website first` };
+        return { action, success: false, error: `screenshot_ocr requires a browser session — try asking me to browse a website first` };
       }
       try {
         const result = await executionEngine.executeStep({ action: action.type, params: action.params as Record<string, unknown> });
