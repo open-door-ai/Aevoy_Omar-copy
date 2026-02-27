@@ -5512,7 +5512,11 @@ Extract the ACTUAL phone number from search results and call them:
         (/(?:results?|listings?|data|information)\s+(?:is|are)\s+available\s+at\s+https?:\/\//i.test(responseLC)) ||
         (/(?:currently\s+being\s+displayed|displayed)\s+(?:on|at)\s+[a-z]+(?:duck|google|bing|yahoo|search)/i.test(responseLC)) ||
         (/(?:search|query)\s+(?:was|has been)\s+(?:completed|run|executed|performed)[^.]*but[^.]*(?:not provided|not included|not available|not returned)/i.test(responseLC)) ||
-        (/(?:specific results?|detailed results?|full results?)\s+(?:are|were)\s+not\s+(?:provided|included|available|returned)/i.test(responseLC))
+        (/(?:specific results?|detailed results?|full results?)\s+(?:are|were)\s+not\s+(?:provided|included|available|returned)/i.test(responseLC)) ||
+        // "All models failed" fallback placeholder — treat as narration so quality gate retries
+        responseLC.includes('taking longer than expected') ||
+        responseLC.includes('follow up shortly with results') ||
+        responseLC.includes("i'm processing your request about")
       );
 
       // Detect advice-style numbered lists: "Here are N ways...", "1. ... 2. ... 3. ..."
@@ -5529,9 +5533,12 @@ Extract the ACTUAL phone number from search results and call them:
         !/(?:found|here(?:'s| is| are) (?:the|what)|results|happening|events|listings|available)/i.test(responseLC)
       );
 
+      // Also detect "all models failed" fallback by model field
+      const isAllModelsFailed = aiResponse.model === "fallback";
+
       let qualityGateHaikuFired = false;
-      if (isPlanLike || isNarration || isAdviceList) {
-        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : 'narration'} — going straight to Haiku direct answer`);
+      if (isPlanLike || isNarration || isAdviceList || isAllModelsFailed) {
+        console.log(`[QUALITY] Response is ${isPlanLike ? 'plan-like' : isAdviceList ? 'advice-list' : isAllModelsFailed ? 'all-models-failed' : 'narration'} — going straight to Haiku direct answer`);
         try {
           // Skip DeepSeek/Groq refinement (they also produce narration) — go straight to Haiku
           const { generateForcedDirectAnswer } = await import("./ai.js");
