@@ -5513,7 +5513,7 @@ Extract the ACTUAL phone number from search results and call them:
         // "you can view the search interface at" / "you can view results at"
         /you can (?:view|see|access|check|find) the (?:search|results?|listings?|interface|page)\b/i.test(responseLC) ||
         // "returned a generic [site] search page" / "returned a generic DuckDuckGo search page"
-        /returned a (?:generic|standard|basic|plain|regular|default)\s+\w+\s+(?:search|results?|page)/i.test(responseLC) ||
+        /returned a (?:generic|general|standard|basic|plain|regular|default)\s+\w+\s+(?:search|results?|page)/i.test(responseLC) ||
         // "only returned a search page / results page" — got a page not data
         /only\s+returned\s+a\s+(?:search|results?|generic|standard)/i.test(responseLC) ||
         // "X results/list are available at/on [site] at https://..." — sending user to URL instead of giving results
