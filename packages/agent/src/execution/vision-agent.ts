@@ -19,10 +19,11 @@ import type { Page } from 'patchright';
 import { generateVisionResponse } from '../services/ai.js';
 import { handleCaptchaIfPresent } from './captcha.js';
 import { extractVerificationCode } from '../utils/email-code-extractor.js';
+import { humanMouseMove } from './stealth.js';
 
-const MAX_STEPS = 40;
+const MAX_STEPS = 150;           // was 40 — real tasks need 80-120 steps
 const STEP_TIMEOUT_MS = 15000;
-const TOTAL_TIMEOUT_MS = 480000; // 8 minutes — enough for Twitter signup + email verification
+const TOTAL_TIMEOUT_MS = 2700000; // 45 minutes — complex multi-step tasks take time
 
 export interface VisionAgentResult {
   success: boolean;
@@ -51,7 +52,18 @@ interface ElementInfo {
  */
 async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> {
   return await page.evaluate((sel) => {
-    const interactive = Array.from(document.querySelectorAll(sel));
+    // Traverse both main DOM and shadow roots (Stripe, Shopify, etc. hide forms in shadow DOM)
+    function collectElements(root: Document | ShadowRoot | Element, depth = 0): Element[] {
+      if (depth > 5) return [];
+      const els: Element[] = Array.from(root.querySelectorAll(sel));
+      const hosts = Array.from(root.querySelectorAll('*'));
+      for (const host of hosts) {
+        const sr = (host as Element & { shadowRoot?: ShadowRoot }).shadowRoot;
+        if (sr) els.push(...collectElements(sr, depth + 1));
+      }
+      return els;
+    }
+    const interactive = collectElements(document);
 
     const results: Array<{
       index: number; tag: string; type?: string; text?: string;
@@ -177,7 +189,9 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
     }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
   }
 
-  await page.waitForTimeout(150);
+  // Human-like mouse movement before click (bezier curve path)
+  try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
+  await page.waitForTimeout(80 + Math.floor(Math.random() * 120)); // 80-200ms aim delay
 
   // Strategy 1: Playwright mouse click (fires mouseenter, mousedown, mouseup, click events)
   try {
@@ -400,6 +414,7 @@ RESPOND WITH EXACTLY ONE LINE in this format:
 - PRESS:Enter
 - PRESS:Escape         (close modal/dropdown)
 - WAIT                 (wait 2 seconds for page to load)
+- SWITCH_TAB           (switch focus to the most recently opened popup/new tab — use after OAuth button clicks)
 - DONE:"result message" (task complete - describe what was accomplished)
 - FAIL:"reason"        (impossible to complete - explain why)
 
@@ -461,6 +476,7 @@ function parseAction(response: string): { type: string; index?: number; text?: s
   if (press) return { type: 'press', key: press[1].trim() };
 
   if (line === 'WAIT') return { type: 'wait' };
+  if (line === 'SWITCH_TAB' || line.startsWith('SWITCH_TAB')) return { type: 'switch_tab' };
 
   const done = line.match(/^DONE:"((?:[^"\\]|\\.)*)"/);
   if (done) return { type: 'done', result: done[1] };
@@ -531,7 +547,12 @@ GOOGLE OAUTH FLOW (critical — follow exactly):
 
 VERIFICATION EMAIL HANDLING: After submitting any signup form, if the page says "Check your email" or "Verify your email": output WAIT — the system automatically fetches the verification code from the agent's inbox and fills it in. You do NOT need to manually fetch the code.
 
-CROSS-SERVICE CHAINING: You can navigate to OTHER websites mid-task to complete prerequisites. You have 40 steps — use them across multiple sites. Example flow: Canva → Google OAuth → Gmail creation → back to Canva → signed in.
+CROSS-SERVICE CHAINING: You can navigate to OTHER websites mid-task to complete prerequisites. You have 150 steps — use them across multiple sites. Example flow: Canva → Google OAuth → Gmail creation → back to Canva → signed in.
+
+TAB HANDLING (CRITICAL):
+- When history shows "📋 NEW TAB OPENED: ..." — output SWITCH_TAB on your next action to focus that tab.
+- OAuth buttons ("Continue with Google", "Sign in with Apple", etc.) ALWAYS open a popup tab. After clicking one, output SWITCH_TAB to follow it.
+- After completing auth in the popup, output SWITCH_TAB again to return to the main page if needed.
 
 If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever the site offers)`;
 
@@ -556,6 +577,18 @@ export async function runVisionAgent(
   const history: string[] = [];
   let totalCost = 0;
   let steps = 0;
+
+  // POPUP/NEW TAB TRACKING — OAuth flows, payment, email verification all open popups.
+  // Track the latest popup and allow AI to switch into it with SWITCH_TAB action.
+  let popupPage: Page | null = null;
+  let activePage = page; // The page the agent is currently interacting with
+  const allPopups: Page[] = [];
+  page.on('popup', (popup: Page) => {
+    popupPage = popup as Page;
+    allPopups.push(popup as Page);
+    console.log(`[VISION-AGENT] New popup/tab detected: ${(popup as Page).url() || '(loading)'}`);
+    // Notify history on next step so AI knows to switch
+  });
   let lastUrl = '';
   let sameUrlCount = 0;
   let lastActionKey = '';
@@ -595,8 +628,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
   try {
     // PRE-NAVIGATION: If page is blank/error, navigate to the target URL immediately
-    // Extract from task string or plan before wasting step 0 on it
-    const currentStartUrl = page.url();
+    const currentStartUrl = activePage.url();
     const isBlankOrError = !currentStartUrl || currentStartUrl === 'about:blank' ||
       currentStartUrl.startsWith('chrome-error://') || currentStartUrl.startsWith('about:');
     if (isBlankOrError) {
@@ -608,30 +640,73 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
         : planUrl?.startsWith('http') ? planUrl : null;
       if (startUrl) {
         console.log(`[VISION-AGENT] Pre-navigating to ${startUrl}`);
-        await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(1000);
+        await activePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+        await activePage.waitForTimeout(1000);
       }
     }
+
+    // Bot wall detection counters
+    let botWallCount = 0;
+    let lastBotWallUrl = '';
 
     for (steps = 0; steps < MAX_STEPS; steps++) {
       // Check total timeout
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
-        return { success: false, error: 'Timeout: 8 minutes exceeded — task took too long', steps, cost: totalCost, screenshots };
+        return { success: false, error: 'Timeout: 45 minutes exceeded', steps, cost: totalCost, screenshots };
+      }
+
+      // If a popup appeared since last step, notify AI via history
+      if (popupPage) {
+        const capturedPopup = popupPage as Page; // stable local ref avoids TS narrowing issues
+        const pUrl = capturedPopup.url() || '(loading)';
+        history.push(`📋 NEW TAB OPENED: A new browser tab/popup appeared at "${pUrl}". If this is part of the task (OAuth login, payment, etc.), output SWITCH_TAB to move your focus there.`);
+        console.log(`[VISION-AGENT] Queued SWITCH_TAB notification for popup at ${pUrl}`);
+        popupPage = null; // consumed — will be re-populated if another opens
       }
 
       // Wait for page to settle
-      await page.waitForLoadState('domcontentloaded').catch(() => {});
-      await page.waitForTimeout(600);
+      await activePage.waitForLoadState('domcontentloaded').catch(() => {});
+      await activePage.waitForTimeout(600);
 
       // Handle CAPTCHAs automatically
       try {
-        await handleCaptchaIfPresent(page, userId, taskId);
+        await handleCaptchaIfPresent(activePage, userId, taskId);
+      } catch { /* non-critical */ }
+
+      // BOT WALL DETECTION: Cloudflare, DataDome, PerimeterX block pages
+      // Detected by: checking for challenge/blocked page content
+      try {
+        const pageTitle = await activePage.title().catch(() => '');
+        const bodySnippet = await activePage.evaluate(() => document.body?.innerText?.substring(0, 300) || '').catch(() => '');
+        const isBotWall = /just a moment|checking your browser|ddos protection|access denied|cloudflare|blocked|security check|please enable javascript|verify you are human/i.test(pageTitle + ' ' + bodySnippet);
+        if (isBotWall) {
+          const wallUrl = activePage.url();
+          if (wallUrl === lastBotWallUrl) {
+            botWallCount++;
+          } else {
+            botWallCount = 1;
+            lastBotWallUrl = wallUrl;
+          }
+          console.log(`[VISION-AGENT] Bot wall detected at ${wallUrl} (count=${botWallCount})`);
+          if (botWallCount === 1) {
+            // First hit: wait for Cloudflare to auto-pass (it often does within 5s)
+            await activePage.waitForTimeout(6000);
+          } else if (botWallCount === 2) {
+            // Second hit: try reloading with a different user agent via headers
+            history.push(`⚠️ BOT WALL DETECTED (attempt ${botWallCount}): Site is blocking automated access. Waiting for challenge to resolve. If stuck, try NAVIGATE to a different path on the same site or NAVIGATE to a backup search result.`);
+            await activePage.waitForTimeout(4000);
+          } else if (botWallCount >= 4) {
+            // Persistent bot wall: bail out for CALL-GATE
+            return { success: false, error: `Bot wall: ${wallUrl} — blocked by anti-bot system after ${botWallCount} attempts. CALL-GATE will call the business directly.`, steps, cost: totalCost, screenshots };
+          }
+        } else {
+          botWallCount = 0;
+        }
       } catch { /* non-critical */ }
 
       // Auto-dismiss cookie consent banners and modal overlays that block interaction
       try {
-        await page.evaluate(() => {
-          // Common cookie consent / GDPR dismiss buttons
+        await activePage.evaluate(() => {
           const dismissSelectors = [
             '[id*="cookie"] button[class*="accept"], [id*="cookie"] button[class*="agree"]',
             '[class*="cookie"] button[class*="accept"], [class*="cookie"] button[class*="agree"]',
@@ -644,7 +719,6 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
             const btn = document.querySelector(sel) as HTMLElement | null;
             if (btn && btn.offsetParent !== null) { btn.click(); break; }
           }
-          // Auto-close "X" close buttons on overlays/modals (but NOT the whole page)
           const overlayClose = document.querySelector(
             '[role="dialog"] button[aria-label*="Close"], [role="dialog"] button[aria-label*="close"], ' +
             '.modal button.close, .modal button[aria-label="Close"], ' +
@@ -654,21 +728,21 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
         });
       } catch { /* non-critical */ }
 
-      // OBSERVE: Screenshot + extract elements
+      // OBSERVE: Screenshot + extract elements from activePage
       let screenshot: string;
       let elements: ElementInfo[];
       try {
         [screenshot, elements] = await Promise.all([
-          takeScreenshot(page),
-          extractElements(page, INTERACTIVE_SELECTOR),
+          takeScreenshot(activePage),
+          extractElements(activePage, INTERACTIVE_SELECTOR),
         ]);
       } catch (err) {
         return { success: false, error: `Page capture failed: ${err}`, steps, cost: totalCost, screenshots };
       }
 
       screenshots.push(screenshot);
-      const url = page.url();
-      console.log(`[VISION-AGENT] Step ${steps + 1}: ${url} — ${elements.length} elements`);
+      const url = activePage.url();
+      console.log(`[VISION-AGENT] Step ${steps + 1}: ${url} — ${elements.length} elements (active tab: ${activePage === page ? 'main' : 'popup'})`);
 
       // Compute which elements are NEW this step (appeared after the last action)
       const currSigs = new Set(elements.map(getElemSig));
@@ -692,12 +766,17 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
 
         if (sameUrlCount === 4) {
           console.log(`[VISION-AGENT] Stuck on same URL for 4 steps — forcing scroll down`);
-          await page.mouse.wheel(0, 600);
-          await page.waitForTimeout(400);
+          await activePage.mouse.wheel(0, 600);
+          await activePage.waitForTimeout(400);
         } else if (sameUrlCount === 7) {
           console.log(`[VISION-AGENT] Stuck for 7 steps — scrolling back up`);
-          await page.mouse.wheel(0, -600);
-          await page.waitForTimeout(400);
+          await activePage.mouse.wheel(0, -600);
+          await activePage.waitForTimeout(400);
+        } else if (sameUrlCount === 10) {
+          // Long stuck: try a page reload
+          console.log(`[VISION-AGENT] Stuck for 10 steps — refreshing page`);
+          await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          await activePage.waitForTimeout(2000);
         }
       } else {
         lastUrl = url;
@@ -705,7 +784,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       }
 
       // REASON: Ask AI what to do
-      const viewport = page.viewportSize() || { width: 1280, height: 800 };
+      const viewport = activePage.viewportSize() || { width: 1280, height: 800 };
       const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport, taskCreds, newElemIndices);
       let aiResponse: string;
       let stepCost = 0;
@@ -722,7 +801,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       } catch (err) {
         console.warn(`[VISION-AGENT] AI failed at step ${steps + 1}: ${err}`);
         history.push(`Step ${steps + 1}: AI error — ${err}`);
-        await page.waitForTimeout(2000);
+        await activePage.waitForTimeout(2000);
         continue;
       }
 
@@ -774,19 +853,17 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       }
 
       if (action.type === 'fail') {
-        // Don't accept FAIL on an error page in early steps — force navigate instead
-        const currentUrl = page.url();
+        const currentUrl = activePage.url();
         const onErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl.startsWith('about:') || steps < 2;
         if (onErrorPage && steps < 3) {
-          // Extract URL from task and navigate there instead of giving up
           const urlInTask = task.match(/https?:\/\/[^\s,)]+/)?.[0] ||
             task.match(/\bon\s+(\w[\w.-]+\.(com|org|net|io|co))/i)?.[1];
           const navUrl = urlInTask?.startsWith('http') ? urlInTask : urlInTask ? `https://www.${urlInTask}` : null;
           if (navUrl) {
             console.log(`[VISION-AGENT] FAIL on error page — forcing navigate to ${navUrl}`);
-            await page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-            await page.waitForTimeout(1000);
-            continue; // Try again after navigation
+            await activePage.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+            await activePage.waitForTimeout(1000);
+            continue;
           }
         }
         console.log(`[VISION-AGENT] FAIL: ${action.result}`);
@@ -797,29 +874,43 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       let actionOk = false;
       try {
         switch (action.type) {
+          case 'switch_tab': {
+            // Switch to the most recently opened popup/tab
+            const target = allPopups.filter(p => !p.isClosed()).pop() || null;
+            if (target) {
+              activePage = target;
+              await activePage.waitForLoadState('domcontentloaded').catch(() => {});
+              await activePage.waitForTimeout(1000);
+              history.push(`✅ SWITCHED to new tab: ${activePage.url()}`);
+              console.log(`[VISION-AGENT] Switched to popup tab: ${activePage.url()}`);
+              actionOk = true;
+            } else {
+              history.push(`⚠️ SWITCH_TAB: No open popup tabs found. The popup may have been closed already.`);
+              actionOk = false;
+            }
+            break;
+          }
+
           case 'click': {
-            const urlBeforeClick = page.url();
+            const urlBeforeClick = activePage.url();
             const countBeforeClick = elements.length;
 
             actionOk = await Promise.race([
-              clickByIndex(page, action.index!),
+              clickByIndex(activePage, action.index!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
 
             if (actionOk) {
-              await page.waitForLoadState('domcontentloaded').catch(() => {});
-              // SPA-stable wait: poll until DOM settles rather than fixed sleep.
-              // Handles React/Vue pages (Canva, Notion, etc.) that render new form steps
-              // asynchronously after clicks — no page navigation event fires.
-              await waitForSpaStable(page, 2500);
+              await activePage.waitForLoadState('domcontentloaded').catch(() => {});
+              await waitForSpaStable(activePage, 2500);
 
               // Post-click verification: if URL and element count unchanged, the click
               // may have been intercepted/blocked. Try JS .click() as secondary strategy.
-              const urlAfterClick = page.url();
-              const countAfterClick = await getInteractiveCount(page);
+              const urlAfterClick = activePage.url();
+              const countAfterClick = await getInteractiveCount(activePage);
               if (urlAfterClick === urlBeforeClick && Math.abs(countAfterClick - countBeforeClick) < 2) {
                 console.log(`[VISION-AGENT] Post-click: page unchanged — trying JS click fallback`);
-                const jsOk = await page.evaluate(([idx, sel]: [number, string]) => {
+                const jsOk = await activePage.evaluate(([idx, sel]: [number, string]) => {
                   const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                     const r = el.getBoundingClientRect();
                     if (r.width === 0 || r.height === 0) return false;
@@ -833,9 +924,9 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
                 }, [action.index!, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
 
                 if (jsOk) {
-                  await waitForSpaStable(page, 1500);
-                  const countAfterJs = await getInteractiveCount(page);
-                  if (Math.abs(countAfterJs - countBeforeClick) < 2 && page.url() === urlBeforeClick) {
+                  await waitForSpaStable(activePage, 1500);
+                  const countAfterJs = await getInteractiveCount(activePage);
+                  if (Math.abs(countAfterJs - countBeforeClick) < 2 && activePage.url() === urlBeforeClick) {
                     history.push(`⚠️ CLICK:${action.index} — page unchanged after mouse click AND JS click. The button may be disabled, covered by an overlay, or require scroll. Try: SCROLL:down to find the button, or CLICK_AT with exact pixel coordinates from screenshot.`);
                   }
                 } else {
@@ -847,22 +938,21 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           }
 
           case 'click_at': {
-            // Coordinate-based click — Manus-style fallback for elements not in DOM list
             const x = action.index!;
             const y = parseInt(action.text!);
-            await page.mouse.click(x, y);
-            await page.waitForLoadState('domcontentloaded').catch(() => {});
-            await waitForSpaStable(page, 2000);
+            try { await humanMouseMove(activePage, x, y); } catch { /* non-critical */ }
+            await activePage.mouse.click(x, y);
+            await activePage.waitForLoadState('domcontentloaded').catch(() => {});
+            await waitForSpaStable(activePage, 2000);
             actionOk = true;
             break;
           }
 
           case 'type': {
-            actionOk = await typeByIndex(page, action.index!, action.text!);
+            actionOk = await typeByIndex(activePage, action.index!, action.text!);
             if (actionOk) {
-              await page.waitForTimeout(300);
-              // Verify text was actually entered (React/Vue might have cleared it)
-              const fieldVal = await page.evaluate(([idx, sel]: [number, string]) => {
+              await activePage.waitForTimeout(300);
+              const fieldVal = await activePage.evaluate(([idx, sel]: [number, string]) => {
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                   const r = el.getBoundingClientRect();
                   const s = window.getComputedStyle(el);
@@ -879,12 +969,10 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           }
 
           case 'fill': {
-            // React-compatible fill — sets value directly via native setter
-            actionOk = await fillByIndex(page, action.index!, action.text!);
+            actionOk = await fillByIndex(activePage, action.index!, action.text!);
             if (actionOk) {
-              await page.waitForTimeout(300);
-              // Verify fill actually set the value
-              const fieldVal = await page.evaluate(([idx, sel]: [number, string]) => {
+              await activePage.waitForTimeout(300);
+              const fieldVal = await activePage.evaluate(([idx, sel]: [number, string]) => {
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                   const r = el.getBoundingClientRect();
                   const s = window.getComputedStyle(el);
@@ -901,24 +989,24 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           }
 
           case 'select': {
-            actionOk = await selectByIndex(page, action.index!, action.text!);
+            actionOk = await selectByIndex(activePage, action.index!, action.text!);
             break;
           }
 
           case 'scroll': {
             const dir = action.text === 'up' ? -600 : 600;
-            await page.mouse.wheel(0, dir);
-            await page.waitForTimeout(500);
+            await activePage.mouse.wheel(0, dir);
+            await activePage.waitForTimeout(500);
             actionOk = true;
             break;
           }
 
           case 'navigate': {
-            const navErr = await page.goto(action.url!, { waitUntil: 'domcontentloaded', timeout: 20000 })
+            const navErr = await activePage.goto(action.url!, { waitUntil: 'domcontentloaded', timeout: 20000 })
               .then(() => null)
               .catch((e: Error) => e.message);
-            await page.waitForTimeout(1000);
-            const landedUrl = page.url();
+            await activePage.waitForTimeout(1000);
+            const landedUrl = activePage.url();
             const isStillError = landedUrl.startsWith('chrome-error://') || landedUrl.startsWith('about:blank');
             if (isStillError || navErr) {
               history.push(`⚠️ NAVIGATE to ${action.url} failed (${navErr || 'error page'}). Try a different URL or use search instead.`);
@@ -930,22 +1018,20 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
           }
 
           case 'press': {
-            await page.keyboard.press(action.key!);
-            await page.waitForTimeout(300);
+            await activePage.keyboard.press(action.key!);
+            await activePage.waitForTimeout(300);
             actionOk = true;
             break;
           }
 
           case 'wait': {
-            // Check if page is waiting for email verification
-            const waitUrl = page.url();
-            const waitText = await page.textContent('body').catch(() => '') || '';
+            const waitUrl = activePage.url();
+            const waitText = await activePage.textContent('body').catch(() => '') || '';
             const isVerificationPage = /verif|confirm.*email|check.*inbox|code.*sent|enter.*code|otp|one.time/i.test(waitUrl + ' ' + waitText.substring(0, 500));
 
             if (isVerificationPage && emailUsername) {
-              // Wait 20 seconds for the email to arrive then check inbox
               console.log(`[VISION-AGENT] Verification page detected — waiting 20s then checking ${emailUsername}@aevoy.com`);
-              await page.waitForTimeout(20000);
+              await activePage.waitForTimeout(20000);
               try {
                 const { fetchRecentEmails } = await import('../services/inbox-poller.js');
                 const emails = await fetchRecentEmails(`${emailUsername}@aevoy.com`, 3, 5);
@@ -954,7 +1040,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
                   if (extracted.code) {
                     console.log(`[VISION-AGENT] Found verification code: ${extracted.code} — auto-filling`);
                     // Auto-fill: find the first visible code/OTP input and fill it
-                    const autoFilled = await page.evaluate((code: string) => {
+                    const autoFilled = await activePage.evaluate((code: string) => {
                       const selectors = [
                         'input[name*="code"]', 'input[name*="otp"]', 'input[name*="token"]',
                         'input[placeholder*="code"]', 'input[placeholder*="OTP"]', 'input[placeholder*="Code"]',
@@ -990,7 +1076,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
                 // Fall through with normal wait
               }
             } else {
-              await page.waitForTimeout(2500);
+              await activePage.waitForTimeout(2500);
             }
             actionOk = true;
             break;
@@ -1004,7 +1090,7 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       console.log(`[VISION-AGENT] ${action.type}${action.index !== undefined ? ':' + action.index : ''} → ${actionOk ? 'ok' : 'FAIL'}`);
     }
 
-    return { success: false, error: `Max steps (${MAX_STEPS}) reached without completing task`, steps, cost: totalCost, screenshots };
+    return { success: false, error: `Max steps (${MAX_STEPS}) reached — task is too complex or site is bot-blocking`, steps, cost: totalCost, screenshots };
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

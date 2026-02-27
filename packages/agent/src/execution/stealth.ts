@@ -207,21 +207,30 @@ export async function applyStealthPatches(context: BrowserContext): Promise<void
       return origToBlob.call(this, cb, type, quality as number | undefined);
     };
 
-    // --- WebGL fingerprint spoofing ---
+    // --- WebGL fingerprint spoofing (randomized per session) ---
+    // Static "GTX 1650" every session is a fingerprinting signal — randomize from real GPU list
+    const webglProfiles = [
+      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6600M Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+      { vendor: 'Apple Inc.', renderer: 'Apple M1' },
+      { vendor: 'Apple Inc.', renderer: 'Apple M2' },
+    ];
+    const gpuProfile = webglProfiles[Math.floor(Math.random() * webglProfiles.length)];
     const getParameterOrig = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function (param: number) {
-      // UNMASKED_VENDOR_WEBGL
-      if (param === 0x9245) return 'Google Inc. (NVIDIA)';
-      // UNMASKED_RENDERER_WEBGL
-      if (param === 0x9246) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+      if (param === 0x9245) return gpuProfile.vendor;
+      if (param === 0x9246) return gpuProfile.renderer;
       return getParameterOrig.call(this, param);
     };
-    // Also patch WebGL2
     if (typeof WebGL2RenderingContext !== 'undefined') {
       const getParam2Orig = WebGL2RenderingContext.prototype.getParameter;
       WebGL2RenderingContext.prototype.getParameter = function (param: number) {
-        if (param === 0x9245) return 'Google Inc. (NVIDIA)';
-        if (param === 0x9246) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+        if (param === 0x9245) return gpuProfile.vendor;
+        if (param === 0x9246) return gpuProfile.renderer;
         return getParam2Orig.call(this, param);
       };
     }
