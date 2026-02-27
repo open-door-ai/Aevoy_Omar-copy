@@ -5987,13 +5987,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       /\b(i'?ll need (a|your) password|need (a|your) password to|what password (would|do) you|provide (a|your) password|password to (complete|create|finish|register|sign))\b/i.test(cleanResponse)
     );
 
-    // Pre-check: if passive phrase is only in the LAST sentence of a substantive response (>200 chars
+    // Pre-check: if passive phrase is only in the LAST sentence of a substantive response (>80 chars
     // of real content before it), strip it UNIVERSALLY (all task types, not just browser tasks).
-    // "Want me to check the M3 price?" at the end of a factual answer = passive + strip it.
+    // "Want me to check availability?" after "$1,549.99 at Apple Canada" = trailing passive → strip it.
     if (cleanResponse && _passivePatterns.test(cleanResponse) && !_isLegitCredentialRequest) {
       const _firstPassiveIdx = cleanResponse.search(_passivePatterns);
       const _textBeforePassive = cleanResponse.substring(0, _firstPassiveIdx);
-      const _isTrailingProactive = _firstPassiveIdx > 200 && !_passivePatterns.test(_textBeforePassive);
+      const _isTrailingProactive = _firstPassiveIdx > 80 && !_passivePatterns.test(_textBeforePassive);
       if (_isTrailingProactive) {
         // Strip just the trailing passive sentence — the rest of the response is good
         const _trailingStrip = cleanResponse.replace(/[\n\s]*[^\n.!?]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^.!?]*[.!?]?\s*$/i, '').trim();
