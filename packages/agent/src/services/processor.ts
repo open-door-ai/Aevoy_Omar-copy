@@ -5857,10 +5857,10 @@ Extract the ACTUAL phone number from search results and call them:
         (/can be (?:created|found|downloaded|accessed) using (?:templates?|tools?|software) (?:from|at|on) (?:\w+['\u2019]?s )?website at https?:\/\//i.test(responseLC)) ||
         // "is the most commonly used word processing software for creating..." — describing what to use vs. doing it
         (/is the most commonly used (?:word processing|spreadsheet|presentation) software for\b/i.test(responseLC)) ||
-        // "search results did not retrieve specific company leads" — search ran but data wasn't useful
-        (/(?:search results?|searches?|query)\s+did not\s+(?:retrieve|return|find|provide|yield)\s+(?:specific|detailed|actual|real|relevant)/i.test(responseLC)) ||
-        // "Based on general business needs / general knowledge" — falling back to training data instead of real results
-        (/based on (?:general|my|our|training)\s+(?:business|knowledge|training|information|data|understanding)/i.test(responseLC)) ||
+        // "search results did not [directly] retrieve specific X" — search ran but data wasn't useful
+        (/(?:search results?|searches?|query)\s+did not\s+(?:\w+\s+)?(?:retrieve|return|find|provide|yield)\s+(?:specific|detailed|actual|real|relevant)/i.test(responseLC)) ||
+        // "Based on general business [knowledge/needs]" — falling back to training data instead of real results
+        (/based on (?:general|my|our|training)\s+(?:\w+\s+)?(?:business|knowledge|training|information|data|understanding)/i.test(responseLC)) ||
         // "potential leads for X include e-commerce platforms like Shopify" — generic list instead of real leads
         (/potential (?:leads?|clients?|customers?|companies|businesses)\s+(?:for|include|are)/i.test(responseLC) && !/found|sourced|researched|identified|extracted/i.test(responseLC)) ||
         // "companies that might want X include Y" — speculative generic list
