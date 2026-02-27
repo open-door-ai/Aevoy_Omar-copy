@@ -426,6 +426,8 @@ async function tryScheduleFastPath(
     description = scheduleMatch[1].trim();
     timeStr = scheduleMatch[2].trim();
     action = 'task';
+    // Save BEFORE overwriting — "a reminder for me tomorrow" has "tomorrow" we need to keep
+    const originalDesc = description;
     // Post-process: strip trailing "to <task>" / "for <task>" from timeStr that belongs to description
     // e.g. "schedule a reminder tomorrow at 9am to call the dentist"
     //       → timeStr="9am to call the dentist" → strip → timeStr="9am", description="call the dentist"
@@ -435,14 +437,14 @@ async function tryScheduleFastPath(
       const potentialTask = trailingTaskMatch[2].trim();
       if (/\b(?:\d{1,2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?|noon|midnight|tomorrow|tonight|morning|evening|afternoon)\b/i.test(potentialTime)) {
         timeStr = potentialTime;
-        if (/^(a\s+)?reminder\s+(for\s+me\s+)?/i.test(description) || description.length < 20) {
+        if (/^(a\s+)?reminder\s+(for\s+me\s+)?/i.test(originalDesc) || originalDesc.length < 20) {
           description = potentialTask;
         }
       }
     }
-    // Also handle "remind me tomorrow at 9am to call X" where description="a reminder for me tomorrow"
-    // Extract day/time from description if timeStr is just a time
-    const dayInDesc = description.match(/\b(tomorrow|tonight|this\s+(?:morning|afternoon|evening)|next\s+\w+)\b/i);
+    // Extract day modifier from ORIGINAL description (before it was overwritten with the actual task)
+    // "a reminder for me tomorrow" → dayInDesc="tomorrow" → timeStr="tomorrow at 9am"
+    const dayInDesc = originalDesc.match(/\b(tomorrow|tonight|this\s+(?:morning|afternoon|evening)|next\s+\w+)\b/i);
     if (dayInDesc && !/\b(tomorrow|tonight|this\s+(?:morning|afternoon|evening))\b/i.test(timeStr)) {
       timeStr = `${dayInDesc[1]} at ${timeStr}`;
     }
@@ -450,8 +452,15 @@ async function tryScheduleFastPath(
 
   if (!action || !timeStr) return null;
 
-  // Parse the time
-  const nextRun = calculateNextRun(timeStr);
+  // Fetch user timezone BEFORE calculateNextRun — times must be in user's local tz, not UTC
+  let schedUserTz = 'America/Los_Angeles';
+  try {
+    const { data: tzProf } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
+    if (tzProf?.timezone) schedUserTz = tzProf.timezone;
+  } catch { /* use default */ }
+
+  // Parse the time (timezone-aware: "9am" means 9am in user's tz, not 9am UTC)
+  const nextRun = calculateNextRun(timeStr, schedUserTz);
   if (!nextRun) return null;
 
   // Verify it's a valid future time (not fallback)
@@ -550,14 +559,9 @@ async function tryScheduleFastPath(
     }
   }
 
-  // Use user's timezone for display (falls back to America/Los_Angeles)
-  let userTz = 'America/Los_Angeles';
-  try {
-    const { data: prof } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
-    if (prof?.timezone) userTz = prof.timezone;
-  } catch { /* use default */ }
+  // userTz already fetched above (schedUserTz) — reuse for display
   let humanTime = '9:00 AM';
-  try { humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: userTz }); } catch { /* fallback */ }
+  try { humanTime = nextRunDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: schedUserTz }); } catch { /* fallback */ }
   const responseText = action === 'call_user'
     ? `Got it — I'll call you at ${humanTime}`
     : action === 'send_sms'
@@ -7823,7 +7827,23 @@ async function executeAction(
   }
 }
 
-function calculateNextRun(cron: string): string {
+// Timezone-aware hour setter: applies h:m in the user's local timezone to a Date
+// Railway server runs UTC, so plain setHours(9) = 9am UTC ≠ 9am Pacific
+function _setLocalHours(base: Date, h: number, m: number, tz: string): void {
+  base.setHours(h, m, 0, 0); // Start with UTC approximation
+  if (tz === 'UTC') return;
+  try {
+    const fmtd = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(base);
+    const parts = fmtd.split(':').map(n => parseInt(n, 10));
+    const ch = parts[0], cm = parts[1];
+    const diffMin = (h - ch) * 60 + (m - cm);
+    if (Math.abs(diffMin) > 1) base.setTime(base.getTime() + diffMin * 60_000);
+  } catch { /* leave as UTC approximation */ }
+}
+
+function calculateNextRun(cron: string, userTz = 'UTC'): string {
   const now = new Date();
   const lower = cron.toLowerCase().trim();
 
@@ -7838,10 +7858,10 @@ function calculateNextRun(cron: string): string {
     const isTomorrow = /tomorrow/i.test(lower);
     if (isTomorrow || isTonight) base.setDate(base.getDate() + 1);
     const timePart = (tomorrowMatch?.[3] || '').trim();
-    // Set hour based on keyword or time string
-    if (!timePart || /morning/i.test(lower)) base.setHours(9, 0, 0, 0);
-    else if (/afternoon/i.test(lower) && !/\d/.test(timePart)) base.setHours(14, 0, 0, 0);
-    else if (/evening|night/i.test(lower) && !/\d/.test(timePart)) base.setHours(19, 0, 0, 0);
+    // Set hour based on keyword or time string (timezone-aware)
+    if (!timePart || /morning/i.test(lower)) _setLocalHours(base, 9, 0, userTz);
+    else if (/afternoon/i.test(lower) && !/\d/.test(timePart)) _setLocalHours(base, 14, 0, userTz);
+    else if (/evening|night/i.test(lower) && !/\d/.test(timePart)) _setLocalHours(base, 19, 0, userTz);
     else {
       const hm = timePart.match(/(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?/i);
       if (hm) {
@@ -7850,8 +7870,8 @@ function calculateNextRun(cron: string): string {
         const ap = (hm[3] || '').replace(/\./g, '').toLowerCase();
         if (ap === 'pm' && h !== 12) h += 12;
         if (ap === 'am' && h === 12) h = 0;
-        base.setHours(h, m, 0, 0);
-      } else base.setHours(9, 0, 0, 0);
+        _setLocalHours(base, h, m, userTz);
+      } else _setLocalHours(base, 9, 0, userTz);
     }
     return base.toISOString();
   }
@@ -7884,14 +7904,14 @@ function calculateNextRun(cron: string): string {
   // "at 5:10", "5:10 PM", "at 5:10pm", "at 17:00", "3:30 am", "at noon", "at midnight"
   if (lower === 'at noon' || lower === 'noon') {
     const next = new Date(now);
-    next.setHours(12, 0, 0, 0);
+    _setLocalHours(next, 12, 0, userTz);
     if (next <= now) next.setDate(next.getDate() + 1);
     return next.toISOString();
   }
   if (lower === 'at midnight' || lower === 'midnight') {
     const next = new Date(now);
     next.setDate(next.getDate() + 1); // always next midnight
-    next.setHours(0, 0, 0, 0);
+    _setLocalHours(next, 0, 0, userTz);
     return next.toISOString();
   }
   const absoluteMatch = lower.match(/^(?:at\s+)?(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?$/);
@@ -7911,7 +7931,7 @@ function calculateNextRun(cron: string): string {
       }
     }
     const next = new Date(now);
-    next.setHours(hour, minute, 0, 0);
+    _setLocalHours(next, hour, minute, userTz);
     if (next <= now) next.setDate(next.getDate() + 1);
     console.log(`[SCHEDULE] Absolute time parsed: "${cron}" → ${next.toISOString()}`);
     return next.toISOString();
@@ -7929,7 +7949,7 @@ function calculateNextRun(cron: string): string {
       if (testNext <= now && hour + 12 < 24) hour += 12;
     }
     const next = new Date(now);
-    next.setHours(hour, 0, 0, 0);
+    _setLocalHours(next, hour, 0, userTz);
     if (next <= now) next.setDate(next.getDate() + 1);
     console.log(`[SCHEDULE] Absolute hour parsed: "${cron}" → ${next.toISOString()}`);
     return next.toISOString();
