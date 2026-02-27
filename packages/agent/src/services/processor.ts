@@ -6149,7 +6149,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const _isTrailingProactive = _firstPassiveIdx > 80 && !_passivePatterns.test(_textBeforePassive);
       if (_isTrailingProactive) {
         // Strip just the trailing passive sentence — the rest of the response is good
-        const _trailingStrip = cleanResponse.replace(/[\n\s]*[^\n.!?]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^.!?]*[.!?]?\s*$/i, '').trim();
+        // Handles both inline ("Found X. Want me to...") and newline-separated ("\n\nWant me to...")
+        const _trailingStrip = cleanResponse.replace(/\n{1,2}[^\n]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^\n]*[.!?]?\s*$/i, '').replace(/[^\n.!?]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^.!?]*[.!?]?\s*$/i, '').trim();
         if (_trailingStrip.length > 50) {
           cleanResponse = _trailingStrip;
           console.log('[PASSIVE-GUARD] Stripped trailing proactive question — substantive content preserved');
