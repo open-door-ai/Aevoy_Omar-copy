@@ -6610,16 +6610,22 @@ RULES:
       : (error instanceof Error ? error.message : "Unknown error");
     console.error("Task processing error:", errorMessage);
 
-    // Update task as failed
+    // Update task as needs_review (never "failed" — users should always see a usable response)
+    // Only update if task is still "processing" — SIGTERM handler may have already set needs_review
+    const gracefulErrorMsg = isTimeout
+      ? "This task took longer than expected. I've saved my progress — send it again and I'll pick up where I left off."
+      : "I ran into a snag while working on your request. I'm going to try a different approach — feel free to send it again and I'll get right on it.";
     if (taskId) {
       await getSupabaseClient()
         .from("tasks")
         .update({
-          status: "failed",
+          status: "needs_review",
+          response_text: gracefulErrorMsg,
           error_message: errorMessage,
           completed_at: new Date().toISOString(),
         })
-        .eq("id", taskId);
+        .eq("id", taskId)
+        .eq("status", "processing"); // Only update if SIGTERM handler hasn't already set needs_review
     }
 
     // Send friendly response — never expose internal error details to users
@@ -6628,9 +6634,7 @@ RULES:
         to: from,
         from: `${username}@aevoy.com`,
         subject,
-        body: isTimeout
-          ? "This task took longer than expected. I've saved my progress — send it again and I'll pick up where I left off."
-          : "I ran into a snag while working on your request. I'm going to try a different approach — feel free to send it again and I'll get right on it.",
+        body: gracefulErrorMsg,
       });
     }
 
