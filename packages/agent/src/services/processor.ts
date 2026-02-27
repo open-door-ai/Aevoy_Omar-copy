@@ -5505,6 +5505,8 @@ Extract the ACTUAL phone number from search results and call them:
         responseLC.includes('not included in the returned') ||
         responseLC.includes('not available in the returned') ||
         responseLC.includes('could not be retrieved from') ||
+        // "were not directly retrieved" — contact/data info not fetched
+        /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available)/i.test(responseLC) ||
         responseLC.includes('you can view the full search results at') ||
         responseLC.includes('you can check the full results at') ||
         responseLC.includes('you can find the results at') ||
@@ -5514,13 +5516,15 @@ Extract the ACTUAL phone number from search results and call them:
         /returned a (?:generic|standard|basic|plain|regular|default)\s+\w+\s+(?:search|results?|page)/i.test(responseLC) ||
         // "only returned a search page / results page" — got a page not data
         /only\s+returned\s+a\s+(?:search|results?|generic|standard)/i.test(responseLC) ||
-        // "X results are available at/on [site] at https://..." — sending user to URL instead of giving results
-        (/(?:results?|listings?|data|information|jobs?)\s+(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(responseLC)) ||
+        // "X results/list are available at/on [site] at https://..." — sending user to URL instead of giving results
+        (/(?:results?|listings?|list|data|information|jobs?)\s+(?:of\s+\w+\s+)?(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(responseLC)) ||
+        // "a current list is available at [site]: https://..." — redirect to third-party URL
+        (/(?:a\s+)?(?:current|full|complete|comprehensive|best|top)\s+(?:list|listing|guide|collection)\s+(?:of\s+\w+[\w\s]*\s+)?(?:is|are)\s+available\s+at\s+/i.test(responseLC)) ||
         // "job listings are available on Indeed" — redirect to job board without actual results
         (/(?:results?|listings?|data|information|jobs?)\s+(?:is|are)\s+available\s+on\s+(?:indeed|linkedin|glassdoor|monster|ziprecruiter|google|amazon|bing)\b/i.test(responseLC)) ||
         (/(?:currently\s+being\s+displayed|displayed)\s+(?:on|at)\s+[a-z]+(?:duck|google|bing|yahoo|search)/i.test(responseLC)) ||
         (/(?:search|query)\s+(?:was|has been)\s+(?:completed|run|executed|performed)[^.]*but[^.]*(?:not provided|not included|not available|not returned)/i.test(responseLC)) ||
-        (/(?:specific results?|detailed results?|full results?)\s+(?:are|were)\s+not\s+(?:provided|included|available|returned)/i.test(responseLC)) ||
+        (/(?:specific results?|detailed results?|full results?|specific\s+\w+[\w\s,]+)\s+(?:are|were)\s+not\s+(?:directly\s+)?(?:provided|included|available|returned|retrieved)/i.test(responseLC)) ||
         // "All models failed" fallback placeholder — treat as narration so quality gate retries
         responseLC.includes('taking longer than expected') ||
         responseLC.includes('follow up shortly with results') ||
