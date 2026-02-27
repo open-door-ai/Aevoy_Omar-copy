@@ -4368,8 +4368,14 @@ STEP 2: After search returns results, extract the phone number and call them:
 DO NOT attempt another browser action. Use search → call_external now.`;
                 console.log(`[BOT-WALL-PHONE] Pivoting to phone escalation for ordering task`);
               } else {
-                // Inject failure context so next AI round knows what happened and tries differently
-                visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}". Think creatively — try 3 different approaches before giving up: (1) DIFFERENT AUTH: Try "Continue with Google" or "Continue with Apple" OAuth — bypasses bot detection. (2) ALTERNATIVE: search("free alternatives to [service]") and try one that works. (3) BUILT-IN TOOLS: If goal is content creation (design, image, doc), use generate_image() or create_word() directly — no signup needed. (4) MOBILE SITE: Try m.site.com or a different URL path. (5) PUBLIC API: search("[service] free API") — programmatic access is often easier. NEVER just report "couldn't sign up" — achieve the USER'S GOAL by any available means.]`;
+                // If MAX_STEPS was hit, the site is too complex for the browser — block 2nd invocation
+              // and force alternative approach immediately (prevents 2nd × 12-min wasted browser session)
+              const isMaxStepsError = /max steps/i.test(errMsg);
+              if (isMaxStepsError) {
+                visionAgentInvocations = 2; // cap out — no retry
+              }
+              // Inject failure context so next AI round knows what happened and tries differently
+              visionFailureNote = `[VISION-AGENT ATTEMPT FAILED after ${visionResult.steps} steps: "${errMsg}".${isMaxStepsError ? ' BROWSER SESSION EXHAUSTED — DO NOT browse this site again.' : ''} Think creatively — try 3 different approaches before giving up: (1) DIFFERENT AUTH: Try "Continue with Google" or "Continue with Apple" OAuth — bypasses bot detection. (2) ALTERNATIVE: search("free alternatives to [service]") and try one that works. (3) BUILT-IN TOOLS: If goal is content creation (design, image, doc), use generate_image() or create_word() directly — no signup needed. (4) MOBILE SITE: Try m.site.com or a different URL path. (5) PUBLIC API: search("[service] free API") — programmatic access is often easier. NEVER just report "couldn't sign up" — achieve the USER'S GOAL by any available means.]`;
               }
             }
           } catch (visionErr) {
