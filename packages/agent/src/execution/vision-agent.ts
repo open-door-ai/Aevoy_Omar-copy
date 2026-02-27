@@ -20,6 +20,7 @@ import { generateVisionResponse } from '../services/ai.js';
 import { handleCaptchaIfPresent } from './captcha.js';
 import { extractVerificationCode } from '../utils/email-code-extractor.js';
 import { humanMouseMove } from './stealth.js';
+import { getSupabaseClient } from '../utils/supabase.js';
 
 const MAX_STEPS = 150;           // was 40 — real tasks need 80-120 steps
 const STEP_TIMEOUT_MS = 15000;
@@ -514,6 +515,15 @@ DONE RULES (CRITICAL):
 - NEVER output DONE with passive phrases like "want me to", "I'll need", "would you like", "shall I", "let me know", "I need your", "please provide". Those mean you HAVE NOT completed the task. Keep going.
 - NEVER describe what you COULD do. DO IT. DONE is only for confirmed completion.
 
+DONE MESSAGE MUST INCLUDE ACTUAL DATA:
+- For price tasks: DONE:"iPhone 16 Pro 256GB at Best Buy CA: $1,649 CAD. At Apple: $1,699 CAD."
+  NOT: DONE:"Found product page" — the actual price must be in the DONE message.
+- For restaurant booking: DONE:"Reserved table for 2 at Joe Fortes Seafood (777 Thurlow St, Vancouver) for Saturday 7pm. Confirmation #123 or call 604-669-1940."
+  If couldn't book online: DONE:"Joe Fortes Seafood: 777 Thurlow St, Vancouver. Phone: 604-669-1940. OpenTable reservation requires login — visit opentable.com or call to book."
+- For restaurant research: DONE:"[Name], [address], [phone], [hours], [price range], [reservation method]."
+- For address/contact lookup: include full address, phone, hours in DONE message.
+- ALWAYS: the DONE message is what the user sees. Make it complete and actionable.
+
 KEY RULES:
 - If you see a 404, "page not found", or error page: NAVIGATE to the base domain (e.g. NAVIGATE:"https://example.com")
 - If the signup/register URL fails: try NAVIGATE:"https://example.com/register" then NAVIGATE:"https://example.com/join" then NAVIGATE:"https://example.com" and find signup link
@@ -668,12 +678,15 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       if (steps > 0 && steps % 25 === 0 && taskId) {
         const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1);
         const progressUrl = activePage.url();
-        void import('../utils/supabase.js').then(({ getSupabaseClient }) => {
-          getSupabaseClient().from('tasks').update({
-            progress_message: `[VISION-AGENT] Step ${steps}/${MAX_STEPS} (${elapsedMin}min) on ${progressUrl.substring(0, 60)}`
-          }).eq('id', taskId).then(() => {});
-        }).catch(() => {});
-        console.log(`[VISION-AGENT] Progress heartbeat: step ${steps}/${MAX_STEPS}, ${elapsedMin}min elapsed`);
+        const heartbeatMsg = `[VISION-AGENT] Step ${steps}/${MAX_STEPS} (${elapsedMin}min) on ${progressUrl.substring(0, 60)}`;
+        console.log(`[VISION-AGENT] Heartbeat: ${heartbeatMsg}`);
+        void (async () => {
+          try {
+            await getSupabaseClient().from('tasks').update({ progress_message: heartbeatMsg }).eq('id', taskId);
+          } catch (e) {
+            console.warn('[VISION-AGENT] Heartbeat failed:', e);
+          }
+        })();
       }
 
       // If a popup appeared since last step, notify AI via history

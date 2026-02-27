@@ -5810,6 +5810,35 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // strips them at the top, but the last iteration's response may still have them
     aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
     const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
+
+    // Narration prefix stripper: DeepSeek sometimes outputs thinking + answer in same message.
+    // Pattern: "[The user asked for X...\n\nFrom the results:\n- ...]\n\n\n\n[Based on results, here are...]"
+    // Instead of marking whole response as garbage, extract just the clean answer portion.
+    const stripNarrationPrefix = (text: string): string => {
+      const lc = text.trim().toLowerCase();
+      const narrationPrefixes = [
+        /^the user asked for\b/i, /^the user wants\b/i, /^the user is asking\b/i,
+        /^from the results:/i, /^i'll synthesize/i, /^i need to compile/i,
+        /^let me compile/i, /^i'll now compile/i,
+      ];
+      if (!narrationPrefixes.some(p => p.test(lc))) return text;
+      // Find first paragraph after which real content begins
+      const realContentPatterns = [
+        /^based on (the |current |my )/i, /^here (are|is) (the |your |a )/i,
+        /^the (top|best|cheapest|recommended)\b/i, /^\d+\.\s+\*\*/, /^#+ /,
+      ];
+      const paragraphs = text.split(/\n{2,}/);
+      for (let i = 1; i < paragraphs.length; i++) {
+        const para = paragraphs[i].trim();
+        if (para.length > 80 && realContentPatterns.some(p => p.test(para))) {
+          console.log(`[NARRATION-STRIP] Extracted clean answer from paragraph ${i}/${paragraphs.length}`);
+          return paragraphs.slice(i).join('\n\n');
+        }
+      }
+      return text;
+    };
+    const strippedCleanResponse = rawCleanResponse ? stripNarrationPrefix(rawCleanResponse) : rawCleanResponse;
+
     // Safety: if cleanResponseForEmail stripped everything or left garbage, use an action-aware fallback
     // Detect garbage: too short, looks like code/selectors/JSON fragments, no real words
     const isGarbageResponse = (text: string): boolean => {
@@ -5848,8 +5877,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     if (signupAutoCompleted && rawCleanResponse) {
       // Signup-auto result — use directly, never overwrite with AI summary
       cleanResponse = rawCleanResponse;
-    } else if (rawCleanResponse && !isGarbageResponse(rawCleanResponse)) {
-      cleanResponse = rawCleanResponse;
+    } else if (strippedCleanResponse && !isGarbageResponse(strippedCleanResponse)) {
+      // Use stripped response (narration prefix removed if needed), or raw if stripping wasn't needed
+      cleanResponse = strippedCleanResponse;
     } else if (isConversationalSubject && rawCleanResponse && rawCleanResponse.length > 2) {
       // Short conversational response — valid, not garbage
       cleanResponse = rawCleanResponse;
@@ -5956,6 +5986,22 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // This is ALWAYS legitimate — can't create account without user's desired password
       /\b(i'?ll need (a|your) password|need (a|your) password to|what password (would|do) you|provide (a|your) password|password to (complete|create|finish|register|sign))\b/i.test(cleanResponse)
     );
+
+    // Pre-check: if passive phrase is only in the LAST sentence of a substantive response (>200 chars
+    // of real content before it), it's a proactive follow-up (intentional design) — just strip it.
+    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !_isLegitCredentialRequest) {
+      const _firstPassiveIdx = cleanResponse.search(_passivePatterns);
+      const _textBeforePassive = cleanResponse.substring(0, _firstPassiveIdx);
+      const _isTrailingProactive = _firstPassiveIdx > 200 && !_passivePatterns.test(_textBeforePassive);
+      if (_isTrailingProactive) {
+        // Strip just the trailing passive sentence — the rest of the response is good
+        const _trailingStrip = cleanResponse.replace(/[\n\s]*[^\n.!?]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^.!?]*[.!?]?\s*$/i, '').trim();
+        if (_trailingStrip.length > 50) {
+          cleanResponse = _trailingStrip;
+          console.log('[PASSIVE-GUARD] Stripped trailing proactive question — substantive content preserved');
+        }
+      }
+    }
 
     if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted && !_isLegitCredentialRequest) {
       console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
