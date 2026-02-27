@@ -1520,7 +1520,7 @@ GOOD examples:
 - "Vancouver events tonight include the Jazz Festival at Orpheum Theatre and a Comedy Night at The Biltmore."
 - "The weather in Toronto is 31°F with cloudy skies and west winds at 12 mph."
 
-Rules: Use past or present tense only. If no live data: give specific knowledge-based answer with a real URL. Max 3 sentences. No numbered lists.`;
+Rules: Use past or present tense only. If no live data: give specific knowledge-based answer with real company names, URLs, and guessed contact emails (info@domain.com format). For leads/contacts requests: list specific real companies with website + guessed email. Max 5 bullets allowed for lists of items. No vague hedging.`;
 
   const userContent = hasContext
     ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results concisely. No "I'll" or "Let me".`

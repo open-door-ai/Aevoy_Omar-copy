@@ -5914,12 +5914,16 @@ Extract the ACTUAL phone number from search results and call them:
             // don't use it — fall through to stillBad/action-data handling instead.
             const _fbLC = fallbackResponse.content.toLowerCase();
             const _fbStillNarration = (
-              /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available)/i.test(_fbLC) ||
+              /(?:were|was|are|is|did)\s+not\s+(?:directly\s+)?(?:retrieve|retrieved|extract|extracted|fetch|fetched|obtain|obtained|find|found|available)/i.test(_fbLC) ||
               /(?:results?|listings?|list|data|information|jobs?)\s+(?:of\s+\w+\s+)?(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(_fbLC) ||
               /a\s+(?:current|full|complete|comprehensive)\s+(?:list|listing|guide)\s+(?:of\s+[\w\s]+\s+)?(?:is|are)\s+available\s+at\s+/i.test(_fbLC) ||
               /(?:can be found|available)\s+(?:at|on)\s+(?:\w+\s+)?(?:at\s+)?https?:\/\//i.test(_fbLC) ||
               /(?:further|additional|more)\s+(?:specific\s+)?searches?\s+(?:for|are)\s+(?:required|needed)/i.test(_fbLC) ||
-              /(?:search|searches?)\s+(?:for\s+\w[\w\s]+\s+)?(?:is|are|was|were)\s+(?:not\s+)?(?:required|needed|necessary)\s+to\s+(?:gather|find|get|retrieve)/i.test(_fbLC)
+              /(?:search|searches?)\s+(?:for\s+\w[\w\s]+\s+)?(?:is|are|was|were)\s+(?:not\s+)?(?:required|needed|necessary)\s+to\s+(?:gather|find|get|retrieve)/i.test(_fbLC) ||
+              // "based on general business knowledge" — still using training data, not real results
+              /based on (?:general|my|our|training)\s+(?:\w+\s+)?(?:business|knowledge|training|information|data)/i.test(_fbLC) ||
+              // "primarily show X, not Y" — context mismatch description
+              /primarily show\b/i.test(_fbLC)
             );
             if (_fbStillNarration) {
               console.log('[QUALITY] Fallback response is still narration — trying pure knowledge mode');
