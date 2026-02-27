@@ -5568,11 +5568,24 @@ Extract the ACTUAL phone number from search results and call them:
             username
           );
           if (fallbackResponse.content && fallbackResponse.content.length > 20) {
-            console.log(`[QUALITY] Haiku direct answer used (${fallbackResponse.content.length} chars)`);
-            aiResponse.content = fallbackResponse.content.trim();
-            aiResponse.cost = (aiResponse.cost || 0) + (fallbackResponse.cost || 0);
-            aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
-            qualityGateHaikuFired = true;
+            // Re-check: if the fallback itself is still narration (DeepSeek produced "available at URL"),
+            // don't use it — fall through to stillBad/action-data handling instead.
+            const _fbLC = fallbackResponse.content.toLowerCase();
+            const _fbStillNarration = (
+              /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available)/i.test(_fbLC) ||
+              /(?:results?|listings?|list|data|information|jobs?)\s+(?:of\s+\w+\s+)?(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(_fbLC) ||
+              /a\s+(?:current|full|complete|comprehensive)\s+(?:list|listing|guide)\s+(?:of\s+[\w\s]+\s+)?(?:is|are)\s+available\s+at\s+/i.test(_fbLC) ||
+              /(?:can be found|available)\s+(?:at|on)\s+(?:\w+\s+)?(?:at\s+)?https?:\/\//i.test(_fbLC)
+            );
+            if (_fbStillNarration) {
+              console.log('[QUALITY] Fallback response is still narration — skipping, using action data directly');
+            } else {
+              console.log(`[QUALITY] Haiku direct answer used (${fallbackResponse.content.length} chars)`);
+              aiResponse.content = fallbackResponse.content.trim();
+              aiResponse.cost = (aiResponse.cost || 0) + (fallbackResponse.cost || 0);
+              aiResponse.tokensUsed = (aiResponse.tokensUsed || 0) + (fallbackResponse.tokensUsed || 0);
+              qualityGateHaikuFired = true;
+            }
           }
         } catch (refinementErr) {
           console.error('[QUALITY] Haiku fallback failed:', refinementErr);

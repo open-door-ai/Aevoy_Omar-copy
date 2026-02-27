@@ -1560,7 +1560,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
   if (process.env.GROQ_API_KEY) {
     try {
       const groqClient = getGroqClient();
-      const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. Include a real URL. Max 2-3 sentences.`;
+      const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. If search results only contain article links without real data, use your training knowledge to name specific restaurants/products/services. NEVER say "available at", "not directly retrieved", "can be found at", or redirect to a URL. Max 2-3 sentences.`;
       const res = await groqClient.chat.completions.create({
         model: 'llama-3.3-70b-versatile',
         max_tokens: 200,
@@ -1588,7 +1588,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
   // Last resort: DeepSeek with ultra-strict prompt
   if (process.env.DEEPSEEK_API_KEY) {
     try {
-      const strictSystem = `RESULTS REPORT: Answer in present tense only. Start with a fact. Include a URL. Max 2 sentences. Do NOT begin with "I'll", "Let me", or "I will".`;
+      const strictSystem = `RESULTS REPORT: Answer in present tense only. Start with a concrete fact (specific name, price, address). If search results only link to articles without real data, use your training knowledge to name real restaurants/prices/services. NEVER say "available at URL", "not directly retrieved", "can be found at", or point to a website. Max 2 sentences. Do NOT begin with "I'll", "Let me", or "I will".`;
       const client = getDeepSeekClient();
       const res = await client.chat.completions.create({
         model: "deepseek-chat",
