@@ -438,7 +438,11 @@ RULES:
  * Parse the AI's one-line action response.
  */
 function parseAction(response: string): { type: string; index?: number; text?: string; key?: string; url?: string; result?: string } | null {
-  const line = response.trim().split('\n')[0].trim();
+  // Scan ALL lines — text-only LLMs (DeepSeek fallback) sometimes add a brief explanation
+  // before the action. We find the first line that matches a known action pattern.
+  const allLines = response.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const actionPrefixes = /^(CLICK_AT:|CLICK:|TYPE:|FILL:|SELECT:|SCROLL:|NAVIGATE:|PRESS:|WAIT$|SWITCH_TAB|DONE:|FAIL:)/;
+  const line = allLines.find(l => actionPrefixes.test(l)) || allLines[0] || '';
 
   const clickAt = line.match(/^CLICK_AT:(\d+),(\d+)/);
   if (clickAt) return { type: 'click_at', index: parseInt(clickAt[1]), text: clickAt[2] };
