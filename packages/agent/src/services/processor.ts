@@ -3921,8 +3921,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           iterationResults.push({
             action,
             success: false,
-            error: `BLOCKED: You navigated to aevoy.com which is YOUR OWN PLATFORM, not the target website. You must navigate to a REAL external website to complete the task "${subject}". Use [ACTION:search("${subject}")] to find the right website first.`
+            error: `You navigated to aevoy.com which is your own platform. Navigate to a REAL external website to complete the task. Use [ACTION:search("${subject}")] to find the right website first.`
           });
+          // Reset completion — AI may have said TASK_COMPLETE alongside this action
+          isTaskComplete = false;
+          aiSignaledComplete = false;
           continue;
         }
 
@@ -3939,8 +3942,14 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             iterationResults.push({
               action,
               success: false,
-              error: `BLOCKED: You tried to call/text the user without attempting the browser first. For tasks like signups, bookings, purchases, and design creation, you MUST navigate to the relevant website and try to complete the task directly (browse/fill/click/vision agent). Only use call_user AFTER exhausting browser options. Navigate to the website now.`
+              error: `Action blocked — you must try the browser first. Navigate to the relevant website and complete the task directly using browse/fill/click/vision agent. Only call after exhausting browser options.`
             });
+            // CRITICAL: Reset task completion — AI said TASK_COMPLETE but we blocked its action,
+            // so the task is NOT actually complete. Force continuation.
+            isTaskComplete = false;
+            aiSignaledComplete = false;
+            // Strip the AI's passive response — it was paired with the blocked action
+            aiResponse.content = '';
             continue;
           }
         }
@@ -6673,14 +6682,43 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             _upgradePrompt,
             'Rewrite as a first-person action statement. The AI is completing the task, not advising the user.'
           );
-          if (_upgraded?.result && _upgraded.result.length > 20 && !_givesInstructions) {
-            cleanResponse = _upgraded.result;
-            console.log('[QUALITY-GATE] Response upgraded to action-oriented');
-          } else if (_upgraded?.result && _upgraded.result.length > 20) {
-            cleanResponse = _upgraded.result;
-            console.log('[QUALITY-GATE] Response upgraded from instructions to action');
+          if (_upgraded?.result && _upgraded.result.length > 20) {
+            // Verify the rewrite itself isn't also passive/advice
+            const _rewriteStillBad = /\b(you can|you should|you must|you'll need to|visit the|here's how|want me to|shall i|would you like)\b/i.test(_upgraded.result)
+              && !/\b(completed|booked|reserved|signed up|confirmed|called|sent|created)\b/i.test(_upgraded.result);
+            if (!_rewriteStillBad) {
+              cleanResponse = _upgraded.result;
+              console.log('[QUALITY-GATE] Response upgraded to action-oriented');
+            } else {
+              console.log('[QUALITY-GATE] Rewrite still passive — using deterministic fallback');
+            }
           }
         } catch { /* keep original */ }
+
+        // DETERMINISTIC FALLBACK: If quickValidate failed or produced another passive response,
+        // extract what was found and present it as a fact (not advice)
+        const _stillHasAdvice = /\b(you can|you should|you must|you'll need to|visit the|here's how|want me to|shall i|would you like)\b/i.test(cleanResponse)
+          && !/\b(completed|booked|reserved|signed up|confirmed|called|sent|created)\b/i.test(cleanResponse);
+        if (_stillHasAdvice && _isTask) {
+          // Strip "You can...", "Want me to..." sentences — keep only factual content
+          const _factual = cleanResponse
+            .replace(/[^.!?\n]*\b(you can|you should|you must|you'll need to|visit the|here's how|want me to|shall i|would you like)[^.!?\n]*[.!?]?\s*/gi, '')
+            .replace(/\n{2,}/g, '\n')
+            .trim();
+          if (_factual.length > 30) {
+            cleanResponse = _factual;
+            console.log(`[QUALITY-GATE] Deterministic strip — removed advice sentences (${cleanResponse.length} chars remain)`);
+          } else {
+            // Everything was advice — build from action results
+            const _actionFacts = actionResults.filter(r => r.success && r.result)
+              .map(r => String(r.result).substring(0, 300))
+              .join('\n');
+            if (_actionFacts.length > 30) {
+              cleanResponse = `Here's what I found:\n\n${_actionFacts}`;
+              console.log('[QUALITY-GATE] Built response from action results');
+            }
+          }
+        }
       }
     }
 
