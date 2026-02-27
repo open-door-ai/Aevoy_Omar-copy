@@ -25,6 +25,19 @@ import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, Strik
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+// ── Per-task call rate counters (module-level, cleaned up after task completes) ──
+const _taskCallCounters = new Map<string, { call_user: number; call_external: number }>();
+function _getCallCount(taskId: string, type: 'call_user' | 'call_external'): number {
+  return _taskCallCounters.get(taskId)?.[type] || 0;
+}
+function _incrementCallCount(taskId: string, type: 'call_user' | 'call_external'): void {
+  if (!_taskCallCounters.has(taskId)) _taskCallCounters.set(taskId, { call_user: 0, call_external: 0 });
+  _taskCallCounters.get(taskId)![type]++;
+}
+function _cleanupCallCounters(taskId: string): void {
+  _taskCallCounters.delete(taskId);
+}
+
 // Self-learning intelligence imports
 import { recordModelOutcome } from "./model-intelligence.js";
 import { predictDifficulty, recordTaskDifficulty } from "./difficulty-predictor.js";
@@ -777,6 +790,9 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     }
 
     const taskId = taskRecord.id;
+
+    // Clean up call rate counters for this user (reset at start of each task)
+    _cleanupCallCounters(userId);
 
     // Either send confirmation or execute immediately
     if (clarified.needsConfirmation) {
@@ -6611,7 +6627,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // and "page available at URL where you can create account" (giving link, not doing task)
       const _isTask = /\b(book|reserv|cancel|sign.?up|sign up|register|create|make|set.?up|buy|order|purchase|subscribe|account|join)\b/i.test(subject + ' ' + (body || ''));
       const _givesInstructions = _isTask && (
-        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book|sign|register|access|cancel|subscribe|view|see|check|look)\b/i.test(cleanResponse) ||
+        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book|sign|register|access|cancel|subscribe|view|see|check|look|call)\b/i.test(cleanResponse) ||
         /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse) ||
         // "page available at https://... where you can create/sign up" — giving a link to do it yourself
         /https?:\/\/[^\s]{10,}\s.{0,60}\bwhere (you can|you'll|you should|you need to)\b/i.test(cleanResponse) ||
@@ -6624,6 +6640,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         /\b(i recommend (you |that you )?(calling|visiting|checking|going|using|trying|booking|making))\b/i.test(cleanResponse) ||
         /\b(i suggest (you |that you )?(call|visit|check|go|use|try|book|make))\b/i.test(cleanResponse) ||
         /\b(you should (call|visit|check|go|contact|phone|try calling) (them|it|directly|the ))/i.test(cleanResponse) ||
+        /\b(you can call them|call them directly|their phone number is|their number is)/i.test(cleanResponse) ||
         /\b(for (availability|reservations?|a table), (call|contact|phone|try calling|you can call))\b/i.test(cleanResponse) ||
         // Booking advice patterns: "you must confirm directly", "accepts reservations online", "may be available"
         /\b(you must confirm|confirm directly|accepts reservations|may be available|availability.*may)\b/i.test(cleanResponse) ||
@@ -8428,6 +8445,11 @@ async function executeAction(
     case "call_user": {
       const { message: callMsg } = action.params as { message?: string };
       try {
+        // ── SECURITY: Rate limit user calls ──────────────────────────
+        if (_getCallCount(userId, 'call_user') >= 2) {
+          return { action, success: false, error: "Already called the user twice in this task — limit reached" };
+        }
+
         // Look up user's phone number
         const { data: profile } = await getSupabaseClient()
           .from("profiles")
@@ -8439,12 +8461,17 @@ async function executeAction(
           return { action, success: false, error: "I don't have a phone number on file for you. Please add your number in Settings at https://www.aevoy.com/dashboard?tab=settings and I'll call you right away." };
         }
 
+        // Sanitize message
+        const _safeCallMsg = (callMsg || "Hey, your AI assistant is calling to follow up on your request.")
+          .replace(/\[ACTION:[^\]]*\]/g, '').replace(/\[TASK_COMPLETE\]/g, '').substring(0, 500);
+
         const { callUser: makeCall } = await import("./twilio.js");
         const result = await makeCall({
           to: profile.phone_number,
           userId,
-          message: callMsg || "Hey, your AI assistant is calling to follow up on your request.",
+          message: _safeCallMsg,
         });
+        if (result.success) _incrementCallCount(userId, 'call_user');
         return {
           action,
           success: result.success,
@@ -8463,21 +8490,58 @@ async function executeAction(
         return { action, success: false, error: "Missing 'to' phone number — specify who to call" };
       }
       try {
-        // Safety: never call the user's own number via call_external (use call_user instead)
+        // ── SECURITY: Outbound call validation ──────────────────────────
+        const _extNormalized = extNumber.replace(/\D/g, '');
+
+        // 1. Must be a real phone number (7+ digits, starts with country code)
+        if (_extNormalized.length < 10 || _extNormalized.length > 15) {
+          return { action, success: false, error: "Invalid phone number format — must be a real 10-15 digit number" };
+        }
+
+        // 2. Block emergency numbers (911, 112, 999, etc.)
+        if (/^(911|112|999|000|110|119|100|108)$/.test(_extNormalized) || _extNormalized.startsWith('911')) {
+          console.error(`[SECURITY] BLOCKED call to emergency number: ${extNumber}`);
+          return { action, success: false, error: "Cannot call emergency services" };
+        }
+
+        // 3. Block premium/toll numbers (1-900, 1-976, 0900, etc.)
+        if (/^1?(900|976|970)/.test(_extNormalized) || /^0(900|800|870|871)/.test(_extNormalized)) {
+          console.error(`[SECURITY] BLOCKED call to premium number: ${extNumber}`);
+          return { action, success: false, error: "Cannot call premium/toll numbers" };
+        }
+
+        // 4. Block fabricated 555-xxxx numbers
+        if (/555\d{4}$/.test(_extNormalized) && !/5551212$/.test(_extNormalized)) {
+          return { action, success: false, error: "That looks like a fabricated 555-xxxx number. Search for the real phone number first." };
+        }
+
+        // 5. Rate limit: max 5 outbound calls per task
+        if (_getCallCount(userId, 'call_external') >= 5) {
+          return { action, success: false, error: "Maximum 5 outbound calls per task reached" };
+        }
+
+        // 6. Safety: never call the user's own number via call_external
         const { data: _extProfile } = await getSupabaseClient()
           .from("profiles").select("phone_number").eq("id", userId).single();
         const _userPhone = (_extProfile?.phone_number || '').replace(/\D/g, '');
-        const _extNormalized = extNumber.replace(/\D/g, '');
         if (_userPhone && (_extNormalized.endsWith(_userPhone) || _userPhone.endsWith(_extNormalized))) {
           return { action, success: false, error: "That is the user's own phone number — use call_user to call the user, or search for the correct external business phone number first" };
         }
+
+        // 7. Sanitize message — strip any prompt injection attempts
+        const _safeMsg = (extMsg || "Hi, I'm calling on behalf of my client to inquire about your listing.")
+          .replace(/\[ACTION:[^\]]*\]/g, '') // strip action tags
+          .replace(/\[TASK_COMPLETE\]/g, '')
+          .substring(0, 500); // max 500 chars
+
         const { callExternal } = await import("./twilio.js");
         const result = await callExternal(
           userId,
           extNumber,
-          extMsg || "Hi, I'm calling on behalf of my client to inquire about your listing.",
+          _safeMsg,
           true
         );
+        if (result.success) _incrementCallCount(userId, 'call_external');
         return {
           action,
           success: result.success,

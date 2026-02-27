@@ -667,8 +667,8 @@ NON-BROWSER ACTIONS:
 [ACTION:send_sms("+1234567890", "Message text")] — Send an SMS text message to a phone number. Use the user's phone from their profile if they say "text me".
 [ACTION:send_whatsapp("+1234567890", "Message text")] — Send a WhatsApp message. Use the user's whatsapp_phone from their profile if available.
 [ACTION:send_telegram("chat_id", "Message text")] — Send a Telegram message. Use the user's telegram_chat_id from their profile if available.
-[ACTION:call_user("Optional message to say")] — Call the user on their registered phone number. Use when they say "call me" or you need to reach them by voice.
-[ACTION:call_external("+1234567890", "Message to say")] — Call ANY phone number (businesses, dealers, restaurants, support lines). Use for sourcing, negotiations, appointments, price quotes.
+[ACTION:call_user("Optional message to say")] — Call THE USER (the person who gave you this task) on their registered phone. ONLY for: "call me", "phone me", collecting info FROM the user. NEVER use this to call restaurants, businesses, or anyone else — that's call_external.
+[ACTION:call_external("+1234567890", "Message to say")] — Call a BUSINESS/RESTAURANT/EXTERNAL NUMBER. You MUST provide the actual phone number (search for it first). Use for: booking restaurants, calling businesses, price quotes, appointments, customer service lines. NEVER use call_user for these — call_user dials the USER, not the business.
 [ACTION:read_email()] — Check your @aevoy.com inbox for recent emails (verification codes, replies, etc.)
 [ACTION:read_email(5, 60)] — Check last 5 emails from the past 60 minutes
 [ACTION:remember("important fact")] — Save information to long-term memory
