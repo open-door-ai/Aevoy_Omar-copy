@@ -104,6 +104,7 @@ async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> 
 }
 
 // Selector for all interactive elements (serialized as string to pass into page.evaluate)
+// COMPREHENSIVE: catches standard elements + SPA custom components + ARIA widgets
 const INTERACTIVE_SELECTOR =
   'input:not([type="hidden"]):not([disabled]),' +
   'textarea:not([disabled]),' +
@@ -113,7 +114,12 @@ const INTERACTIVE_SELECTOR =
   '[role="button"]:not([disabled]),' +
   '[role="link"],[role="option"],[role="menuitem"],[role="tab"],' +
   '[role="checkbox"],[role="radio"],[role="textbox"],' +
-  '[contenteditable="true"]';
+  '[role="combobox"],[role="listbox"],[role="switch"],[role="slider"],' +
+  '[contenteditable="true"],' +
+  // SPA custom components: focusable divs, dropdown triggers, details toggles
+  '[tabindex="0"],' +
+  '[aria-haspopup],' +
+  'summary';
 
 /**
  * Get interactive element count (for post-action change detection).
@@ -420,11 +426,10 @@ RESPOND WITH EXACTLY ONE LINE in this format:
 - FAIL:"reason"        (impossible to complete - explain why)
 
 RULES:
-- One action only. No explanation.
+- One action only. No explanation. Just the action line.
 - If you need to fill a form, fill ONE field at a time.
 - After typing in a field, use PRESS:Tab to move to the next field.
 - If TYPE does not work on a field (no text appears after 2 tries), use FILL instead.
-- If an element you need to click is NOT in the element list but you can SEE it in the screenshot, use CLICK_AT:x,y with estimated pixel coordinates.
 - After filling all fields, CLICK the submit button.
 - If a CAPTCHA appears, output WAIT (it will be solved automatically).
 - If you see a success confirmation, output DONE.
@@ -432,7 +437,19 @@ RULES:
 - If form has required fields with asterisks (*) fill ALL of them before submitting.
 - If a cookie/privacy banner blocks the page, it is auto-dismissed — just proceed with your next action.
 - If a date of birth field appears, fill it: month first, then day, then year (or use SELECT for dropdowns).
-- For phone/email verification: output WAIT (the system will check email automatically).`;
+- For phone/email verification: output WAIT (the system will check email automatically).
+
+CLICK_AT IS YOUR SECRET WEAPON (CRITICAL):
+- If a button, link, date, time slot, or ANY clickable element is VISIBLE in the screenshot but NOT in the element list — use CLICK_AT:x,y with estimated pixel coordinates from the screenshot.
+- Modern SPAs render custom components (date pickers, time selectors, reservation slots, card buttons) that don't appear in the element list. Look at the SCREENSHOT, find the element visually, estimate its center x,y coordinates, and CLICK_AT.
+- CLICK_AT is always available. Element list is helpful but NOT required to click things.
+
+NEVER DESCRIBE, ALWAYS ACT:
+- NEVER output DONE saying "here's the info" or "you can do X". That means you FAILED.
+- NEVER output DONE with advice like "visit the website", "call them", "confirm directly". YOU must do it.
+- If you're stuck after trying many approaches: output FAIL with a clear reason, NOT DONE with advice.
+- DONE means SUCCESS. FAIL means you tried and couldn't. There is no middle ground.
+- Every step MUST be an action (CLICK, TYPE, FILL, NAVIGATE, etc.). If you find yourself wanting to explain something, output the next CLICK action instead.`;
 }
 
 /**
@@ -568,7 +585,27 @@ TAB HANDLING (CRITICAL):
 - OAuth buttons ("Continue with Google", "Sign in with Apple", etc.) ALWAYS open a popup tab. After clicking one, output SWITCH_TAB to follow it.
 - After completing auth in the popup, output SWITCH_TAB again to return to the main page if needed.
 
-If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever the site offers)`;
+If a task includes creating an account as ONE STEP of a larger goal: find any method that gets you logged in (email, Google, Apple, GitHub — whatever the site offers)
+
+RESTAURANT BOOKING STRATEGY (CRITICAL — follow exactly):
+Restaurant booking sites (SevenRooms, OpenTable, Resy, direct restaurant sites) use complex date/time pickers.
+STEP 1: Look for party size selector (dropdown or +/- buttons). CLICK to set the correct number.
+STEP 2: Look for date field. If it's a calendar widget: CLICK the date field to open calendar, then CLICK the correct date. For "today": click today's highlighted date. For "tomorrow": click the next day.
+STEP 3: Look for time selector (dropdown or time slots). CLICK to open, then CLICK the matching time.
+STEP 4: After setting party/date/time, look for "Find a Table", "Search", "Check Availability", "Reserve" button. CLICK it.
+STEP 5: Available time slots will appear. CLICK the first available slot that matches (or closest to requested time).
+STEP 6: A contact form appears. FILL: First Name, Last Name, Email, Phone. Use the credentials provided in the task.
+STEP 7: Look for "Complete Reservation", "Confirm", "Book Table" button. CLICK it.
+STEP 8: Only DONE when you see a confirmation page/message with details.
+
+BOOKING FORM TIPS:
+- If a date picker is stuck: try TYPE the date as text (e.g. "Feb 27, 2026") into the date field
+- If a dropdown won't open: try CLICK_AT the center of the dropdown element
+- SevenRooms URL trick: add ?date=YYYY-MM-DD&time=HH:MM&party_size=N to pre-fill
+- OpenTable URL trick: add ?dateTime=YYYY-MM-DDTHH:MM&covers=N to pre-fill
+- If the form requires a phone number and none is in credentials: use a placeholder like 604-000-0000
+- NEVER output DONE saying "accepts reservations" or "you can book" — that means you FAILED to book
+- NEVER fabricate phone numbers, addresses, or confirmation numbers — only report what you see on screen`;
 
 /**
  * Run the vision-based browser agent on a task.
@@ -845,6 +882,18 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
       console.log(`[VISION-AGENT] AI says: ${aiResponse.substring(0, 100)}`);
       history.push(`Step ${steps + 1} @ ${url}: ${aiResponse.substring(0, 80)}`);
 
+      // ACTION-FORCING: If last 4+ steps had no CLICK/CLICK_AT/TYPE/FILL actions, inject urgency
+      if (steps >= 4) {
+        const recentActions = history.slice(-4);
+        const hasClickInRecent = recentActions.some(h =>
+          /CLICK:|CLICK_AT:|TYPE:|FILL:/i.test(h)
+        );
+        if (!hasClickInRecent) {
+          history.push(`⚠️ NO CLICKS IN LAST 4 STEPS. You are not interacting with the page! Look at the screenshot — find a button, link, or form field and CLICK it. If it's not in the element list, use CLICK_AT:x,y with coordinates from the screenshot. EVERY step must involve clicking or typing something.`);
+          console.log(`[VISION-AGENT] ACTION-FORCING: No clicks in last 4 steps at step ${steps + 1}`);
+        }
+      }
+
       // ACT: Parse and execute
       const action = parseAction(aiResponse);
 
@@ -877,12 +926,32 @@ Be specific (use actual URLs, field names). Max 150 words. No fluff.`;
         // PASSIVE DONE REJECTION: If DONE says "want me to", "I'll need", etc.
         // it means the AI described what it COULD do instead of DOING it. Force continue.
         const isPassiveDone = /want me to|i['']ll need|would you like|shall i|let me know|i need your|please provide|do you want|can i proceed|should i|could you|please tell me/i.test(doneResult);
-        if (isPassiveDone) {
+        // GENERIC ADVICE DONE REJECTION: If DONE describes what COULD be done instead of
+        // what WAS done, it's advice not completion. Reject and force the agent to keep acting.
+        // This is NOT hardcoded per task type — it catches advice patterns universally.
+        const _isAdviceDone = !isPassiveDone && (
+          // "you can [verb]" — telling user to do it themselves
+          /\b(you can|you must|you should|you'll need to|you need to|confirm directly|visit the|check the|call them|contact them)\b/i.test(doneResult) ||
+          // "accepts [service]" / "available at/on" / "located at" — describing a page, not completing a task
+          /\b(accepts\s+(reservations|bookings|orders)|available\s+(at|on)|located at|phone number is|for availability|may be available)\b/i.test(doneResult) ||
+          // Fabricated 555-xxxx phone numbers — hallucinated data
+          /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(doneResult) ||
+          // "here's how" / "here are the" — instruction-giving
+          /\b(here'?s?\s+how|here\s+are\s+the|steps?\s+to|follow\s+these)\b/i.test(doneResult)
+        );
+        if (isPassiveDone || _isAdviceDone) {
           const credHint = taskCreds.email
             ? ` Credentials already provided: email=${taskCreds.email}, password=${taskCreds.password}. USE THEM.`
             : '';
-          console.log(`[VISION-AGENT] REJECTED passive DONE at step ${steps + 1}: "${doneResult.substring(0, 80)}"`);
-          history.push(`⚠️ PASSIVE DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint} Fill ALL form fields and submit. NEVER output DONE with "want me to", "I'll need", or any passive phrase.`);
+          const reason = isPassiveDone ? 'PASSIVE' : 'ADVICE';
+          console.log(`[VISION-AGENT] REJECTED ${reason} DONE at step ${steps + 1}: "${doneResult.substring(0, 80)}"`);
+          history.push(`⚠️ ${reason} DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint} You MUST actually complete the task. Click buttons, fill forms, submit. If truly impossible after many tries, output FAIL (not DONE with advice). DONE = task succeeded. FAIL = task impossible. Advice = neither.`);
+          // If we've rejected 3+ DONE attempts, force FAIL to prevent infinite loop
+          const doneRejectCount = history.filter(h => h.includes('DONE REJECTED')).length;
+          if (doneRejectCount >= 3) {
+            console.log(`[VISION-AGENT] 3+ DONE rejections — forcing FAIL to prevent infinite loop`);
+            return { success: false, error: `Agent could not complete task after ${steps + 1} steps — kept giving advice instead of acting. Last attempt: "${doneResult.substring(0, 200)}"`, steps: steps + 1, cost: totalCost, screenshots };
+          }
           continue; // Force the loop to keep going
         }
         console.log(`[VISION-AGENT] DONE after ${steps + 1} steps: ${doneResult}`);

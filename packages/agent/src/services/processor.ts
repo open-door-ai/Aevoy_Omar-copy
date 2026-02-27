@@ -3225,10 +3225,11 @@ DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
           // Specific patterns also catch partial matches when hasRealActions
           const isJustInfo = !hasBookingConfirmation && (
             !hasRealActions ||  // No browse/click/call means agent just gave info — always reject
-            /\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation|reservation page is found|contact information.*booking|available on their website|contact (them|the restaurant) (at|directly)|information for booking)\b/i.test(lowerContent)
+            /\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation|reservation page is found|contact information.*booking|available on their website|contact (them|the restaurant) (at|directly)|information for booking|accepts reservations|you must confirm|confirm directly|may be available|for availability)\b/i.test(lowerContent) ||
+            /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(lowerContent) // fabricated 555-xxxx phone
           );
 
-          if (isBookingTask && isJustInfo && currentIteration <= 4) {
+          if (isBookingTask && isJustInfo && currentIteration <= 8) {
             console.warn(`[BOOKING-GATE] REJECTED: AI gave restaurant info instead of completing booking. Forcing form fill.`);
             aiResponse.content = '';
             aiResponse.actions = [];
@@ -3237,15 +3238,20 @@ DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
 YOU DID NOT COMPLETE THE BOOKING. You just returned the restaurant's address/phone.
 That is NOT what the user asked for. They said "book me a table" — you must ACTUALLY BOOK IT.
 
-DO THIS NOW:
+APPROACH 1 — Online booking (try first):
 1. Navigate to the restaurant's reservation page (OpenTable, Resy, Sevenrooms, or their website)
-2. Select the date, time (${subject}), and party size
-3. Fill in: Name="${username}", Email="${username}@aevoy.com", Phone from profile
-4. Click the Book/Reserve/Confirm button
-5. Report the confirmation number or "Booking confirmed" message
+2. For SevenRooms: add ?party_size=N&date=YYYY-MM-DD to the URL to pre-fill
+3. Select the date, time (${subject}), and party size
+4. Fill in: Name="${senderName || username}", Email="${username}@aevoy.com", Phone from profile
+5. Click the Book/Reserve/Confirm button
+6. Report the confirmation number or "Booking confirmed" message
 
-If online booking fails, call them: [ACTION:call_external("+1PHONENUMBER", "I'd like to book a table for the date/time specified")]
+APPROACH 2 — Call the restaurant (if online booking is too complex):
+1. Search for their REAL phone number: [ACTION:search("${subject.replace(/"/g, '')} restaurant phone number")]
+2. Call them: [ACTION:call_external("+1XXXXXXXXXX", "Hi, I'd like to book a table for ${subject.match(/(\d+)\s*(ppl|people|persons?|guests?)/i)?.[1] || '2'} people ${subject.match(/(tonight|today|tomorrow)/i)?.[1] || 'tonight'} at ${subject.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i)?.[1] || '5pm'}. The name is ${senderName || username}.")]
+3. Report: "I called [restaurant] and booked a table for [N] at [time]."
 
+NEVER fabricate phone numbers (no 555-xxxx). NEVER say "you can book it" — YOU book it.
 DO NOT just give me the address again. COMPLETE THE BOOKING.`;
 
             const forcedBooking = await generateResponse(
@@ -4632,7 +4638,13 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const visionName = senderName || username;
           // Inject Hive Mind learnings into vision agent task — agent starts with knowledge of what worked/failed for this domain
           const visionLearnings = learningsHint ? `\n\nHIVE MIND INTELLIGENCE (from past tasks on this site):\n${learningsHint.substring(0, 600)}` : '';
-          const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Complete the task fully on the page.${visionLearnings}`;
+          // For booking tasks, inject structured parameters to help the vision agent fill forms
+          const _vIsBooking = /\b(book|reserv|table for|reso\b|dinner)\b/i.test(taskTextLower);
+          const _vPartySize = (subject + ' ' + (body || '')).match(/(\d+)\s*(ppl|people|persons?|guests?|covers?)/i)?.[1] || '';
+          const _vTime = (subject + ' ' + (body || '')).match(/(?:at|for)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i)?.[1] || '';
+          const _vDate = /tonight|today/i.test(subject + ' ' + (body || '')) ? 'today' : /tomorrow/i.test(subject + ' ' + (body || '')) ? 'tomorrow' : '';
+          const _vBookingCtx = _vIsBooking ? `\n\n⚡ BOOKING DETAILS: Party size=${_vPartySize || '2'}, Date=${_vDate || 'today'}, Time=${_vTime || 'tonight'}. You MUST complete the reservation form — fill party size, date, time, then click Find a Table/Search, then fill name/email/phone and click Confirm. If the form is too complex after 30 steps, output FAIL:"Booking form too complex for browser — call restaurant instead" so the system can call them.` : '';
+          const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy, phone=604-000-0000. Complete the task fully on the page.${_vBookingCtx}${visionLearnings}`;
 
           visionAgentInvocations++;
           console.log(`[VISION-AGENT] Starting (invocation ${visionAgentInvocations}/2) on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);
@@ -4645,6 +4657,34 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
             if (visionResult.success) {
               const rawVisionResult = visionResult.result || 'Task completed successfully.';
+
+              // ── GENERIC VISION RESULT VERIFICATION ──────────────────────────
+              // If the vision agent returned ADVICE instead of actual task completion,
+              // treat it as a failure. This is GENERIC — works for any task type.
+              // "You can book at..." / "Visit the website" / "Here's how" = FAIL.
+              // "Booked table" / "Signed up" / "Found price $X" = SUCCESS.
+              const _isAdviceResult = (
+                /\b(you can|you must|you should|you'll need to|you need to|confirm directly|visit the|call them|contact them)\b/i.test(rawVisionResult) ||
+                /\b(here'?s?\s+how|here\s+are\s+the|steps?\s+to|follow\s+these)\b/i.test(rawVisionResult) ||
+                /\b(accepts\s+(reservations|bookings|orders)|may be available|for availability)\b/i.test(rawVisionResult) ||
+                /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(rawVisionResult) // fabricated 555-xxxx phone
+              );
+              const _isCompletionResult = /\b(confirmed|booked|reserved|signed up|created|registered|cancelled|submitted|completed|purchased|ordered|found|price|cost|\$\d|logged in|account created|successfully)\b/i.test(rawVisionResult);
+
+              if (_isAdviceResult && !_isCompletionResult) {
+                // Vision agent gave advice, not completion — treat as failure
+                console.warn(`[VISION-VERIFY] Vision agent returned advice, not task completion. Treating as failure.`);
+                lastVisionFailed = true;
+                visionAgentInvocations = 2; // prevent retry — browser can't complete, try alternative
+                visionFailureNote = `[BROWSER AUTOMATION INCOMPLETE] The browser agent navigated to the page but could NOT complete the task. It returned advice instead of actually doing it: "${rawVisionResult.substring(0, 200)}"
+
+YOU must complete the task using a DIFFERENT approach:
+1. If this is a booking/reservation: search for the business phone number and call them with [ACTION:call_external("+1...", "...")]
+2. If this is a signup/account creation: try a different URL path or OAuth method
+3. If this is research/lookup: use [ACTION:search("...")] to find the data
+4. NEVER return advice to the user. YOU complete the task or explain exactly what blocked you.`;
+                // Don't break — continue to next iteration with alternative approach
+              } else {
               // If the vision agent returned a trivial/technical string, generate a proper
               // user-facing summary via AI instead of showing the raw output.
               const isTrivialResult = rawVisionResult.trim().length < 60
@@ -4657,8 +4697,8 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                     `The agent navigated the website (URL: ${visionPage?.url() || 'unknown'}) and reported: "${rawVisionResult}".\n` +
                     `Write a 1-2 sentence summary for the user explaining what was accomplished. ` +
                     `Be specific. If a form was filled or account created, say so. If it reached a specific page, mention that. ` +
-                    `End with a proactive follow-up question if there's a natural next step.`,
-                    'You are summarizing a completed web automation task. Be clear, specific, and proactive.'
+                    `CRITICAL: Do NOT use passive phrases like "want me to", "would you like me to", "shall I". State facts only.`,
+                    'You are summarizing a completed web automation task. Be clear, specific, and factual. Never ask permission.'
                   );
                   aiResponse.content = summary?.result || `I've completed the task on the website.`;
                   console.log(`[VISION-AGENT] Generated proper summary for trivial result: ${aiResponse.content.substring(0, 100)}`);
@@ -4670,7 +4710,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               }
               isTaskComplete = true;
               aiSignaledComplete = true;
-              signupAutoCompleted = true; // Protect from quality gates
+              // Only protect from quality gates if vision result shows actual completion
+              // (not advice/description that happened to pass the advice check)
+              signupAutoCompleted = _isCompletionResult;
               console.log(`[VISION-AGENT] Complete: ${aiResponse.content.substring(0, 100)}`);
               // Record SUCCESS to Hive Mind — future tasks on this domain start with this knowledge
               try {
@@ -4709,6 +4751,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 }
               } catch { /* non-critical */ }
               break;
+              } // close booking verification else block
             } else {
               const errMsg = visionResult.error || 'Unknown error';
               console.log(`[VISION-AGENT] Failed: ${errMsg} — injecting failure context into AI iteration`);
@@ -4731,7 +4774,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               // ordering/booking/calling, pivot to phone immediately instead of retrying browser.
               const isBotWallError = /CALL-GATE|bot-blocking|bot wall|anti-bot|blocked by|access denied/i.test(errMsg);
               const isOrderOrBookingTask = /\b(order|reserve|book|buy|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*sushi)\b/i.test(taskTextLower);
-              if (isBotWallError && isOrderOrBookingTask) {
+              // Also escalate booking tasks that failed (form too complex) — not just bot walls
+              const isBookingFormFail = /\b(book|reserv|table for|reso\b)\b/i.test(taskTextLower) && /\b(too complex|form|booking form|couldn't|could not|failed|unable)\b/i.test(errMsg);
+              if ((isBotWallError && isOrderOrBookingTask) || isBookingFormFail) {
                 const cleanTaskForSearch = `${subject} ${body}`.replace(/\b(go to|navigate to|check|find|order from|can you|please)\b/gi, '').replace(/['"]/g, '').trim().substring(0, 60);
                 visionFailureNote = `[BOT WALL — PHONE ESCALATION REQUIRED] The website blocked automated access. DO NOT retry the browser. CALL THE BUSINESS DIRECTLY — this is faster and more reliable than fighting their bot detection.
 
@@ -6579,7 +6624,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         /\b(i recommend (you |that you )?(calling|visiting|checking|going|using|trying|booking|making))\b/i.test(cleanResponse) ||
         /\b(i suggest (you |that you )?(call|visit|check|go|use|try|book|make))\b/i.test(cleanResponse) ||
         /\b(you should (call|visit|check|go|contact|phone|try calling) (them|it|directly|the ))/i.test(cleanResponse) ||
-        /\b(for (availability|reservations?|a table), (call|contact|phone|try calling|you can call))\b/i.test(cleanResponse)
+        /\b(for (availability|reservations?|a table), (call|contact|phone|try calling|you can call))\b/i.test(cleanResponse) ||
+        // Booking advice patterns: "you must confirm directly", "accepts reservations online", "may be available"
+        /\b(you must confirm|confirm directly|accepts reservations|may be available|availability.*may)\b/i.test(cleanResponse) ||
+        // Fabricated phone numbers: 555-xxxx is the Hollywood fake number range
+        /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
       // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
       const _gaveUp = _isTask && (
