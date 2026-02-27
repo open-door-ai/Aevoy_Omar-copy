@@ -5823,6 +5823,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const lc = text.trim().toLowerCase();
       if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking') ||
           lc.startsWith('the user is calling') || lc.startsWith('the user said') || lc.startsWith('they want me') ||
+          lc.startsWith('the user asked for') || lc.startsWith('the user asked me') || // "The user asked for the top 5..." — AI narrating
           lc.startsWith('i need to navigate') || lc.startsWith('i should navigate') || lc.startsWith('i need to go to') ||
           lc.startsWith('let me navigate') || lc.startsWith("let's navigate") || lc.startsWith("let's go to") ||
           lc.startsWith("let me start by") || lc.startsWith("let me go to") ||

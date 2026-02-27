@@ -2793,17 +2793,18 @@ server.listen(PORT, async () => {
   const runTaskWatchdog = async () => {
     try {
       // Use updated_at (not started_at) so Railway-restart-killed tasks are caught quickly.
-      // 12 min gives the vision agent (8 min timeout) room to complete naturally,
-      // while catching Railway-killed tasks within 12 min of the kill (they stop updating at kill time).
-      const twelveMinutesAgo = new Date(Date.now() - 12 * 60 * 1000).toISOString();
+      // 25 min: vision agent can run up to 12 min (150 steps × 5s) + processor overhead.
+      // Quality > speed: complex tasks are allowed to run to completion naturally.
+      // Railway-killed tasks stop updating immediately, so they're caught within ~25 min.
+      const twentyFiveMinutesAgo = new Date(Date.now() - 25 * 60 * 1000).toISOString();
       const { data: stuckTasks } = await getSupabaseClient()
         .from('tasks')
         .select('id, email_subject, input_channel, user_id')
         .eq('status', 'processing')
-        .lt('updated_at', twelveMinutesAgo);
+        .lt('updated_at', twentyFiveMinutesAgo);
 
       if (stuckTasks && stuckTasks.length > 0) {
-        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >12 min) — resolving gracefully...`);
+        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >25 min) — resolving gracefully...`);
 
         // Gracefully complete each stuck task with a helpful message.
         // NEVER mark as "failed" — users should always see a usable response.
