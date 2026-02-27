@@ -2481,11 +2481,19 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Infer service name generically from the task text (any proper noun after "cancel/manage my X")
         const serviceNameMatch = subject.match(/\b(?:cancel|unsubscribe|manage|pause|delete|close)\s+(?:my\s+)?([A-Z][a-zA-Z0-9+\s]{1,30}?)(?:\s+(?:subscription|account|membership|plan)|\s*$)/i) ||
           subject.match(/\b(?:on|from|at|to)\s+([A-Z][a-zA-Z0-9+\s]{1,30}?)(?:\s*$|[\s,.])/i);
-        const serviceName = serviceNameMatch?.[1]?.trim() || (serviceDomain ? serviceDomain.replace('www.', '').replace('.com', '').replace('.ca', '') : 'the service');
+        const rawServiceName = serviceNameMatch?.[1]?.trim() || (serviceDomain ? serviceDomain.replace('www.', '').replace('.com', '').replace('.ca', '') : '');
+        // Detect vague/non-specific service names (adjectives, generic words — not a real service name)
+        const _vagueWords = /^(the |a |my |most |least |cheapest |most expensive |some |any |streaming |subscription |service |account |plan |membership )/i;
+        const _isVagueName = !rawServiceName || _vagueWords.test(rawServiceName) ||
+          /\b(most|least|expensive|cheapest|biggest|smaller|largest|highest|lowest|extra|another|all|every)\b/i.test(rawServiceName) ||
+          rawServiceName.split(' ').length > 3; // >3 words = phrase, not a service name
+        const serviceName = _isVagueName ? '' : rawServiceName;
         const verb = taskTextLower.includes('cancel') ? 'cancel your' : taskTextLower.includes('delete') ? 'delete your' : 'manage your';
         const noun = taskTextLower.includes('subscription') ? 'subscription' : 'account';
-        // Ask the user to REPLY with their credentials — never send them to Settings
-        const credResponse = `To ${verb} ${serviceName} ${noun}, I need your login credentials.\n\nReply with your ${serviceName} email address and password and I'll log in and handle it immediately.`;
+        // When service is ambiguous, ask which service + credentials together
+        const credResponse = _isVagueName
+          ? `Which service would you like me to ${verb.replace(' your', '')}?\n\nReply with the service name and your login credentials (e.g. "Netflix — email@example.com / password123") and I'll handle it right away.`
+          : `To ${verb} ${serviceName} ${noun}, I need your login credentials.\n\nReply with your ${serviceName} email address and password and I'll log in and handle it immediately.`;
 
         await getSupabaseClient().from("tasks").update({
           status: "completed",
@@ -5450,6 +5458,9 @@ Extract the ACTUAL phone number from search results and call them:
         responseLC.includes('you can view the full search results at') ||
         responseLC.includes('you can check the full results at') ||
         responseLC.includes('you can find the results at') ||
+        // "X results are available at https://..." — sending user to URL instead of giving results
+        (/(?:results?|listings?|data|information)\s+(?:is|are)\s+available\s+at\s+https?:\/\//i.test(responseLC)) ||
+        (/(?:currently\s+being\s+displayed|displayed)\s+(?:on|at)\s+[a-z]+(?:duck|google|bing|yahoo|search)/i.test(responseLC)) ||
         (/(?:search|query)\s+(?:was|has been)\s+(?:completed|run|executed|performed)[^.]*but[^.]*(?:not provided|not included|not available|not returned)/i.test(responseLC)) ||
         (/(?:specific results?|detailed results?|full results?)\s+(?:are|were)\s+not\s+(?:provided|included|available|returned)/i.test(responseLC))
       );
