@@ -2753,10 +2753,42 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             _dfpResult = await createWordDocument({ filename: _dfpFile, sections: _dfpSecs as any[], title: subject });
           } else if (_dfpAct === 'create_excel') {
             const { createExcelFile } = await import('../execution/actions/create-excel.js');
-            _dfpResult = await createExcelFile({ filename: _dfpFile, sheets: [{ name: 'Sheet1', headers: ['Item', 'Value'], data: _dfpSecs.filter((s: any) => s.type === 'paragraph').map((s: any) => [s.text.substring(0, 50), '']) }] });
+            // Try to parse markdown table first for proper column headers/data
+            const _mdTableMatch = _dfpRaw.match(/\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)+)/);
+            let _xlHeaders: string[] = ['Item', 'Details'];
+            let _xlData: (string | number | null)[][] = [];
+            if (_mdTableMatch) {
+              _xlHeaders = _mdTableMatch[1].split('|').map((h: string) => h.trim()).filter(Boolean);
+              _xlData = _mdTableMatch[2].trim().split('\n').map((row: string) =>
+                row.split('|').map((c: string) => c.trim()).filter(Boolean).map((c: string) => {
+                  const n = parseFloat(c.replace(/[$,%]/g, ''));
+                  return isNaN(n) ? c : n;
+                })
+              );
+            } else {
+              // Fall back: extract header/value pairs from sections
+              _dfpSecs.forEach((s: any) => {
+                if (s.type === 'heading') { _xlData.push([s.text, '']); }
+                else if (s.type === 'paragraph' && s.text.includes(':')) {
+                  const [k, v] = s.text.split(':', 2);
+                  _xlData.push([k.trim(), v.trim()]);
+                } else if (s.type === 'paragraph') { _xlData.push([s.text.substring(0, 80), '']); }
+              });
+            }
+            _dfpResult = await createExcelFile({ filename: _dfpFile, sheets: [{ name: 'Sheet1', headers: _xlHeaders, data: _xlData, styles: { headerBold: true, alternateRowColors: true, freezeFirstRow: true, autoFilter: true } }] });
           } else if (_dfpAct === 'create_powerpoint') {
             const { createPowerPoint } = await import('../execution/actions/create-powerpoint.js');
-            _dfpResult = await createPowerPoint({ filename: _dfpFile, slides: _dfpSecs.filter((s: any) => s.type === 'heading' && s.level <= 2).map((s: any) => ({ title: s.text, content: [] })) });
+            // Build slides: pair each heading with its following content
+            const _pptSlides: { title: string; bullets?: string[]; content?: string; layout: 'title' | 'content' }[] = [{ title: subject, layout: 'title', content: 'AI-Generated Presentation' }];
+            let _pptCurrTitle = ''; const _pptCurrBullets: string[] = [];
+            for (const s of _dfpSecs) {
+              if (s.type === 'heading' && (s.level ?? 3) <= 2) {
+                if (_pptCurrTitle && _pptCurrBullets.length > 0) _pptSlides.push({ title: _pptCurrTitle, bullets: [..._pptCurrBullets], layout: 'content' });
+                _pptCurrTitle = s.text; _pptCurrBullets.length = 0;
+              } else if (_pptCurrTitle) { _pptCurrBullets.push(s.text.substring(0, 120)); }
+            }
+            if (_pptCurrTitle) _pptSlides.push({ title: _pptCurrTitle, bullets: _pptCurrBullets.length ? _pptCurrBullets : undefined, layout: 'content' });
+            _dfpResult = await createPowerPoint({ filename: _dfpFile, slides: _pptSlides.slice(0, 15) });
           } else if (_dfpAct === 'create_pdf') {
             const { createPDF } = await import('../execution/actions/create-pdf.js');
             _dfpResult = await createPDF({ filename: _dfpFile, content: _dfpSecs as any[] });
