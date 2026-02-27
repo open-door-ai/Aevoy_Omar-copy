@@ -4112,6 +4112,16 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       console.log(`[ITERATE] Round ${currentIteration} execution done: ${iterationResults.length} results (${iterationResults.filter(r => r.success).length} success)`);
       actionResults.push(...iterationResults);
 
+      // DOC-COMPLETION: If a document action succeeded this round, mark task complete immediately.
+      // Without this check the loop continues to round 2+ where the AI narrates instead of completing.
+      const _docCompletedThisRound = iterationResults.some(r =>
+        ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '') && r.success
+      );
+      if (_docCompletedThisRound) {
+        console.log(`[DOC-COMPLETE] Document created successfully this round — marking task complete`);
+        isTaskComplete = true;
+      }
+
       // Stream progress: round complete
       const roundSuccesses = iterationResults.filter(r => r.success).length;
       const totalSuccesses = actionResults.filter(r => r.success).length;
