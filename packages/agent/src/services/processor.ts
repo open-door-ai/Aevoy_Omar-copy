@@ -5597,7 +5597,7 @@ Extract the ACTUAL phone number from search results and call them:
       // Skip generateForcedDirectAnswer for document action tasks — it can't emit create_word/excel/ppt/pdf
       // action tags, so it produces narration about Microsoft Word/Google Docs instead.
       // For these tasks, continue the iteration loop so the AI retries with the document action instruction.
-      if (_isDocumentAction && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && (isPlanLike || isNarration || isAdviceList)) {
+      if (_isDocumentAction && !isAllModelsFailed && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && (isPlanLike || isNarration || isAdviceList)) {
         console.log(`[QUALITY] Document action task — skipping generateForcedDirectAnswer, will re-prompt with action tag instruction`);
         // Don't set qualityGateHaikuFired — let the iteration loop continue and re-prompt the AI
       } else if (isPlanLike || isNarration || isAdviceList || isAllModelsFailed) {
