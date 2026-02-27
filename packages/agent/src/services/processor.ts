@@ -2628,7 +2628,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const _isActionTask = /\b(sign\s?up|signup|register|create.*account|cancel|book|reserv|buy|order|purchase|subscribe|log\s*in|fill.*form|unsubscribe|dispute)\b/i.test(_agentTeamText);
       // Skip agent team for pure generation/writing tasks — the AI should produce content directly
       const _isGenerationTask = /\b(write me|create me|make me|build me|html code|full html|complete html|the html|css code|javascript code|portfolio website|landing page|one.page|a website for|a webpage for|source code|the code|return the|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|write.*function|write.*script|write.*program|write.*essay|write.*email|write.*letter|draft.*email|draft.*letter)\b/i.test(_agentTeamText);
-      if (isComplexTask(_agentTeamText) && !task.suppressEmail && !_isActionTask && !_isGenerationTask) {
+      // Skip agent team for factual lookups — single-goal queries that just need a search
+      // "cheapest flight to X", "price of X", "what is X", "how much does X cost" — agent team is overkill
+      const _isFactualLookup = /\b(cheapest\s+(flight|price|deal|ticket|rate)|what is the (price|cost|rate|fee)|how much (does|is|costs?)|current price|price check|find the cheapest|cheapest.*to\b|price.*in Canada|price.*in US)\b/i.test(_agentTeamText) ||
+        /^(what is|how much|what's the|what are the prices?|find the cheapest|cheapest)\b/i.test(_agentTeamText.trim());
+      if (isComplexTask(_agentTeamText) && !task.suppressEmail && !_isActionTask && !_isGenerationTask && !_isFactualLookup) {
         try {
           const teamResult = await getAgentTeam().executeWithTeam(
             subject + ' ' + body,

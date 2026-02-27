@@ -91,9 +91,10 @@ export function isComplexTask(task: string): boolean {
   const hasPayment = /\b(pay|payment|checkout|credit card|card)\b/.test(lower);
   if (hasSensitiveAction && hasPayment) return true;
 
-  // Long detailed request
+  // Long detailed request — threshold raised to 40 words to avoid triggering on
+  // simple factual lookups where subject+body combined exceeds 25 words
   const wordCount = task.trim().split(/\s+/).length;
-  if (wordCount > 25) return true;
+  if (wordCount > 40) return true;
 
   return false;
 }

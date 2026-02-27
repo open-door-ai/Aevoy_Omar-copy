@@ -907,22 +907,26 @@ When given a complex goal (set up an account, apply to jobs, create a campaign, 
 5. VERIFY your work: after key steps, check if they actually succeeded (look at page state)
 6. If a step fails, don't repeat it — try an alternative approach immediately
 
-RESEARCH DEPTH — MULTI-SOURCE VERIFICATION (CRITICAL):
-- For ANY research task (find a price, find info, compare options, investigate):
-  * MINIMUM 3 different sources before you answer. 5+ is better. 10+ for important decisions.
-  * Cross-reference data across sources. If 3 sources say $2,499 and 1 says $1,999, the $2,499 is likely correct.
-  * NEVER complete a research task after just 1 search. Even if the first result looks good, VERIFY it.
-  * For price checks: use search() first (see PRICE LOOKUP STRATEGY above). If search has the price, done. Only browse as last resort.
-  * For restaurant/business queries: get SPECIFIC data (exact address, phone, hours, rating) from search results first.
-  * For comparisons: create a mental table and fill ALL cells before answering.
-- RESEARCH WORKFLOW:
-  Round 1: [ACTION:search("main query")] — get an overview
-  Round 2: [ACTION:browse("best result URL")] — verify primary source only if search didn't return the answer
-  Round 3: [ACTION:search("same query different angle")] — second source
-  Round 4: [ACTION:browse("second source URL")] — verify if needed
-  Round 5+: Continue until you have CONFIDENT, VERIFIED data from multiple sources
-  Final: Synthesize ALL findings into a clear answer with sources cited
-- If you give an answer after 1-2 searches, that's LAZY. The user wants THOROUGH research, not a quick guess.
+RESEARCH DEPTH — KNOW WHEN TO STOP:
+- TWO TYPES of research tasks. Apply the right rule:
+
+  TYPE A — FACTUAL LOOKUPS (price, availability, address, hours, a specific fact):
+  * If the answer is clearly in your FIRST search result → report it and [TASK_COMPLETE] immediately.
+  * "MacBook Pro 16 M4 Pro price Canada" → search → see "$3,499 CAD" → DONE. Do NOT do 3 more searches.
+  * "Is this restaurant open on Sunday?" → search → see "Open Sun 11am-9pm" → DONE.
+  * 1-2 searches is ENOUGH when the data is clearly there. More searches waste time.
+
+  TYPE B — COMPLEX RESEARCH (compare options, analyze tradeoffs, find best deal, investigate):
+  * MINIMUM 3 different sources before you answer. 5+ is better.
+  * Cross-reference data. If 3 sources say $2,499 and 1 says $1,999, the $2,499 is likely correct.
+  * For comparisons: build a mental table and fill ALL cells before answering.
+  * Round 1: search overview → Round 2: dig into best results → Round 3: verify/compare
+  * Final: Synthesize all findings with sources cited.
+
+- KEY RULE: If you can already see the answer in your search results, answer IMMEDIATELY with [TASK_COMPLETE].
+  Doing another search "just to be sure" on a factual lookup wastes 90 seconds and frustrates the user.
+- If you give an answer based on speculation or training data (not actual search results), that's WRONG.
+  Always base your answer on what the search actually returned.
 - For price queries: use search() first (Amazon/Apple/BestBuy all block bots — search is faster and more reliable).
   Use search() to verify price, then optionally browse the direct product URL from search results to confirm.
 - ⚠️ NEVER ANSWER FROM TRAINING DATA for: product prices, product availability, product specs, service pricing,
