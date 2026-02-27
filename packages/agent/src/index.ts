@@ -2814,7 +2814,7 @@ server.listen(PORT, async () => {
             `I ran into a technical hiccup and wasn't able to complete this task — the process was interrupted (likely a server restart). ` +
             `Please try again and I'll pick up right where we left off!`;
 
-          await getSupabaseClient()
+          const { error: updateErr } = await getSupabaseClient()
             .from('tasks')
             .update({
               status: 'completed',
@@ -2824,7 +2824,33 @@ server.listen(PORT, async () => {
             .eq('id', task.id)
             .eq('status', 'processing'); // double-check it's still stuck
 
-          console.log(`[WATCHDOG] Gracefully resolved task ${task.id} (channel: ${channel})`);
+          if (!updateErr) {
+            console.log(`[WATCHDOG] Gracefully resolved task ${task.id} (channel: ${channel})`);
+
+            // For email-channel tasks: notify the user so they're not left waiting
+            if (channel === 'email' && task.user_id) {
+              try {
+                const { data: profile } = await getSupabaseClient()
+                  .from('profiles')
+                  .select('email, username')
+                  .eq('id', task.user_id)
+                  .single();
+                if (profile?.email) {
+                  const { sendResponse } = await import('./services/email.js');
+                  const agentFrom = `${profile.username || 'Aevoy'}@aevoy.com`;
+                  await sendResponse({
+                    to: profile.email,
+                    from: agentFrom,
+                    subject: task.email_subject || 'Your task',
+                    body: gracefulResponse,
+                  });
+                  console.log(`[WATCHDOG] Sent recovery email to ${profile.email}`);
+                }
+              } catch (emailErr) {
+                console.warn('[WATCHDOG] Could not send recovery email:', emailErr);
+              }
+            }
+          }
         }
 
         console.log(`[WATCHDOG] Resolved ${stuckTasks.length} stuck task(s)`);
@@ -2837,7 +2863,7 @@ server.listen(PORT, async () => {
   // Run immediately on startup to catch tasks from previous server instance
   runTaskWatchdog();
   setInterval(runTaskWatchdog, 5 * 60 * 1000); // Then every 5 minutes
-  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 12min updated_at threshold, graceful recovery)');
+  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 25min updated_at threshold, graceful recovery + email notify)');
 
   // WEBHOOK SELF-HEALER — auto-repair phone numbers pointing to wrong URL
   const validateAndRepairWebhooks = async () => {

@@ -5988,8 +5988,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     );
 
     // Pre-check: if passive phrase is only in the LAST sentence of a substantive response (>200 chars
-    // of real content before it), it's a proactive follow-up (intentional design) — just strip it.
-    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !_isLegitCredentialRequest) {
+    // of real content before it), strip it UNIVERSALLY (all task types, not just browser tasks).
+    // "Want me to check the M3 price?" at the end of a factual answer = passive + strip it.
+    if (cleanResponse && _passivePatterns.test(cleanResponse) && !_isLegitCredentialRequest) {
       const _firstPassiveIdx = cleanResponse.search(_passivePatterns);
       const _textBeforePassive = cleanResponse.substring(0, _firstPassiveIdx);
       const _isTrailingProactive = _firstPassiveIdx > 200 && !_passivePatterns.test(_textBeforePassive);
