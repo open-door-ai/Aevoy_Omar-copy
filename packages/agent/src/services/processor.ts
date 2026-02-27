@@ -5912,12 +5912,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // and "page available at URL where you can create account" (giving link, not doing task)
       const _isTask = /\b(book|reserv|cancel|sign.?up|sign up|register|create|make|set.?up|buy|order|purchase|subscribe|account|join)\b/i.test(subject + ' ' + (body || ''));
       const _givesInstructions = _isTask && (
-        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book|sign|register|access|cancel|subscribe)\b/i.test(cleanResponse) ||
+        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book|sign|register|access|cancel|subscribe|view|see|check|look)\b/i.test(cleanResponse) ||
         /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse) ||
         // "page available at https://... where you can create/sign up" — giving a link to do it yourself
         /https?:\/\/[^\s]{10,}\s.{0,60}\bwhere (you can|you'll|you should|you need to)\b/i.test(cleanResponse) ||
         // "[service] page is available at https://..." — never do tasks by giving URLs
-        /\b(?:page|site|form|portal)\b.{0,30}https?:\/\//i.test(cleanResponse)
+        /\b(?:page|site|form|portal)\b.{0,30}https?:\/\//i.test(cleanResponse) ||
+        // "You can view the current listings here: [url]" — common instructional research pattern
+        /\byou can (view|see|check|browse|look at) (the |current |all |those |these |their )?(listing|result|option|posting|job|price|deal|offer)/i.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
       // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
       const _gaveUp = _isTask && (
