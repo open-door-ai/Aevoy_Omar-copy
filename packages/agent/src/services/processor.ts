@@ -2711,6 +2711,68 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
     let signupAutoCompleted = false; // true when mechanical signup trigger filled form + completed task
 
+    // DOCUMENT FAST-PATH: For create_word/excel/pptx/pdf tasks, the AI will never reliably
+    // emit [ACTION:create_word()] — it always narrates about Word instead. Skip the iteration
+    // loop entirely and directly generate content + create the file.
+    // This replaces all the gate logic inside the loop (DOC-ACTION-GATE, DOC-COMPLETE, etc.)
+    // with a simple pre-loop execution that always works.
+    if (_isDocumentAction && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && aiResponse.model !== 'fallback') {
+      console.log('[DOC-FAST-PATH] Document task detected — generating content and creating file directly (bypass iteration loop)');
+      try {
+        const _dfpAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+          : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+          : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
+        const _dfpExt = _dfpAct === 'create_excel' ? 'xlsx' : _dfpAct === 'create_powerpoint' ? 'pptx' : _dfpAct === 'create_pdf' ? 'pdf' : 'docx';
+        const _dfpFile = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_dfpExt}`;
+        const _dfpTypeName = _dfpAct === 'create_excel' ? 'spreadsheet' : _dfpAct === 'create_powerpoint' ? 'presentation' : _dfpAct === 'create_pdf' ? 'PDF' : 'Word document';
+        // Generate rich content for the document
+        const _dfpContent = await generateResponse(memory, subject, `Write detailed, complete content for: "${subject}". Include all relevant sections with comprehensive information. Format with clear headings using ## for sections and ### for subsections.`, username, "generate", userId, taskId, senderName);
+        const _dfpRaw = (_dfpContent.content || '').trim();
+        if (_dfpRaw && _dfpRaw.length > 100) {
+          // Parse markdown into sections
+          const _dfpSecs = _dfpRaw.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
+            const t = s.trim().replace(/^\*+|\*+$/g, '').trim();
+            const h1 = t.match(/^#{1}\s+(.+)/); if (h1) return { type: 'heading', text: h1[1].trim(), level: 1 };
+            const h2 = t.match(/^#{2}\s+(.+)/); if (h2) return { type: 'heading', text: h2[1].trim(), level: 2 };
+            const h3 = t.match(/^#{3,}\s+(.+)/); if (h3) return { type: 'heading', text: h3[1].trim(), level: 3 };
+            if (t.length < 80 && !t.endsWith('.') && !t.endsWith(',') && /^[A-Z\d]/.test(t)) return { type: 'heading', text: t, level: 2 };
+            return { type: 'paragraph', text: t };
+          });
+          // Create the file directly
+          let _dfpResult: { success: boolean; filepath?: string; url?: string; error?: string } = { success: false, error: 'Unknown type' };
+          if (_dfpAct === 'create_word') {
+            const { createWordDocument } = await import('../execution/actions/create-word.js');
+            _dfpResult = await createWordDocument({ filename: _dfpFile, sections: _dfpSecs as any[], title: subject });
+          } else if (_dfpAct === 'create_excel') {
+            const { createExcelFile } = await import('../execution/actions/create-excel.js');
+            _dfpResult = await createExcelFile({ filename: _dfpFile, sheets: [{ name: 'Sheet1', headers: ['Item', 'Value'], data: _dfpSecs.filter((s: any) => s.type === 'paragraph').map((s: any) => [s.text.substring(0, 50), '']) }] });
+          } else if (_dfpAct === 'create_powerpoint') {
+            const { createPowerPoint } = await import('../execution/actions/create-powerpoint.js');
+            _dfpResult = await createPowerPoint({ filename: _dfpFile, slides: _dfpSecs.filter((s: any) => s.type === 'heading' && s.level <= 2).map((s: any) => ({ title: s.text, content: [] })) });
+          } else if (_dfpAct === 'create_pdf') {
+            const { createPDF } = await import('../execution/actions/create-pdf.js');
+            _dfpResult = await createPDF({ filename: _dfpFile, content: _dfpSecs as any[] });
+          }
+          if (_dfpResult.success) {
+            const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+            const _dfpUrl = (_dfpResult.url || _dfpResult.filepath || '');
+            const _dfpFullUrl = _dfpUrl.startsWith('http') ? _dfpUrl : `${_agBase}${_dfpUrl}`;
+            aiResponse.content = `Your ${_dfpTypeName} is ready!\n\n**File:** ${_dfpFile}\n**Download:** ${_dfpFullUrl}`;
+            aiResponse.actions = [{ type: _dfpAct as any, params: { filename: _dfpFile, sections: _dfpSecs } }];
+            console.log(`[DOC-FAST-PATH] ${_dfpTypeName} created: ${_dfpFullUrl}`);
+          } else {
+            console.warn('[DOC-FAST-PATH] File creation failed:', _dfpResult.error);
+            // Fall through to iteration loop as last resort
+          }
+        } else {
+          console.warn('[DOC-FAST-PATH] Content generation returned < 100 chars, falling back');
+        }
+      } catch (_dfpErr) {
+        console.error('[DOC-FAST-PATH] Error:', _dfpErr);
+        // Fall through to iteration loop
+      }
+    }
+
     // GENERATION FAST-PATH: For writing/generation tasks (HTML, code, essays), the first
     // generateResponse already produced the complete answer using GENERATE_SYSTEM_PROMPT.
     // Entering the iteration loop would overwrite the HTML with a "complex" re-prompt that
@@ -2726,6 +2788,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       !aiResponse.content.includes('follow up shortly with results');
     if (_isRealGeneratedContent) {
       console.log('[GENERATE] Writing task produced direct content — skipping iteration loop');
+      isTaskComplete = true;
+      aiSignaledComplete = true;
+    }
+    // DOC-FAST-PATH completion: if the fast path set a success content (contains "is ready!"), skip loop
+    if (_isDocumentAction && aiResponse.content.includes('is ready!') && aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type))) {
+      console.log('[DOC-FAST-PATH] Document created successfully — skipping iteration loop');
       isTaskComplete = true;
       aiSignaledComplete = true;
     }
