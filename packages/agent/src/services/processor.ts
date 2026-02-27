@@ -5930,7 +5930,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // AI loop takes over but asks permission instead of acting.
     // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
     // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
-    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b)/i;
+    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b)/i;
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
@@ -5956,32 +5956,47 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted && !_isLegitCredentialRequest) {
       console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
+      // Determine failure context for a better rewrite prompt
+      const _isBotBlocked = visionAgentInvocations >= 2 && lastVisionFailed;
+      const _siteName = (subject + ' ' + (body || '')).match(/\b(fiverr|upwork|swagbucks|canva|figma|twitter|linkedin|instagram|facebook|notion|slack|github|dropbox|shopify|squarespace|airbnb|spotify|reddit|medium|substack|etsy|ebay|pinterest|discord|twitch|patreon|tiktok|amazon|uber|lyft|doordash)\b/i)?.[1] || '';
       try {
         const { quickValidate } = await import("./ai.js");
-        const _browserCtx = visionFailureNote
-          ? `Vision agent attempted the task but was blocked.`
-          : `Browser actions completed: ${actionResults.filter(r => r.success).slice(0, 4).map(r => r.action.type).join(', ')}`;
+        const _botCtx = _isBotBlocked
+          ? `IMPORTANT: The agent ran the browser automation TWICE and both attempts were blocked by bot detection. The site actively prevented automated signup.`
+          : visionFailureNote
+            ? `Vision agent attempted the task but encountered an error.`
+            : `Browser actions completed: ${actionResults.filter(r => r.success).slice(0, 4).map(r => r.action.type).join(', ')}`;
         const _activeRewrite = await quickValidate(
-          `Task: "${subject.substring(0, 200)}"\nContext: ${_browserCtx}\nCurrent (passive) response to rewrite: "${cleanResponse.substring(0, 300)}"\n\nRewrite rules — CRITICAL:\n1. Use PAST TENSE for what was done: "I navigated to...", "I found...", "I searched for..."\n2. NEVER say "I am now proceeding", "I will now", "I am placing" — these lie about future actions that are already done\n3. If task hit a wall (login required, bot protection, payment needed): state that HONESTLY in past tense + what the user must do\n4. NEVER ask permission or use "want me to", "shall I", "would you like" — state facts\n5. For ordering tasks (coffee, food): If couldn't order, say "I found [store] at [address] but their online ordering requires an account/login. Call [phone] to order by phone."\n6. For signup: If bot-blocked, say "I reached the signup form but hit bot protection. Trying Google OAuth or an alternative."\n7. Keep it 2-3 sentences, past tense, honest about what actually happened`,
-          'You are a proactive AI assistant. The agent has its own email and password for new signups. Only ask the user for credentials for THEIR existing accounts (Netflix login, Hulu login, etc.). Rewrite passive responses into direct action statements.'
+          `Task: "${subject.substring(0, 200)}"\nContext: ${_botCtx}\nCurrent (passive) response to rewrite: "${cleanResponse.substring(0, 300)}"\n\nRewrite rules — CRITICAL:\n1. Use PAST TENSE for what was done: "I navigated to...", "I found...", "I searched for..."\n2. NEVER ask permission or use "want me to", "shall I", "would you like", "reply with" — state facts\n3. If bot-blocked: say "I tried to sign up for [site] but hit bot protection both times. To sign up, visit [site].com directly and create a free account."\n4. If signup needs email verification that couldn't complete: say "I reached the [site] signup form and filled email + password, but email verification is required. Check your inbox for a verification email."\n5. If credential needed for existing account (Netflix, etc): ask directly "To cancel Netflix I need your Netflix login. Reply with your Netflix email and password."\n6. Keep it 2-3 sentences. No passive phrases. No "reply with [password/code]" for new signups — use the auto-credentials.\n7. Be honest about what actually happened and what the concrete next step is.`,
+          'You are a proactive AI assistant. Rewrite passive/uncertain responses into direct action statements in past tense.'
         );
         if (_activeRewrite?.result && _activeRewrite.result.length > 20) {
-          // Always accept the rewrite — even if it still has some mild passive patterns,
-          // it will be better than the original since it has task context.
-          // Strip ALL trailing passive sentences from the rewrite result — the model sometimes
-          // appends "Would you like to confirm?" or "Let me know if..." even when instructed not to.
           let rewriteResult = _activeRewrite.result.trim();
-          // Remove any trailing sentence containing passive/permission phrases
-          rewriteResult = rewriteResult.replace(/\s+[^.!?]*\b(would you like|want me to|shall i|do you want me to|let me know if|feel free to|please let me know|ready to proceed|can i proceed|i'm ready to|i'll need your)\b[^.!?]*[.!?]?\s*$/i, '').trim();
-          // Ensure it still ends with punctuation
+          // Strip ALL trailing passive sentences
+          rewriteResult = rewriteResult.replace(/\s+[^.!?]*\b(would you like|want me to|shall i|do you want me to|let me know if|feel free to|please let me know|ready to proceed|can i proceed|i'm ready to|i'll need your|reply with (the |a |your )?(password|code))\b[^.!?]*[.!?]?\s*$/i, '').trim();
           if (rewriteResult && !/[.!?]$/.test(rewriteResult)) rewriteResult += '.';
           if (rewriteResult.length > 15) {
             cleanResponse = rewriteResult;
             console.log(`[PASSIVE-GUARD] Passive response replaced (${cleanResponse.length} chars)`);
           }
+        } else {
+          // quickValidate returned nothing — use hardcoded fallback based on failure type
+          console.warn('[PASSIVE-GUARD] quickValidate returned empty — using hardcoded fallback');
+          if (_isBotBlocked && _siteName) {
+            cleanResponse = `I attempted to sign you up for ${_siteName} twice but both tries were blocked by their bot-detection system. To create the account, visit ${_siteName.toLowerCase()}.com directly in your browser. Once you have an account, I can help with the next steps.`;
+          } else if (_isBotBlocked) {
+            cleanResponse = `I tried to complete this task twice using browser automation but hit bot protection both times. The site's security actively blocks automated browsers. Please try completing this manually, or let me know if you want me to try a completely different approach.`;
+          } else {
+            cleanResponse = `I ran into technical difficulties completing this task. Please try again or let me know if you'd like me to take a different approach.`;
+          }
         }
       } catch (e) {
         console.warn('[PASSIVE-GUARD] Rewrite failed:', e);
+        // Exception fallback — still better than passive response
+        if (_isBotBlocked) {
+          const _siteDisplay = _siteName || 'the site';
+          cleanResponse = `I attempted to sign you up for ${_siteDisplay} but hit bot protection on both browser attempts. Visit ${_siteDisplay.toLowerCase()}${_siteName ? '.com' : ' directly'} to create your account manually.`;
+        }
       }
     }
 
