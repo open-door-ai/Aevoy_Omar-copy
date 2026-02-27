@@ -5831,7 +5831,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // Raw search/browse dump — contains search engine output or browser scraping fragments
       if (lc.startsWith('search results for') || lc.startsWith('browsed:') || lc.includes('duckduckgo') ||
           lc.includes('region: ') || lc.includes('scrolled down') || lc.includes('waited ') ||
-          lc.startsWith('done!\n\nwaited')) return true;
+          lc.startsWith('done!\n\nwaited') ||
+          // Action-echo responses: "Done!\n\nscreenshot_ocr completed" — raw action result, not useful to user
+          /^done!\s*\n+\s*(screenshot_ocr|screenshot|browse|search|extract|scroll|wait)\s+(completed|done|succeeded|ok)/i.test(text.trim())) return true;
       // Contains leaked action tag fragments (mismatched brackets, escaped quotes)
       if (/\\"\)?]\s*$/.test(text.trim()) || /\)\]\s*$/.test(text.trim())) return true;
       return false;
@@ -5853,7 +5855,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     } else if (actionResults.length > 0 && actionResults.some(r => r.success)) {
       // Actions succeeded but AI response was only action tags — build user-friendly summary
       const successActions = actionResults.filter(r => r.success);
-      const hasBrowserActions = successActions.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
+      const hasBrowserActions = successActions.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search', 'screenshot', 'screenshot_ocr', 'extract'].includes(r.action.type));
 
       if (hasBrowserActions) {
         // For browser tasks: generate AI summary using search results + action data
@@ -5936,7 +5938,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // without ever attempting to browse/click/fill anything
     const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card))\b/i.test(subject + ' ' + (body || ''));
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
-      actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search'].includes(r.action.type));
+      actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search', 'screenshot', 'screenshot_ocr', 'extract'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
     // vs. a passive "should I start?" response for our own signup.
     // IMPORTANT: If the agent already LOGGED IN or completed work, it is NOT a legit credential
