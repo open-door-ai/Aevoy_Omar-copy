@@ -5438,7 +5438,13 @@ Extract the ACTUAL phone number from search results and call them:
         /(?:i'?ll\s+take\s+a\s+(?:different|new|fresh|another)\s+approach)/i.test(responseLC) ||
         /(?:as\s+an\s+alternative[,\s].*i'?ll)/i.test(responseLC) ||
         /(?:instead[,\s]+i'?ll\s+)/i.test(responseLC) ||
-        /(?:i'?ll\s+(?:now\s+)?(?:pivot|switch|move)\s+to)/i.test(responseLC)
+        /(?:i'?ll\s+(?:now\s+)?(?:pivot|switch|move)\s+to)/i.test(responseLC) ||
+        // "A concrete step is to..." / "A good next step would be to..." — future planning, not past action
+        /\b(?:a (?:concrete|good|great|key|recommended|suggested|logical|natural|important) (?:step|action|approach|move|thing) (?:is|would be|would be to|is to) (?:to )?\w)/i.test(responseLC) ||
+        // "The next step is to reach out..." / "Next step would be to..." — forward-looking
+        /\b(?:next|the next|your next|a next)\s+step\s+(?:is|would be|will be|should be)\s+to\b/i.test(responseLC) ||
+        // "I recommend reaching out to..." when in body of completed task report
+        /\bi (?:recommend|suggest|advise)\s+(?:reaching out|contacting|emailing|calling|sending|posting|creating|building|setting)/i.test(responseLC)
       );
 
       const isNarration = (
