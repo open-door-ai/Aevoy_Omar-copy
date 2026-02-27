@@ -5436,7 +5436,18 @@ Extract the ACTUAL phone number from search results and call them:
         (responseLC.includes('what i can do next') || responseLC.includes('what i can next')) ||
         (responseLC.includes('technical issues') && (responseLC.includes('search') || responseLC.includes('bing') || responseLC.includes('google'))) ||
         (responseLC.includes('unable to process') || responseLC.includes('error has occurred')) ||
-        (/(?:search|page|results?|site)\s+(?:didn't|did not|doesn't|does not|isn't|is not|wasn't|was not)\s+(?:load|work|show|display|return|respond)/i.test(responseLC))
+        (/(?:search|page|results?|site)\s+(?:didn't|did not|doesn't|does not|isn't|is not|wasn't|was not)\s+(?:load|work|show|display|return|respond)/i.test(responseLC)) ||
+        // Search ran but data wasn't included in the response (tells user to go look themselves)
+        responseLC.includes('not provided in the returned data') ||
+        responseLC.includes('are not provided in the') ||
+        responseLC.includes('not included in the returned') ||
+        responseLC.includes('not available in the returned') ||
+        responseLC.includes('could not be retrieved from') ||
+        responseLC.includes('you can view the full search results at') ||
+        responseLC.includes('you can check the full results at') ||
+        responseLC.includes('you can find the results at') ||
+        (/(?:search|query)\s+(?:was|has been)\s+(?:completed|run|executed|performed)[^.]*but[^.]*(?:not provided|not included|not available|not returned)/i.test(responseLC)) ||
+        (/(?:specific results?|detailed results?|full results?)\s+(?:are|were)\s+not\s+(?:provided|included|available|returned)/i.test(responseLC))
       );
 
       // Detect advice-style numbered lists: "Here are N ways...", "1. ... 2. ... 3. ..."
