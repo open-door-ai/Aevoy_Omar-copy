@@ -713,7 +713,10 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     // These tasks should go straight to the main AI pipeline with the 'generate' model chain.
     const isDirectGenerationTask = /\b(write me|create me|make me|build me|generate me|give me|show me|produce|draft me|compose me)\b.{0,60}\b(html|css|javascript|python|code|script|function|poem|essay|story|email template|letter|website|webpage|portfolio|landing page|api|program|app)\b/i.test(directBrowserTaskText) ||
       /\b(write (a|an|the|me a|me an|me the)|create (a|an|the)|draft (a|an|the)|generate (a|an|the)|code (a|an|the)|build (a|an|the))\b.{0,40}\b(website|webpage|html|css|javascript|python|function|script|program|poem|story|email|letter|essay|app|api|portfolio)\b/i.test(directBrowserTaskText) ||
-      /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText);
+      /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText) ||
+      // Document/spreadsheet creation — these use create_excel/word/ppt/pdf actions directly, never browse online
+      /\b(create|make|build|generate|give me)\b.{0,50}\b(spreadsheet|excel|xlsx|word document|docx|powerpoint|pptx|presentation|pdf|csv)\b/i.test(directBrowserTaskText) ||
+      /\b(spreadsheet|excel file|word file|powerpoint|presentation)\b.{0,40}\b(for|to track|to manage|template|tracker)\b/i.test(directBrowserTaskText);
 
     if (isDirectBrowserTask || isDirectGenerationTask) {
       console.log(`[BYPASS] ${isDirectGenerationTask ? 'Generation' : 'Browser'} task — skipping autonomous planning`);

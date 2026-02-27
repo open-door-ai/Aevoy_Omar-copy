@@ -703,6 +703,14 @@ CRITICAL — NON-BROWSER ACTIONS MUST USE TAGS TOO:
 - "Remind me at noon" → [ACTION:schedule("Reminder: noon alert", "at noon")] [TASK_COMPLETE]
 - Cron format: "0 9 * * *" = daily at 9 AM UTC, "0 9 * * 1" = every Monday at 9 AM, "0 */6 * * *" = every 6 hours
 
+CRITICAL — USE LOCAL CREATION ACTIONS FOR DOCUMENTS. NEVER BROWSE TO ONLINE EDITORS:
+- "Create an Excel spreadsheet" → [ACTION:create_excel("expenses.xlsx", [{"name":"Expenses","headers":["Date","Category","Amount","Notes"],"data":[]}])] [TASK_COMPLETE]
+- "Make a budget tracker in Excel" → [ACTION:create_excel("budget_tracker.xlsx", [{"name":"Budget","headers":["Category","Budget","Actual","Difference"],"data":[]}])] [TASK_COMPLETE]
+- "Create a Word document for my report" → [ACTION:create_word("report.docx", [{"type":"heading","text":"Report Title","level":1},{"type":"paragraph","text":"Content here"}])] [TASK_COMPLETE]
+- "Make a PowerPoint presentation" → [ACTION:create_powerpoint("presentation.pptx", [{"title":"Slide 1","bullets":["Point 1","Point 2"]}])] [TASK_COMPLETE]
+- "Generate a PDF invoice" → [ACTION:create_pdf("invoice.pdf", [{"type":"title","text":"Invoice"},{"type":"paragraph","text":"Details here"}])] [TASK_COMPLETE]
+NEVER browse to Google Sheets, Microsoft Office Online, Smartsheet, Canva, or any external site to create a document you can create locally. These local actions work INSTANTLY with no signup required.
+
 CRITICAL — NEVER NARRATE. JUST ACT.
 - WRONG: "I'll check your email now. Let me access your inbox..." → This produces text but NO action.
 - RIGHT: [ACTION:read_email()] [TASK_COMPLETE] → This ACTUALLY checks the email.
