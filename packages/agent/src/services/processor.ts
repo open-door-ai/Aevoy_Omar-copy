@@ -7965,6 +7965,14 @@ async function executeAction(
         return { action, success: false, error: "Missing 'to' phone number — specify who to call" };
       }
       try {
+        // Safety: never call the user's own number via call_external (use call_user instead)
+        const { data: _extProfile } = await getSupabaseClient()
+          .from("profiles").select("phone_number").eq("id", userId).single();
+        const _userPhone = (_extProfile?.phone_number || '').replace(/\D/g, '');
+        const _extNormalized = extNumber.replace(/\D/g, '');
+        if (_userPhone && (_extNormalized.endsWith(_userPhone) || _userPhone.endsWith(_extNormalized))) {
+          return { action, success: false, error: "That is the user's own phone number — use call_user to call the user, or search for the correct external business phone number first" };
+        }
         const { callExternal } = await import("./twilio.js");
         const result = await callExternal(
           userId,
