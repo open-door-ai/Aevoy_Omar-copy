@@ -5956,6 +5956,23 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       }
     }
 
+    // ── SIGNUP CREDENTIAL FALLBACK ───────────────────────────────────────────
+    // If a signup/register task produced an instructional response (Groq rewrite still passive),
+    // mechanically convert it to a credential request — no model needed.
+    // "The Notion signup page is available... you can create an account" → deterministic ask.
+    {
+      const _isSignupTask = /\b(sign\s?me?\s?up|signup|register\s+(for|on|with|at)|create\s+(an?\s+)?account|make\s+(an?\s+)?account)\b/i.test(subject + ' ' + (body || ''));
+      const _sfCompletionWords = /\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created)\b/i;
+      const _sfGivesInstructions = /\byou can (create|sign up|register|access|make|build|set up)\b/i.test(cleanResponse)
+        || /\b(?:page|site|form)\b.{0,30}https?:\/\//i.test(cleanResponse)
+        || /\bavailable at https?:\/\//i.test(cleanResponse);
+      if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
+        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay)\b/i);
+        const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
+        cleanResponse = `I reached the ${_svcName} signup page. To complete your account, reply with the password you'd like to use and I'll finish the registration immediately.`;
+        console.log(`[SIGNUP-FALLBACK] Converted instructional response to credential request for ${_svcName}`);
+      }
+    }
     // ── HALLUCINATION GUARD ──────────────────────────────────────────────────
     // Detect when AI describes a design/creation WITHOUT actually doing it via browser.
     // E.g. task: "Make business cards on Canva" → AI describes "The design features blue..."
