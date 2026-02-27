@@ -5575,10 +5575,30 @@ Extract the ACTUAL phone number from search results and call them:
               /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available)/i.test(_fbLC) ||
               /(?:results?|listings?|list|data|information|jobs?)\s+(?:of\s+\w+\s+)?(?:is|are)\s+available\s+(?:on\s+\w+\s+)?at\s+https?:\/\//i.test(_fbLC) ||
               /a\s+(?:current|full|complete|comprehensive)\s+(?:list|listing|guide)\s+(?:of\s+[\w\s]+\s+)?(?:is|are)\s+available\s+at\s+/i.test(_fbLC) ||
-              /(?:can be found|available)\s+(?:at|on)\s+(?:\w+\s+)?(?:at\s+)?https?:\/\//i.test(_fbLC)
+              /(?:can be found|available)\s+(?:at|on)\s+(?:\w+\s+)?(?:at\s+)?https?:\/\//i.test(_fbLC) ||
+              /(?:further|additional|more)\s+(?:specific\s+)?searches?\s+(?:for|are)\s+(?:required|needed)/i.test(_fbLC) ||
+              /(?:search|searches?)\s+(?:for\s+\w[\w\s]+\s+)?(?:is|are|was|were)\s+(?:not\s+)?(?:required|needed|necessary)\s+to\s+(?:gather|find|get|retrieve)/i.test(_fbLC)
             );
             if (_fbStillNarration) {
-              console.log('[QUALITY] Fallback response is still narration — skipping, using action data directly');
+              console.log('[QUALITY] Fallback response is still narration — trying pure knowledge mode');
+              // Context was unhelpful (just article links) — retry WITHOUT context, use training knowledge only
+              try {
+                const { generateForcedDirectAnswer: knowledgeAnswer } = await import("./ai.js");
+                const knowledgeResp = await knowledgeAnswer(`${subject} ${body}`, '', username);
+                const _kLC = (knowledgeResp.content || '').toLowerCase();
+                const _kStillNarration = (
+                  /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available)/i.test(_kLC) ||
+                  /(?:further|additional|more)\s+(?:specific\s+)?searches?\s+(?:for|are)\s+(?:required|needed)/i.test(_kLC)
+                );
+                if (knowledgeResp.content && knowledgeResp.content.length > 20 && !_kStillNarration) {
+                  console.log(`[QUALITY] Knowledge-mode answer used (${knowledgeResp.content.length} chars)`);
+                  aiResponse.content = knowledgeResp.content.trim();
+                  aiResponse.cost = (aiResponse.cost || 0) + (knowledgeResp.cost || 0);
+                  qualityGateHaikuFired = true;
+                } else {
+                  console.log('[QUALITY] Knowledge-mode also narration — falling to stillBad handler');
+                }
+              } catch (_ke) { console.warn('[QUALITY] Knowledge-mode fallback failed:', _ke); }
             } else {
               console.log(`[QUALITY] Haiku direct answer used (${fallbackResponse.content.length} chars)`);
               aiResponse.content = fallbackResponse.content.trim();
