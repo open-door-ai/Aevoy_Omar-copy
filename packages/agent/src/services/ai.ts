@@ -788,11 +788,14 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
   * "Find restaurant on Yelp" → [ACTION:browse("https://www.yelp.com/search?find_desc=Italian&find_loc=Downtown+Toronto")]
   * "Search Craigslist" → [ACTION:browse("https://newyork.craigslist.org/search/sss?query=laptop&max_price=500")]
   * "Check flight prices" → [ACTION:browse("https://www.google.com/flights")] — go directly to Google Flights
-- AMAZON/ECOMMERCE STRATEGY: Amazon blocks direct browser automation. Use search() to find products:
-  * "Find price on Amazon" → [ACTION:search("MacBook Pro 16 M4 Pro amazon price")] — DDG returns Amazon prices without bot detection
-  * "Find cheapest laptop under $400 on Amazon" → [ACTION:search("best laptop under 400 amazon 2026")]
-  * Only use browse("amazon.com/...") as a FALLBACK if search() returns nothing useful.
-  * NEVER use screenshot_ocr on Amazon — it just captures the bot-detection page, not products.
+- PRICE LOOKUP STRATEGY (use search() FIRST for all major retailers — never browse directly to product pages):
+  * Amazon → [ACTION:search("MacBook Pro 16 M4 Pro amazon price site:amazon.com")] — Amazon blocks bots
+  * Best Buy → [ACTION:search("iPhone 16 Pro 256GB bestbuy price")] — Best Buy is slow for bots
+  * Apple Store → [ACTION:search("iPhone 16 Pro 256GB apple store price site:apple.com")]
+  * Walmart, Costco, Target → [ACTION:search("[product] walmart price 2026")]
+  * "Check price at Best Buy AND Apple" → one search per store is usually enough. 90 seconds vs 15 minutes.
+  * Only browse to a retailer site as LAST RESORT if 2 searches return nothing useful.
+  * NEVER use screenshot_ocr on retailer sites — it captures bot-detection pages, not products.
 - screenshot_ocr IS FOR: physical documents, scanned PDFs, images with text, receipts. NOT for reading regular web pages — use browse() for that.
 - BE RESOURCEFUL: If one approach fails, try a COMPLETELY different approach. Use APIs, plain-text websites,
   mobile versions of sites (m.site.com), or cached pages. Figure it out — don't give up.
