@@ -24,7 +24,8 @@ import { extractVerificationCode } from '../utils/email-code-extractor.js';
 import { humanMouseMove } from './stealth.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 
-const MAX_STEPS = 150;           // was 40 — real tasks need 80-120 steps
+const MAX_STEPS = 150;           // Default max — complex multi-step tasks need room
+const MAX_STEPS_BOOKING = 50;    // Booking/reservation: bail early → phone escalation
 const STEP_TIMEOUT_MS = 15000;
 const TOTAL_TIMEOUT_MS = 2700000; // 45 minutes — complex multi-step tasks take time
 
@@ -823,10 +824,14 @@ export async function runVisionAgent(
     // Other tasks (signup, research, etc.) get 4 attempts before bail.
     const isOrderingOrBookingTask = /\b(order|reserve|book|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*coffee|get.*sushi|call.*for)\b/i.test(task);
     const BOT_WALL_BAIL_ATTEMPTS = isOrderingOrBookingTask ? 2 : 4;
+    const effectiveMaxSteps = isOrderingOrBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS;
     let botWallCount = 0;
     let lastBotWallUrl = '';
+    let lastProgressCheckStep = 0;
+    let hasReachedForm = false;     // Detected form fields (input, select, submit)
+    let hasFilledAnyField = false;  // Successfully typed/filled into a field
 
-    for (steps = 0; steps < MAX_STEPS; steps++) {
+    for (steps = 0; steps < effectiveMaxSteps; steps++) {
       // Check total timeout
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
         return { success: false, error: 'Timeout: 45 minutes exceeded', steps, cost: totalCost, screenshots };
@@ -901,6 +906,33 @@ export async function runVisionAgent(
           botWallCount = 0;
         }
       } catch { /* non-critical */ }
+
+      // SMART BAIL-OUT FOR BOOKING TASKS: If we've spent 25+ steps without finding a form
+      // or 35+ steps without filling any fields, bail and suggest phone call.
+      // A genius human would give up on the website after 2 minutes and just call.
+      if (isOrderingOrBookingTask && steps > 0 && steps % 10 === 0 && steps > lastProgressCheckStep) {
+        lastProgressCheckStep = steps;
+        try {
+          const pageText = await activePage.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
+          const hasConfirmation = /\b(confirm|booked|reserved|success|thank you|your reservation|order placed|order confirmed)\b/i.test(pageText);
+          if (hasConfirmation) {
+            // Great — we found a confirmation! Let the AI wrap up with DONE
+            history.push(`✅ CONFIRMATION DETECTED on page! Look for confirmation details and output DONE with the result.`);
+          } else if (steps >= 35 && !hasFilledAnyField) {
+            // 35 steps without filling any form field — the reservation widget is too complex
+            const phoneMatch = pageText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+            const phoneNumber = phoneMatch ? phoneMatch[0].trim() : null;
+            const bailReason = phoneNumber
+              ? `CALL-GATE: Reservation widget too complex after ${steps} steps. Phone number found: ${phoneNumber}. Call the restaurant directly.`
+              : `CALL-GATE: Reservation widget too complex after ${steps} steps. Search for the restaurant phone number and call directly.`;
+            console.log(`[VISION-AGENT] Smart bail-out: ${bailReason}`);
+            return { success: false, error: bailReason, steps, cost: totalCost, screenshots };
+          } else if (steps >= 25 && !hasReachedForm) {
+            // 25 steps and haven't found any form — we're probably lost in navigation
+            history.push(`⚠️ ${steps} steps and no reservation form found yet. STOP navigating — look for a "Reserve" or "Book" button and CLICK it NOW. If you can't find it, look for a phone number on the page.`);
+          }
+        } catch { /* non-critical */ }
+      }
 
       // Auto-dismiss cookie consent banners and modal overlays (only first 5 steps — banners appear on first load)
       if (steps < 5) try {
@@ -1283,8 +1315,10 @@ export async function runVisionAgent(
           }
 
           case 'type': {
+            hasReachedForm = true;
             actionOk = await typeByIndex(activePage, action.index!, action.text!);
             if (actionOk) {
+              hasFilledAnyField = true;
               await activePage.waitForTimeout(100);
               const fieldVal = await activePage.evaluate(([idx, sel]: [number, string]) => {
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {
@@ -1303,8 +1337,10 @@ export async function runVisionAgent(
           }
 
           case 'fill': {
+            hasReachedForm = true;
             actionOk = await fillByIndex(activePage, action.index!, action.text!);
             if (actionOk) {
+              hasFilledAnyField = true;
               await activePage.waitForTimeout(100);
               const fieldVal = await activePage.evaluate(([idx, sel]: [number, string]) => {
                 const els = Array.from(document.querySelectorAll(sel)).filter(el => {
@@ -1323,7 +1359,9 @@ export async function runVisionAgent(
           }
 
           case 'select': {
+            hasReachedForm = true;
             actionOk = await selectByIndex(activePage, action.index!, action.text!);
+            if (actionOk) hasFilledAnyField = true;
             break;
           }
 
@@ -1496,7 +1534,23 @@ export async function runVisionAgent(
       }
     }
 
-    return { success: false, error: `Max steps (${MAX_STEPS}) reached — task is too complex or site is bot-blocking`, steps, cost: totalCost, screenshots };
+    // For booking/ordering tasks that hit max steps, signal CALL-GATE to escalate to phone
+    if (isOrderingOrBookingTask) {
+      // Try to extract phone number from the current page before bailing
+      let phoneOnPage = '';
+      try {
+        phoneOnPage = await activePage.evaluate(() => {
+          const text = document.body?.innerText || '';
+          const match = text.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+          return match ? match[0].trim() : '';
+        }).catch(() => '');
+      } catch { /* non-critical */ }
+      const callGateMsg = phoneOnPage
+        ? `CALL-GATE: Browser couldn't complete reservation after ${steps} steps. Phone: ${phoneOnPage}. Call the restaurant.`
+        : `CALL-GATE: Browser couldn't complete reservation after ${steps} steps. Search for phone number and call the restaurant.`;
+      return { success: false, error: callGateMsg, steps, cost: totalCost, screenshots };
+    }
+    return { success: false, error: `Max steps (${effectiveMaxSteps}) reached — task is too complex or site is bot-blocking`, steps, cost: totalCost, screenshots };
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
