@@ -361,6 +361,8 @@ app.get("/health", async (_req, res) => {
     conversationRelay: USE_CONVERSATION_RELAY,
     database: supabaseStatus,
     capsolver: !!process.env.CAPSOLVER_API_KEY,
+    googleApi: !!process.env.GOOGLE_API_KEY,
+    anthropicApi: !!process.env.ANTHROPIC_API_KEY,
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
     remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
   });

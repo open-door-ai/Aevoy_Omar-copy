@@ -2288,12 +2288,16 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       /\b(graphic|image|logo|banner|poster)\b.{0,40}\b(for|to post|to share)\b/i.test(combinedQuery);
     const hasImageAction = aiResponse.actions.some(a => a.type === 'generate_image');
     if (_isImageCreationTask && !hasImageAction && !_isDocumentAction) {
-      // Build a good prompt from the task description
-      const _imgPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for social media.`;
-      console.log(`[IMAGE-INJECT] Image creation task with no generate_image action — injecting generate_image`);
-      aiResponse.actions.push({ type: 'generate_image' as any, params: { prompt: _imgPrompt, size: '1024x1024' } });
-      // Remove [TASK_COMPLETE] so the loop processes the image generation
-      aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+      // Only inject if GOOGLE_API_KEY is available (image generation uses Gemini)
+      if (process.env.GOOGLE_API_KEY) {
+        const _imgPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for social media.`;
+        console.log(`[IMAGE-INJECT] Image creation task with no generate_image action — injecting generate_image`);
+        aiResponse.actions.push({ type: 'generate_image' as any, params: { prompt: _imgPrompt, size: '1024x1024' } });
+        // Remove [TASK_COMPLETE] so the loop processes the image generation
+        aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+      } else {
+        console.warn(`[IMAGE-INJECT] Skipped — GOOGLE_API_KEY not set, generate_image would fail`);
+      }
     }
 
     // 6b. MISSING-ACTION GATE: If the task explicitly needs schedule/remember/campaign/email
@@ -2848,10 +2852,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           isTaskComplete = true;
           aiSignaledComplete = true;
         } else {
-          console.warn('[BUSINESS-CARD-FAST-PATH] Failed:', _bcResult.error);
+          const _bcErrMsg = _bcResult.error || 'unknown error';
+          console.warn('[BUSINESS-CARD-FAST-PATH] createPDF failed:', _bcErrMsg);
+          void getSupabaseClient().from('tasks').update({ stuck_reason: `[BUSINESS-CARD] createPDF failed: ${_bcErrMsg}` }).eq('id', taskId);
         }
       } catch (_bcErr) {
-        console.error('[BUSINESS-CARD-FAST-PATH] Error:', _bcErr);
+        const _bcErrStr = _bcErr instanceof Error ? _bcErr.message : String(_bcErr);
+        console.error('[BUSINESS-CARD-FAST-PATH] Error:', _bcErrStr);
+        void getSupabaseClient().from('tasks').update({ stuck_reason: `[BUSINESS-CARD] Exception: ${_bcErrStr.substring(0, 300)}` }).eq('id', taskId);
       }
     }
 
@@ -6144,10 +6152,40 @@ Extract the ACTUAL phone number from search results and call them:
       const isAllModelsFailed = aiResponse.model === "fallback";
 
       let qualityGateHaikuFired = false;
+
+      // RESEARCH BYPASS: If search actions returned real data, use action results directly
+      // instead of letting the quality gate kill them. The AI often says "jobs available on Indeed"
+      // while the actual search results contain real job listings — quality gate wrongly rejects this.
+      const _searchResults = actionResults.filter(r => r.action?.type === 'search' && r.success && r.result && String(r.result).length > 200);
+      const _hasRealSearchData = _searchResults.length > 0;
+      if (_hasRealSearchData && (isNarration || isAdviceList) && !isAllModelsFailed) {
+        // Construct response from actual search results + ask AI to summarize
+        const _searchData = _searchResults
+          .map(r => String(r.result).substring(0, 2000))
+          .join('\n\n');
+        console.log(`[QUALITY] Research task with ${_searchResults.length} search results (${_searchData.length} chars) — using search data instead of quality gate`);
+        try {
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const _researchSummary = await generateForcedDirectAnswer(
+            `${subject} ${body}`,
+            `SEARCH RESULTS (real data — use ONLY this data, present the specific findings):\n${_searchData}`,
+            username
+          );
+          if (_researchSummary.content && _researchSummary.content.length > 30) {
+            aiResponse.content = _researchSummary.content.trim();
+            aiResponse.cost = (aiResponse.cost || 0) + (_researchSummary.cost || 0);
+            qualityGateHaikuFired = true;
+            console.log(`[QUALITY] Research summary generated (${aiResponse.content.length} chars)`);
+          }
+        } catch (_rErr) { console.warn('[QUALITY] Research summary failed:', _rErr); }
+      }
+
       // Skip generateForcedDirectAnswer for document action tasks — it can't emit create_word/excel/ppt/pdf
       // action tags, so it produces narration about Microsoft Word/Google Docs instead.
       // For these tasks, continue the iteration loop so the AI retries with the document action instruction.
-      if (_isDocumentAction && !isAllModelsFailed && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && (isPlanLike || isNarration || isAdviceList)) {
+      if (qualityGateHaikuFired) {
+        // Already handled by research bypass above
+      } else if (_isDocumentAction && !isAllModelsFailed && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && (isPlanLike || isNarration || isAdviceList)) {
         console.log(`[QUALITY] Document action task — skipping generateForcedDirectAnswer, will re-prompt with action tag instruction`);
         // Don't set qualityGateHaikuFired — let the iteration loop continue and re-prompt the AI
       } else if (isPlanLike || isNarration || isAdviceList || isAllModelsFailed) {
