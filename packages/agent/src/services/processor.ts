@@ -6067,7 +6067,13 @@ Extract the ACTUAL phone number from search results and call them:
     // These are plans/narrations, not answers. The user expects an actual result.
     // SKIP quality gate for direct-injected results (read_email, check_calendar, etc.) — both success AND error are already user-facing
     // SKIP quality gate when signup-auto trigger completed the task — the response is our mechanical result, not AI narration
-    const hasDirectResultData = signupAutoCompleted || _isRealGeneratedContent || actionResults.some(r =>
+    // IMAGE GENERATION PRIORITY: If generate_image succeeded, use that result as the response
+    const _imgResult = actionResults.find(r => r.action.type === 'generate_image' && r.success && r.result);
+    if (_imgResult) {
+      aiResponse.content = String(_imgResult.result);
+      console.log(`[IMAGE-PRIORITY] generate_image succeeded — using image result as response`);
+    }
+    const hasDirectResultData = signupAutoCompleted || _isRealGeneratedContent || !!_imgResult || actionResults.some(r =>
       ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
       (aiResponse.content === r.result || aiResponse.content === r.error)
     );
@@ -6725,7 +6731,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             if (r.action.type === 'remember') return `Remembered: ${r.action.params.fact || r.action.params.text || 'your preference'}`;
             if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
             if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
-            if (r.action.type === 'generate_image') return `Image generated`;
+            if (r.action.type === 'generate_image') return r.result ? String(r.result) : `Image generated`;
             if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
             if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
             if (r.action.type === 'post_tweet') return `Tweet posted`;
@@ -7911,6 +7917,32 @@ async function executeAction(
           enrichedResult = `NUTRITION DATA: ${[...new Set(calorieMatches)].join(', ')}\n\n${enrichedResult}`;
         }
 
+        // ── STRUCTURED RESULT EXTRACTION: Pull individual result titles + URLs from DDG HTML ──
+        // This gives the AI specific items to reference instead of just raw text
+        if (rawSearchHtml) {
+          const _structuredResults: Array<{ title: string; url: string }> = [];
+          const _uddgRegex = /uddg=([^"&]+)[^"]*"[^>]*>(.*?)<\/a>/gi;
+          let _uddgMatch;
+          while ((_uddgMatch = _uddgRegex.exec(rawSearchHtml)) !== null) {
+            try {
+              const _rUrl = decodeURIComponent(_uddgMatch[1]);
+              const _rTitle = _uddgMatch[2].replace(/<[^>]+>/g, '').trim();
+              // Skip ads and search engine self-links
+              if (_rUrl.startsWith('http') && _rTitle &&
+                  !_rUrl.includes('duckduckgo.com/y.js') &&
+                  !/duckduckgo|brave\.com|bing\.com\/aclick/i.test(_rUrl)) {
+                _structuredResults.push({ title: _rTitle, url: _rUrl });
+              }
+            } catch { /* malformed URL */ }
+          }
+          if (_structuredResults.length > 0) {
+            const _topResults = _structuredResults.slice(0, 8)
+              .map((r, i) => `${i+1}. ${r.title} — ${r.url}`)
+              .join('\n');
+            enrichedResult = `TOP RESULT LINKS:\n${_topResults}\n\n${enrichedResult}`;
+          }
+        }
+
         // ── DEEP RESEARCH: Browse top result URLs for actual page data ──
         // DDG/Brave snippets are thin text — browse the actual pages to get real data
         // (job listings, product details, restaurant info, reviews, prices, etc.)
@@ -7931,10 +7963,12 @@ async function executeAction(
               if (_u.startsWith('http')) _deepUrls.push(_u);
             }
 
-            // Deduplicate by domain, filter out search engines themselves
+            // Deduplicate by domain, filter out search engines and ad trackers
             const _seenDomains = new Set<string>();
             const _resultUrls = _deepUrls.filter(url => {
               try {
+                // Skip DDG ad redirect URLs
+                if (url.includes('duckduckgo.com/y.js') || url.includes('bing.com/aclick')) return false;
                 const h = new URL(url).hostname;
                 if (_seenDomains.has(h)) return false;
                 if (/duckduckgo|brave\.com|google\.com|bing\.com|yahoo\.com|aevoy\.com/i.test(h)) return false;
@@ -7951,24 +7985,30 @@ async function executeAction(
               if (_page && !_page.isClosed()) {
                 for (const _deepUrl of _resultUrls) {
                   try {
-                    await _page.goto(_deepUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
-                    await _page.waitForTimeout(1500);
+                    await _page.goto(_deepUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+                    // Wait longer for JS-heavy sites (job boards, review sites)
+                    await _page.waitForTimeout(3000);
+                    // Scroll once to trigger lazy-loaded content
+                    await _page.evaluate(() => window.scrollBy(0, 800));
+                    await _page.waitForTimeout(1000);
 
                     const _pageText = await _page.evaluate(() => {
                       // Focus on main content, strip noise
-                      const main = document.querySelector('main, article, [role="main"], .content, #content, .main-content');
+                      const main = document.querySelector('main, article, [role="main"], .content, #content, .main-content, #mosaic-jobResults, .job_listings, .search-results');
                       const target = (main || document.body).cloneNode(true) as HTMLElement;
                       target.querySelectorAll(
                         'script, style, nav, footer, header, iframe, noscript, svg, ' +
                         '[role="banner"], [role="navigation"], [class*="cookie"], [class*="consent"], ' +
                         '[class*="popup"], [class*="modal"], [class*="sidebar"], [class*="advertisement"], [class*="ad-"]'
                       ).forEach(el => el.remove());
-                      return (target.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 3000);
+                      return (target.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 4000);
                     });
 
-                    if (_pageText.length > 100) {
-                      _deepData.push(`\n--- ${_deepUrl} ---\n${_pageText.substring(0, 2000)}`);
+                    if (_pageText.length > 100 && !isGarbageText(_pageText)) {
+                      _deepData.push(`\n--- ${_deepUrl} ---\n${_pageText.substring(0, 2500)}`);
                       console.log(`[SEARCH] Browsed ${new URL(_deepUrl).hostname}: ${_pageText.length} chars`);
+                    } else {
+                      console.log(`[SEARCH] Browsed ${new URL(_deepUrl).hostname}: ${_pageText.length} chars (${isGarbageText(_pageText) ? 'garbage' : 'too short'} — skipped)`);
                     }
                   } catch (_bErr) {
                     console.log(`[SEARCH] Failed to browse ${_deepUrl}: ${_bErr instanceof Error ? _bErr.message : _bErr}`);
@@ -8580,10 +8620,10 @@ async function executeAction(
 
         const { data: base64Data, mimeType } = imagePart.inlineData;
 
-        // Save to /tmp/aevoy-images/ and return the path
+        // Save to /tmp/aevoy-files/images/ so it's served at /files/images/...
         const fs = await import("fs");
         const path = await import("path");
-        const imgDir = "/tmp/aevoy-images";
+        const imgDir = "/tmp/aevoy-files/images";
         if (!fs.existsSync(imgDir)) {
           fs.mkdirSync(imgDir, { recursive: true });
         }
@@ -8592,17 +8632,17 @@ async function executeAction(
         const filePath = path.join(imgDir, filename);
         fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
 
-        // Also create a data URL for inline sharing
-        const dataUrl = `data:${mimeType};base64,${base64Data.substring(0, 100)}...`;
+        const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+        const imageUrl = `${agentUrl}/files/images/${filename}`;
 
         // Track Gemini image cost ($0.039/image)
         const imgCost = 0.039;
         trackServiceCost(userId, "google", "gemini-2.0-flash-exp-image-generation", imgCost, "image_generation").catch(() => {});
-        console.log(`[GENERATE_IMAGE] Gemini image saved: ${filePath} (cost: $${imgCost})`);
+        console.log(`[GENERATE_IMAGE] Gemini image saved: ${filePath} → ${imageUrl} (cost: $${imgCost})`);
         return {
           action,
           success: true,
-          result: `Image generated and saved: ${filePath}`,
+          result: `Image generated successfully!\n\n**Download:** ${imageUrl}\n\nThe image has been created based on your request.`,
         };
       } catch (imgErr) {
         console.error("[GENERATE_IMAGE] Failed:", imgErr);

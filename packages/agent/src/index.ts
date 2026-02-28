@@ -246,7 +246,14 @@ app.use('/files', express.static(path.join('/tmp', 'aevoy-files'), {
     else if (filePath.endsWith('.xlsx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     else if (filePath.endsWith('.pptx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     else if (filePath.endsWith('.pdf')) res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+    else if (filePath.endsWith('.png')) res.setHeader('Content-Type', 'image/png');
+    else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) res.setHeader('Content-Type', 'image/jpeg');
+    // Images should display inline, not download
+    if (filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
+      res.setHeader('Content-Disposition', `inline; filename="${path.basename(filePath)}"`);
+    } else {
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+    }
   }
 }));
 
