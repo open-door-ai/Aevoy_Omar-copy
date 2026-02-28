@@ -1669,8 +1669,8 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
             userId: profile.userId,
             username: profile.username,
             from: profile.email,
-            subject: "SMS Task",
-            body,
+            subject: body.substring(0, 200),
+            body: "",
             taskId: result.taskId,
             inputChannel: "sms",
           })
@@ -1736,7 +1736,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
         const { processTask: smsProcessTask } = await import("./services/processor.js");
         await smsProcessTask({
           userId: recipientUser.userId, username: recipientUser.username,
-          from: senderNumber, subject: "[SMS]", body: message, inputChannel: "sms"
+          from: senderNumber, subject: message.substring(0, 200), body: "", inputChannel: "sms"
         });
         res.type("text/xml");
         return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
@@ -1779,7 +1779,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       const { processTask: smsProcessTask } = await import("./services/processor.js");
       await smsProcessTask({
         userId: recipientUser.userId, username: recipientUser.username,
-        from: senderNumber, subject: "[SMS]", body: cleanMessage || message, inputChannel: "sms"
+        from: senderNumber, subject: (cleanMessage || message).substring(0, 200), body: "", inputChannel: "sms"
       });
 
       res.type("text/xml");
@@ -1836,8 +1836,8 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
         userId,
         username,
         from: senderNumber,
-        subject: "[SMS]",
-        body: cleanMessage || message,
+        subject: (cleanMessage || message).substring(0, 200),
+        body: "",
         inputChannel: "sms"
       });
 
@@ -1851,8 +1851,8 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       userId,
       username,
       from: senderNumber,
-      subject: "[SMS]",
-      body: message,
+      subject: message.substring(0, 200),
+      body: "",
       inputChannel: "sms"
     });
 
@@ -2192,14 +2192,15 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
       }
     }
 
-    // Process as task
+    // Process as task — use the SMS body as subject (not "[SMS Premium]" which confuses the AI
+    // into searching for "SMS Premium" as a topic)
     const { processTask } = await import("./services/processor.js");
     await processTask({
       userId,
       username: profile?.username || "user",
       from,
-      subject: "[SMS Premium]",
-      body: smsBody,
+      subject: smsBody.substring(0, 200),
+      body: "",
       inputChannel: "sms"
     });
 

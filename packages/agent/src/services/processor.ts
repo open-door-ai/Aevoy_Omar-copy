@@ -2780,12 +2780,72 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // loop entirely and directly generate content + create the file.
     // This replaces all the gate logic inside the loop (DOC-ACTION-GATE, DOC-COMPLETE, etc.)
     // with a simple pre-loop execution that always works.
-    if (_isDocumentAction && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && aiResponse.model !== 'fallback') {
+    // ── BUSINESS CARD FAST PATH ──────────────────────────────────────────
+    // Business cards are structured visual documents — no AI content generation needed.
+    // Extract fields from task text and create the PDF directly with business_card type.
+    if (_isBusinessCard && _isDocumentAction) {
+      console.log('[BUSINESS-CARD-FAST-PATH] Creating visual business card PDF directly');
+      try {
+        const _bcText = `${subject} ${body || ''}`;
+        // Extract fields from task text using regex
+        const _bcCompany = _bcText.match(/(?:for|called|named|company)\s+([A-Z][A-Za-z0-9\s&.']+?)(?:\.|,|\s+(?:my|we|our|is|are|based|in|at|—))/i)?.[1]?.trim()
+          || _bcText.match(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)\b.*?(?:business card|startup)/i)?.[1]?.trim()
+          || 'Company';
+        const _bcPerson = _bcText.match(/(?:my name is|name:?|named)\s+([A-Z][A-Za-z\s]+?)(?:\.|,|\s+(?:title|founder|ceo|cto|director|manager|email|phone))/i)?.[1]?.trim()
+          || _bcText.match(/(?:^|\s)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*,?\s*(?:Founder|CEO|CTO|Director|Manager|Owner)/i)?.[1]?.trim()
+          || username || 'Name';
+        const _bcTitle = _bcText.match(/(?:title:?|as)\s+([\w\s&]+?)(?:\.|,|\s+(?:email|phone|at|website))/i)?.[1]?.trim()
+          || _bcText.match(/\b(Founder\s*(?:&|and)?\s*(?:CEO)?|CEO|CTO|Director|Manager|Owner|Co-?Founder|President|VP)\b/i)?.[0]?.trim()
+          || 'Founder';
+        const _bcEmail = _bcText.match(/[\w.+-]+@[\w.-]+\.\w{2,}/)?.[0] || '';
+        const _bcPhone = _bcText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || '';
+        const _bcWebsite = _bcText.match(/(?:website:?\s*)?(?:https?:\/\/)?(?:www\.)?([a-z0-9][\w.-]+\.\w{2,})/i)?.[1] || '';
+        const _bcTagline = _bcText.match(/(?:tagline:?|slogan:?)\s*["']?([^"'.]+?)["']?(?:\.|,|$)/i)?.[1]?.trim() || '';
+
+        console.log(`[BUSINESS-CARD] Extracted: company=${_bcCompany}, person=${_bcPerson}, title=${_bcTitle}, email=${_bcEmail}, phone=${_bcPhone}, website=${_bcWebsite}`);
+
+        const { createPDF } = await import('../execution/actions/create-pdf.js');
+        const _bcFile = `${_bcCompany.replace(/[^a-z0-9]/gi, '_')}_Business_Card.pdf`;
+        const _bcResult = await createPDF({
+          filename: _bcFile,
+          content: [{
+            type: 'business_card',
+            cardData: {
+              companyName: _bcCompany,
+              personName: _bcPerson,
+              title: _bcTitle,
+              email: _bcEmail,
+              phone: _bcPhone,
+              website: _bcWebsite,
+              tagline: _bcTagline || `${_bcCompany} — AI-Powered Solutions`,
+              primaryColor: '#2563eb',
+            }
+          }]
+        });
+
+        if (_bcResult.success) {
+          const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+          const _bcUrl = (_bcResult.url || _bcResult.filepath || '');
+          const _bcFullUrl = _bcUrl.startsWith('http') ? _bcUrl : `${_agBase}${_bcUrl}`;
+          aiResponse.content = `Your professional business card is ready!\n\n**File:** ${_bcFile}\n**Download:** ${_bcFullUrl}\n\nThe card features a modern design with your branding. Both front and back sides are included. Print at standard business card size (3.5" × 2").`;
+          aiResponse.actions = [{ type: 'create_pdf' as any, params: { filename: _bcFile } }];
+          console.log(`[BUSINESS-CARD-FAST-PATH] Created: ${_bcFullUrl}`);
+          isTaskComplete = true;
+          aiSignaledComplete = true;
+        } else {
+          console.warn('[BUSINESS-CARD-FAST-PATH] Failed:', _bcResult.error);
+        }
+      } catch (_bcErr) {
+        console.error('[BUSINESS-CARD-FAST-PATH] Error:', _bcErr);
+      }
+    }
+
+    if (_isDocumentAction && !_isBusinessCard && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && aiResponse.model !== 'fallback') {
       console.log('[DOC-FAST-PATH] Document task detected — generating content and creating file directly (bypass iteration loop)');
       try {
         const _dfpAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
           : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
-          : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
+          : /\b(pdf|invoice|receipt|certificate|resume|cv|flyer|brochure)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
         const _dfpExt = _dfpAct === 'create_excel' ? 'xlsx' : _dfpAct === 'create_powerpoint' ? 'pptx' : _dfpAct === 'create_pdf' ? 'pdf' : 'docx';
         const _dfpFile = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_dfpExt}`;
         const _dfpTypeName = _dfpAct === 'create_excel' ? 'spreadsheet' : _dfpAct === 'create_powerpoint' ? 'presentation' : _dfpAct === 'create_pdf' ? 'PDF' : 'Word document';
@@ -6930,6 +6990,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       .replace(/\[VISION-AGENT\].*?(?:\.|$)/gm, '') // "[VISION-AGENT] Running on..."
       .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]/gi, '') // Thinking blocks
       .replace(/\[ACTION:[^\]]*\]/g, '')          // Raw action tags
+      .replace(/\[TASK_COMPLETE\]/g, '')           // Task complete markers
+      .replace(/\[MONITOR:[^\]]*\]/g, '')          // Monitor tags
+      .replace(/\[REMEMBER:[^\]]*\]/g, '')         // Remember tags
+      .replace(/\[SAVE:[^\]]*\]/g, '')             // Save tags
+      // Chain-of-thought leak: strip lines that start with 3rd-person analysis of the user
+      .replace(/^(?:The user (?:is |wants? |asked? |said |has |needs? |seems? |appears? ))[^\n]*$/gm, '')
+      .replace(/^(?:I need to |I should |I must |I will now |Let me |My (?:task|goal|objective) is )[^\n]*$/gm, '')
+      .replace(/^(?:The (?:task|request|query|question) (?:is |involves? |requires? ))[^\n]*$/gm, '')
+      .replace(/^(?:Based on (?:the|my) (?:analysis|search|results?|findings?))[,:]?[^\n]*$/gm, '')
       .replace(/\n{3,}/g, '\n\n')                 // Collapse excess whitespace
       .trim();
     if (!cleanResponse || cleanResponse.length < 5) {

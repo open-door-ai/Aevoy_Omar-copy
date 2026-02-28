@@ -320,7 +320,7 @@ CRITICAL RULES:
 - You are NOT a robot. You are a personal assistant calling on behalf of your client.
 - Speak naturally, like a real human making a phone call. Use "Hi", "thanks", "perfect", natural filler.
 - If they put you on hold, wait patiently.
-- If there's a phone menu (press 1 for X, press 2 for Y), LISTEN to the options and say which number to press. The system will send DTMF tones.
+- If there's a phone menu (press 1 for X, press 2 for Y), output [DTMF:1] (or whatever digit) and the system will send the tone. Example: "Let me press 1 for reservations. [DTMF:1]". You can also press multiple digits: [DTMF:12] sends 1 then 2.
 - If you reach voicemail, leave a message with: the reservation details, your client's name, and a callback number.
 - If they ask for contact info: phone and email will be provided by the system.
 - Confirm all details before hanging up: date, time, party size, name.
@@ -529,12 +529,42 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     // Extract [REMEMBER:...] and [SAVE:...] tags before sending to TTS
     const { response, memories, saves } = extractMemoryTags(rawResponse);
 
-    session.conversationHistory.push({ role: "assistant", content: response });
+    // DTMF SENDING for external calls — detect when AI wants to press phone menu buttons
+    // AI may say "[DTMF:1]" or "I'll press 1" or "pressing 1 now" — extract and send DTMF
+    const isExternalCall = session.callType === 'external_call';
+    let cleanedResponse = response;
+    if (isExternalCall) {
+      // Match explicit [DTMF:X] tags or natural "press X" / "pressing X" language
+      const dtmfTagMatch = response.match(/\[DTMF:(\d+)\]/g);
+      const dtmfNaturalMatch = response.match(/\b(?:press|pressing|dial|dialing|enter|entering|hit|hitting)\s+(\d{1,4})\b/i);
+
+      const digits: string[] = [];
+      if (dtmfTagMatch) {
+        for (const tag of dtmfTagMatch) {
+          const d = tag.match(/\[DTMF:(\d+)\]/);
+          if (d) digits.push(d[1]);
+        }
+        cleanedResponse = cleanedResponse.replace(/\[DTMF:\d+\]/g, '').trim();
+      } else if (dtmfNaturalMatch) {
+        digits.push(dtmfNaturalMatch[1]);
+      }
+
+      if (digits.length > 0) {
+        const allDigits = digits.join('');
+        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} SENDING DTMF: ${allDigits}`);
+        // Send each digit as a DTMF tone via ConversationRelay
+        for (const d of allDigits) {
+          session.ws.send(JSON.stringify({ type: "dtmf", digit: d }));
+        }
+      }
+    }
+
+    session.conversationHistory.push({ role: "assistant", content: cleanedResponse });
 
     // Send response (ConversationRelay handles TTS)
     session.ws.send(JSON.stringify({
       type: "text",
-      token: response,
+      token: cleanedResponse,
       last: true,
     }));
 
