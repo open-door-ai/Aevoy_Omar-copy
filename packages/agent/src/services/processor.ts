@@ -727,9 +727,9 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const isDirectGenerationTask = /\b(write me|create me|make me|build me|generate me|give me|show me|produce|draft me|compose me)\b.{0,60}\b(html|css|javascript|python|code|script|function|poem|essay|story|email template|letter|website|webpage|portfolio|landing page|api|program|app)\b/i.test(directBrowserTaskText) ||
       /\b(write (a|an|the|me a|me an|me the)|create (a|an|the)|draft (a|an|the)|generate (a|an|the)|code (a|an|the)|build (a|an|the))\b.{0,40}\b(website|webpage|html|css|javascript|python|function|script|program|poem|story|email|letter|essay|app|api|portfolio)\b/i.test(directBrowserTaskText) ||
       /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText) ||
-      // Document/spreadsheet creation — these use create_excel/word/ppt/pdf actions directly, never browse online
-      /\b(create|make|build|generate|give me)\b.{0,50}\b(spreadsheet|excel|xlsx|word document|docx|powerpoint|pptx|presentation|pdf|csv)\b/i.test(directBrowserTaskText) ||
-      /\b(spreadsheet|excel file|word file|powerpoint|presentation)\b.{0,40}\b(for|to track|to manage|template|tracker)\b/i.test(directBrowserTaskText);
+      // Document/spreadsheet/card creation — these use create_excel/word/ppt/pdf actions directly, never browse online
+      /\b(create|make|build|generate|give me|design)\b.{0,50}\b(spreadsheet|excel|xlsx|word document|docx|powerpoint|pptx|presentation|pdf|csv|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(directBrowserTaskText) ||
+      /\b(spreadsheet|excel file|word file|powerpoint|presentation|business cards?)\b.{0,40}\b(for|to track|to manage|template|tracker)\b/i.test(directBrowserTaskText);
 
     if (isDirectBrowserTask || isDirectGenerationTask) {
       console.log(`[BYPASS] ${isDirectGenerationTask ? 'Generation' : 'Browser'} task — skipping autonomous planning`);
@@ -2112,7 +2112,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Detect pure writing/generation tasks → use 'generate' chain which is tuned for content output
     // EXCLUDE: document/spreadsheet tasks that must use action tags (create_excel, create_word, etc.)
     // Those need the full SYSTEM_PROMPT where [ACTION:] tags are defined — not GENERATE_SYSTEM_PROMPT
-    const _isDocumentAction = /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`);
+    const _isDocumentAction = /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(`${subject} ${body}`);
     const _isWritingTask = !forceCheapModel && !_isDocumentAction && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
     const aiTaskType = forceCheapModel ? "validate" as const : (_isWritingTask ? "generate" as const : undefined);
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI
@@ -2121,12 +2121,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // For document action tasks: inject mandatory execution context to force action tag usage.
     // DeepSeek often generates prose descriptions instead of calling create_word/excel/ppt/pdf.
     // This explicit instruction overrides that tendency.
+    const _isBusinessCard = /\b(business cards?)\b/i.test(`${subject} ${body}`);
     if (_isDocumentAction && !forceCheapModel) {
       const _docAction = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
         : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
-        : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf'
+        : _isBusinessCard ? 'create_pdf'
+        : /\b(pdf|invoice|receipt|certificate|resume|cv|flyer|brochure)\b/i.test(`${subject} ${body}`) ? 'create_pdf'
         : 'create_word';
-      effectiveBody = `${body || subject}\n\n[EXECUTION CONTEXT: You MUST emit [ACTION:${_docAction}("filename", [...])] to create the file. Use your training knowledge to fill in the content — do NOT search for templates online. Output only the ACTION tag + [TASK_COMPLETE]. Do not describe the document or mention external tools.]`;
+
+      // Business card gets a special execution context with the exact format
+      if (_isBusinessCard) {
+        effectiveBody = `${body || subject}\n\n[EXECUTION CONTEXT: You MUST emit [ACTION:create_pdf("Company_Business_Card.pdf", [{"type":"business_card","cardData":{"companyName":"...","personName":"...","title":"...","email":"...","phone":"...","website":"...","tagline":"...","primaryColor":"#2563eb"}}])] to create a professional visual business card PDF. Fill in ALL fields from the user's request. Use your training knowledge for any missing details. The business_card type renders a professional front+back card design with colors, typography, and layout — NOT a text description. Output ONLY the ACTION tag + [TASK_COMPLETE].]`;
+      } else {
+        effectiveBody = `${body || subject}\n\n[EXECUTION CONTEXT: You MUST emit [ACTION:${_docAction}("filename", [...])] to create the file. Use your training knowledge to fill in the content — do NOT search for templates online. Output only the ACTION tag + [TASK_COMPLETE]. Do not describe the document or mention external tools.]`;
+      }
     }
     if (_isScheduledTrigger) {
       const _scheduledTask = subject.replace(/^\[Scheduled\]\s*/i, '').trim();
