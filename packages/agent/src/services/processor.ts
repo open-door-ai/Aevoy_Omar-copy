@@ -1401,11 +1401,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       try {
         const _ifpPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please|can you)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for print and digital use.`;
 
-        // Model fallback chain
+        // Model fallback chain — only valid Gemini image generation models
         const _ifpModels = [
           'gemini-2.0-flash-exp-image-generation',
-          'gemini-2.5-flash-image',
-          'gemini-3.1-flash-image-preview',
+          'gemini-2.0-flash-exp',
         ];
         let _ifpBase64: string | null = null;
         let _ifpMime = 'image/png';
@@ -1452,7 +1451,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           console.warn(`[IMAGE-FAST-PATH] All Gemini models failed — trying Pollinations.ai`);
           try {
             const _polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(_ifpPrompt)}?width=1024&height=1024&nologo=true`;
-            const _polResp = await fetch(_polUrl, { redirect: 'follow' });
+            const _polResp = await fetch(_polUrl, { redirect: 'follow', signal: AbortSignal.timeout(30000) });
             if (_polResp.ok) {
               const _polBuffer = Buffer.from(await _polResp.arrayBuffer());
               if (_polBuffer.length > 5000) {
@@ -2385,7 +2384,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // EXCLUDE: document/spreadsheet tasks that must use action tags (create_excel, create_word, etc.)
     // Those need the full SYSTEM_PROMPT where [ACTION:] tags are defined — not GENERATE_SYSTEM_PROMPT
     const _isDocumentAction = /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(`${subject} ${body}`);
-    const _isWritingTask = !forceCheapModel && !_isDocumentAction && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
+    // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
+    const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
+    const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
+    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
     const aiTaskType = forceCheapModel ? "validate" as const : (_isWritingTask ? "generate" as const : undefined);
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI
     // doesn't schedule again — it must EXECUTE the task and report the result.
@@ -2480,6 +2482,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // DeepSeek/Groq often refuse signups citing "TOS" or "fraud" despite system prompt.
     // Claude follows system prompts better and will execute the task.
     const _refusalPatterns = /\b(I cannot|I will not|I can't|I'm unable to|I am unable|cannot create.*account|cannot.*signup|cannot proceed|violat\w+ terms|fraudulent|misrepresentation|unauthorized|I must decline|I'm not able|against.*policy|prohibited|not something I can|I shouldn'?t)\b/i;
+    let _refusalRecovered = false; // Flag: browse actions injected by refusal detector must NOT be stripped
     if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0) {
       console.warn(`[REFUSAL-DETECT] AI refused task with model=${aiResponse.model}: "${aiResponse.content.substring(0, 100)}"`);
       // Force retry with Claude (Haiku or Sonnet) which respects system prompts
@@ -2489,20 +2492,27 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         if (!_refusalPatterns.test(retryResponse.content)) {
           console.log(`[REFUSAL-DETECT] Retry succeeded with model=${retryResponse.model}`);
           aiResponse = retryResponse;
+          _refusalRecovered = true;
         } else {
           console.warn(`[REFUSAL-DETECT] Retry also refused — proceeding with browse action injection`);
-          // Last resort: inject a browse action to start the task
-          const _taskUrl = _isSignupContext
-            ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
-            : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+          // Last resort: inject a browse action to start the task directly
+          // Try to extract domain from subject for direct navigation instead of Google search
+          const _domainMatch = subject.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon)\b/i);
+          const _taskUrl = _domainMatch
+            ? `https://www.${_domainMatch[1].toLowerCase()}.com`
+            : _isSignupContext
+              ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
+              : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
           aiResponse.content = `Starting the task now...`;
           aiResponse.actions = [{ type: 'browse' as const, params: { url: _taskUrl } }];
+          _refusalRecovered = true;
         }
       } catch (_retryErr) {
         console.error(`[REFUSAL-DETECT] Retry failed:`, _retryErr);
         // Inject browse action as fallback
         aiResponse.content = `Starting the task now...`;
         aiResponse.actions = [{ type: 'browse' as const, params: { url: `https://www.google.com/search?q=${encodeURIComponent(subject)}` } }];
+        _refusalRecovered = true;
       }
     }
 
@@ -2550,7 +2560,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // GENERATION TASK ACTION STRIP: For writing/generation tasks, the AI should produce content
     // directly in its text response. Strip ALL search/browse actions so the text IS the output.
     // The AI tends to search for examples/templates instead of just writing the content itself.
-    if (_isWritingTask && aiResponse.actions.some(a => ['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type))) {
+    // EXCEPTION: Never strip actions injected by the refusal detector — those are critical for recovery.
+    if (_isWritingTask && !_refusalRecovered && aiResponse.actions.some(a => ['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type))) {
       // Keep only non-browser actions (send_email, remember, generate_image, etc.)
       const nonBrowserActions = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type));
       const stripped = aiResponse.actions.length - nonBrowserActions.length;
@@ -3210,6 +3221,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // EXCEPTION: if all models failed (model === 'fallback'), the placeholder IS NOT real content —
     // fall through so the quality gate can handle the fallback appropriately.
     const _isRealGeneratedContent = _isWritingTask &&
+      !_refusalRecovered &&
       aiResponse.content &&
       aiResponse.content.length > 100 &&
       aiResponse.actions.length === 0 &&
@@ -3243,6 +3255,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const roundHistory: { round: number; summary: string }[] = [];
     let compressedHistory = ''; // Compressed summary of rounds 1-N after round 5
     let visionFailureNote = ''; // Context injected into next iteration when vision agent fails
+    let bookingGateRejectCount = 0; // Track booking gate rejections — after 2, force phone call
     let visionAgentInvocations = 0; // Guard: max 2 vision agent runs per task (prevents 8min × 15 iteration waste)
     let lastVisionFailed = false; // Tracks if last vision agent run failed (used in passive response guard)
 
@@ -3622,10 +3635,25 @@ DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
           );
 
           if (isBookingTask && isJustInfo && currentIteration <= 8) {
-            console.warn(`[BOOKING-GATE] REJECTED: AI gave restaurant info instead of completing booking. Forcing form fill.`);
+            bookingGateRejectCount++;
+            console.warn(`[BOOKING-GATE] REJECTED (#${bookingGateRejectCount}): AI gave restaurant info instead of completing booking.`);
             aiResponse.content = '';
             aiResponse.actions = [];
-            const forceBookingPrompt = `Original request: ${subject} ${body}
+
+            // After 2 rejections, FORCE phone call — don't keep re-prompting for online booking
+            const forcePhoneOnly = bookingGateRejectCount >= 2;
+            const forceBookingPrompt = forcePhoneOnly
+              ? `Original request: ${subject} ${body}
+
+YOU HAVE FAILED TO BOOK ONLINE ${bookingGateRejectCount} TIMES. STOP trying the website.
+CALL THE RESTAURANT DIRECTLY. This is your ONLY option now.
+
+1. Search for their REAL phone number: [ACTION:search("${subject.replace(/"/g, '')} restaurant phone number")]
+2. Call them IMMEDIATELY: [ACTION:call_external("+1XXXXXXXXXX", "Hi, I'd like to book a table for ${subject.match(/(\d+)\s*(ppl|people|persons?|guests?)/i)?.[1] || '2'} people ${subject.match(/(tonight|today|tomorrow)/i)?.[1] || 'tonight'} at ${subject.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i)?.[1] || '7pm'}. The name is ${senderName || username}.")]
+3. Report: "I called [restaurant] and booked a table for [N] at [time]."
+
+NEVER fabricate phone numbers (no 555-xxxx). Output ONLY a search action and then call_external.`
+              : `Original request: ${subject} ${body}
 
 YOU DID NOT COMPLETE THE BOOKING. You just returned the restaurant's address/phone.
 That is NOT what the user asked for. They said "book me a table" — you must ACTUALLY BOOK IT.
@@ -5129,7 +5157,14 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           }).eq('id', taskId).then(() => {});
 
           try {
-            const visionResult = await runVisionAgent(visionPage, visionTask, userId, taskId, username);
+            // Wrap vision agent with 10-minute hard timeout to prevent infinite loops
+            const VISION_TIMEOUT_MS = 600000; // 10 minutes
+            const visionResult = await Promise.race([
+              runVisionAgent(visionPage, visionTask, userId, taskId, username),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error(`Vision agent timeout after ${VISION_TIMEOUT_MS / 60000} minutes`)), VISION_TIMEOUT_MS)
+              ),
+            ]);
             console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
             if (visionResult.success) {
               const rawVisionResult = visionResult.result || 'Task completed successfully.';

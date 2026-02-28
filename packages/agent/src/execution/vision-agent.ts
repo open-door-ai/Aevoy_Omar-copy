@@ -918,8 +918,8 @@ export async function runVisionAgent(
           if (hasConfirmation) {
             // Great — we found a confirmation! Let the AI wrap up with DONE
             history.push(`✅ CONFIRMATION DETECTED on page! Look for confirmation details and output DONE with the result.`);
-          } else if (steps >= 35 && !hasFilledAnyField) {
-            // 35 steps without filling any form field — the reservation widget is too complex
+          } else if (steps >= 20 && !hasFilledAnyField) {
+            // 20 steps without filling any form field — escalate to phone ASAP
             const phoneMatch = pageText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
             const phoneNumber = phoneMatch ? phoneMatch[0].trim() : null;
             const bailReason = phoneNumber
@@ -927,8 +927,8 @@ export async function runVisionAgent(
               : `CALL-GATE: Reservation widget too complex after ${steps} steps. Search for the restaurant phone number and call directly.`;
             console.log(`[VISION-AGENT] Smart bail-out: ${bailReason}`);
             return { success: false, error: bailReason, steps, cost: totalCost, screenshots };
-          } else if (steps >= 25 && !hasReachedForm) {
-            // 25 steps and haven't found any form — we're probably lost in navigation
+          } else if (steps >= 15 && !hasReachedForm) {
+            // 15 steps and haven't found any form — we're probably lost in navigation
             history.push(`⚠️ ${steps} steps and no reservation form found yet. STOP navigating — look for a "Reserve" or "Book" button and CLICK it NOW. If you can't find it, look for a phone number on the page.`);
           }
         } catch { /* non-critical */ }
@@ -1007,6 +1007,10 @@ export async function runVisionAgent(
           console.log(`[VISION-AGENT] Stuck for 10 steps — refreshing page`);
           await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
           await activePage.waitForTimeout(2000);
+        } else if (sameUrlCount >= 15) {
+          // Hard exit: stuck on same URL for 15+ steps despite scroll, scroll-up, and reload
+          console.log(`[VISION-AGENT] HARD STUCK: Same URL for ${sameUrlCount} steps — bailing out`);
+          return { success: false, error: `Stuck on ${url} for ${sameUrlCount} steps — page is unresponsive. CALL-GATE: Search for the business phone number and call directly.`, steps, cost: totalCost, screenshots };
         }
       } else {
         lastUrl = url;

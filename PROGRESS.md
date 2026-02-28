@@ -1,4 +1,41 @@
-# Session 29 — Progress Log
+# Session 64 — Progress Log
+**Date:** 2026-02-28
+**Focus:** Deep audit, signup refusal root cause, vision timeout fix, booking hardening, image gen fix
+
+---
+
+## [15:45] Deep Audit Complete
+- Status: COMPLETE
+- Findings:
+  - Agent deployed on Railway (44d8c4c), all APIs connected
+  - 9/10 recent failures are 20-min watchdog timeouts (browser tasks)
+  - Signup refusals: Swagbucks refused TWICE today despite refusal detector
+  - Booking: 1/5 success (Earls Kitchen via phone call)
+  - Image gen: "all providers unavailable" on 2 tasks
+
+## [16:00] Fix: Signup Refusal Detector (ROOT CAUSE)
+- Status: BUILD PASS
+- Root cause: `_isWritingTask` regex matched "make me an account" via `make me` pattern
+  - Caused: GENERATE_SYSTEM_PROMPT (weak anti-refusal), GENERATION-STRIP (removed browse), GENERATION FAST-PATH (skipped loop)
+- Fixes: `_earlySignupCheck`/`_earlyBookingCheck` exclusions, `_refusalRecovered` flag, direct domain nav
+
+## [16:15] Fix: Vision Agent Timeout Loops
+- Status: BUILD PASS
+- Fixes: Hard exit at sameUrlCount>=15, 10-min Promise.race timeout, booking CALL-GATE 35→20 steps
+
+## [16:20] Fix: Booking Flow Hardening
+- Status: BUILD PASS
+- Fixes: `bookingGateRejectCount` — after 2 info rejections, force phone call only
+
+## [16:25] Fix: Image Generation Models
+- Status: BUILD PASS
+- Fixes: Removed fabricated model names, kept valid Gemini models, added Pollinations 30s timeout
+
+## Next: Deploy + Live Tests
+
+---
+
+# Session 29 — Progress Log (Previous)
 **Date:** 2026-02-22
 **Focus:** AGI intro fix, cost billing, voice calls, onboarding, wiring audit, above & beyond
 
