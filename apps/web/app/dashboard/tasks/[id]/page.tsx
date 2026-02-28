@@ -103,6 +103,8 @@ export default function TaskDetailPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [aiCostData, setAiCostData] = useState<AiCostData | null>(null);
   const [aiCostLoading, setAiCostLoading] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
 
   const fetchTask = useCallback(async (silent = false) => {
     try {
@@ -138,6 +140,30 @@ export default function TaskDetailPage() {
       setAiCostLoading(false);
     }
   }, [taskId, aiCostLoading, aiCostData]);
+
+  const handleReply = async () => {
+    if (!replyText.trim() || replySending) return;
+    setReplySending(true);
+    try {
+      const response = await fetch(`/api/tasks/${taskId}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: replyText.trim() }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setReplyText('');
+        // Navigate to the new follow-up task
+        if (data.taskId) {
+          router.push(`/dashboard/tasks/${data.taskId}`);
+        }
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setReplySending(false);
+    }
+  };
 
   // Initial load
   useEffect(() => {
@@ -601,6 +627,39 @@ export default function TaskDetailPage() {
             <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
               {task.response_text}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Reply to Task */}
+      {task.response_text && (task.status === 'completed' || task.status === 'needs_review') && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex gap-2">
+              <textarea
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                placeholder="Reply to this task..."
+                className="flex-1 min-h-[60px] max-h-[200px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-y"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    handleReply();
+                  }
+                }}
+              />
+              <Button
+                onClick={handleReply}
+                disabled={!replyText.trim() || replySending}
+                size="sm"
+                className="self-end"
+              >
+                {replySending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                <span className="ml-1">Reply</span>
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Press Cmd+Enter to send. This creates a follow-up task with your response as context.
+            </p>
           </CardContent>
         </Card>
       )}
