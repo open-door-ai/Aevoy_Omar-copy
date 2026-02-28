@@ -1395,7 +1395,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       /\b(create|make|design|generate|produce|build)\b.{0,40}\b(graphic|image|logo|banner|poster|flyer|thumbnail|icon|illustration|artwork|picture)\b/i.test(_earlyImgText) ||
       /\b(graphic|image|logo|banner|poster)\b.{0,40}\b(for|to post|to share)\b/i.test(_earlyImgText)
     ) && !/\b(spreadsheet|excel|word document|powerpoint|business card|pdf|html|website|code)\b/i.test(_earlyImgText)
-      && !/\b(sign\s?up|signup|create\b.*\baccount|register|enroll|cancel|book|reserv|subscribe|login|log\s?in)\b/i.test(_earlyImgText);
+      && !/\b(sign\s*\w*\s*up|signup|create\b.*\baccount|register|enroll|cancel|book|reserv|subscribe|login|log\s?in|join)\b/i.test(_earlyImgText);
 
     if (_earlyIsImage) {
       console.log(`[IMAGE-FAST-PATH] Detected image creation task — generating directly via Gemini`);
