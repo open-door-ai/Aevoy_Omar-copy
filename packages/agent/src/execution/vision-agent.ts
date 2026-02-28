@@ -832,9 +832,9 @@ export async function runVisionAgent(
         return { success: false, error: 'Timeout: 45 minutes exceeded', steps, cost: totalCost, screenshots };
       }
 
-      // Periodic progress update every 25 steps — keeps watchdog from killing long-running tasks
+      // Periodic progress update every 10 steps — keeps watchdog from killing long-running tasks
       // (watchdog checks updated_at; this update keeps the task "alive" in the DB)
-      if (steps > 0 && steps % 25 === 0 && taskId) {
+      if (steps > 0 && steps % 10 === 0 && taskId) {
         const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1);
         const progressUrl = activePage.url();
         const heartbeatMsg = `[VISION-AGENT] Step ${steps}/${MAX_STEPS} (${elapsedMin}min) on ${progressUrl.substring(0, 60)}`;

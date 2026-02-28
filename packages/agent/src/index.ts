@@ -597,20 +597,19 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     inputChannel: (task.inputChannel as "email" | "sms" | "voice" | "web") || "email",
   });
 
-  // Track with 20-minute timeout
+  // Track with 45-minute timeout (matches processor MASTER_TIMEOUT_MS)
   trackBackgroundJob(
-    crypto.randomUUID(), // Generate taskId for tracking
+    crypto.randomUUID(),
     task.userId,
     taskPromise,
     () => {
-      // Timeout handler - notify user
       if (task.from) {
         import("./services/email.js").then(({ sendErrorEmail }) => {
           sendErrorEmail(
             task.from,
             process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
             task.subject || 'Your Task',
-            'Task exceeded 20-minute maximum execution time. Please try breaking it into smaller tasks.'
+            'This task took longer than expected. I\'m still working on complex tasks, but please try again if you need a faster response.'
           ).catch((err) => console.error("Failed to send timeout email:", err));
         });
       }
@@ -2809,10 +2808,10 @@ server.listen(PORT, async () => {
   const runTaskWatchdog = async () => {
     try {
       // Use updated_at (not started_at) so Railway-restart-killed tasks are caught quickly.
-      // 25 min: vision agent can run up to 12 min (150 steps × 5s) + processor overhead.
-      // Quality > speed: complex tasks are allowed to run to completion naturally.
-      // Railway-killed tasks stop updating immediately, so they're caught within ~25 min.
-      const twentyFiveMinutesAgo = new Date(Date.now() - 25 * 60 * 1000).toISOString();
+      // 50 min: processor master timeout is 40min, vision agent heartbeats every 10 steps.
+      // Tasks that are genuinely running keep updating updated_at via heartbeats.
+      // Only truly dead tasks (Railway restart, OOM) go 50+ min without an update.
+      const twentyFiveMinutesAgo = new Date(Date.now() - 50 * 60 * 1000).toISOString();
       const { data: stuckTasks } = await getSupabaseClient()
         .from('tasks')
         .select('id, email_subject, input_channel, user_id')
@@ -2820,7 +2819,7 @@ server.listen(PORT, async () => {
         .lt('updated_at', twentyFiveMinutesAgo);
 
       if (stuckTasks && stuckTasks.length > 0) {
-        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >25 min) — resolving gracefully...`);
+        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >50 min) — resolving gracefully...`);
 
         // Gracefully complete each stuck task with a helpful message.
         // NEVER mark as "failed" — users should always see a usable response.
@@ -2879,7 +2878,7 @@ server.listen(PORT, async () => {
   // Run immediately on startup to catch tasks from previous server instance
   runTaskWatchdog();
   setInterval(runTaskWatchdog, 5 * 60 * 1000); // Then every 5 minutes
-  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 25min updated_at threshold, graceful recovery + email notify)');
+  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 50min updated_at threshold, graceful recovery + email notify)');
 
   // WEBHOOK SELF-HEALER — auto-repair phone numbers pointing to wrong URL
   const validateAndRepairWebhooks = async () => {

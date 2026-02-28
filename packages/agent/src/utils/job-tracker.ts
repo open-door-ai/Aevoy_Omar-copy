@@ -2,7 +2,7 @@
  * Background Job Tracker - Prevents orphaned tasks
  *
  * Tracks all async task processing with:
- * - 20-minute max timeout
+ * - 45-minute max timeout (matches processor MASTER_TIMEOUT_MS)
  * - Graceful cleanup on server restart
  * - Error recovery and user notification
  */
@@ -15,7 +15,7 @@ interface BackgroundJob {
   timeoutHandle?: NodeJS.Timeout;
 }
 
-const MAX_TASK_DURATION_MS = 20 * 60 * 1000; // 20 minutes
+const MAX_TASK_DURATION_MS = 45 * 60 * 1000; // 45 minutes — matches processor master timeout
 const backgroundJobs = new Map<string, BackgroundJob>();
 
 /**
@@ -31,7 +31,7 @@ export function trackBackgroundJob(
 
   // Set timeout
   const timeoutHandle = setTimeout(() => {
-    console.error(`[JOB-TRACKER] Task ${taskId} exceeded 20min timeout`);
+    console.error(`[JOB-TRACKER] Task ${taskId} exceeded 45min timeout`);
     backgroundJobs.delete(taskId);
 
     if (onTimeout) {

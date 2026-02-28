@@ -2898,6 +2898,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       const ITERATION_TIMEOUT_MS = 60000; // 60 seconds per iteration max
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
 
+      // Heartbeat: update updated_at so watchdog knows we're alive
+      if (taskId) {
+        void getSupabaseClient().from('tasks')
+          .update({ iteration_count: currentIteration })
+          .eq('id', taskId).then(() => {});
+      }
+
       // Strip [THINKING]...[/THINKING] blocks from AI response (internal reasoning, not for user)
       aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
 
