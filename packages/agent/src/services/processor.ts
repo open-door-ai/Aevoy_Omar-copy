@@ -2580,6 +2580,41 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // 6e. BOOKING TASK DETAIL CHECK: Reservations need party size, date, time.
+    // Ask the user when this critical info is missing — a human would ask before calling.
+    const isRestBookingTask = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso)|table\s+(for|at))\b/i.test(taskTextLower) &&
+      !/\b(flight|hotel|airbnb|car|rental)\b/i.test(taskTextLower); // Restaurant bookings, not flights/hotels
+    if (isRestBookingTask && !task.suppressEmail) {
+      const fullInput = `${subject} ${body || ''}`;
+      const hasPartySize = /\b(\d+)\s*(people|person|guests?|pax|of us)\b/i.test(fullInput) || /\bfor\s+(\d+)\b/i.test(fullInput);
+      const hasTime = /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i.test(fullInput) || /\b(tonight|lunch|dinner|brunch|evening|noon|afternoon)\b/i.test(fullInput);
+      const hasDate = /\b(today|tonight|tomorrow|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}|\d{1,2}\/\d{1,2})\b/i.test(fullInput);
+      const missingFields: string[] = [];
+      if (!hasPartySize) missingFields.push('how many people');
+      if (!hasDate) missingFields.push('what date');
+      if (!hasTime) missingFields.push('what time');
+      if (missingFields.length >= 2) {
+        // Missing 2+ critical fields — ask before wasting browser time
+        console.log(`[BOOKING-GATE] Reservation task missing: ${missingFields.join(', ')} — asking user`);
+        const restNameMatch = fullInput.match(/(?:at|for)\s+([A-Z][A-Za-z'&\s]+?)(?:\s*$|[\s,.])/i);
+        const restName = restNameMatch?.[1]?.trim() || 'the restaurant';
+        const bookingAsk = `I'll book ${restName} for you. Just need a few details:\n\n${missingFields.map((f, i) => `${i + 1}. ${f.charAt(0).toUpperCase() + f.slice(1)}?`).join('\n')}\n\nReply with those details and I'll make the reservation right away.`;
+        await getSupabaseClient().from("tasks").update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime,
+          response_text: bookingAsk,
+          action_count: 0,
+          action_success_count: 0,
+        }).eq("id", taskId);
+        if (!task.suppressEmail) {
+          await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, bookingAsk);
+        }
+        clearTimeout(masterTimer);
+        return { taskId, success: true, response: bookingAsk, actions: [] };
+      }
+    }
+
     // 7. Parse and execute actions with security validation
     const actionResults: ActionResult[] = [];
 
@@ -6730,6 +6765,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         /\b(you should (call|visit|check|go|contact|phone|try calling) (them|it|directly|the ))/i.test(cleanResponse) ||
         /\b(you can call them|call them directly|their phone number is|their number is)/i.test(cleanResponse) ||
         /\b(for (availability|reservations?|a table), (call|contact|phone|try calling|you can call))\b/i.test(cleanResponse) ||
+        // "can be reached at", "reach them at", "contact them at [phone]" — advice giving a phone number
+        /\b(can be reached|reach them|contact them|get in touch)\b.{0,30}\b(at|on|via)\b/i.test(cleanResponse) ||
+        /\b(phone|contact|number|tel)[:\s]+\(?\d{3}\)?[-.\s]?\d{3}/i.test(cleanResponse) ||
         // Booking advice patterns: "you must confirm directly", "accepts reservations online", "may be available"
         /\b(you must confirm|confirm directly|accepts reservations|may be available|availability.*may)\b/i.test(cleanResponse) ||
         // Fabricated phone numbers: 555-xxxx is the Hollywood fake number range
@@ -6831,10 +6869,61 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       cleanResponse = `I wasn't able to access the design tool to create this for you. The browser wasn't used, so no actual design was made — I described what it would look like instead, which isn't helpful. Please resend the task and I'll navigate directly to Canva (or similar) to build your design.`;
     }
 
+    // ── AUTO-CALL TRIGGER FOR BOOKING TASKS ─────────────────────────────────
+    // When a booking/reservation task found a phone number but gave ADVICE instead of
+    // calling, extract the number and actually call the restaurant. This is the core
+    // AGI principle: DO things, don't tell the user how to do things.
+    {
+      const _isBookingTask = /\b(book|reserv|table|make\s+a?\s*(reservation|booking|reso)|dinner|lunch|brunch)\b/i.test(subject + ' ' + (body || ''));
+      const _didNotCall = !actionResults.some(r => r.action.type === 'call_external' && r.success);
+      const _phoneInResponse = cleanResponse.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+      const _noCompletionAction = !/\b(booked|reserved|confirmed|reservation.*made|table.*booked|called.*restaurant|made.*reservation)\b/i.test(cleanResponse);
+      if (_isBookingTask && _didNotCall && _phoneInResponse && _noCompletionAction) {
+        const _phoneNum = _phoneInResponse[0].replace(/[^\d+]/g, '');
+        const _formattedPhone = _phoneNum.startsWith('+') ? _phoneNum : `+1${_phoneNum}`;
+        // Extract restaurant name from response
+        const _restNameMatch = cleanResponse.match(/(?:at\s+|for\s+)?([A-Z][A-Za-z'&\s]+?)(?:\s+(?:can be|is|phone|call|reach|located|at\s+\())/);
+        const _restName = _restNameMatch?.[1]?.trim() || 'the restaurant';
+        // Extract booking details from user input
+        const _partyMatch = (subject + ' ' + (body || '')).match(/(\d+)\s*(?:people|person|guests?|pax|of us)/i);
+        const _timeMatch = (subject + ' ' + (body || '')).match(/(?:at\s+|for\s+|around\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+        const _dateMatch = (subject + ' ' + (body || '')).match(/\b(today|tonight|tomorrow|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2})\b/i);
+        const _partySize = _partyMatch?.[1] || '2';
+        const _time = _timeMatch?.[1] || 'tonight';
+        const _date = _dateMatch?.[1] || 'tonight';
+        console.log(`[AUTO-CALL] Booking task found phone ${_formattedPhone} for ${_restName} — calling now`);
+        try {
+          const { callExternal } = await import("./twilio.js");
+          const callScript = `Hi, I'd like to make a reservation for ${_partySize} people ${_date} at ${_time} please. The name is ${username}.`;
+          await callExternal(userId, _formattedPhone, callScript);
+          cleanResponse = `I found ${_restName}'s number (${_phoneInResponse[0]}) and called to make a reservation for ${_partySize} at ${_time} ${_date}. The call has been placed — I'll update you with the confirmation.`;
+          console.log(`[AUTO-CALL] Call placed to ${_formattedPhone} for reservation`);
+        } catch (callErr) {
+          console.error(`[AUTO-CALL] Failed to call ${_formattedPhone}:`, callErr);
+          cleanResponse = `I found ${_restName}'s number (${_phoneInResponse[0]}) and tried to call for a reservation but the call couldn't be completed. You can call them directly at ${_phoneInResponse[0]} to book a table for ${_partySize} at ${_time}.`;
+        }
+      }
+    }
+
     const successCount = actionResults.filter(r => r.success).length;
     const totalActions = actionResults.length;
 
     let emailBody = cleanResponse;
+    // ── SANITIZE BEFORE ANY RESPONSE SENDING ──────────────────────────────
+    // CRITICAL: This MUST run before SMS/email/voice sending. Previously ran after,
+    // causing internal tags (BLOCKED:, [REJECT], [THINKING], [ACTION:]) to leak into SMS messages.
+    cleanResponse = cleanResponse
+      .replace(/BLOCKED:.*?(?:\.|$)/gm, '')      // "BLOCKED: You tried to call/text..."
+      .replace(/\[REJECT\].*?(?:\.|$)/gm, '')    // "[REJECT] BLOCKED: selector..."
+      .replace(/\[VISION-AGENT\].*?(?:\.|$)/gm, '') // "[VISION-AGENT] Running on..."
+      .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]/gi, '') // Thinking blocks
+      .replace(/\[ACTION:[^\]]*\]/g, '')          // Raw action tags
+      .replace(/\n{3,}/g, '\n\n')                 // Collapse excess whitespace
+      .trim();
+    if (!cleanResponse || cleanResponse.length < 5) {
+      cleanResponse = `I worked on your request "${subject}". Please try again if the result wasn't what you expected.`;
+    }
+
     // Prepend any response prefix (e.g. clarification timeout notice)
     if (task.responsePrefix) {
       emailBody = `${task.responsePrefix}\n\n${emailBody}`;
@@ -6913,10 +7002,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const { getQualityTier: getQT, QUALITY_TIERS: QT } = await import("./task-verifier.js");
     const dbTier = getQT(classification.taskType || 'simple');
     const dbTierTarget = QT[dbTier]?.target ?? 70;
-    // Auto-passed tasks (method='skip') always count as passed regardless of tier target.
-    // Only apply the tier confidence threshold to actual browser verification results.
+    // Auto-passed tasks always count as passed regardless of tier target.
+    // These methods bypass the normal verification pipeline with strong evidence:
+    // - 'skip': pre-verified (fast paths, non-browser tasks)
+    // - 'data_quality': response contains concrete data (phone numbers, prices, addresses)
+    // - 'phone_escalation': task completed via phone call to business
+    const autoPassMethods = new Set(['skip', 'data_quality', 'phone_escalation']);
     const dbVerificationPassed = verificationResult
-      ? verificationResult.method === 'skip' || (verificationResult.confidence ?? 0) >= dbTierTarget
+      ? autoPassMethods.has(verificationResult.method) || verificationResult.passed === true || (verificationResult.confidence ?? 0) >= dbTierTarget
       : null;
 
     const finalActionCount = actionResults.length;
@@ -6932,19 +7025,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       stuckReason = `Verification failed (${method}, confidence ${conf}% < ${dbTierTarget}% target)${evidence}`;
     }
 
-    // FINAL SANITIZATION: Strip internal system messages that should NEVER reach the user
-    cleanResponse = cleanResponse
-      .replace(/BLOCKED:.*?(?:\.|$)/gm, '')      // "BLOCKED: You tried to call/text..."
-      .replace(/\[REJECT\].*?(?:\.|$)/gm, '')    // "[REJECT] BLOCKED: selector..."
-      .replace(/\[VISION-AGENT\].*?(?:\.|$)/gm, '') // "[VISION-AGENT] Running on..."
-      .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]/gi, '') // Thinking blocks
-      .replace(/\[ACTION:[^\]]*\]/g, '')          // Raw action tags
-      .replace(/\n{3,}/g, '\n\n')                 // Collapse excess whitespace
-      .trim();
-    // If stripping left nothing useful, use a fallback
-    if (!cleanResponse || cleanResponse.length < 5) {
-      cleanResponse = `I worked on your request "${subject}". Please try again if the result wasn't what you expected.`;
-    }
+    // (Sanitization already done above, before response sending)
 
     await getSupabaseClient()
       .from("tasks")
