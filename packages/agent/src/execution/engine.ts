@@ -62,25 +62,30 @@ export class ExecutionEngine {
   private results: StepResult[] = [];
   private multiUserBrowser: MultiUserBrowserService | null = null;
   private useMultiUser: boolean;
+  private useRemoteCDP: boolean;
   private userId?: string;
   private domain?: string;
-  // isCloud removed - we only use VPS or local Playwright now
-  private isMultiUser = false; // Whether using multi-user VPS browser
+  private isMultiUser = false;
+  private isRemoteCDP = false; // Whether using remote CDP browser
   private taskId?: string;
 
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
-    
-    // Priority: VPS Browser > Local Playwright
-    // Set FORCE_LOCAL_BROWSER=true env var to force local Playwright only.
+
+    // Priority: Remote CDP > VPS Multi-User > Local Playwright
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
-    // Check for VPS Multi-User Browser (preferred for autonomy)
-    this.useMultiUser = !forceLocal && !!(process.env.VPS_BROWSER_HOST);
+    // PRIORITY 0: Remote CDP browser (connects to VPS Chrome via WebSocket)
+    this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
 
-    if (this.useMultiUser) {
-      console.log('[ENGINE] Will use VPS Browser as primary');
+    // PRIORITY 1: VPS Multi-User Browser (shared Chrome on this process)
+    this.useMultiUser = !forceLocal && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
+
+    if (this.useRemoteCDP) {
+      console.log('[ENGINE] Will use Remote CDP Browser (VPS)');
+    } else if (this.useMultiUser) {
+      console.log('[ENGINE] Will use VPS Multi-User Browser');
     } else {
       console.log('[ENGINE] Will use local Playwright');
     }
@@ -90,6 +95,55 @@ export class ExecutionEngine {
     this.userId = userId;
     this.domain = domain;
     this.taskId = taskId;
+
+    // PRIORITY 0: Remote CDP Browser — connect to Chrome running on VPS via WebSocket
+    if (this.useRemoteCDP) {
+      try {
+        const cdpEndpoint = process.env.REMOTE_BROWSER_CDP!; // e.g. http://77.42.31.185:9223
+        console.log(`[ENGINE] Connecting to remote CDP at ${cdpEndpoint}...`);
+
+        // Get the WebSocket debugger URL from the CDP endpoint
+        const versionUrl = cdpEndpoint.replace(/\/$/, '') + '/json/version';
+        const versionRes = await fetch(versionUrl, { signal: AbortSignal.timeout(5000) });
+        const versionData = await versionRes.json() as { webSocketDebuggerUrl?: string };
+        const wsUrl = versionData.webSocketDebuggerUrl;
+
+        if (!wsUrl) throw new Error('No webSocketDebuggerUrl in CDP /json/version');
+
+        // Connect via CDP — the VPS Chrome stays running, we get a Browser handle
+        this.browser = await chromium.connectOverCDP(wsUrl);
+        this.isRemoteCDP = true;
+
+        // Create an isolated context for this task
+        const { getDeviceProfile } = await import('./stealth.js');
+        const profile = getDeviceProfile();
+        this.context = await this.browser.newContext({
+          viewport: profile.viewport,
+          screen: profile.screen,
+          deviceScaleFactor: profile.deviceScaleFactor,
+          userAgent: getRealisticUserAgent(),
+          locale: 'en-US',
+          timezoneId: 'America/New_York',
+        });
+
+        await applyStealthPatches(this.context);
+        this.page = await this.context.newPage();
+        await humanizeInteraction(this.page);
+
+        // Verify page is responsive
+        await this.page.evaluate(() => document.readyState);
+        console.log(`[ENGINE] Connected to remote CDP browser (Chrome ${(versionData as any).Browser || 'unknown'})`);
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[ENGINE] Remote CDP connection failed: ${errorMsg} — falling back to local`);
+        this.browser = null;
+        this.context = null;
+        this.page = null;
+        this.isRemoteCDP = false;
+        // Fall through to local Playwright
+      }
+    }
 
     // PRIORITY 1: Multi-User Browser (VPS) - Best for autonomy
     if (this.useMultiUser && userId) {
@@ -172,8 +226,6 @@ export class ExecutionEngine {
 
   async cleanup(): Promise<void> {
     // Save session before cleanup
-    // VPS Browser: saves via its own method
-    // Local Playwright: manual save
     if (this.multiUserBrowser) {
       try {
         await this.multiUserBrowser.saveAllSessions();
@@ -192,8 +244,14 @@ export class ExecutionEngine {
       }
     }
 
-    // Close local Playwright browser if not using VPS
-    if (!this.multiUserBrowser) {
+    // Remote CDP: close context only (browser stays running on VPS for other tasks)
+    // Local Playwright: close everything
+    if (this.isRemoteCDP) {
+      if (this.context) await this.context.close().catch(() => {});
+      // Disconnect from remote browser (don't close it — it serves other tasks)
+      if (this.browser) await this.browser.close().catch(() => {});
+      console.log('[ENGINE] Disconnected from remote CDP browser');
+    } else if (!this.multiUserBrowser) {
       if (this.context) await this.context.close().catch(() => {});
       if (this.browser) await this.browser.close().catch(() => {});
     }

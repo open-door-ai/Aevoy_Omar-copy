@@ -79,6 +79,7 @@ function validateEnv(): void {
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
     "VPS_BROWSER_HOST", // Optional VPS browser for better performance
+    "REMOTE_BROWSER_CDP", // Remote Chrome CDP endpoint (VPS headless browser)
   ];
   const missingOptional = optional.filter((key) => !process.env[key]);
   if (missingOptional.length > 0) {
@@ -361,6 +362,7 @@ app.get("/health", async (_req, res) => {
     database: supabaseStatus,
     capsolver: !!process.env.CAPSOLVER_API_KEY,
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
+    remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
   });
 });
 
