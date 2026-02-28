@@ -619,21 +619,45 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
   taskPromise
     .then((result) => {
       console.log(`Incoming task processed: ${result.taskId || 'unknown'}`, { success: result.success, actions: result.actions?.length || 0 });
-      // Original processor handles responses internally via processTask
     })
-    .catch((error) => {
+    .catch(async (error) => {
       console.error("Incoming task processing failed:", error);
 
-      // Send error email
-      if (task.from) {
-        import("./services/email.js").then(({ sendErrorEmail }) => {
-          sendErrorEmail(
-            task.from,
-            process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
-            task.subject || 'Your Task',
-            error.message || 'An unexpected error occurred'
-          ).catch((err) => console.error("Failed to send error email:", err));
-        });
+      // CRITICAL: Mark the task as completed in DB so it doesn't stay "processing" forever
+      // Find the most recent processing task for this user and mark it done
+      try {
+        const { data: stuckTask } = await getSupabaseClient()
+          .from('tasks')
+          .select('id')
+          .eq('user_id', task.userId)
+          .eq('status', 'processing')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (stuckTask) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          const isTimeout = errMsg.includes('timeout') || errMsg.includes('Timeout');
+          const isBrowser = errMsg.includes('browser') || errMsg.includes('CDP') || errMsg.includes('page') || errMsg.includes('Target closed');
+          const userResponse = isTimeout
+            ? `This task took longer than expected. Please try again — I'll work faster this time.`
+            : isBrowser
+            ? `I ran into a browser issue while working on this. Please try again and I'll use a different approach.`
+            : `I encountered an unexpected issue. Please try again — I'll improve my approach.`;
+
+          await getSupabaseClient()
+            .from('tasks')
+            .update({
+              status: 'completed',
+              response_text: userResponse,
+              error_message: errMsg.substring(0, 500),
+              completed_at: new Date().toISOString(),
+            })
+            .eq('id', stuckTask.id);
+          console.log(`[CRASH-RECOVERY] Marked task ${stuckTask.id} as completed with recovery message`);
+        }
+      } catch (dbErr) {
+        console.error('[CRASH-RECOVERY] Failed to update task in DB:', dbErr);
       }
     })
     .finally(() => { activeTasks--; });

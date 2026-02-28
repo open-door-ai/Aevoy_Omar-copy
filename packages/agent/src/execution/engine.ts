@@ -110,28 +110,31 @@ export class ExecutionEngine {
 
         if (!wsUrl) throw new Error('No webSocketDebuggerUrl in CDP /json/version');
 
-        // Connect via CDP — the VPS Chrome stays running, we get a Browser handle
-        this.browser = await chromium.connectOverCDP(wsUrl);
+        // Connect via CDP with 10s timeout — the VPS Chrome stays running, we get a Browser handle
+        const cdpTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+          Promise.race([promise, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timeout after ${ms}ms`)), ms))]);
+
+        this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 10000, 'connectOverCDP');
         this.isRemoteCDP = true;
 
-        // Create an isolated context for this task
+        // Create an isolated context for this task (with timeout for each step)
         const { getDeviceProfile } = await import('./stealth.js');
         const profile = getDeviceProfile();
-        this.context = await this.browser.newContext({
+        this.context = await cdpTimeout(this.browser.newContext({
           viewport: profile.viewport,
           screen: profile.screen,
           deviceScaleFactor: profile.deviceScaleFactor,
           userAgent: getRealisticUserAgent(),
           locale: 'en-US',
           timezoneId: 'America/New_York',
-        });
+        }), 10000, 'newContext');
 
         await applyStealthPatches(this.context);
-        this.page = await this.context.newPage();
+        this.page = await cdpTimeout(this.context.newPage(), 10000, 'newPage');
         await humanizeInteraction(this.page);
 
         // Verify page is responsive
-        await this.page.evaluate(() => document.readyState);
+        await cdpTimeout(this.page.evaluate(() => document.readyState), 5000, 'readyState');
         console.log(`[ENGINE] Connected to remote CDP browser (Chrome ${(versionData as any).Browser || 'unknown'})`);
         return;
       } catch (error) {
