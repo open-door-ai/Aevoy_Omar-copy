@@ -182,7 +182,7 @@ const IntroSequence = ({ onComplete }: { onComplete: () => void }) => {
           Email it. It does it.
         </p>
         <button 
-          className={`px-10 py-5 bg-stone-900 text-white rounded-full font-semibold text-lg transition-all duration-700 hover:bg-stone-800 ${
+          className={`px-10 py-5 bg-stone-900 text-white rounded-full font-semibold text-lg transition-all duration-300 hover:bg-stone-800 hover:shadow-2xl hover:shadow-stone-900/25 hover:scale-105 active:scale-95 active:shadow-md active:translate-y-[1px] cursor-pointer select-none ${
             phase >= 5 ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
           }`}
           style={{ transitionDelay: '800ms' }}
@@ -1175,7 +1175,7 @@ const LiveDemo = ({ demoType }: { demoType: string }) => {
             </div>
             <MagneticButton
               onClick={isCall ? runCallDemo : runTaskDemo}
-              className="w-full py-4 bg-stone-900 text-white rounded-xl font-semibold hover:bg-stone-800 transition-colors"
+              className="w-full py-4 bg-stone-900 text-white rounded-xl font-semibold hover:bg-stone-800 hover:shadow-lg transition-all duration-150 hover:scale-[1.02] active:scale-[0.97] active:translate-y-[1px] select-none"
             >
               {isCall ? 'Call Me Now' : 'Find It'}
             </MagneticButton>
@@ -1210,13 +1210,13 @@ const LiveDemo = ({ demoType }: { demoType: string }) => {
                   <div className="flex gap-3">
                     <button
                       onClick={retry}
-                      className="px-4 py-2 bg-stone-900 text-white rounded-lg text-sm font-medium hover:bg-stone-800 transition-colors"
+                      className="px-4 py-2 bg-stone-900 text-white rounded-lg text-sm font-medium hover:bg-stone-800 hover:shadow-md transition-all duration-150 active:scale-95 active:translate-y-[0.5px] select-none"
                     >
                       Try Again
                     </button>
                     <button
                       onClick={reset}
-                      className="px-4 py-2 bg-white border border-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-50 transition-colors"
+                      className="px-4 py-2 bg-white border border-stone-200 text-stone-700 rounded-lg text-sm font-medium hover:bg-stone-50 hover:shadow-md transition-all duration-150 active:scale-95 active:translate-y-[0.5px] select-none"
                     >
                       Start Over
                     </button>
@@ -1944,7 +1944,7 @@ export default function AevoyLanding() {
             <Link href="/login" className="hidden sm:block text-stone-500 hover:text-stone-900 transition-colors text-sm font-medium">
               Log in
             </Link>
-            <MagneticButton href="/signup" className="px-4 py-2 sm:px-5 sm:py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium hover:bg-stone-800 transition-colors inline-block">
+            <MagneticButton href="/signup" className="px-4 py-2 sm:px-5 sm:py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium hover:bg-stone-800 hover:shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 active:translate-y-[1px] inline-block select-none">
               Get Started
             </MagneticButton>
             {/* Mobile hamburger */}
@@ -1973,7 +1973,7 @@ export default function AevoyLanding() {
             <Link href="/hive" onClick={() => setMobileNavOpen(false)} className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">The Social Network</Link>
             <div className="pt-2 border-t border-stone-100 flex flex-col gap-3">
               <Link href="/login" className="text-stone-600 hover:text-stone-900 text-sm font-medium py-1">Log in</Link>
-              <Link href="/signup" className="px-5 py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium text-center hover:bg-stone-800 transition-colors">Get Started</Link>
+              <Link href="/signup" className="px-5 py-2.5 bg-stone-900 text-white rounded-full text-sm font-medium text-center hover:bg-stone-800 hover:shadow-lg transition-all duration-150 active:scale-95 active:translate-y-[0.5px] select-none">Get Started</Link>
             </div>
           </div>
         )}
@@ -2025,10 +2025,10 @@ export default function AevoyLanding() {
                 opacity: Math.max(0, 1 - scrollY / 350),
               }}
             >
-              <MagneticButton href="/signup" className="px-8 py-4 bg-stone-900 text-white rounded-full font-semibold text-lg hover:bg-stone-800 transition-all hover:shadow-2xl hover:shadow-stone-900/20 text-center inline-block">
+              <MagneticButton href="/signup" className="px-8 py-4 bg-stone-900 text-white rounded-full font-semibold text-lg hover:bg-stone-800 transition-all duration-200 hover:shadow-2xl hover:shadow-stone-900/25 hover:scale-105 active:scale-95 active:shadow-md active:translate-y-[1px] text-center inline-block select-none">
                 Get Started
               </MagneticButton>
-              <MagneticButton href="#demo" className="px-8 py-4 bg-white text-stone-900 rounded-full font-semibold text-lg border border-stone-200 hover:border-stone-300 hover:shadow-lg transition-all text-center inline-block">
+              <MagneticButton href="#demo" className="px-8 py-4 bg-white text-stone-900 rounded-full font-semibold text-lg border border-stone-200 hover:border-stone-300 hover:shadow-xl transition-all duration-200 hover:scale-105 active:scale-95 active:shadow-sm active:translate-y-[1px] text-center inline-block select-none">
                 See it work
               </MagneticButton>
             </div>
@@ -2949,7 +2949,7 @@ export default function AevoyLanding() {
           <div className="mt-16 text-center">
             <MagneticButton
               href="/signup"
-              className="px-8 py-4 bg-stone-900 text-white rounded-full text-lg font-semibold hover:bg-stone-800 transition-colors inline-block"
+              className="px-8 py-4 bg-stone-900 text-white rounded-full text-lg font-semibold hover:bg-stone-800 hover:shadow-2xl hover:shadow-stone-900/25 transition-all duration-200 hover:scale-105 active:scale-95 active:shadow-md active:translate-y-[1px] inline-block select-none"
             >
               Try 25 tasks free — No credit card
             </MagneticButton>
