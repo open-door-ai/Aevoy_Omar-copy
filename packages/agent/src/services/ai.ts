@@ -1652,7 +1652,9 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 export async function generateVisionResponse(
   prompt: string,
   imageBase64: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  userId?: string,
+  taskId?: string
 ): Promise<{ content: string; cost: number }> {
   // Detect media type from base64 header or default to jpeg (screenshots are jpeg)
   const mediaType = imageBase64.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
@@ -1683,8 +1685,13 @@ export async function generateVisionResponse(
 
       const content = response.choices[0]?.message?.content || "";
       if (content.length > 10) {
-        console.log(`[AI] Vision (Gemini Flash) | Cost: FREE | ${content.length} chars`);
-        return { content, cost: 0 };
+        // Gemini Flash pricing: $0.10/1M input, $0.40/1M output (essentially free but track it)
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
+        console.log(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, "gemini-2.0-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
+        return { content, cost };
       }
     } catch (error) {
       console.warn(`[AI] Vision (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1708,6 +1715,7 @@ export async function generateVisionResponse(
       const cost = (response.usage.input_tokens * 0.25 + response.usage.output_tokens * 1.25) / 1_000_000;
 
       console.log(`[AI] Vision (Haiku) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
+      if (userId) trackApiCall(userId, "claude-3-5-haiku-latest", response.usage.input_tokens, response.usage.output_tokens, cost, "anthropic", taskId, "vision").catch(() => {});
       return { content, cost };
     } catch (error) {
       console.warn(`[AI] Vision (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1731,6 +1739,7 @@ export async function generateVisionResponse(
       const cost = (response.usage.input_tokens * 3.00 + response.usage.output_tokens * 15.00) / 1_000_000;
 
       console.log(`[AI] Vision (Sonnet) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
+      if (userId) trackApiCall(userId, "claude-sonnet-4-20250514", response.usage.input_tokens, response.usage.output_tokens, cost, "anthropic", taskId, "vision").catch(() => {});
       return { content, cost };
     } catch (error) {
       console.warn(`[AI] Vision (Sonnet) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1768,7 +1777,8 @@ export async function generateVisionResponse(
 
       if (content.length > 5) {
         const cost = (inputTokens * 0.27 + outputTokens * 1.10) / 1_000_000;
-        console.log(`[AI] Vision (DeepSeek text-fallback) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
+        console.log(`[AI] Vision (DeepSeek text-fallback) | Cost: $${cost.toFixed(6)} | ${inputTokens}in/${outputTokens}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, "deepseek-chat", inputTokens, outputTokens, cost, "deepseek", taskId, "vision").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
@@ -1796,7 +1806,9 @@ export async function generateVisionResponse(
       }
 
       if (content.length > 5) {
+        // Groq is free but track for visibility
         console.log(`[AI] Vision (Groq text-fallback) | Cost: ~$0 | ${content.length} chars`);
+        if (userId) trackApiCall(userId, "llama-3.3-70b-versatile", 0, 0, 0, "groq", taskId, "vision").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {

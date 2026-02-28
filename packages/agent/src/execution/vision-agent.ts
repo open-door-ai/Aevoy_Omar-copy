@@ -821,7 +821,7 @@ export async function runVisionAgent(
   if (isComplexBrowserTask) {
     try {
       const planPrompt = `TASK: ${task}\n\nOutput a concise execution plan as 3-5 bullet points: URL, fields to fill, submit button, success criteria, fallback. Max 100 words.`;
-      const planResult = await generateVisionResponse(planPrompt, '', SYSTEM_PROMPT);
+      const planResult = await generateVisionResponse(planPrompt, '', SYSTEM_PROMPT, userId, taskId);
       taskPlan = planResult.content.substring(0, 400);
       totalCost += planResult.cost;
       console.log(`[VISION-AGENT] Plan: ${taskPlan.substring(0, 150)}`);
@@ -1062,7 +1062,7 @@ export async function runVisionAgent(
       let stepCost = 0;
       try {
         const result = await Promise.race([
-          generateVisionResponse(prompt, screenshot, SYSTEM_PROMPT),
+          generateVisionResponse(prompt, screenshot, SYSTEM_PROMPT, userId, taskId),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Vision AI timeout')), STEP_TIMEOUT_MS)
           ),
