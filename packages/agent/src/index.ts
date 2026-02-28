@@ -377,6 +377,77 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+// ---- Live API Key Validation — actually calls each API ----
+app.get("/debug/test-apis", async (_req, res) => {
+  const results: Record<string, { status: string; detail?: string; latency_ms?: number }> = {};
+
+  // 1. Gemini Flash
+  if (process.env.GOOGLE_API_KEY) {
+    const start = Date.now();
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GOOGLE_API_KEY}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: "Reply OK" }] }], generationConfig: { maxOutputTokens: 5 } }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const d = await r.json() as any;
+      if (d.error) { results.gemini = { status: 'INVALID', detail: d.error.message, latency_ms: Date.now() - start }; }
+      else { results.gemini = { status: 'OK', detail: d.candidates?.[0]?.content?.parts?.[0]?.text || 'no text', latency_ms: Date.now() - start }; }
+    } catch (e: any) { results.gemini = { status: 'ERROR', detail: e.message, latency_ms: Date.now() - start }; }
+  } else { results.gemini = { status: 'NOT_SET' }; }
+
+  // 2. Anthropic (Claude)
+  if (process.env.ANTHROPIC_API_KEY) {
+    const start = Date.now();
+    try {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 5, messages: [{ role: 'user', content: 'Reply OK' }] }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const d = await r.json() as any;
+      if (d.error) { results.anthropic = { status: 'INVALID', detail: d.error.message, latency_ms: Date.now() - start }; }
+      else { results.anthropic = { status: 'OK', detail: d.content?.[0]?.text || 'no text', latency_ms: Date.now() - start }; }
+    } catch (e: any) { results.anthropic = { status: 'ERROR', detail: e.message, latency_ms: Date.now() - start }; }
+  } else { results.anthropic = { status: 'NOT_SET' }; }
+
+  // 3. DeepSeek
+  if (process.env.DEEPSEEK_API_KEY) {
+    const start = Date.now();
+    try {
+      const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'Reply OK' }], max_tokens: 5 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const d = await r.json() as any;
+      if (d.error) { results.deepseek = { status: 'INVALID', detail: d.error.message, latency_ms: Date.now() - start }; }
+      else { results.deepseek = { status: 'OK', detail: d.choices?.[0]?.message?.content || 'no text', latency_ms: Date.now() - start }; }
+    } catch (e: any) { results.deepseek = { status: 'ERROR', detail: e.message, latency_ms: Date.now() - start }; }
+  } else { results.deepseek = { status: 'NOT_SET' }; }
+
+  // 4. Groq
+  if (process.env.GROQ_API_KEY) {
+    const start = Date.now();
+    try {
+      const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'Reply OK' }], max_tokens: 5 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const d = await r.json() as any;
+      if (d.error) { results.groq = { status: 'RATE_LIMITED_OR_INVALID', detail: d.error.message, latency_ms: Date.now() - start }; }
+      else { results.groq = { status: 'OK', detail: d.choices?.[0]?.message?.content || 'no text', latency_ms: Date.now() - start }; }
+    } catch (e: any) { results.groq = { status: 'ERROR', detail: e.message, latency_ms: Date.now() - start }; }
+  } else { results.groq = { status: 'NOT_SET' }; }
+
+  const allOk = Object.values(results).every(r => r.status === 'OK');
+  res.json({ allApisWorking: allOk, results });
+});
+
 // ---- Image generation test endpoint ----
 app.get("/debug/test-image-gen", async (req, res) => {
   const googleKey = process.env.GOOGLE_API_KEY;
