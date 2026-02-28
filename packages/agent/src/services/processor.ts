@@ -1387,6 +1387,110 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // ── IMAGE GENERATION FAST PATH (before AI processing) ──
+    // If the task is clearly asking to create/generate an image, skip the AI and call Gemini directly.
+    // The AI wastes time searching for Canva/stock photos instead of using generate_image.
+    const _earlyImgText = `${subject} ${body || ''}`.toLowerCase();
+    const _earlyIsImage = (
+      /\b(create|make|design|generate|produce|build)\b.{0,40}\b(graphic|image|logo|banner|poster|flyer|thumbnail|icon|illustration|artwork|picture)\b/i.test(_earlyImgText) ||
+      /\b(graphic|image|logo|banner|poster)\b.{0,40}\b(for|to post|to share)\b/i.test(_earlyImgText)
+    ) && !/\b(spreadsheet|excel|word document|powerpoint|business card|pdf|html|website|code)\b/i.test(_earlyImgText);
+
+    if (_earlyIsImage && process.env.GOOGLE_API_KEY) {
+      console.log(`[IMAGE-FAST-PATH] Detected image creation task — generating directly via Gemini`);
+      try {
+        const _ifpPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please|can you)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for print and digital use.`;
+
+        // Model fallback chain
+        const _ifpModels = [
+          'gemini-2.0-flash-exp-image-generation',
+          'gemini-2.0-flash-preview-image-generation',
+          'gemini-2.0-flash',
+        ];
+        let _ifpBase64: string | null = null;
+        let _ifpMime = 'image/png';
+        let _ifpModel = '';
+
+        for (const _m of _ifpModels) {
+          try {
+            const _ifpUrl = `https://generativelanguage.googleapis.com/v1beta/models/${_m}:generateContent`;
+            console.log(`[IMAGE-FAST-PATH] Trying model: ${_m}`);
+            const _ifpResp = await fetch(_ifpUrl, {
+              method: 'POST',
+              headers: {
+                'x-goog-api-key': process.env.GOOGLE_API_KEY!,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: `Generate an image: ${_ifpPrompt}` }] }],
+                generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '1:1' } },
+              }),
+            });
+            if (!_ifpResp.ok) {
+              const _ifpErrTxt = await _ifpResp.text();
+              console.warn(`[IMAGE-FAST-PATH] ${_m} failed (${_ifpResp.status}): ${_ifpErrTxt.substring(0, 100)}`);
+              continue;
+            }
+            const _ifpData = await _ifpResp.json() as any;
+            const _ifpParts = _ifpData?.candidates?.[0]?.content?.parts || [];
+            const _ifpImgPart = _ifpParts.find((p: any) => p.inlineData?.data);
+            if (_ifpImgPart?.inlineData) {
+              _ifpBase64 = _ifpImgPart.inlineData.data;
+              _ifpMime = _ifpImgPart.inlineData.mimeType;
+              _ifpModel = _m;
+              break;
+            }
+          } catch (_ifpErr) {
+            console.warn(`[IMAGE-FAST-PATH] ${_m} error:`, _ifpErr);
+            continue;
+          }
+        }
+
+        if (_ifpBase64) {
+          // Save image
+          const _ifpFs = await import('fs');
+          const _ifpPath = await import('path');
+          const _ifpDir = '/tmp/aevoy-files/images';
+          if (!_ifpFs.existsSync(_ifpDir)) _ifpFs.mkdirSync(_ifpDir, { recursive: true });
+          const _ifpExt = _ifpMime === 'image/png' ? 'png' : 'jpg';
+          const _ifpFilename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${_ifpExt}`;
+          const _ifpFilePath = _ifpPath.join(_ifpDir, _ifpFilename);
+          _ifpFs.writeFileSync(_ifpFilePath, Buffer.from(_ifpBase64, 'base64'));
+
+          const _ifpAgentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+          const _ifpImageUrl = `${_ifpAgentUrl}/files/images/${_ifpFilename}`;
+
+          // Track cost
+          trackServiceCost(userId, 'google', _ifpModel, 0.039, 'image_generation').catch(() => {});
+
+          const _ifpResponse = `Image generated successfully!\n\n**Download:** ${_ifpImageUrl}\n\nThe image has been created based on your request. Let me know if you'd like adjustments.`;
+
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - startTime,
+            response_text: _ifpResponse,
+            action_count: 1,
+            action_success_count: 1,
+            cost_usd: 0.039,
+          }).eq('id', taskId);
+
+          if (!task.suppressEmail) {
+            await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, _ifpResponse);
+          }
+          clearTimeout(masterTimer);
+          console.log(`[IMAGE-FAST-PATH] Generated: ${_ifpImageUrl} (model: ${_ifpModel})`);
+          return { taskId, success: true, response: _ifpResponse, actions: [] };
+        } else {
+          console.warn(`[IMAGE-FAST-PATH] All models failed — falling through to AI processing`);
+          // Fall through to normal processing
+        }
+      } catch (_ifpErr) {
+        console.error(`[IMAGE-FAST-PATH] Error:`, _ifpErr);
+        // Fall through to normal processing
+      }
+    }
+
     // Email sending fast path ("send email to X")
     const earlyEmailResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
     if (earlyEmailResult) {
