@@ -7217,7 +7217,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // and "page available at URL where you can create account" (giving link, not doing task)
       const _isTask = /\b(book|reserv|cancel|sign.?up|sign up|register|create|make|set.?up|buy|order|purchase|subscribe|account|join|design|build|generate|develop)\b/i.test(subject + ' ' + (body || ''));
       const _givesInstructions = _isTask && (
-        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate)|you can (find|make|create|book|sign|register|access|cancel|subscribe|view|see|check|look|call)\b/i.test(cleanResponse) ||
+        /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate|choose|select|sign|register|create|set up)|you can (find|make|create|book|sign|register|access|cancel|subscribe|view|see|check|look|call)\b/i.test(cleanResponse) ||
+        // "sign up yourself" / "to get started, you'll need to" — telling user to do it
+        /\b(sign up|register|create.*account|get started) (your ?self|on your own|manually|directly)\b/i.test(cleanResponse) ||
+        /\bto get started.{0,30}(you'?ll|you will|you need|you should|you can)\b/i.test(cleanResponse) ||
         /\*\*(reservation method|booking system|direct links|how to book|contact information|next steps)\*\*/i.test(cleanResponse) ||
         // "page available at https://... where you can create/sign up" — giving a link to do it yourself
         /https?:\/\/[^\s]{10,}\s.{0,60}\bwhere (you can|you'll|you should|you need to)\b/i.test(cleanResponse) ||
