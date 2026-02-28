@@ -2802,6 +2802,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // ── BUSINESS CARD FAST PATH ──────────────────────────────────────────
     // Business cards are structured visual documents — no AI content generation needed.
     // Extract fields from task text and create the PDF directly with business_card type.
+    console.log(`[BUSINESS-CARD-CHECK] _isBusinessCard=${_isBusinessCard}, _isDocumentAction=${_isDocumentAction}, isTaskComplete=${isTaskComplete}, subject="${subject.substring(0, 50)}"`);
+    void getSupabaseClient().from('tasks').update({ stuck_reason: `[BC-DIAG] bc=${_isBusinessCard},doc=${_isDocumentAction},complete=${isTaskComplete}` }).eq('id', taskId);
     if (_isBusinessCard && _isDocumentAction) {
       console.log('[BUSINESS-CARD-FAST-PATH] Creating visual business card PDF directly');
       try {
