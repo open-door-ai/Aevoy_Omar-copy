@@ -157,14 +157,15 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
     }
   });
 
-  // Keepalive ping every 25s — prevents proxies/load balancers from closing idle connections
+  // Keepalive ping every 10s — prevents Twilio/proxies from closing idle WebSocket
+  // 25s was too long — Twilio ConversationRelay can drop connections if WebSocket appears idle
   const pingInterval = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.ping();
     } else {
       clearInterval(pingInterval);
     }
-  }, 25_000);
+  }, 10_000);
 
   ws.on("close", () => {
     clearInterval(pingInterval);
@@ -516,6 +517,16 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       return;
     }
 
+    // Send a "thinking" hold message if AI takes > 2s — keeps the WebSocket alive
+    // and prevents Twilio ConversationRelay from dropping the connection due to silence
+    let thinkingSent = false;
+    const thinkingTimer = setTimeout(() => {
+      if (session.ws.readyState === WebSocket.OPEN) {
+        session.ws.send(JSON.stringify({ type: "text", token: "Hmm, let me think about that...", last: true }));
+        thinkingSent = true;
+      }
+    }, 2000);
+
     const rawResponse = await generateVoiceResponse(session.userId || "demo", voicePrompt, session.conversationHistory, {
       userName: session.userName,
       userEmail: session.userEmail,
@@ -525,6 +536,8 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       userProfile: session.userProfile,
       memoryContext: session.memoryContext,
     });
+
+    clearTimeout(thinkingTimer); // Cancel thinking message if AI responded in time
 
     // Extract [REMEMBER:...] and [SAVE:...] tags before sending to TTS
     const { response, memories, saves } = extractMemoryTags(rawResponse);
