@@ -11,8 +11,10 @@
  *   Verify  → screenshot again, check progress
  *   Repeat  → loop until DONE or max steps
  *
- * AI returns: CLICK:N | TYPE:N:"text" | SELECT:N:"value" | SCROLL:up/down |
- *             NAVIGATE:"url" | PRESS:key | WAIT | DONE:"result" | FAIL:"reason"
+ * AI returns: CLICK:N | DBLCLICK:N | RIGHTCLICK:N | HOVER:N | LONGPRESS:N |
+ *             DRAG:fromX,fromY,toX,toY | TYPE:N:"text" | SELECT:N:"value" |
+ *             SCROLL:up/down | NAVIGATE:"url" | PRESS:key | WAIT |
+ *             DONE:"result" | FAIL:"reason"
  */
 
 import type { Page } from 'patchright';
@@ -222,6 +224,164 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
 }
 
 /**
+ * Get element center coordinates by index (shared helper for click variants).
+ */
+async function getElementPosition(page: Page, index: number): Promise<{ x: number; y: number } | null> {
+  return page.evaluate(([idx, sel]: [number, string]) => {
+    const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      const s = window.getComputedStyle(el);
+      return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+    });
+    const el = interactive[idx] as HTMLElement | undefined;
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const rect = el.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => null);
+}
+
+/**
+ * Double-click an element by index.
+ * Uses Playwright's native dblclick for proper event sequence:
+ * mousedown → mouseup → click → mousedown → mouseup → click → dblclick
+ */
+async function dblclickByIndex(page: Page, index: number): Promise<boolean> {
+  const pos = await getElementPosition(page, index);
+  if (!pos) {
+    // Fallback: JS dispatch dblclick event
+    return page.evaluate(([idx, sel]: [number, string]) => {
+      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+      });
+      const el = els[idx] as HTMLElement | undefined;
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      return true;
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
+  }
+  try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
+  try {
+    await page.mouse.dblclick(pos.x, pos.y);
+    return true;
+  } catch {
+    return page.evaluate(([idx, sel]: [number, string]) => {
+      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+      });
+      const el = els[idx] as HTMLElement | undefined;
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      return true;
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
+  }
+}
+
+/**
+ * Right-click an element by index (context menu).
+ * Uses Playwright mouse with button: 'right' for native event sequence.
+ */
+async function rightclickByIndex(page: Page, index: number): Promise<boolean> {
+  const pos = await getElementPosition(page, index);
+  if (!pos) {
+    return page.evaluate(([idx, sel]: [number, string]) => {
+      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+      });
+      const el = els[idx] as HTMLElement | undefined;
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      return true;
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
+  }
+  try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
+  try {
+    await page.mouse.click(pos.x, pos.y, { button: 'right' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hover over an element by index (for dropdown menus, tooltips, etc.).
+ * Triggers mouseenter + mouseover events. Pauses 300ms to let menus appear.
+ */
+async function hoverByIndex(page: Page, index: number): Promise<boolean> {
+  const pos = await getElementPosition(page, index);
+  if (!pos) {
+    return page.evaluate(([idx, sel]: [number, string]) => {
+      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+      });
+      const el = els[idx] as HTMLElement | undefined;
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      return true;
+    }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
+  }
+  try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
+  try {
+    await page.mouse.move(pos.x, pos.y);
+    await page.waitForTimeout(300); // Let dropdown/tooltip appear
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Long-press an element by index (mousedown → hold 800ms → mouseup).
+ * Used for mobile patterns, hold-to-delete, drag-to-unlock.
+ */
+async function longpressByIndex(page: Page, index: number): Promise<boolean> {
+  const pos = await getElementPosition(page, index);
+  if (!pos) return false;
+  try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
+  try {
+    await page.mouse.down();
+    await page.waitForTimeout(800); // Hold for 800ms
+    await page.mouse.up();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Drag from one point to another (for sliders, date pickers, drag-and-drop).
+ * Fires mousedown at start → mousemove events along path → mouseup at end.
+ */
+async function dragBetweenPoints(page: Page, fromX: number, fromY: number, toX: number, toY: number): Promise<boolean> {
+  try {
+    await humanMouseMove(page, fromX, fromY);
+    await page.mouse.down();
+    // Smooth drag: move in 10 steps for realistic behavior
+    const steps = 10;
+    for (let i = 1; i <= steps; i++) {
+      const x = fromX + (toX - fromX) * (i / steps);
+      const y = fromY + (toY - fromY) * (i / steps);
+      await page.mouse.move(x, y);
+      await page.waitForTimeout(20);
+    }
+    await page.mouse.up();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Type text into an element by its numeric index.
  * Clicks to focus, clears with triple-click+Delete (browser-use strategy),
  * then types with 25ms delay. Falls back to FILL if field stays empty.
@@ -410,6 +570,11 @@ Look at the screenshot and the element list. Output 3-5 actions to execute in se
 
 RESPOND WITH ACTIONS in this format (one per line, 3-5 preferred):
 - CLICK:N              (click element N from the list above)
+- DBLCLICK:N           (double-click element N — for text selection, zoom in, map zoom, edit-in-place)
+- RIGHTCLICK:N         (right-click element N — opens context menu)
+- HOVER:N              (hover over element N — reveals dropdown menus, tooltips, sub-navigation)
+- LONGPRESS:N          (press and hold element N for 800ms — mobile patterns, hold-to-delete)
+- DRAG:fromX,fromY,toX,toY  (drag from one point to another — sliders, date range pickers, drag-and-drop)
 - CLICK_AT:x,y        (click at pixel coordinates — use when element is not in the list but visible in screenshot)
 - TYPE:N:"text"        (keyboard-type text into element N — clears first)
 - FILL:N:"text"        (directly set value of element N — use for React/custom inputs when TYPE fails)
@@ -439,6 +604,14 @@ RULES:
 - If a date of birth field appears, fill it: month first, then day, then year (or use SELECT for dropdowns).
 - For phone/email verification: output WAIT (the system will check email automatically).
 
+CLICK VARIANTS (when to use each):
+- CLICK — standard single click for buttons, links, checkboxes, radio buttons
+- DBLCLICK — double-click for: editing table cells, selecting text/words, zooming maps
+- RIGHTCLICK — right-click for: context menus (Shopify admin, Google Sheets, file managers)
+- HOVER — hover without clicking for: dropdown navigation menus, tooltip reveals, sub-menu expansion. After HOVER, the dropdown items will appear as ★NEW elements — then CLICK the sub-item
+- LONGPRESS — hold for 800ms for: mobile delete buttons, drag handles, press-and-hold confirmations
+- DRAG — for: sliders, range pickers, time selectors, star ratings, drag-and-drop reordering
+
 CLICK_AT IS YOUR SECRET WEAPON (CRITICAL):
 - If a button, link, date, time slot, or ANY clickable element is VISIBLE in the screenshot but NOT in the element list — use CLICK_AT:x,y with estimated pixel coordinates from the screenshot.
 - Modern SPAs render custom components (date pickers, time selectors, reservation slots, card buttons) that don't appear in the element list. Look at the SCREENSHOT, find the element visually, estimate its center x,y coordinates, and CLICK_AT.
@@ -459,11 +632,27 @@ function parseAction(response: string): { type: string; index?: number; text?: s
   // Scan ALL lines — text-only LLMs (DeepSeek fallback) sometimes add a brief explanation
   // before the action. We find the first line that matches a known action pattern.
   const allLines = response.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  const actionPrefixes = /^(CLICK_AT:|CLICK:|TYPE:|FILL:|SELECT:|SCROLL:|NAVIGATE:|PRESS:|WAIT$|SWITCH_TAB|DONE:|FAIL:)/;
+  const actionPrefixes = /^(CLICK_AT:|DBLCLICK:|RIGHTCLICK:|HOVER:|LONGPRESS:|DRAG:|CLICK:|TYPE:|FILL:|SELECT:|SCROLL:|NAVIGATE:|PRESS:|WAIT$|SWITCH_TAB|DONE:|FAIL:)/;
   const line = allLines.find(l => actionPrefixes.test(l)) || allLines[0] || '';
 
   const clickAt = line.match(/^CLICK_AT:(\d+),(\d+)/);
   if (clickAt) return { type: 'click_at', index: parseInt(clickAt[1]), text: clickAt[2] };
+
+  const dblclick = line.match(/^DBLCLICK:(\d+)/);
+  if (dblclick) return { type: 'dblclick', index: parseInt(dblclick[1]) };
+
+  const rightclick = line.match(/^RIGHTCLICK:(\d+)/);
+  if (rightclick) return { type: 'rightclick', index: parseInt(rightclick[1]) };
+
+  const hover = line.match(/^HOVER:(\d+)/);
+  if (hover) return { type: 'hover', index: parseInt(hover[1]) };
+
+  const longpress = line.match(/^LONGPRESS:(\d+)/);
+  if (longpress) return { type: 'longpress', index: parseInt(longpress[1]) };
+
+  // DRAG:fromX,fromY,toX,toY — store as index=fromX, text="fromY,toX,toY"
+  const drag = line.match(/^DRAG:(\d+),(\d+),(\d+),(\d+)/);
+  if (drag) return { type: 'drag', index: parseInt(drag[1]), text: `${drag[2]},${drag[3]},${drag[4]}` };
 
   const click = line.match(/^CLICK:(\d+)/);
   if (click) return { type: 'click', index: parseInt(click[1]) };
@@ -958,7 +1147,21 @@ export async function runVisionAgent(
               const urlAfterClick = activePage.url();
               const countAfterClick = await getInteractiveCount(activePage);
               if (urlAfterClick === urlBeforeClick && Math.abs(countAfterClick - countBeforeClick) < 2) {
-                console.log(`[VISION-AGENT] Post-click: page unchanged — trying JS click fallback`);
+                console.log(`[VISION-AGENT] Post-click: page unchanged — trying hover-then-click + JS fallback`);
+
+                // Strategy 2: Hover-then-click (dropdown menus, tooltip buttons)
+                const hoverOk = await hoverByIndex(activePage, action.index!).catch(() => false);
+                if (hoverOk) {
+                  await activePage.waitForTimeout(200);
+                  await clickByIndex(activePage, action.index!).catch(() => {});
+                  await waitForSpaStable(activePage, 1000);
+                  const countAfterHover = await getInteractiveCount(activePage);
+                  if (activePage.url() !== urlBeforeClick || Math.abs(countAfterHover - countBeforeClick) >= 2) {
+                    break; // Hover-then-click worked
+                  }
+                }
+
+                // Strategy 3: JS click fallback
                 const jsOk = await activePage.evaluate(([idx, sel]: [number, string]) => {
                   const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                     const r = el.getBoundingClientRect();
@@ -976,7 +1179,31 @@ export async function runVisionAgent(
                   await waitForSpaStable(activePage, 1500);
                   const countAfterJs = await getInteractiveCount(activePage);
                   if (Math.abs(countAfterJs - countBeforeClick) < 2 && activePage.url() === urlBeforeClick) {
-                    history.push(`⚠️ CLICK:${action.index} — page unchanged after mouse click AND JS click. The button may be disabled, covered by an overlay, or require scroll. Try: SCROLL:down to find the button, or CLICK_AT with exact pixel coordinates from screenshot.`);
+                    // Strategy 4: Force click (ignore overlay/pointer-events)
+                    await activePage.evaluate(([idx, sel]: [number, string]) => {
+                      const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+                        const r = el.getBoundingClientRect();
+                        const s = window.getComputedStyle(el);
+                        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                      });
+                      const el = els[idx] as HTMLElement | undefined;
+                      if (!el) return;
+                      // Dispatch complete mouse event sequence directly
+                      const rect = el.getBoundingClientRect();
+                      const cx = rect.left + rect.width / 2;
+                      const cy = rect.top + rect.height / 2;
+                      for (const evType of ['mousedown', 'mouseup', 'click'] as const) {
+                        el.dispatchEvent(new MouseEvent(evType, {
+                          bubbles: true, cancelable: true, view: window,
+                          clientX: cx, clientY: cy, button: 0,
+                        }));
+                      }
+                    }, [action.index!, INTERACTIVE_SELECTOR] as [number, string]).catch(() => {});
+                    await waitForSpaStable(activePage, 1000);
+                    const countFinal = await getInteractiveCount(activePage);
+                    if (Math.abs(countFinal - countBeforeClick) < 2 && activePage.url() === urlBeforeClick) {
+                      history.push(`⚠️ CLICK:${action.index} — page unchanged after 4 click strategies (mouse, hover+click, JS, force dispatch). Try: HOVER:${action.index} to reveal dropdown, DBLCLICK:${action.index}, SCROLL:down, or CLICK_AT with exact pixel coords.`);
+                    }
                   }
                 } else {
                   history.push(`⚠️ CLICK:${action.index} — element not found for JS fallback. Use CLICK_AT:x,y with coordinates from the screenshot instead.`);
@@ -994,6 +1221,64 @@ export async function runVisionAgent(
             await activePage.waitForLoadState('domcontentloaded').catch(() => {});
             await waitForSpaStable(activePage, 1200);
             actionOk = true;
+            break;
+          }
+
+          case 'dblclick': {
+            actionOk = await Promise.race([
+              dblclickByIndex(activePage, action.index!),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
+            ]);
+            if (actionOk) {
+              await activePage.waitForLoadState('domcontentloaded').catch(() => {});
+              await waitForSpaStable(activePage, 1200);
+            }
+            break;
+          }
+
+          case 'rightclick': {
+            actionOk = await Promise.race([
+              rightclickByIndex(activePage, action.index!),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
+            ]);
+            if (actionOk) {
+              await waitForSpaStable(activePage, 800);
+            }
+            break;
+          }
+
+          case 'hover': {
+            actionOk = await Promise.race([
+              hoverByIndex(activePage, action.index!),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
+            ]);
+            if (actionOk) {
+              await waitForSpaStable(activePage, 800);
+            }
+            break;
+          }
+
+          case 'longpress': {
+            actionOk = await Promise.race([
+              longpressByIndex(activePage, action.index!),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
+            ]);
+            if (actionOk) {
+              await waitForSpaStable(activePage, 1200);
+            }
+            break;
+          }
+
+          case 'drag': {
+            const fromX = action.index!;
+            const [fromYStr, toXStr, toYStr] = action.text!.split(',');
+            actionOk = await Promise.race([
+              dragBetweenPoints(activePage, fromX, parseInt(fromYStr), parseInt(toXStr), parseInt(toYStr)),
+              new Promise<boolean>(resolve => setTimeout(() => resolve(false), 8000)),
+            ]);
+            if (actionOk) {
+              await waitForSpaStable(activePage, 1200);
+            }
             break;
           }
 
