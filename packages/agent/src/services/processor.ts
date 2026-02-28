@@ -4682,6 +4682,57 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const _vTime = (subject + ' ' + (body || '')).match(/(?:at|for)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i)?.[1] || '';
           const _vDate = /tonight|today/i.test(subject + ' ' + (body || '')) ? 'today' : /tomorrow/i.test(subject + ' ' + (body || '')) ? 'tomorrow' : '';
           const _vBookingCtx = _vIsBooking ? `\n\n⚡ BOOKING DETAILS: Party size=${_vPartySize || '2'}, Date=${_vDate || 'today'}, Time=${_vTime || 'tonight'}. You MUST complete the reservation form — fill party size, date, time, then click Find a Table/Search, then fill name/email/phone and click Confirm. If the form is too complex after 30 steps, output FAIL:"Booking form too complex for browser — call restaurant instead" so the system can call them.` : '';
+          // PRE-FILL BOOKING FORMS: If on SevenRooms/OpenTable, append query params to skip date/time/party picker
+          if (_vIsBooking && visionPage) {
+            const currentPageUrl = visionPage.url();
+            try {
+              const _now = new Date();
+              const _bookDate = _vDate === 'tomorrow'
+                ? new Date(_now.getTime() + 86400000).toISOString().split('T')[0]
+                : _now.toISOString().split('T')[0]; // today
+              const _bookTime = _vTime ? _vTime.replace(/\s*(am|pm)/i, (_, p) => {
+                return ''; // strip am/pm for 24h format below
+              }) : '18:00';
+              // Parse time to HH:MM format
+              let _bookTime24 = _bookTime;
+              const _tMatch = (_vTime || '6pm').match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+              if (_tMatch) {
+                let h = parseInt(_tMatch[1]);
+                const m = _tMatch[2] || '00';
+                const ampm = (_tMatch[3] || '').toLowerCase();
+                if (ampm === 'pm' && h < 12) h += 12;
+                if (ampm === 'am' && h === 12) h = 0;
+                _bookTime24 = `${h.toString().padStart(2,'0')}:${m}`;
+              }
+              const _party = _vPartySize || '2';
+              if (/sevenrooms\.com/i.test(currentPageUrl)) {
+                // SevenRooms: ?date=YYYY-MM-DD&time=HH:MM&party_size=N
+                const url = new URL(currentPageUrl);
+                url.searchParams.set('date', _bookDate);
+                url.searchParams.set('time', _bookTime24);
+                url.searchParams.set('party_size', _party);
+                console.log(`[BOOKING-PREFILL] SevenRooms: navigating to ${url.toString()}`);
+                await visionPage.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+                await visionPage.waitForTimeout(2000);
+              } else if (/opentable\.com/i.test(currentPageUrl)) {
+                // OpenTable: ?dateTime=YYYY-MM-DDTHH:MM&covers=N
+                const url = new URL(currentPageUrl);
+                url.searchParams.set('dateTime', `${_bookDate}T${_bookTime24}`);
+                url.searchParams.set('covers', _party);
+                console.log(`[BOOKING-PREFILL] OpenTable: navigating to ${url.toString()}`);
+                await visionPage.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+                await visionPage.waitForTimeout(2000);
+              } else if (/resy\.com/i.test(currentPageUrl)) {
+                // Resy: ?date=YYYY-MM-DD&seats=N
+                const url = new URL(currentPageUrl);
+                url.searchParams.set('date', _bookDate);
+                url.searchParams.set('seats', _party);
+                console.log(`[BOOKING-PREFILL] Resy: navigating to ${url.toString()}`);
+                await visionPage.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+                await visionPage.waitForTimeout(2000);
+              }
+            } catch { /* non-critical — vision agent will fill manually */ }
+          }
           const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy, phone=604-000-0000. Complete the task fully on the page.${_vBookingCtx}${visionLearnings}`;
 
           visionAgentInvocations++;
