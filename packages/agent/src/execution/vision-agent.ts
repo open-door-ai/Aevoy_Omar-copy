@@ -162,13 +162,16 @@ async function waitForSpaStable(page: Page, maxMs = 2500): Promise<void> {
 
 /**
  * Click an element by its numeric index.
- * 3-strategy cascade (browser-use style):
- *   1. Playwright mouse.click() at center coordinates — fires all native mouse events
- *   2. JavaScript element.click() — fires synthetic click, works when coords fail
- *   3. History warning injected if page is unchanged after both strategies
+ * CDP-first approach (browser-use / Manus style):
+ *   1. CDP Input.dispatchMouseEvent — bypasses ALL Playwright abstractions, direct browser input
+ *   2. Playwright mouse.down/up fallback — if CDP session unavailable
+ *   3. JS element.click() — last resort for elements that ignore mouse events
+ *
+ * CDP is what browser-use switched to after finding Playwright clicks unreliable on SPAs.
+ * It sends events directly to the browser's input pipeline — no hit-test, no actionability checks.
  */
 async function clickByIndex(page: Page, index: number): Promise<boolean> {
-  // Get element position (scroll into view first)
+  // Get element position + focus it (scroll into view first)
   const pos = await page.evaluate(([idx, sel]: [number, string]) => {
     const interactive = Array.from(document.querySelectorAll(sel)).filter(el => {
       const r = el.getBoundingClientRect();
@@ -179,6 +182,8 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
     const el = interactive[idx] as HTMLElement | undefined;
     if (!el) return null;
     el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    // Focus the element (helps with React hydrated components)
+    if (typeof el.focus === 'function') el.focus();
     const rect = el.getBoundingClientRect();
     return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => null);
@@ -199,23 +204,37 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
     }, [index, INTERACTIVE_SELECTOR] as [number, string]).catch(() => false);
   }
 
-  // Human-like mouse movement before click (bezier curve path)
-  try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
-  await page.waitForTimeout(30 + Math.floor(Math.random() * 50)); // 30-80ms aim delay
+  // Small jitter (+/- 3px) — humans don't click dead center
+  const x = pos.x + (Math.random() - 0.5) * 6;
+  const y = pos.y + (Math.random() - 0.5) * 6;
 
-  // Slight position jitter — humans don't click dead center (+/- 3px)
-  const jitterX = pos.x + (Math.random() - 0.5) * 6;
-  const jitterY = pos.y + (Math.random() - 0.5) * 6;
-
-  // Strategy 1: Real mouse click — mousedown → realistic hold → mouseup → click
+  // Strategy 1: CDP direct Input.dispatchMouseEvent (browser-use approach)
+  // Bypasses Playwright's actionability checks, hit-testing, and Node.js relay entirely.
   try {
-    await page.mouse.move(jitterX, jitterY);
+    const cdp = await (page.context() as any).newCDPSession(page);
+    try {
+      // Move → Press → Release (what browser-use does)
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left' });
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await page.waitForTimeout(30 + Math.floor(Math.random() * 60)); // 30-90ms hold
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+      await cdp.detach().catch(() => {});
+      return true;
+    } catch (cdpErr) {
+      await cdp.detach().catch(() => {});
+      // Fall through to Strategy 2
+    }
+  } catch { /* CDP session creation failed — fall through */ }
+
+  // Strategy 2: Playwright mouse (fallback if CDP unavailable)
+  try {
+    await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.waitForTimeout(40 + Math.floor(Math.random() * 80)); // 40-120ms hold (humans hold 50-150ms)
+    await page.waitForTimeout(30 + Math.floor(Math.random() * 60));
     await page.mouse.up();
     return true;
   } catch {
-    // Strategy 2: JavaScript .click() (fires synthetic click — bypasses coordinate issues)
+    // Strategy 3: JS click (last resort)
     return page.evaluate(([idx, sel]: [number, string]) => {
       const els = Array.from(document.querySelectorAll(sel)).filter(el => {
         const r = el.getBoundingClientRect();
@@ -1271,15 +1290,23 @@ export async function runVisionAgent(
             const y = parseInt(action.text!);
             const caUrlBefore = activePage.url();
             const caCountBefore = elements?.length || 0;
-            // Slight jitter for human-like targeting (+/- 2px)
             const caJX = x + (Math.random() - 0.5) * 4;
             const caJY = y + (Math.random() - 0.5) * 4;
-            try { await humanMouseMove(activePage, caJX, caJY); } catch { /* non-critical */ }
-            // Real mousedown → hold → mouseup (not instant synthetic click)
-            await activePage.mouse.move(caJX, caJY);
-            await activePage.mouse.down();
-            await activePage.waitForTimeout(40 + Math.floor(Math.random() * 80)); // 40-120ms hold
-            await activePage.mouse.up();
+            // CDP direct click (same as clickByIndex Strategy 1)
+            try {
+              const cdp2 = await (activePage.context() as any).newCDPSession(activePage);
+              await cdp2.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: caJX, y: caJY, button: 'left' });
+              await cdp2.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: caJX, y: caJY, button: 'left', clickCount: 1 });
+              await activePage.waitForTimeout(30 + Math.floor(Math.random() * 60));
+              await cdp2.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: caJX, y: caJY, button: 'left', clickCount: 1 });
+              await cdp2.detach().catch(() => {});
+            } catch {
+              // Fallback to Playwright mouse
+              await activePage.mouse.move(caJX, caJY);
+              await activePage.mouse.down();
+              await activePage.waitForTimeout(30 + Math.floor(Math.random() * 60));
+              await activePage.mouse.up();
+            }
             await activePage.waitForLoadState('domcontentloaded').catch(() => {});
             await waitForSpaStable(activePage, 1200);
             // Post-click: if page unchanged, try full pointer+mouse event dispatch at coords

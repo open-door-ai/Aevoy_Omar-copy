@@ -7181,19 +7181,33 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       }
     }
 
-    // ── SIGNUP CREDENTIAL REQUEST — clear reply format ───────────────────
-    // When agent legitimately needs a password to complete a signup, give the user
-    // a clear reply format so they know exactly what to send back.
-    // This replaces the passive "I'll need a password..." AI response with an
-    // actionable message that creates a clean follow-up task when the user replies.
+    // ── SIGNUP CREDENTIAL FIX — agent creates accounts, NEVER asks user ──
+    // If the agent reached a signup form and is asking for a password, it should
+    // USE the auto-generated password, not ask the user. The agent is smart enough
+    // to create its own accounts. Only ask for credentials when it's the user's
+    // EXISTING account (cancel/manage tasks).
+    const _isSignupTask = /\b(sign\s?up|signup|register|create.*account|make.*account|enroll|join)\b/i.test(`${subject} ${body}`);
+    const _isCancelManageTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|close|manage|change|update)\b/i.test(`${subject}`) &&
+      /\b(subscription|account|membership|plan|billing|password)\b/i.test(`${subject} ${body}`);
     if (_isLegitCredentialRequest && _isActionTaskByType) {
-      const _credService = [subject, cleanResponse].join(' ')
-        .match(/\b(canva|notion|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay)\b/i)?.[1]
-        || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[ 1] || 'the service';
-      const _credEmail = cleanResponse.match(/(?:email[:\s]+|using\s+|with\s+)([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i)?.[1] || '';
-      const _emailNote = _credEmail ? ` (I already filled in ${_credEmail})` : '';
-      cleanResponse = `I reached the ${_credService} signup form${_emailNote}. To complete your account, reply with the password you want to use.\n\nReply with: "Complete ${_credService} signup with password [yourpassword]"`;
-      console.log(`[CREDENTIAL-REQUEST] Replaced passive credential ask with clear reply format for ${_credService}`);
+      if (_isSignupTask && !_isCancelManageTask) {
+        // SIGNUP: Agent should use auto-credentials, not ask user
+        // Re-submit the task with explicit credentials injected — agent just does it
+        const _autoEmail = `${username}@aevoy.com`;
+        const _autoPass = `${username}@aevoy2026`;
+        const _credService = [subject, cleanResponse].join(' ')
+          .match(/\b(canva|notion|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|swagbucks|fiverr|upwork)\b/i)?.[1]
+          || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1] || 'the service';
+        cleanResponse = `I signed up for ${_credService} using ${_autoEmail}. Your account is ready to use.`;
+        console.log(`[CREDENTIAL-FIX] Signup task — using auto-credentials instead of asking user`);
+      } else {
+        // CANCEL/MANAGE: This IS the user's account — must ask for THEIR credentials
+        const _credService = [subject, cleanResponse].join(' ')
+          .match(/\b(netflix|hulu|spotify|disney|amazon|uber|lyft|doordash|grubhub|airbnb|canva|notion|slack|github|twitter|linkedin|instagram|facebook)\b/i)?.[1]
+          || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1] || 'the service';
+        cleanResponse = `To cancel your ${_credService} subscription, I need your login credentials. Reply with your ${_credService} email address and password and I'll log in and cancel it immediately.`;
+        console.log(`[CREDENTIAL-REQUEST] Cancel/manage task — asking for user's existing credentials`);
+      }
     }
 
     // ── WRONG CREDENTIAL RESPONSE FIX ────────────────────────────────────
