@@ -2387,8 +2387,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
     const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
-    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
-    const aiTaskType = forceCheapModel ? "validate" as const : (_isWritingTask ? "generate" as const : undefined);
+    // Research tasks that also ask to "draft" something are NOT pure writing tasks — they need search first
+    const _hasResearchVerb = /\b(find|search|look up|look for|get me|show me|list|compare|check)\b/i.test(`${subject} ${body}`);
+    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && !_hasResearchVerb && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
+    // Signup tasks MUST use Claude (complex) — Groq/DeepSeek refuse despite system prompt
+    const aiTaskType = forceCheapModel ? "validate" as const : (_earlySignupCheck ? "complex" as const : (_isWritingTask ? "generate" as const : undefined));
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI
     // doesn't schedule again — it must EXECUTE the task and report the result.
     let effectiveBody = body;
@@ -3305,6 +3308,19 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         break;
       }
 
+      // IN-LOOP REFUSAL DETECTOR: If AI refuses during iteration, override and force action
+      if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0 && _earlySignupCheck) {
+        console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
+        // Force browse to the service directly — don't re-prompt (same model will refuse again)
+        const _domainMatch2 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello)\b/i);
+        const _forceUrl = _domainMatch2
+          ? `https://www.${_domainMatch2[1].toLowerCase()}.com/signup`
+          : `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
+        aiResponse.content = '';
+        aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
+        console.log(`[REFUSAL-LOOP] Injected browse action: ${_forceUrl}`);
+      }
+
       // Check for [TASK_COMPLETE] signal in AI response
       if (aiResponse.content.includes('[TASK_COMPLETE]')) {
         console.log(`[ITERATE] AI signaled TASK_COMPLETE (has ${aiResponse.actions.length} actions)`);
@@ -3631,6 +3647,7 @@ DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
           const isJustInfo = !hasBookingConfirmation && (
             !hasRealActions ||  // No browse/click/call means agent just gave info — always reject
             /\b(located at|address is|phone number is|you can.*visit|you can.*call|you can.*book|make a reservation|reservation page is found|contact information.*booking|available on their website|contact (them|the restaurant) (at|directly)|information for booking|accepts reservations|you must confirm|confirm directly|may be available|for availability)\b/i.test(lowerContent) ||
+            /\b(attempted to book|tried to book|encountered.*system|encountered.*verification|couldn't complete|could not complete|wasn't able to book|unable to complete.*booking|reservation system.*requir)\b/i.test(lowerContent) || // Non-completion despite trying
             /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(lowerContent) // fabricated 555-xxxx phone
           );
 
