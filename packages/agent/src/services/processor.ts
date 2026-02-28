@@ -1396,7 +1396,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       /\b(graphic|image|logo|banner|poster)\b.{0,40}\b(for|to post|to share)\b/i.test(_earlyImgText)
     ) && !/\b(spreadsheet|excel|word document|powerpoint|business card|pdf|html|website|code)\b/i.test(_earlyImgText);
 
-    if (_earlyIsImage && process.env.GOOGLE_API_KEY) {
+    if (_earlyIsImage) {
       console.log(`[IMAGE-FAST-PATH] Detected image creation task — generating directly via Gemini`);
       try {
         const _ifpPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please|can you)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for print and digital use.`;
@@ -1412,6 +1412,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         let _ifpModel = '';
 
         for (const _m of _ifpModels) {
+          if (!process.env.GOOGLE_API_KEY) break;
           try {
             const _ifpUrl = `https://generativelanguage.googleapis.com/v1beta/models/${_m}:generateContent`;
             console.log(`[IMAGE-FAST-PATH] Trying model: ${_m}`);
@@ -1446,11 +1447,26 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           }
         }
 
+        // Pollinations.ai fallback — free, no API key needed
         if (!_ifpBase64) {
-          // Log which models failed so we can debug
-          const _ifpFailMsg = `[IMAGE-FAST-PATH-FAIL] All Gemini image models exhausted/unavailable`;
-          console.error(_ifpFailMsg);
-          void getSupabaseClient().from('tasks').update({ stuck_reason: _ifpFailMsg }).eq('id', taskId);
+          console.warn(`[IMAGE-FAST-PATH] All Gemini models quota exhausted — trying Pollinations.ai`);
+          try {
+            const _polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(_ifpPrompt)}?width=1024&height=1024&nologo=true`;
+            const _polResp = await fetch(_polUrl, { redirect: 'follow' });
+            if (_polResp.ok) {
+              const _polBuffer = Buffer.from(await _polResp.arrayBuffer());
+              if (_polBuffer.length > 5000) { // Valid image should be >5KB
+                _ifpBase64 = _polBuffer.toString('base64');
+                _ifpMime = 'image/jpeg';
+                _ifpModel = 'pollinations-flux';
+                console.log(`[IMAGE-FAST-PATH] Pollinations.ai succeeded (${_polBuffer.length} bytes)`);
+              }
+            } else {
+              console.warn(`[IMAGE-FAST-PATH] Pollinations.ai failed: ${_polResp.status}`);
+            }
+          } catch (_polErr) {
+            console.warn(`[IMAGE-FAST-PATH] Pollinations.ai error:`, _polErr);
+          }
         }
 
         if (_ifpBase64) {
@@ -1467,8 +1483,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           const _ifpAgentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
           const _ifpImageUrl = `${_ifpAgentUrl}/files/images/${_ifpFilename}`;
 
-          // Track cost
-          trackServiceCost(userId, 'google', _ifpModel, 0.039, 'image_generation').catch(() => {});
+          // Track cost (Pollinations is free, Gemini is $0.039)
+          const _ifpCost = _ifpModel.includes('pollinations') ? 0 : 0.039;
+          trackServiceCost(userId, _ifpModel.includes('pollinations') ? 'pollinations' : 'google', _ifpModel, _ifpCost, 'image_generation').catch(() => {});
 
           const _ifpResponse = `Image generated successfully!\n\n**Download:** ${_ifpImageUrl}\n\nThe image has been created based on your request. Let me know if you'd like adjustments.`;
 
@@ -1479,7 +1496,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             response_text: _ifpResponse,
             action_count: 1,
             action_success_count: 1,
-            cost_usd: 0.039,
+            cost_usd: _ifpCost,
           }).eq('id', taskId);
 
           if (!task.suppressEmail) {
@@ -1489,8 +1506,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           console.log(`[IMAGE-FAST-PATH] Generated: ${_ifpImageUrl} (model: ${_ifpModel})`);
           return { taskId, success: true, response: _ifpResponse, actions: [] };
         } else {
-          console.warn(`[IMAGE-FAST-PATH] All models failed — falling through to AI processing`);
-          // Fall through to normal processing
+          // All providers failed — return clear error instead of searching stock photos
+          const _ifpErrResponse = `I wasn't able to generate the image right now (all image generation providers are temporarily unavailable). Please try again in a few minutes.`;
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - startTime,
+            response_text: _ifpErrResponse,
+          }).eq('id', taskId);
+          if (!task.suppressEmail) {
+            await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, _ifpErrResponse);
+          }
+          clearTimeout(masterTimer);
+          console.error(`[IMAGE-FAST-PATH] All providers failed — returning error`);
+          return { taskId, success: false, response: _ifpErrResponse, actions: [] };
         }
       } catch (_ifpErr) {
         console.error(`[IMAGE-FAST-PATH] Error:`, _ifpErr);
@@ -8730,9 +8759,6 @@ async function executeAction(
       };
       try {
         const googleKey = process.env.GOOGLE_API_KEY;
-        if (!googleKey) {
-          return { action, success: false, error: "Image generation not available — GOOGLE_API_KEY not set" };
-        }
 
         // Map DALL-E sizes to Gemini aspect ratios
         const aspectMap: Record<string, string> = {
@@ -8753,14 +8779,19 @@ async function executeAction(
         let _imgMime = 'image/png';
         let _usedModel = '';
 
+        if (!googleKey) {
+          console.warn("[GENERATE_IMAGE] No GOOGLE_API_KEY — skipping Gemini, will try Pollinations");
+        }
+
         for (const _model of _imageModels) {
+          if (!googleKey) break;
           try {
             const _genUrl = `https://generativelanguage.googleapis.com/v1beta/models/${_model}:generateContent`;
             console.log(`[GENERATE_IMAGE] Trying model: ${_model}`);
             const _genResp = await fetch(_genUrl, {
               method: "POST",
               headers: {
-                "x-goog-api-key": googleKey,
+                "x-goog-api-key": googleKey!,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({
@@ -8811,9 +8842,31 @@ async function executeAction(
           }
         }
 
+        // Pollinations.ai fallback — free, no API key needed
         if (!_imgBase64) {
-          console.error("[GENERATE_IMAGE] All models failed to generate image");
-          return { action, success: false, error: "Image generation failed — all models quota exhausted or unavailable. Try again later." };
+          console.warn("[GENERATE_IMAGE] All Gemini models failed — trying Pollinations.ai");
+          try {
+            const _polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${size === '1792x1024' ? 1792 : 1024}&height=${size === '1024x1792' ? 1792 : 1024}&nologo=true`;
+            const _polResp = await fetch(_polUrl, { redirect: 'follow' });
+            if (_polResp.ok) {
+              const _polBuf = Buffer.from(await _polResp.arrayBuffer());
+              if (_polBuf.length > 5000) {
+                _imgBase64 = _polBuf.toString('base64');
+                _imgMime = 'image/jpeg';
+                _usedModel = 'pollinations-flux';
+                console.log(`[GENERATE_IMAGE] Pollinations.ai succeeded (${_polBuf.length} bytes)`);
+              }
+            } else {
+              console.warn(`[GENERATE_IMAGE] Pollinations.ai failed: ${_polResp.status}`);
+            }
+          } catch (_polErr) {
+            console.warn("[GENERATE_IMAGE] Pollinations.ai error:", _polErr);
+          }
+        }
+
+        if (!_imgBase64) {
+          console.error("[GENERATE_IMAGE] All providers failed to generate image");
+          return { action, success: false, error: "Image generation failed — all providers unavailable. Try again later." };
         }
 
         // Save to /tmp/aevoy-files/images/ so it's served at /files/images/...
@@ -8831,9 +8884,9 @@ async function executeAction(
         const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
         const imageUrl = `${agentUrl}/files/images/${filename}`;
 
-        // Track cost
-        const imgCost = 0.039;
-        trackServiceCost(userId, "google", _usedModel, imgCost, "image_generation").catch(() => {});
+        // Track cost (Pollinations is free, Gemini is $0.039)
+        const imgCost = _usedModel.includes('pollinations') ? 0 : 0.039;
+        trackServiceCost(userId, _usedModel.includes('pollinations') ? 'pollinations' : "google", _usedModel, imgCost, "image_generation").catch(() => {});
         console.log(`[GENERATE_IMAGE] Image saved: ${filePath} → ${imageUrl} (model: ${_usedModel}, cost: $${imgCost})`);
         return {
           action,
