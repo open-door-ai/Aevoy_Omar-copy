@@ -2828,18 +2828,14 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
       // EXCLUDE research tasks — "find out how to cancel" doesn't need login
       !isResearchTask;
     if (isCredentialTask) {
-      // Check if we have stored credentials for this service
+      // Check if we have SERVICE-SPECIFIC credentials (not just generic agent passwords)
+      // Generic agent_passwords are for NEW signups — not for logging into existing services
       const serviceDomain = classification.domains?.[0] || '';
       let hasCredentials = false;
       try {
-        const { data: passwords } = await getSupabaseClient()
-          .from('profiles')
-          .select('agent_passwords_encrypted')
-          .eq('id', userId)
-          .single();
-        hasCredentials = !!(passwords?.agent_passwords_encrypted);
-        if (!hasCredentials && serviceDomain) {
-          // Also check credential_vault for service-specific logins
+        // Only check credential_vault for service-specific logins (Netflix, Hulu, etc.)
+        // Generic agent_passwords do NOT count — they won't help cancel Netflix
+        if (serviceDomain) {
           const { data: vaultCreds } = await getSupabaseClient()
             .from('credential_vault')
             .select('id')
@@ -7226,7 +7222,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // "page available at https://... where you can create/sign up" — giving a link to do it yourself
         /https?:\/\/[^\s]{10,}\s.{0,60}\bwhere (you can|you'll|you should|you need to)\b/i.test(cleanResponse) ||
         // "[service] page is available at https://..." — never do tasks by giving URLs
-        /\b(?:page|site|form|portal)\b.{0,30}https?:\/\//i.test(cleanResponse) ||
+        /\b(?:page|site|website|form|portal)\b.{0,30}https?:\/\//i.test(cleanResponse) ||
         // "such as [Service] (https://...)" — recommending services instead of using them
         /\bsuch as\b.{0,40}https?:\/\//i.test(cleanResponse) ||
         // "requires selecting/choosing/visiting" — telling user what to do instead of doing it
@@ -7245,6 +7241,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         /\b(phone|contact|number|tel)[:\s]+\(?\d{3}\)?[-.\s]?\d{3}/i.test(cleanResponse) ||
         // Booking advice patterns: "you must confirm directly", "accepts reservations online", "may be available"
         /\b(you must confirm|confirm directly|accepts reservations|may be available|availability.*may)\b/i.test(cleanResponse) ||
+        // Passive voice advice: "can be canceled/booked/done through" — agent describing HOW instead of DOING
+        /\bcan be (cancel|cancell|book|reserv|subscrib|access|manag|done|complet|achiev)\w*\b.{0,30}\b(through|via|on|at|by|from)\b/i.test(cleanResponse) ||
+        // "Users/customers sign in" — generic third-person instructions
+        /\b(users|customers|subscribers|members) (can|should|need to|must|sign|log|have to|will need)\b/i.test(cleanResponse) ||
+        // "[service] website/app at https://" — "website" was missing from the URL pattern
+        /\b(website|app|application|service)\b.{0,30}https?:\/\//i.test(cleanResponse) ||
+        // "to stop/manage/cancel their/your subscription/membership" — how-to framing
+        /\bto (stop|manage|cancel|pause|end|terminate) (their|your|the) (subscription|membership|account|plan|billing)\b/i.test(cleanResponse) ||
         // Fabricated phone numbers: 555-xxxx is the Hollywood fake number range
         /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
