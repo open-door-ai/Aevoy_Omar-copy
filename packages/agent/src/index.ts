@@ -499,7 +499,7 @@ app.get("/debug/voice-twiml", (req, res) => {
   const defaultVoice = process.env.ELEVENLABS_DEFAULT_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
   res.json({
     conversationRelay: USE_CONVERSATION_RELAY,
-    sampleTwiml: `<ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${defaultVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?" />`,
+    sampleTwiml: `<ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${defaultVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="Hey! What can I help you with?" />`,
   });
 });
 
@@ -1060,7 +1060,7 @@ app.post("/webhook/voice/demo-outbound", async (req, res) => {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escGreeting}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escGreeting}">
       <Parameter name="userId" value="${effectiveUserId}" />
       <Parameter name="callType" value="${effectiveCallType}" />
       <Parameter name="callerNumber" value="${callerNumber}" />
@@ -1112,7 +1112,7 @@ app.post("/webhook/voice/outbound-twiml", async (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escGreeting}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escGreeting}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="callback" />
     </ConversationRelay>
@@ -1158,7 +1158,7 @@ app.post("/webhook/voice/external-call-twiml", async (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escGreeting}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escGreeting}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="external_call" />
       <Parameter name="contextKey" value="${contextKey}" />
@@ -1251,7 +1251,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(effectiveGreeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${DEMO_VOICE}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escapeXml(effectiveGreeting)}">
       <Parameter name="userId" value="${effectiveUserId}" />
       <Parameter name="callType" value="${effectiveCallType}" />
       <Parameter name="callerNumber" value="${callerNumber}" />
@@ -1452,7 +1452,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
@@ -1591,7 +1591,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
@@ -2220,7 +2220,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="Hey! What can I help you with?">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="Hey! What can I help you with?">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="task" />
     </ConversationRelay>
@@ -2599,7 +2599,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escapeXml(greeting)}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${elevenlabsVoice}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escapeXml(greeting)}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="${checkinCallType}" />
     </ConversationRelay>

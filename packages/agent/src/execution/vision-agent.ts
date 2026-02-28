@@ -1131,7 +1131,7 @@ export async function runVisionAgent(
         const doneResult = action.result || '';
         // PASSIVE DONE REJECTION: If DONE says "want me to", "I'll need", etc.
         // it means the AI described what it COULD do instead of DOING it. Force continue.
-        const isPassiveDone = /want me to|i['']ll need|would you like|shall i|let me know|i need your|please provide|do you want|can i proceed|should i|could you|please tell me/i.test(doneResult);
+        const isPassiveDone = /want me to|i['']ll need|would you like|shall i|let me know|i need your|please provide|do you want|can i proceed|should i|could you|please tell me|start the (sign.?up|process|registration|booking|order)|ready to (start|begin|proceed)|i can (help|assist) (you )?(with|to)|if you('d| would) like/i.test(doneResult);
         // GENERIC ADVICE DONE REJECTION: If DONE describes what COULD be done instead of
         // what WAS done, it's advice not completion. Reject and force the agent to keep acting.
         // This is NOT hardcoded per task type — it catches advice patterns universally.

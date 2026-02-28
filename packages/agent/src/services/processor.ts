@@ -7126,7 +7126,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     if (cleanResponse && _passivePatterns.test(cleanResponse) && !_isLegitCredentialRequest) {
       const _firstPassiveIdx = cleanResponse.search(_passivePatterns);
       const _textBeforePassive = cleanResponse.substring(0, _firstPassiveIdx);
-      const _isTrailingProactive = _firstPassiveIdx > 80 && !_passivePatterns.test(_textBeforePassive);
+      const _isTrailingProactive = _firstPassiveIdx > 30 && !_passivePatterns.test(_textBeforePassive);
       if (_isTrailingProactive) {
         // Strip just the trailing passive sentence — the rest of the response is good
         // Handles both inline ("Found X. Want me to...") and newline-separated ("\n\nWant me to...")
@@ -7138,7 +7138,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       }
     }
 
-    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !signupAutoCompleted && !_isLegitCredentialRequest) {
+    if (cleanResponse && _passivePatterns.test(cleanResponse) && _isBrowserActionTask && !_isLegitCredentialRequest) {
       console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
       // Determine failure context for a better rewrite prompt
       const _isBotBlocked = visionAgentInvocations >= 2 && lastVisionFailed;

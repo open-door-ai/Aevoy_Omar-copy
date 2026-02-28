@@ -35,6 +35,8 @@ interface VoiceSession {
   ws: WebSocket;
   startedAt: number;
   lastActivityAt: number;
+  lastResponseAt: number;  // When the last agent response was sent (for echo detection)
+  lastResponseText: string; // Last agent response text (for echo comparison)
   callType: string;
   // Memory context loaded at session start
   memoryContext: string;
@@ -212,7 +214,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     sessionId, callSid: callSid || '', userId, userName: 'there', userEmail: '',
     botName: 'Aevoy', greetingStyle: 'casual', timezone: 'America/Los_Angeles',
     conversationHistory: [], state: 'setup', pinAttempts: 0, pinDigits: '',
-    ws, startedAt: Date.now(), lastActivityAt: Date.now(), callType, memoryContext: '', userProfile: '',
+    ws, startedAt: Date.now(), lastActivityAt: Date.now(), lastResponseAt: 0, lastResponseText: '', callType, memoryContext: '', userProfile: '',
   };
   activeSessions.set(sessionId, placeholderSession);
 
@@ -449,6 +451,24 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
 
   session.lastActivityAt = Date.now();
 
+  // ── ECHO DETECTION ──────────────────────────────────────────────────────
+  // When TTS plays through the phone speaker, the microphone can pick it up.
+  // Deepgram STT may transcribe the echo as a "prompt" event. Detect and ignore.
+  // Check 1: Prompt arrives < 2s after we sent a response → likely echo
+  // Check 2: Prompt text substantially matches what the agent just said → definite echo
+  const timeSinceLastResponse = session.lastResponseAt > 0 ? Date.now() - session.lastResponseAt : Infinity;
+  if (timeSinceLastResponse < 2000 && voicePrompt && voicePrompt.length < 60) {
+    // Short utterance right after agent spoke — check for echo similarity
+    const echoSimilarity = session.lastResponseText
+      ? (session.lastResponseText.toLowerCase().includes(voicePrompt.toLowerCase().trim()) ||
+         voicePrompt.toLowerCase().trim().split(' ').filter((w: string) => session.lastResponseText.toLowerCase().includes(w)).length > voicePrompt.split(' ').length * 0.5)
+      : false;
+    if (echoSimilarity || timeSinceLastResponse < 800) {
+      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} ECHO DETECTED (${timeSinceLastResponse}ms after response, similarity=${echoSimilarity}): "${voicePrompt.slice(0, 50)}"`);
+      return;
+    }
+  }
+
   // If session is still loading (race condition: user responded before handleSetup finished)
   // Just acknowledge — once state becomes "ready", the normal conversation flow continues.
   if (session.state === "setup") {
@@ -517,15 +537,17 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       return;
     }
 
-    // Send a "thinking" hold message if AI takes > 2s — keeps the WebSocket alive
-    // and prevents Twilio ConversationRelay from dropping the connection due to silence
+    // Send a "thinking" hold message if AI takes > 4s — keeps the WebSocket alive
+    // and prevents Twilio ConversationRelay from dropping the connection due to silence.
+    // Uses 4s threshold (was 2s) to avoid sending thinking message for fast responses.
+    // Sends as last:true, then clears the queue before sending the real response.
     let thinkingSent = false;
     const thinkingTimer = setTimeout(() => {
       if (session.ws.readyState === WebSocket.OPEN) {
         session.ws.send(JSON.stringify({ type: "text", token: "Hmm, let me think about that...", last: true }));
         thinkingSent = true;
       }
-    }, 2000);
+    }, 4000);
 
     const rawResponse = await generateVoiceResponse(session.userId || "demo", voicePrompt, session.conversationHistory, {
       userName: session.userName,
@@ -538,6 +560,12 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     });
 
     clearTimeout(thinkingTimer); // Cancel thinking message if AI responded in time
+
+    // If thinking message was already sent, clear the TTS queue before sending real response
+    // This prevents the thinking message from playing over the actual response
+    if (thinkingSent && session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(JSON.stringify({ type: "clear" }));
+    }
 
     // Extract [REMEMBER:...] and [SAVE:...] tags before sending to TTS
     const { response, memories, saves } = extractMemoryTags(rawResponse);
@@ -580,6 +608,10 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       token: cleanedResponse,
       last: true,
     }));
+
+    // Track response timing for echo detection
+    session.lastResponseAt = Date.now();
+    session.lastResponseText = cleanedResponse;
 
     console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} assistant: "${response.slice(0, 80)}"`);
 
