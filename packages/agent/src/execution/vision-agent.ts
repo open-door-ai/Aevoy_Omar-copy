@@ -201,11 +201,18 @@ async function clickByIndex(page: Page, index: number): Promise<boolean> {
 
   // Human-like mouse movement before click (bezier curve path)
   try { await humanMouseMove(page, pos.x, pos.y); } catch { /* non-critical */ }
-  await page.waitForTimeout(30 + Math.floor(Math.random() * 50)); // 30-80ms aim delay (speed optimized)
+  await page.waitForTimeout(30 + Math.floor(Math.random() * 50)); // 30-80ms aim delay
 
-  // Strategy 1: Playwright mouse click (fires mouseenter, mousedown, mouseup, click events)
+  // Slight position jitter — humans don't click dead center (+/- 3px)
+  const jitterX = pos.x + (Math.random() - 0.5) * 6;
+  const jitterY = pos.y + (Math.random() - 0.5) * 6;
+
+  // Strategy 1: Real mouse click — mousedown → realistic hold → mouseup → click
   try {
-    await page.mouse.click(pos.x, pos.y);
+    await page.mouse.move(jitterX, jitterY);
+    await page.mouse.down();
+    await page.waitForTimeout(40 + Math.floor(Math.random() * 80)); // 40-120ms hold (humans hold 50-150ms)
+    await page.mouse.up();
     return true;
   } catch {
     // Strategy 2: JavaScript .click() (fires synthetic click — bypasses coordinate issues)
@@ -1215,7 +1222,7 @@ export async function runVisionAgent(
                   await waitForSpaStable(activePage, 1500);
                   const countAfterJs = await getInteractiveCount(activePage);
                   if (Math.abs(countAfterJs - countBeforeClick) < 2 && activePage.url() === urlBeforeClick) {
-                    // Strategy 4: Force click (ignore overlay/pointer-events)
+                    // Strategy 4: Force click with full pointer + mouse event sequence
                     await activePage.evaluate(([idx, sel]: [number, string]) => {
                       const els = Array.from(document.querySelectorAll(sel)).filter(el => {
                         const r = el.getBoundingClientRect();
@@ -1224,16 +1231,18 @@ export async function runVisionAgent(
                       });
                       const el = els[idx] as HTMLElement | undefined;
                       if (!el) return;
-                      // Dispatch complete mouse event sequence directly
                       const rect = el.getBoundingClientRect();
-                      const cx = rect.left + rect.width / 2;
-                      const cy = rect.top + rect.height / 2;
-                      for (const evType of ['mousedown', 'mouseup', 'click'] as const) {
-                        el.dispatchEvent(new MouseEvent(evType, {
-                          bubbles: true, cancelable: true, view: window,
-                          clientX: cx, clientY: cy, button: 0,
-                        }));
-                      }
+                      const cx = rect.left + rect.width / 2 + (Math.random() - 0.5) * 4;
+                      const cy = rect.top + rect.height / 2 + (Math.random() - 0.5) * 4;
+                      const evOpts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0, pointerId: 1, pointerType: 'mouse' as const, isPrimary: true, width: 1, height: 1, pressure: 0.5 };
+                      // Pointer events first (React/Angular/Vue listen to these)
+                      el.dispatchEvent(new PointerEvent('pointerdown', evOpts));
+                      el.dispatchEvent(new MouseEvent('mousedown', evOpts));
+                      // Focus the element if focusable
+                      if ('focus' in el && typeof (el as any).focus === 'function') (el as HTMLElement).focus();
+                      el.dispatchEvent(new PointerEvent('pointerup', evOpts));
+                      el.dispatchEvent(new MouseEvent('mouseup', evOpts));
+                      el.dispatchEvent(new MouseEvent('click', evOpts));
                     }, [action.index!, INTERACTIVE_SELECTOR] as [number, string]).catch(() => {});
                     await waitForSpaStable(activePage, 1000);
                     const countFinal = await getInteractiveCount(activePage);
@@ -1252,10 +1261,36 @@ export async function runVisionAgent(
           case 'click_at': {
             const x = action.index!;
             const y = parseInt(action.text!);
-            try { await humanMouseMove(activePage, x, y); } catch { /* non-critical */ }
-            await activePage.mouse.click(x, y);
+            const caUrlBefore = activePage.url();
+            const caCountBefore = elements?.length || 0;
+            // Slight jitter for human-like targeting (+/- 2px)
+            const caJX = x + (Math.random() - 0.5) * 4;
+            const caJY = y + (Math.random() - 0.5) * 4;
+            try { await humanMouseMove(activePage, caJX, caJY); } catch { /* non-critical */ }
+            // Real mousedown → hold → mouseup (not instant synthetic click)
+            await activePage.mouse.move(caJX, caJY);
+            await activePage.mouse.down();
+            await activePage.waitForTimeout(40 + Math.floor(Math.random() * 80)); // 40-120ms hold
+            await activePage.mouse.up();
             await activePage.waitForLoadState('domcontentloaded').catch(() => {});
             await waitForSpaStable(activePage, 1200);
+            // Post-click: if page unchanged, try full pointer+mouse event dispatch at coords
+            const caUrlAfter = activePage.url();
+            const caCountAfter = await getInteractiveCount(activePage);
+            if (caUrlAfter === caUrlBefore && Math.abs(caCountAfter - caCountBefore) < 2) {
+              await activePage.evaluate(([cx, cy]: [number, number]) => {
+                const target = document.elementFromPoint(cx, cy);
+                if (!target) return;
+                const evOpts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0, pointerId: 1, pointerType: 'mouse' as const, isPrimary: true, width: 1, height: 1, pressure: 0.5 };
+                target.dispatchEvent(new PointerEvent('pointerdown', evOpts));
+                target.dispatchEvent(new MouseEvent('mousedown', evOpts));
+                if ('focus' in target && typeof (target as any).focus === 'function') (target as HTMLElement).focus();
+                target.dispatchEvent(new PointerEvent('pointerup', evOpts));
+                target.dispatchEvent(new MouseEvent('mouseup', evOpts));
+                target.dispatchEvent(new MouseEvent('click', evOpts));
+              }, [x, y] as [number, number]).catch(() => {});
+              await waitForSpaStable(activePage, 1000);
+            }
             actionOk = true;
             break;
           }

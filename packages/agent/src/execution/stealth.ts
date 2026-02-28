@@ -370,27 +370,46 @@ export async function humanScroll(page: Page, direction: 'down' | 'up' = 'down')
   }
 }
 
+// Track last known cursor position across calls (per-page would be ideal but this is good enough)
+let _lastCursorX = -1;
+let _lastCursorY = -1;
+
 /**
- * Move the mouse in a somewhat realistic path before clicking.
- * Uses 3-point quadratic bezier instead of teleporting.
+ * Move the mouse in a realistic path before clicking.
+ * Uses quadratic bezier curve from LAST cursor position (not random).
+ * Tracks cursor position across calls for natural movement chains.
  */
 export async function humanMouseMove(page: Page, targetX: number, targetY: number): Promise<void> {
-  const steps = randomBetween(8, 20);
-  // Start from a random position (simulate existing cursor position)
-  let currentX = randomBetween(100, 800);
-  let currentY = randomBetween(100, 500);
-  // Control point for bezier curve (creates a natural arc)
-  const cpX = (currentX + targetX) / 2 + randomBetween(-100, 100);
-  const cpY = (currentY + targetY) / 2 + randomBetween(-80, 80);
+  const steps = randomBetween(6, 14); // Fewer steps = faster but still natural
+  // Start from last known position (first time: random)
+  let currentX = _lastCursorX >= 0 ? _lastCursorX : randomBetween(100, 800);
+  let currentY = _lastCursorY >= 0 ? _lastCursorY : randomBetween(100, 500);
+
+  // Skip movement if already very close to target (< 20px)
+  const dist = Math.sqrt((targetX - currentX) ** 2 + (targetY - currentY) ** 2);
+  if (dist < 20) {
+    await page.mouse.move(targetX, targetY);
+    _lastCursorX = targetX;
+    _lastCursorY = targetY;
+    return;
+  }
+
+  // Control point for bezier curve (creates a natural arc — smaller arc for short distances)
+  const arcScale = Math.min(dist * 0.3, 80);
+  const cpX = (currentX + targetX) / 2 + (Math.random() - 0.5) * arcScale;
+  const cpY = (currentY + targetY) / 2 + (Math.random() - 0.5) * arcScale;
 
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    // Quadratic bezier interpolation
-    const x = (1 - t) * (1 - t) * currentX + 2 * (1 - t) * t * cpX + t * t * targetX;
-    const y = (1 - t) * (1 - t) * currentY + 2 * (1 - t) * t * cpY + t * t * targetY;
+    // Ease-in-out (accelerate then decelerate — like real hand movement)
+    const tEased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    const x = (1 - tEased) * (1 - tEased) * currentX + 2 * (1 - tEased) * tEased * cpX + tEased * tEased * targetX;
+    const y = (1 - tEased) * (1 - tEased) * currentY + 2 * (1 - tEased) * tEased * cpY + tEased * tEased * targetY;
     await page.mouse.move(x, y);
-    await page.waitForTimeout(randomBetween(5, 25));
+    await page.waitForTimeout(randomBetween(4, 18)); // Slightly faster
   }
+  _lastCursorX = targetX;
+  _lastCursorY = targetY;
 }
 
 /** Get a random typing delay per character (ms). */
