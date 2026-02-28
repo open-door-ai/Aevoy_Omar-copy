@@ -2281,6 +2281,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
     }
 
+    // 6a4. IMAGE GENERATION INJECTION: If the task asks to create/make/design a graphic/image/logo
+    // and the AI didn't include a generate_image action, inject one. The AI often searches for
+    // Canva/Adobe instead of using the built-in generate_image tool.
+    const _isImageCreationTask = /\b(create|make|design|generate|produce|build)\b.{0,40}\b(graphic|image|logo|banner|poster|flyer|social media|instagram|facebook|twitter|thumbnail|icon|illustration|artwork|picture)\b/i.test(combinedQuery) ||
+      /\b(graphic|image|logo|banner|poster)\b.{0,40}\b(for|to post|to share)\b/i.test(combinedQuery);
+    const hasImageAction = aiResponse.actions.some(a => a.type === 'generate_image');
+    if (_isImageCreationTask && !hasImageAction && !_isDocumentAction) {
+      // Build a good prompt from the task description
+      const _imgPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for social media.`;
+      console.log(`[IMAGE-INJECT] Image creation task with no generate_image action — injecting generate_image`);
+      aiResponse.actions.push({ type: 'generate_image' as any, params: { prompt: _imgPrompt, size: '1024x1024' } });
+      // Remove [TASK_COMPLETE] so the loop processes the image generation
+      aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+    }
+
     // 6b. MISSING-ACTION GATE: If the task explicitly needs schedule/remember/campaign/email
     // but AI returned 0 matching actions, re-prompt or inject directly.
     const taskTextLower = `${subject} ${body}`.toLowerCase();
