@@ -533,7 +533,7 @@ async function selectByIndex(page: Page, index: number, value: string): Promise<
  * Take a JPEG screenshot for vision AI (quality 70).
  */
 async function takeScreenshot(page: Page): Promise<string> {
-  const buf = await page.screenshot({ type: 'jpeg', quality: 50 });
+  const buf = await page.screenshot({ type: 'jpeg', quality: 70 });
   return buf.toString('base64');
 }
 
@@ -947,14 +947,24 @@ export async function runVisionAgent(
             // Great — we found a confirmation! Let the AI wrap up with DONE
             history.push(`✅ CONFIRMATION DETECTED on page! Look for confirmation details and output DONE with the result.`);
           } else if (steps >= 20 && !hasFilledAnyField) {
-            // 20 steps without filling any form field — escalate to phone ASAP
-            const phoneMatch = pageText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-            const phoneNumber = phoneMatch ? phoneMatch[0].trim() : null;
-            const bailReason = phoneNumber
-              ? `CALL-GATE: Reservation widget too complex after ${steps} steps. Phone number found: ${phoneNumber}. Call the restaurant directly.`
-              : `CALL-GATE: Reservation widget too complex after ${steps} steps. Search for the restaurant phone number and call directly.`;
-            console.log(`[VISION-AGENT] Smart bail-out: ${bailReason}`);
-            return { success: false, error: bailReason, steps, cost: totalCost, screenshots };
+            // For ORDER tasks: clicking menu items / add-to-cart IS progress even without text field fills.
+            // Check if page URL suggests we're in an ordering flow (cart, menu, checkout).
+            const currentUrl = activePage.url().toLowerCase();
+            const _isInOrderFlow = /\b(cart|basket|order|menu|checkout|food|catego|product)\b/i.test(currentUrl) ||
+              /\b(cart|basket|order|menu|checkout|add to|item|quantity)\b/i.test(pageText.substring(0, 500));
+            if (_isInOrderFlow && isOrderingOrBookingTask) {
+              // Still in the ordering flow — keep going, don't bail
+              history.push(`⚠️ ${steps} steps without filling a text field, but you're in an ordering flow. Keep selecting items, adding to cart, and proceeding to checkout. Fill delivery details when you reach checkout.`);
+            } else {
+              // 20 steps without filling any form field — escalate to phone ASAP
+              const phoneMatch = pageText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+              const phoneNumber = phoneMatch ? phoneMatch[0].trim() : null;
+              const bailReason = phoneNumber
+                ? `CALL-GATE: Reservation widget too complex after ${steps} steps. Phone number found: ${phoneNumber}. Call the restaurant directly.`
+                : `CALL-GATE: Reservation widget too complex after ${steps} steps. Search for the restaurant phone number and call directly.`;
+              console.log(`[VISION-AGENT] Smart bail-out: ${bailReason}`);
+              return { success: false, error: bailReason, steps, cost: totalCost, screenshots };
+            }
           } else if (steps >= 15 && !hasReachedForm) {
             // 15 steps and haven't found any form — we're probably lost in navigation
             history.push(`⚠️ ${steps} steps and no reservation form found yet. STOP navigating — look for a "Reserve" or "Book" button and CLICK it NOW. If you can't find it, look for a phone number on the page.`);
