@@ -842,7 +842,7 @@ export async function runVisionAgent(
       if (steps > 0 && steps % 10 === 0 && taskId) {
         const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1);
         const progressUrl = activePage.url();
-        const heartbeatMsg = `[VISION-AGENT] Step ${steps}/${MAX_STEPS} (${elapsedMin}min) on ${progressUrl.substring(0, 60)}`;
+        const heartbeatMsg = `[VISION-AGENT] Step ${steps}/${effectiveMaxSteps} (${elapsedMin}min) on ${progressUrl.substring(0, 60)}`;
         console.log(`[VISION-AGENT] Heartbeat: ${heartbeatMsg}`);
         void (async () => {
           try {
