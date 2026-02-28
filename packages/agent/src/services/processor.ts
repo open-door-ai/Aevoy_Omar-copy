@@ -5182,7 +5182,12 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               }
             } catch { /* non-critical — vision agent will fill manually */ }
           }
-          const visionTask = `${subject} ${body}. If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy, phone=604-000-0000. Complete the task fully on the page.${_vBookingCtx}${visionLearnings}`;
+          // For signup tasks: explicit FILL command, not passive "if filling forms"
+          const _isVisionSignup = /\b(sign\s?up|signup|register|create.*account|make.*account|enroll)\b/i.test(`${subject} ${body}`);
+          const _visionFormCtx = _isVisionSignup
+            ? `FILL the signup form NOW: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Click the Sign Up/Create Account/Register button. DO NOT describe the page. DO NOT say "registration is initiated". ACTUALLY FILL THE FORM AND CLICK SUBMIT.`
+            : `If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy, phone=604-000-0000. Complete the task fully on the page.`;
+          const visionTask = `${subject} ${body}. ${_visionFormCtx}${_vBookingCtx}${visionLearnings}`;
 
           visionAgentInvocations++;
           console.log(`[VISION-AGENT] Starting (invocation ${visionAgentInvocations}/2) on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);

@@ -1112,7 +1112,15 @@ export async function runVisionAgent(
           // Fabricated 555-xxxx phone numbers — hallucinated data
           /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(doneResult) ||
           // "here's how" / "here are the" — instruction-giving
-          /\b(here'?s?\s+how|here\s+are\s+the|steps?\s+to|follow\s+these)\b/i.test(doneResult)
+          /\b(here'?s?\s+how|here\s+are\s+the|steps?\s+to|follow\s+these)\b/i.test(doneResult) ||
+          // Vague completion without evidence: "registration is initiated", "process is started"
+          /\b(registration|signup|sign.?up|process|task) (is|has been) (initiated|started|begun|available|accessible)\b/i.test(doneResult) ||
+          // Page description: "Key details include", "Features include", "Accessibility features"
+          /\b(key details|features) include\b/i.test(doneResult) ||
+          // "can be canceled/booked/done through" — passive voice advice
+          /\bcan be (cancel|cancell|book|reserv|subscrib|access|manag|done|complet)\w*\b/i.test(doneResult) ||
+          // "users sign in" / "customers can" — third-person instructions
+          /\b(users|customers|subscribers|members) (can|should|need to|must|sign|log)\b/i.test(doneResult)
         );
         if (isPassiveDone || _isAdviceDone) {
           const credHint = taskCreds.email
