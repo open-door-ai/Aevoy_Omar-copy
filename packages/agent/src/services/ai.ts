@@ -1698,6 +1698,39 @@ export async function generateVisionResponse(
     }
   }
 
+  // 1.5. Groq Vision (Llama 4 Scout) — FREE vision model, good quality, fast
+  // CRITICAL: This is the working vision fallback when Gemini/Anthropic keys are broken
+  if (process.env.GROQ_API_KEY && hasImage) {
+    try {
+      const groqVisionContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+        { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
+        { type: "text", text: prompt }
+      ];
+
+      const response = await withTimeout(getGroqClient().chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        max_tokens: 512,
+        messages: [
+          ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+          { role: "user" as const, content: groqVisionContent }
+        ],
+      }), 15000);
+
+      const content = response.choices[0]?.message?.content || "";
+      if (content.length > 10) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        // Groq Llama 4 Scout: essentially free tier
+        const cost = (inTok * 0.11 + outTok * 0.34) / 1_000_000;
+        console.log(`[AI] Vision (Groq Llama4 Scout) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, "llama-4-scout-17b-16e-instruct", inTok, outTok, cost, "groq", taskId, "vision").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   // 2. Claude Haiku — cheap and decent vision
   if (process.env.ANTHROPIC_API_KEY) {
     try {
