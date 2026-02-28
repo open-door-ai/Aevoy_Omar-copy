@@ -2364,16 +2364,22 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const _isImageCreationTask = /\b(create|make|design|generate|produce|build)\b.{0,40}\b(graphic|image|logo|banner|poster|flyer|social media|instagram|facebook|twitter|thumbnail|icon|illustration|artwork|picture)\b/i.test(combinedQuery) ||
       /\b(graphic|image|logo|banner|poster)\b.{0,40}\b(for|to post|to share)\b/i.test(combinedQuery);
     const hasImageAction = aiResponse.actions.some(a => a.type === 'generate_image');
-    if (_isImageCreationTask && !hasImageAction && !_isDocumentAction) {
-      // Only inject if GOOGLE_API_KEY is available (image generation uses Gemini)
-      if (process.env.GOOGLE_API_KEY) {
+    if (_isImageCreationTask && !_isDocumentAction) {
+      if (!hasImageAction && process.env.GOOGLE_API_KEY) {
+        // Inject generate_image if AI didn't include one
         const _imgPrompt = `Professional ${subject.replace(/\b(create|make|design|generate|I need|please)\b/gi, '').trim()}. Clean, modern design with bold typography and vibrant colors. High quality, ready for social media.`;
         console.log(`[IMAGE-INJECT] Image creation task with no generate_image action — injecting generate_image`);
         aiResponse.actions.push({ type: 'generate_image' as any, params: { prompt: _imgPrompt, size: '1024x1024' } });
-        // Remove [TASK_COMPLETE] so the loop processes the image generation
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
-      } else {
+      } else if (!hasImageAction) {
         console.warn(`[IMAGE-INJECT] Skipped — GOOGLE_API_KEY not set, generate_image would fail`);
+      }
+      // Strip search/browse actions for image tasks — AI should use generate_image, not search for Canva/templates
+      const _imgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type));
+      if (_imgNonSearch.length < aiResponse.actions.length) {
+        const _imgStripped = aiResponse.actions.length - _imgNonSearch.length;
+        console.log(`[IMAGE-STRIP] Stripped ${_imgStripped} search/browse actions from image creation task`);
+        aiResponse.actions = _imgNonSearch;
       }
     }
 
@@ -6069,9 +6075,15 @@ Extract the ACTUAL phone number from search results and call them:
     // SKIP quality gate when signup-auto trigger completed the task — the response is our mechanical result, not AI narration
     // IMAGE GENERATION PRIORITY: If generate_image succeeded, use that result as the response
     const _imgResult = actionResults.find(r => r.action.type === 'generate_image' && r.success && r.result);
+    const _imgFailed = actionResults.find(r => r.action.type === 'generate_image' && !r.success);
     if (_imgResult) {
       aiResponse.content = String(_imgResult.result);
       console.log(`[IMAGE-PRIORITY] generate_image succeeded — using image result as response`);
+    } else if (_imgFailed && _isImageCreationTask) {
+      // Image task but generation failed — give clear error, don't let AI iterate to suggest Canva
+      aiResponse.content = `I wasn't able to generate the image right now (${_imgFailed.error || 'API unavailable'}). Please try again in a few minutes.`;
+      aiResponse.content += '\n[TASK_COMPLETE]';
+      console.log(`[IMAGE-FAIL] Image creation task but generate_image failed: ${_imgFailed.error}`);
     }
     const hasDirectResultData = signupAutoCompleted || _isRealGeneratedContent || !!_imgResult || actionResults.some(r =>
       ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
