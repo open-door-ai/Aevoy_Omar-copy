@@ -6628,12 +6628,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Safety: if cleanResponseForEmail stripped everything or left garbage, use an action-aware fallback
     // Detect garbage: too short, looks like code/selectors/JSON fragments, no real words
     const isGarbageResponse = (text: string): boolean => {
-      if (!text || text.length < 20) return true;
+      if (!text || text.trim().length === 0) return true;
       // Selector/code fragments: starts with >, ), ], or contains mostly non-word chars
       if (/^[>\)\]\."',;:\s]/.test(text.trim())) return true;
-      // Mostly punctuation/symbols (less than 40% word characters)
+      // Mostly punctuation/symbols (less than 40% word characters) — only check for longer text
+      // Short valid responses like "4", "Yes", "2+2 = 4" should pass through
       const wordChars = text.replace(/[^a-zA-Z0-9\s]/g, '').length;
-      if (wordChars / text.length < 0.4) return true;
+      if (text.length > 10 && wordChars / text.length < 0.4) return true;
       // AI narration leak — starts with planning text, not results
       const lc = text.trim().toLowerCase();
       if (lc.startsWith('user wants') || lc.startsWith('the user wants') || lc.startsWith('the user is asking') ||
@@ -7790,6 +7791,7 @@ async function executeAction(
       // Strategy 0: API-based search using fetch (no browser needed, avoids bot detection)
       // DuckDuckGo Lite works without JS and returns HTML that's easy to parse
       let apiSearchResult = '';
+      let rawSearchHtml = '';  // Keep raw HTML for URL extraction (deep research)
       try {
         console.log(`[SEARCH] Strategy 0: Fetch-based DuckDuckGo Lite for "${query}"`);
         const ddgApiUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
@@ -7803,6 +7805,7 @@ async function executeAction(
         });
         if (fetchResponse.ok) {
           const html = await fetchResponse.text();
+          rawSearchHtml = html;  // Save for URL extraction
           // Extract text from DDG Lite HTML (simple structure: <a> links + text snippets)
           const textContent = html
             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -7843,6 +7846,7 @@ async function executeAction(
           });
           if (braveResponse.ok) {
             const html = await braveResponse.text();
+            if (!rawSearchHtml) rawSearchHtml = html;  // Save for URL extraction
             const textContent = html
               .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
               .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -7905,6 +7909,81 @@ async function executeAction(
         const calorieMatches = apiSearchResult.match(/\d+\s*(?:calories?|cal|kcal)/gi);
         if (calorieMatches && calorieMatches.length > 0) {
           enrichedResult = `NUTRITION DATA: ${[...new Set(calorieMatches)].join(', ')}\n\n${enrichedResult}`;
+        }
+
+        // ── DEEP RESEARCH: Browse top result URLs for actual page data ──
+        // DDG/Brave snippets are thin text — browse the actual pages to get real data
+        // (job listings, product details, restaurant info, reviews, prices, etc.)
+        // The user demands: "go there, find what you're looking for, browse it for you"
+        if (executionEngine && rawSearchHtml) {
+          try {
+            // Extract result URLs from raw search engine HTML
+            const _deepUrls: string[] = [];
+            const _hrefRegex = /href="([^"]+)"/gi;
+            let _hm;
+            while ((_hm = _hrefRegex.exec(rawSearchHtml)) !== null) {
+              let _u = _hm[1];
+              // DDG Lite wraps URLs: href="//duckduckgo.com/l/?uddg=ENCODED_URL"
+              if (_u.includes('uddg=')) {
+                const _uddg = _u.match(/uddg=([^&]+)/);
+                if (_uddg) _u = decodeURIComponent(_uddg[1]);
+              }
+              if (_u.startsWith('http')) _deepUrls.push(_u);
+            }
+
+            // Deduplicate by domain, filter out search engines themselves
+            const _seenDomains = new Set<string>();
+            const _resultUrls = _deepUrls.filter(url => {
+              try {
+                const h = new URL(url).hostname;
+                if (_seenDomains.has(h)) return false;
+                if (/duckduckgo|brave\.com|google\.com|bing\.com|yahoo\.com|aevoy\.com/i.test(h)) return false;
+                _seenDomains.add(h);
+                return true;
+              } catch { return false; }
+            }).slice(0, 3);
+
+            if (_resultUrls.length > 0) {
+              console.log(`[SEARCH] Deep research: browsing ${_resultUrls.length} result URLs: ${_resultUrls.map(u => new URL(u).hostname).join(', ')}`);
+              const _deepData: string[] = [];
+              const _page = executionEngine.getPage?.();
+
+              if (_page && !_page.isClosed()) {
+                for (const _deepUrl of _resultUrls) {
+                  try {
+                    await _page.goto(_deepUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
+                    await _page.waitForTimeout(1500);
+
+                    const _pageText = await _page.evaluate(() => {
+                      // Focus on main content, strip noise
+                      const main = document.querySelector('main, article, [role="main"], .content, #content, .main-content');
+                      const target = (main || document.body).cloneNode(true) as HTMLElement;
+                      target.querySelectorAll(
+                        'script, style, nav, footer, header, iframe, noscript, svg, ' +
+                        '[role="banner"], [role="navigation"], [class*="cookie"], [class*="consent"], ' +
+                        '[class*="popup"], [class*="modal"], [class*="sidebar"], [class*="advertisement"], [class*="ad-"]'
+                      ).forEach(el => el.remove());
+                      return (target.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 3000);
+                    });
+
+                    if (_pageText.length > 100) {
+                      _deepData.push(`\n--- ${_deepUrl} ---\n${_pageText.substring(0, 2000)}`);
+                      console.log(`[SEARCH] Browsed ${new URL(_deepUrl).hostname}: ${_pageText.length} chars`);
+                    }
+                  } catch (_bErr) {
+                    console.log(`[SEARCH] Failed to browse ${_deepUrl}: ${_bErr instanceof Error ? _bErr.message : _bErr}`);
+                  }
+                }
+
+                if (_deepData.length > 0) {
+                  enrichedResult += `\n\nDETAILED DATA FROM TOP RESULTS:${_deepData.join('\n')}`;
+                  console.log(`[SEARCH] Deep research enriched with ${_deepData.length} page(s)`);
+                }
+              }
+            }
+          } catch (_deepErr) {
+            console.log(`[SEARCH] Deep research error: ${_deepErr instanceof Error ? _deepErr.message : _deepErr}`);
+          }
         }
 
         return {
