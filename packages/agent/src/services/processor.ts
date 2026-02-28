@@ -1449,13 +1449,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
         // Pollinations.ai fallback — free, no API key needed
         if (!_ifpBase64) {
-          console.warn(`[IMAGE-FAST-PATH] All Gemini models quota exhausted — trying Pollinations.ai`);
+          console.warn(`[IMAGE-FAST-PATH] All Gemini models failed — trying Pollinations.ai`);
           try {
             const _polUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(_ifpPrompt)}?width=1024&height=1024&nologo=true`;
             const _polResp = await fetch(_polUrl, { redirect: 'follow' });
             if (_polResp.ok) {
               const _polBuffer = Buffer.from(await _polResp.arrayBuffer());
-              if (_polBuffer.length > 5000) { // Valid image should be >5KB
+              if (_polBuffer.length > 5000) {
                 _ifpBase64 = _polBuffer.toString('base64');
                 _ifpMime = 'image/jpeg';
                 _ifpModel = 'pollinations-flux';
@@ -1466,6 +1466,61 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             }
           } catch (_polErr) {
             console.warn(`[IMAGE-FAST-PATH] Pollinations.ai error:`, _polErr);
+          }
+        }
+
+        // Stable Horde fallback — community-powered, anonymous access, async poll
+        if (!_ifpBase64) {
+          console.warn(`[IMAGE-FAST-PATH] Pollinations failed — trying Stable Horde`);
+          try {
+            const _shSubmit = await fetch('https://stablehorde.net/api/v2/generate/async', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'apikey': '0000000000' },
+              body: JSON.stringify({
+                prompt: _ifpPrompt,
+                params: { width: 512, height: 512, steps: 15, cfg_scale: 7, sampler_name: 'k_euler' },
+                nsfw: false,
+              }),
+            });
+            if (_shSubmit.ok) {
+              const _shJob = await _shSubmit.json() as { id?: string };
+              if (_shJob.id) {
+                console.log(`[IMAGE-FAST-PATH] Stable Horde job: ${_shJob.id}`);
+                // Poll for up to 90 seconds (10s intervals)
+                for (let _shI = 0; _shI < 9; _shI++) {
+                  await new Promise(r => setTimeout(r, 10000));
+                  const _shCheck = await fetch(`https://stablehorde.net/api/v2/generate/check/${_shJob.id}`);
+                  const _shStatus = await _shCheck.json() as { done?: boolean; wait_time?: number; queue_position?: number };
+                  console.log(`[IMAGE-FAST-PATH] Stable Horde poll ${_shI + 1}: done=${_shStatus.done}, wait=${_shStatus.wait_time}s, pos=${_shStatus.queue_position}`);
+                  if (_shStatus.done) {
+                    const _shResult = await fetch(`https://stablehorde.net/api/v2/generate/status/${_shJob.id}`);
+                    const _shData = await _shResult.json() as { generations?: Array<{ img?: string; model?: string }> };
+                    const _shGen = _shData.generations?.[0];
+                    if (_shGen?.img) {
+                      // Stable Horde returns a URL — download it
+                      const _shImgResp = await fetch(_shGen.img);
+                      if (_shImgResp.ok) {
+                        const _shBuf = Buffer.from(await _shImgResp.arrayBuffer());
+                        if (_shBuf.length > 5000) {
+                          _ifpBase64 = _shBuf.toString('base64');
+                          _ifpMime = 'image/webp';
+                          _ifpModel = `stablehorde-${_shGen.model || 'sd'}`;
+                          console.log(`[IMAGE-FAST-PATH] Stable Horde succeeded (${_shBuf.length} bytes, model: ${_shGen.model})`);
+                        }
+                      }
+                    }
+                    break;
+                  }
+                  // If wait time > 120s, give up early
+                  if ((_shStatus.wait_time || 0) > 120) {
+                    console.warn(`[IMAGE-FAST-PATH] Stable Horde queue too long (${_shStatus.wait_time}s) — giving up`);
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (_shErr) {
+            console.warn(`[IMAGE-FAST-PATH] Stable Horde error:`, _shErr);
           }
         }
 
@@ -8861,6 +8916,58 @@ async function executeAction(
             }
           } catch (_polErr) {
             console.warn("[GENERATE_IMAGE] Pollinations.ai error:", _polErr);
+          }
+        }
+
+        // Stable Horde fallback — community-powered, anonymous access
+        if (!_imgBase64) {
+          console.warn("[GENERATE_IMAGE] Pollinations failed — trying Stable Horde");
+          try {
+            const _shSubmit = await fetch('https://stablehorde.net/api/v2/generate/async', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'apikey': '0000000000' },
+              body: JSON.stringify({
+                prompt,
+                params: { width: 512, height: 512, steps: 15, cfg_scale: 7, sampler_name: 'k_euler' },
+                nsfw: false,
+              }),
+            });
+            if (_shSubmit.ok) {
+              const _shJob = await _shSubmit.json() as { id?: string };
+              if (_shJob.id) {
+                console.log(`[GENERATE_IMAGE] Stable Horde job: ${_shJob.id}`);
+                for (let _shI = 0; _shI < 9; _shI++) {
+                  await new Promise(r => setTimeout(r, 10000));
+                  const _shCheck = await fetch(`https://stablehorde.net/api/v2/generate/check/${_shJob.id}`);
+                  const _shStatus = await _shCheck.json() as { done?: boolean; wait_time?: number; queue_position?: number };
+                  console.log(`[GENERATE_IMAGE] Stable Horde poll ${_shI + 1}: done=${_shStatus.done}, wait=${_shStatus.wait_time}s`);
+                  if (_shStatus.done) {
+                    const _shResult = await fetch(`https://stablehorde.net/api/v2/generate/status/${_shJob.id}`);
+                    const _shData = await _shResult.json() as { generations?: Array<{ img?: string; model?: string }> };
+                    const _shGen = _shData.generations?.[0];
+                    if (_shGen?.img) {
+                      const _shImgResp = await fetch(_shGen.img);
+                      if (_shImgResp.ok) {
+                        const _shBuf = Buffer.from(await _shImgResp.arrayBuffer());
+                        if (_shBuf.length > 5000) {
+                          _imgBase64 = _shBuf.toString('base64');
+                          _imgMime = 'image/webp';
+                          _usedModel = `stablehorde-${_shGen.model || 'sd'}`;
+                          console.log(`[GENERATE_IMAGE] Stable Horde succeeded (${_shBuf.length} bytes)`);
+                        }
+                      }
+                    }
+                    break;
+                  }
+                  if ((_shStatus.wait_time || 0) > 120) {
+                    console.warn(`[GENERATE_IMAGE] Stable Horde queue too long — giving up`);
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (_shErr) {
+            console.warn("[GENERATE_IMAGE] Stable Horde error:", _shErr);
           }
         }
 
