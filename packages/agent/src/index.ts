@@ -382,8 +382,9 @@ app.get("/debug/test-image-gen", async (req, res) => {
 
   const models = [
     'gemini-2.0-flash-exp-image-generation',
-    'gemini-2.0-flash-preview-image-generation',
-    'gemini-2.0-flash',
+    'gemini-2.5-flash-image',
+    'gemini-3.1-flash-image-preview',
+    'gemini-3-pro-image-preview',
   ];
   const results: Record<string, string> = {};
 

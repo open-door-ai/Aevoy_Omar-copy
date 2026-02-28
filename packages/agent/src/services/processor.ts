@@ -1404,8 +1404,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Model fallback chain
         const _ifpModels = [
           'gemini-2.0-flash-exp-image-generation',
-          'gemini-2.0-flash-preview-image-generation',
-          'gemini-2.0-flash',
+          'gemini-2.5-flash-image',
+          'gemini-3.1-flash-image-preview',
         ];
         let _ifpBase64: string | null = null;
         let _ifpMime = 'image/png';
@@ -8745,8 +8745,8 @@ async function executeAction(
         // Model fallback chain: try multiple models in case of quota/rate limits
         const _imageModels = [
           'gemini-2.0-flash-exp-image-generation',
-          'gemini-2.0-flash-preview-image-generation',
-          'gemini-2.0-flash',
+          'gemini-2.5-flash-image',
+          'gemini-3.1-flash-image-preview',
         ];
 
         let _imgBase64: string | null = null;
