@@ -203,7 +203,7 @@ export interface Task {
 export interface VerificationResult {
   passed: boolean;
   confidence: number;
-  method: 'self_check' | 'evidence' | 'smart_review';
+  method: 'self_check' | 'evidence' | 'smart_review' | 'data_quality' | 'phone_escalation';
   evidence?: string;
   screenshotBase64?: string;
   correctionHints?: string[];

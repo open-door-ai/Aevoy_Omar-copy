@@ -6925,6 +6925,20 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       stuckReason = `Verification failed (${method}, confidence ${conf}% < ${dbTierTarget}% target)${evidence}`;
     }
 
+    // FINAL SANITIZATION: Strip internal system messages that should NEVER reach the user
+    cleanResponse = cleanResponse
+      .replace(/BLOCKED:.*?(?:\.|$)/gm, '')      // "BLOCKED: You tried to call/text..."
+      .replace(/\[REJECT\].*?(?:\.|$)/gm, '')    // "[REJECT] BLOCKED: selector..."
+      .replace(/\[VISION-AGENT\].*?(?:\.|$)/gm, '') // "[VISION-AGENT] Running on..."
+      .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]/gi, '') // Thinking blocks
+      .replace(/\[ACTION:[^\]]*\]/g, '')          // Raw action tags
+      .replace(/\n{3,}/g, '\n\n')                 // Collapse excess whitespace
+      .trim();
+    // If stripping left nothing useful, use a fallback
+    if (!cleanResponse || cleanResponse.length < 5) {
+      cleanResponse = `I worked on your request "${subject}". Please try again if the result wasn't what you expected.`;
+    }
+
     await getSupabaseClient()
       .from("tasks")
       .update({
