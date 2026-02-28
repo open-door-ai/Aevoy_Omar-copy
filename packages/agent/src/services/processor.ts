@@ -7100,7 +7100,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
-    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card))\b/i.test(subject + ' ' + (body || ''));
+    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b)\b/i.test(subject + ' ' + (body || ''));
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search', 'screenshot', 'screenshot_ocr', 'extract'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
