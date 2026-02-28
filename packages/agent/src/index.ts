@@ -1001,6 +1001,54 @@ app.post("/webhook/voice/outbound-twiml", async (req, res) => {
   res.type('text/xml').send(twiml);
 });
 
+// ---- External Call TwiML (for calling restaurants, businesses, etc.) ----
+// callExternal() creates the call and Twilio fetches this URL for TwiML.
+// Returns ConversationRelay so the AI can have a REAL conversation with the business.
+app.post("/webhook/voice/external-call-twiml", async (req, res) => {
+  const userId = req.query.userId as string || '';
+  const contextKey = req.query.contextKey as string || '';
+  const script = req.query.script as string || '';
+  const businessName = req.query.businessName as string || 'the business';
+  const wsUrl = `${(process.env.AGENT_URL || 'http://localhost:3001').replace('http', 'ws')}/ws/voice`;
+  let voiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+
+  // Load user's voice preference
+  if (userId) {
+    try {
+      const { data: vs } = await getSupabaseClient()
+        .from("user_settings")
+        .select("voice_preference")
+        .eq("user_id", userId)
+        .single();
+      if (vs?.voice_preference && !vs.voice_preference.includes('.')) {
+        voiceId = vs.voice_preference;
+      }
+    } catch { /* use default */ }
+  }
+
+  // Opening line for the business (spoken immediately when they pick up)
+  const greeting = script
+    ? script.substring(0, 200) // Use the script as the opening line
+    : `Hi, I'm calling on behalf of a customer to make a reservation.`;
+  const escGreeting = greeting.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="true" welcomeGreeting="${escGreeting}">
+      <Parameter name="userId" value="${userId}" />
+      <Parameter name="callType" value="external_call" />
+      <Parameter name="contextKey" value="${contextKey}" />
+      <Parameter name="script" value="${escGreeting}" />
+      <Parameter name="businessName" value="${businessName.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" />
+    </ConversationRelay>
+  </Connect>
+</Response>`;
+
+  console.log(`[VOICE] External call TwiML for user ${userId?.slice(0, 8)}, business=${businessName}, voice=${voiceId}`);
+  res.type('text/xml').send(twiml);
+});
+
 // ---- Incoming Voice Calls (Caller Identification) ----
 
 app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, async (req, res) => {

@@ -225,35 +225,35 @@ export async function callExternal(
   userId: string,
   to: string,
   message: string,
-  gatherAfter: boolean = true
+  gatherAfter: boolean = true,
+  businessName?: string
 ): Promise<{ success: boolean; callSid?: string; error?: string }> {
   const config = getTwilioConfig();
   if (!config) return { success: false, error: "Twilio not configured" };
-  const voice = await getUserVoice(userId);
   const fromNumber = await getUserFromNumber(userId);
 
   try {
-    // Use a safe voice for <Say> — Polly.Joanna-Neural is always reliable
-    const safeVoice = 'Polly.Joanna-Neural';
-    // Build TwiML that speaks then optionally gathers response
-    let twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="${safeVoice}">${escapeXml(message)}</Say>`;
+    // Generate a unique context key for this call
+    const contextKey = `ext_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-    if (gatherAfter) {
-      twiml += `
-  <Gather input="speech" timeout="10" speechTimeout="auto"
-          action="${config.webhookBaseUrl}/webhook/voice/process/${userId}" method="POST">
-    <Say voice="${safeVoice}">I'm listening for your response.</Say>
-  </Gather>`;
-    }
+    // Store context for the ConversationRelay WebSocket to pick up
+    const { setExternalCallContext } = await import("./voice-conversation.js");
+    setExternalCallContext(contextKey, {
+      script: message,
+      businessName: businessName || 'the business',
+      userName: '', // Will be loaded from profile in handleSetup
+      createdAt: Date.now(),
+    });
 
-    twiml += `\n</Response>`;
+    // Use ConversationRelay via TwiML URL — natural ElevenLabs voice + real two-way conversation
+    const baseUrl = config.webhookBaseUrl || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+    const twimlUrl = `${baseUrl}/webhook/voice/external-call-twiml?userId=${encodeURIComponent(userId)}&contextKey=${encodeURIComponent(contextKey)}&businessName=${encodeURIComponent(businessName || 'the business')}&script=${encodeURIComponent(message.substring(0, 200))}`;
 
     const params = new URLSearchParams({
       To: to,
       From: fromNumber || config.phoneNumber,
-      Twiml: twiml,
+      Url: twimlUrl,
+      Method: 'POST',
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -265,6 +265,7 @@ export async function callExternal(
     const data = await response.json() as { sid: string };
     await trackVoiceUsage(userId, 1);
 
+    console.log(`[CALL-EXTERNAL] ConversationRelay call placed: to=${to}, from=${fromNumber || config.phoneNumber}, sid=${data.sid}, business=${businessName || 'unknown'}`);
     return { success: true, callSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";

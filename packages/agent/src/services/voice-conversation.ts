@@ -46,6 +46,28 @@ const MAX_SESSIONS = 50;
 const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes max call
 const DEMO_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes max for demo calls (cost control)
 const INTERVIEW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes for demo interview calls
+const EXTERNAL_CALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max for external calls (restaurant, etc.)
+
+// External call context store — populated by callExternal, consumed by handleSetup
+// Key: callSid or a temp UUID, Value: context for the AI to use during the call
+interface ExternalCallContext {
+  script: string;        // What to say/accomplish
+  businessName: string;  // Who we're calling
+  userName: string;      // Who we're calling on behalf of
+  taskId?: string;       // Original task for follow-up
+  createdAt: number;
+}
+const externalCallContexts = new Map<string, ExternalCallContext>();
+
+/**
+ * Store context for an upcoming external call so the WebSocket handler
+ * knows what the call is about when ConversationRelay connects.
+ */
+export function setExternalCallContext(key: string, ctx: ExternalCallContext): void {
+  externalCallContexts.set(key, ctx);
+  // Auto-expire after 5 minutes (call should connect within seconds)
+  setTimeout(() => externalCallContexts.delete(key), 5 * 60 * 1000);
+}
 
 // ---- Session Management ----
 
@@ -63,6 +85,7 @@ setInterval(() => {
   for (const [id, session] of activeSessions) {
     const timeout = session.callType === 'demo' ? DEMO_TIMEOUT_MS
       : (session.callType === 'demo_interview' || session.callType === 'onboarding_setup') ? INTERVIEW_TIMEOUT_MS
+      : session.callType === 'external_call' ? EXTERNAL_CALL_TIMEOUT_MS
       : SESSION_TIMEOUT_MS;
     if (now - session.startedAt > timeout) {
       const mins = Math.round((now - session.startedAt) / 60000);
@@ -276,6 +299,40 @@ RULES:
 - You can use [REMEMBER:...] tags for anything interesting they mention.`;
   }
 
+  // ---- EXTERNAL CALL (calling a restaurant, business, etc. on behalf of user) ----
+  const isExternalCall = callType === 'external_call';
+  if (isExternalCall) {
+    // Look up context stored by callExternal before the call was placed
+    const extCtx = externalCallContexts.get(customParameters.contextKey || '') || externalCallContexts.get(callSid || '');
+    const script = extCtx?.script || customParameters.script || 'Hi, I am calling on behalf of a customer.';
+    const bizName = extCtx?.businessName || customParameters.businessName || 'the business';
+    const callerName = extCtx?.userName || customParameters.userName || 'a customer';
+    // Clean up context after use
+    if (extCtx) {
+      externalCallContexts.delete(customParameters.contextKey || '');
+      externalCallContexts.delete(callSid || '');
+    }
+    memoryContext = `CALL TYPE: EXTERNAL CALL — You are calling ${bizName} on behalf of ${callerName}.
+
+YOUR MISSION: ${script}
+
+CRITICAL RULES:
+- You are NOT a robot. You are a personal assistant calling on behalf of your client.
+- Speak naturally, like a real human making a phone call. Use "Hi", "thanks", "perfect", natural filler.
+- If they put you on hold, wait patiently.
+- If there's a phone menu (press 1 for X, press 2 for Y), LISTEN to the options and say which number to press. The system will send DTMF tones.
+- If you reach voicemail, leave a message with: the reservation details, your client's name, and a callback number.
+- If they ask for contact info: phone and email will be provided by the system.
+- Confirm all details before hanging up: date, time, party size, name.
+- When done, summarize what was confirmed in your last response.
+- Keep the call under 3 minutes. Be efficient but friendly.
+- If they can't accommodate the request (fully booked, etc.), ask about alternatives (different time, waitlist, etc.).
+
+VOICE STYLE: Warm, casual, like a friend making a call. Not corporate. Not robotic.`;
+
+    console.log(`[VOICE-WS] External call setup: business=${bizName}, caller=${callerName}`);
+  }
+
   if (userId) {
     // Load profile, settings, and memory in parallel — wrapped in try/catch so session is ALWAYS created
     try {
@@ -318,7 +375,7 @@ RULES:
         const callerPhone = from?.replace(/\D/g, "");
         const userPhone = profile.phone_number?.replace(/\D/g, "");
         const hasPinSet = profile.unified_pin_hash || profile.voice_pin_hash || profile.voice_pin;
-        const skipPin = isDemo || isInterview || isOnboardingSetup;
+        const skipPin = isDemo || isInterview || isOnboardingSetup || isExternalCall;
 
         if (hasPinSet && callerPhone !== userPhone && !skipPin) {
           // Check lockout (unified: 5 attempts, 1 hour)
@@ -339,7 +396,7 @@ RULES:
 
       // Format memory context — for demo/onboarding, APPEND user memory to Aevoy identity prompt
       if (memoryResult.facts) {
-        if (isDemo || isInterview || isOnboardingSetup) {
+        if (isDemo || isInterview || isOnboardingSetup || isExternalCall) {
           // Preserve the Aevoy identity prompt and append user's memory context
           memoryContext += `\n\nUSER MEMORY:\n${memoryResult.facts}`;
           if (memoryResult.recentLogs) {

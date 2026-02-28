@@ -2584,7 +2584,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Ask the user when this critical info is missing — a human would ask before calling.
     const isRestBookingTask = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso)|table\s+(for|at))\b/i.test(taskTextLower) &&
       !/\b(flight|hotel|airbnb|car|rental)\b/i.test(taskTextLower); // Restaurant bookings, not flights/hotels
-    if (isRestBookingTask && !task.suppressEmail) {
+    if (isRestBookingTask) {
       const fullInput = `${subject} ${body || ''}`;
       const hasPartySize = /\b(\d+)\s*(people|person|guests?|pax|of us)\b/i.test(fullInput) || /\bfor\s+(\d+)\b/i.test(fullInput);
       const hasTime = /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i.test(fullInput) || /\b(tonight|lunch|dinner|brunch|evening|noon|afternoon)\b/i.test(fullInput);
@@ -6895,7 +6895,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         try {
           const { callExternal } = await import("./twilio.js");
           const callScript = `Hi, I'd like to make a reservation for ${_partySize} people ${_date} at ${_time} please. The name is ${username}.`;
-          await callExternal(userId, _formattedPhone, callScript);
+          await callExternal(userId, _formattedPhone, callScript, true, _restName);
           cleanResponse = `I found ${_restName}'s number (${_phoneInResponse[0]}) and called to make a reservation for ${_partySize} at ${_time} ${_date}. The call has been placed — I'll update you with the confirmation.`;
           console.log(`[AUTO-CALL] Call placed to ${_formattedPhone} for reservation`);
         } catch (callErr) {
