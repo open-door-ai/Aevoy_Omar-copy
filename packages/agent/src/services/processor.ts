@@ -6699,7 +6699,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           const { generateForcedDirectAnswer } = await import("./ai.js");
           const summary = await generateForcedDirectAnswer(
             `${subject} ${body || ''}`,
-            `${context}\n\nUsing the data above, give the user a clear, specific answer to their request. Include names, addresses, prices, URLs, or other concrete details from the search results.`,
+            `${context}\n\nUsing ALL data above (including DETAILED PAGE DATA if present), give a clear, specific answer.\nRULES:\n- Extract and list specific items (company names, job titles, prices, addresses, ratings, URLs)\n- If the data contains individual listings, present each one with its details\n- NEVER say "aggregate results" or "check the website" — extract the actual data\n- Present results as a numbered or bulleted list with concrete details`,
             username
           );
           cleanResponse = summary.content || `I worked on your request. ${successActions.length} actions completed.`;
@@ -6714,12 +6714,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           try {
             const searchResults = successActions
               .filter(r => r.action.type === 'search' && r.result)
-              .map(r => String(r.result).substring(0, 500))
+              .map(r => String(r.result).substring(0, 3000))
               .join('\n---\n');
             const { generateForcedDirectAnswer } = await import("./ai.js");
             const summary = await generateForcedDirectAnswer(
               `${subject} ${body || ''}`,
-              `Search results:\n${searchResults.substring(0, 2000)}\n\nUsing the data above, give the user a clear, specific answer. Include names, addresses, prices, URLs, or other concrete details.`,
+              `Search results:\n${searchResults.substring(0, 6000)}\n\nUsing ALL data above (including DETAILED PAGE DATA if present), give the user a clear, specific answer.\nRULES:\n- Extract and list specific items (company names, job titles, prices, addresses, ratings, URLs)\n- If the data contains individual listings, present each one with its details\n- NEVER say "aggregate results" or "check the website" — extract the actual data\n- Present results as a numbered or bulleted list with concrete details`,
               username
             );
             cleanResponse = summary.content || `I searched for your request but couldn't extract a clear answer.`;
@@ -7986,26 +7986,48 @@ async function executeAction(
                 for (const _deepUrl of _resultUrls) {
                   try {
                     await _page.goto(_deepUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-                    // Wait longer for JS-heavy sites (job boards, review sites)
+                    // Wait for JS rendering
                     await _page.waitForTimeout(3000);
-                    // Scroll once to trigger lazy-loaded content
-                    await _page.evaluate(() => window.scrollBy(0, 800));
-                    await _page.waitForTimeout(1000);
+                    // Scroll progressively to trigger lazy-loaded content
+                    for (let _scrollI = 0; _scrollI < 3; _scrollI++) {
+                      await _page.evaluate((i) => window.scrollBy(0, 600 + i * 400), _scrollI);
+                      await _page.waitForTimeout(500);
+                    }
 
                     const _pageText = await _page.evaluate(() => {
-                      // Focus on main content, strip noise
-                      const main = document.querySelector('main, article, [role="main"], .content, #content, .main-content, #mosaic-jobResults, .job_listings, .search-results');
-                      const target = (main || document.body).cloneNode(true) as HTMLElement;
+                      // Try listing-specific selectors first (job boards, review sites, product pages)
+                      const listSelectors = [
+                        '#mosaic-jobResults', '.job_listings', '.search-results', '.results-list',
+                        '[data-testid="job-list"]', '.jobs-list', '.jobsearch-ResultsList',
+                        '.serp-results', '.organic-results', '.listing-results',
+                        'main article', 'main [role="list"]', '.product-list', '.review-list'
+                      ];
+                      let target: HTMLElement | null = null;
+                      for (const sel of listSelectors) {
+                        const el = document.querySelector(sel);
+                        if (el && el.textContent && el.textContent.trim().length > 200) {
+                          target = el.cloneNode(true) as HTMLElement;
+                          break;
+                        }
+                      }
+                      // Fall back to main content
+                      if (!target) {
+                        const main = document.querySelector('main, article, [role="main"], .content, #content, .main-content');
+                        target = ((main || document.body).cloneNode(true)) as HTMLElement;
+                      }
+                      // Strip noise
                       target.querySelectorAll(
                         'script, style, nav, footer, header, iframe, noscript, svg, ' +
                         '[role="banner"], [role="navigation"], [class*="cookie"], [class*="consent"], ' +
                         '[class*="popup"], [class*="modal"], [class*="sidebar"], [class*="advertisement"], [class*="ad-"]'
                       ).forEach(el => el.remove());
-                      return (target.textContent || '').replace(/\s+/g, ' ').trim().substring(0, 4000);
+                      // Normalize whitespace but preserve line breaks between elements for readability
+                      const text = target.innerText || target.textContent || '';
+                      return text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().substring(0, 5000);
                     });
 
                     if (_pageText.length > 100 && !isGarbageText(_pageText)) {
-                      _deepData.push(`\n--- ${_deepUrl} ---\n${_pageText.substring(0, 2500)}`);
+                      _deepData.push(`\n--- SOURCE: ${_deepUrl} ---\n${_pageText.substring(0, 3500)}`);
                       console.log(`[SEARCH] Browsed ${new URL(_deepUrl).hostname}: ${_pageText.length} chars`);
                     } else {
                       console.log(`[SEARCH] Browsed ${new URL(_deepUrl).hostname}: ${_pageText.length} chars (${isGarbageText(_pageText) ? 'garbage' : 'too short'} — skipped)`);
@@ -8016,7 +8038,7 @@ async function executeAction(
                 }
 
                 if (_deepData.length > 0) {
-                  enrichedResult += `\n\nDETAILED DATA FROM TOP RESULTS:${_deepData.join('\n')}`;
+                  enrichedResult += `\n\nDETAILED PAGE DATA (extract specific names, prices, addresses, ratings, listings from below):${_deepData.join('\n')}`;
                   console.log(`[SEARCH] Deep research enriched with ${_deepData.length} page(s)`);
                 }
               }
@@ -8576,49 +8598,79 @@ async function executeAction(
         };
         const aspectRatio = aspectMap[size] || "1:1";
 
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent`;
-        const geminiResponse = await fetch(geminiUrl, {
-          method: "POST",
-          headers: {
-            "x-goog-api-key": googleKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
-            generationConfig: {
-              responseModalities: ["TEXT", "IMAGE"],
-              imageConfig: { aspectRatio },
-            },
-          }),
-        });
+        // Model fallback chain: try multiple models in case of quota/rate limits
+        const _imageModels = [
+          'gemini-2.0-flash-exp-image-generation',
+          'gemini-2.0-flash-preview-image-generation',
+          'gemini-2.0-flash',
+        ];
 
-        if (!geminiResponse.ok) {
-          const errText = await geminiResponse.text();
-          console.error(`[GENERATE_IMAGE] Gemini API error ${geminiResponse.status}: ${errText.substring(0, 200)}`);
-          return { action, success: false, error: "Image generation API returned an error" };
-        }
+        let _imgBase64: string | null = null;
+        let _imgMime = 'image/png';
+        let _usedModel = '';
 
-        const geminiData = await geminiResponse.json() as {
-          candidates?: Array<{
-            content?: {
-              parts?: Array<{
-                text?: string;
-                inlineData?: { mimeType: string; data: string };
+        for (const _model of _imageModels) {
+          try {
+            const _genUrl = `https://generativelanguage.googleapis.com/v1beta/models/${_model}:generateContent`;
+            console.log(`[GENERATE_IMAGE] Trying model: ${_model}`);
+            const _genResp = await fetch(_genUrl, {
+              method: "POST",
+              headers: {
+                "x-goog-api-key": googleKey,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: `Generate an image: ${prompt}` }] }],
+                generationConfig: {
+                  responseModalities: ["TEXT", "IMAGE"],
+                  imageConfig: { aspectRatio },
+                },
+              }),
+            });
+
+            if (!_genResp.ok) {
+              const _errTxt = await _genResp.text();
+              console.warn(`[GENERATE_IMAGE] ${_model} failed (${_genResp.status}): ${_errTxt.substring(0, 150)}`);
+              // If quota/rate limit, try next model
+              if (_genResp.status === 429 || _genResp.status === 503 || _errTxt.includes('quota')) continue;
+              // For other errors, also try next model
+              continue;
+            }
+
+            const _genData = await _genResp.json() as {
+              candidates?: Array<{
+                content?: {
+                  parts?: Array<{
+                    text?: string;
+                    inlineData?: { mimeType: string; data: string };
+                  }>;
+                };
               }>;
             };
-          }>;
-        };
 
-        // Find the image part in the response
-        const parts = geminiData.candidates?.[0]?.content?.parts || [];
-        const imagePart = parts.find((p: { inlineData?: { data: string; mimeType: string } }) => p.inlineData?.data);
+            const _genParts = _genData.candidates?.[0]?.content?.parts || [];
+            const _imgPart = _genParts.find((p: { inlineData?: { data: string; mimeType: string } }) => p.inlineData?.data);
 
-        if (!imagePart?.inlineData) {
-          console.error("[GENERATE_IMAGE] No image data in Gemini response");
-          return { action, success: false, error: "No image returned from generation" };
+            if (_imgPart?.inlineData) {
+              _imgBase64 = _imgPart.inlineData.data;
+              _imgMime = _imgPart.inlineData.mimeType;
+              _usedModel = _model;
+              console.log(`[GENERATE_IMAGE] Success with model: ${_model}`);
+              break;
+            } else {
+              console.warn(`[GENERATE_IMAGE] ${_model} returned no image data, trying next`);
+              continue;
+            }
+          } catch (_modelErr) {
+            console.warn(`[GENERATE_IMAGE] ${_model} threw error:`, _modelErr);
+            continue;
+          }
         }
 
-        const { data: base64Data, mimeType } = imagePart.inlineData;
+        if (!_imgBase64) {
+          console.error("[GENERATE_IMAGE] All models failed to generate image");
+          return { action, success: false, error: "Image generation failed — all models quota exhausted or unavailable. Try again later." };
+        }
 
         // Save to /tmp/aevoy-files/images/ so it's served at /files/images/...
         const fs = await import("fs");
@@ -8627,18 +8679,18 @@ async function executeAction(
         if (!fs.existsSync(imgDir)) {
           fs.mkdirSync(imgDir, { recursive: true });
         }
-        const ext = mimeType === "image/png" ? "png" : "jpg";
+        const ext = _imgMime === "image/png" ? "png" : "jpg";
         const filename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
         const filePath = path.join(imgDir, filename);
-        fs.writeFileSync(filePath, Buffer.from(base64Data, "base64"));
+        fs.writeFileSync(filePath, Buffer.from(_imgBase64, "base64"));
 
         const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
         const imageUrl = `${agentUrl}/files/images/${filename}`;
 
-        // Track Gemini image cost ($0.039/image)
+        // Track cost
         const imgCost = 0.039;
-        trackServiceCost(userId, "google", "gemini-2.0-flash-exp-image-generation", imgCost, "image_generation").catch(() => {});
-        console.log(`[GENERATE_IMAGE] Gemini image saved: ${filePath} → ${imageUrl} (cost: $${imgCost})`);
+        trackServiceCost(userId, "google", _usedModel, imgCost, "image_generation").catch(() => {});
+        console.log(`[GENERATE_IMAGE] Image saved: ${filePath} → ${imageUrl} (model: ${_usedModel}, cost: $${imgCost})`);
         return {
           action,
           success: true,
