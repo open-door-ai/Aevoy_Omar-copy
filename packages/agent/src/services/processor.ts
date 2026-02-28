@@ -1310,6 +1310,83 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 2b. FAST PATHS — detect and execute BEFORE expensive AI classification
     // This runs right after task creation so we have a taskId to update
 
+    // ── BUSINESS CARD FAST PATH (top-level, before all other processing) ──
+    // Business cards are structured visual documents — no AI needed at all.
+    // Extract fields from task text and create the PDF directly with PDFKit vector drawing.
+    const _earlyBcText = `${subject} ${body || ''}`;
+    const _earlyIsBc = /\b(business cards?)\b/i.test(_earlyBcText);
+    if (_earlyIsBc) {
+      console.log(`[BUSINESS-CARD-FAST-PATH] Detected business card task — creating PDF directly`);
+      try {
+        const _bcCompany = _earlyBcText.match(/(?:for|called|named|company)\s+([A-Z][A-Za-z0-9\s&.']+?)(?:\.|,|\s+(?:my|we|our|is|are|based|in|at|—))/i)?.[1]?.trim()
+          || _earlyBcText.match(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)\b.*?(?:business card|startup)/i)?.[1]?.trim()
+          || 'Company';
+        const _bcPerson = _earlyBcText.match(/(?:my name is|name:?|named)\s+([A-Z][A-Za-z\s]+?)(?:\.|,|\s+(?:title|founder|ceo|cto|director|manager|email|phone))/i)?.[1]?.trim()
+          || _earlyBcText.match(/(?:^|\s)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*,?\s*(?:Founder|CEO|CTO|Director|Manager|Owner)/i)?.[1]?.trim()
+          || username || 'Name';
+        const _bcTitle = _earlyBcText.match(/(?:title:?|as)\s+([\w\s&]+?)(?:\.|,|\s+(?:email|phone|at|website))/i)?.[1]?.trim()
+          || _earlyBcText.match(/\b(Founder\s*(?:&|and)?\s*(?:CEO)?|CEO|CTO|Director|Manager|Owner|Co-?Founder|President|VP)\b/i)?.[0]?.trim()
+          || 'Founder';
+        const _bcEmail = _earlyBcText.match(/[\w.+-]+@[\w.-]+\.\w{2,}/)?.[0] || '';
+        const _bcPhone = _earlyBcText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || '';
+        const _bcWebsite = _earlyBcText.match(/(?:website:?\s*)?(?:https?:\/\/)?(?:www\.)?([a-z0-9][\w.-]+\.\w{2,})/i)?.[1] || '';
+        const _bcTagline = _earlyBcText.match(/(?:tagline:?|slogan:?)\s*["']?([^"'.]+?)["']?(?:\.|,|$)/i)?.[1]?.trim() || '';
+
+        console.log(`[BUSINESS-CARD] Fields: company=${_bcCompany}, person=${_bcPerson}, title=${_bcTitle}, email=${_bcEmail}`);
+
+        const { createPDF } = await import('../execution/actions/create-pdf.js');
+        const _bcFile = `${_bcCompany.replace(/[^a-z0-9]/gi, '_')}_Business_Card.pdf`;
+        const _bcResult = await createPDF({
+          filename: _bcFile,
+          content: [{
+            type: 'business_card',
+            cardData: {
+              companyName: _bcCompany,
+              personName: _bcPerson,
+              title: _bcTitle,
+              email: _bcEmail,
+              phone: _bcPhone,
+              website: _bcWebsite,
+              tagline: _bcTagline || `${_bcCompany} — AI-Powered Solutions`,
+              primaryColor: '#2563eb',
+            }
+          }]
+        });
+
+        if (_bcResult.success) {
+          const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+          const _bcUrl = (_bcResult.url || _bcResult.filepath || '');
+          const _bcFullUrl = _bcUrl.startsWith('http') ? _bcUrl : `${_agBase}${_bcUrl}`;
+          const _bcResponse = `Your professional business card is ready!\n\n**File:** ${_bcFile}\n**Download:** ${_bcFullUrl}\n\nThe card features a modern design with your branding. Both front and back sides are included. Print at standard business card size (3.5" × 2").`;
+
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - startTime,
+            response_text: _bcResponse,
+            action_count: 1,
+            action_success_count: 1,
+          }).eq('id', taskId);
+
+          if (!task.suppressEmail) {
+            await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, _bcResponse);
+          }
+          clearTimeout(masterTimer);
+          console.log(`[BUSINESS-CARD-FAST-PATH] Created: ${_bcFullUrl} (${_bcResult.fileSize} bytes)`);
+          return { taskId, success: true, response: _bcResponse, actions: [] };
+        } else {
+          console.warn(`[BUSINESS-CARD-FAST-PATH] createPDF failed: ${_bcResult.error}`);
+          await getSupabaseClient().from('tasks').update({ stuck_reason: `[BC-FAIL] ${_bcResult.error}` }).eq('id', taskId);
+          // Fall through to normal processing
+        }
+      } catch (_bcErr) {
+        const _bcErrStr = _bcErr instanceof Error ? `${_bcErr.message}\n${_bcErr.stack}` : String(_bcErr);
+        console.error(`[BUSINESS-CARD-FAST-PATH] Exception: ${_bcErrStr}`);
+        await getSupabaseClient().from('tasks').update({ stuck_reason: `[BC-ERROR] ${_bcErrStr.substring(0, 300)}` }).eq('id', taskId);
+        // Fall through to normal processing
+      }
+    }
+
     // Email sending fast path ("send email to X")
     const earlyEmailResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
     if (earlyEmailResult) {
@@ -2799,71 +2876,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // loop entirely and directly generate content + create the file.
     // This replaces all the gate logic inside the loop (DOC-ACTION-GATE, DOC-COMPLETE, etc.)
     // with a simple pre-loop execution that always works.
-    // ── BUSINESS CARD FAST PATH ──────────────────────────────────────────
-    // Business cards are structured visual documents — no AI content generation needed.
-    // Extract fields from task text and create the PDF directly with business_card type.
-    console.log(`[BUSINESS-CARD-CHECK] _isBusinessCard=${_isBusinessCard}, _isDocumentAction=${_isDocumentAction}, isTaskComplete=${isTaskComplete}, subject="${subject.substring(0, 50)}"`);
-    void getSupabaseClient().from('tasks').update({ stuck_reason: `[BC-DIAG] bc=${_isBusinessCard},doc=${_isDocumentAction},complete=${isTaskComplete}` }).eq('id', taskId);
-    if (_isBusinessCard && _isDocumentAction) {
-      console.log('[BUSINESS-CARD-FAST-PATH] Creating visual business card PDF directly');
-      try {
-        const _bcText = `${subject} ${body || ''}`;
-        // Extract fields from task text using regex
-        const _bcCompany = _bcText.match(/(?:for|called|named|company)\s+([A-Z][A-Za-z0-9\s&.']+?)(?:\.|,|\s+(?:my|we|our|is|are|based|in|at|—))/i)?.[1]?.trim()
-          || _bcText.match(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)\b.*?(?:business card|startup)/i)?.[1]?.trim()
-          || 'Company';
-        const _bcPerson = _bcText.match(/(?:my name is|name:?|named)\s+([A-Z][A-Za-z\s]+?)(?:\.|,|\s+(?:title|founder|ceo|cto|director|manager|email|phone))/i)?.[1]?.trim()
-          || _bcText.match(/(?:^|\s)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*,?\s*(?:Founder|CEO|CTO|Director|Manager|Owner)/i)?.[1]?.trim()
-          || username || 'Name';
-        const _bcTitle = _bcText.match(/(?:title:?|as)\s+([\w\s&]+?)(?:\.|,|\s+(?:email|phone|at|website))/i)?.[1]?.trim()
-          || _bcText.match(/\b(Founder\s*(?:&|and)?\s*(?:CEO)?|CEO|CTO|Director|Manager|Owner|Co-?Founder|President|VP)\b/i)?.[0]?.trim()
-          || 'Founder';
-        const _bcEmail = _bcText.match(/[\w.+-]+@[\w.-]+\.\w{2,}/)?.[0] || '';
-        const _bcPhone = _bcText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || '';
-        const _bcWebsite = _bcText.match(/(?:website:?\s*)?(?:https?:\/\/)?(?:www\.)?([a-z0-9][\w.-]+\.\w{2,})/i)?.[1] || '';
-        const _bcTagline = _bcText.match(/(?:tagline:?|slogan:?)\s*["']?([^"'.]+?)["']?(?:\.|,|$)/i)?.[1]?.trim() || '';
-
-        console.log(`[BUSINESS-CARD] Extracted: company=${_bcCompany}, person=${_bcPerson}, title=${_bcTitle}, email=${_bcEmail}, phone=${_bcPhone}, website=${_bcWebsite}`);
-
-        const { createPDF } = await import('../execution/actions/create-pdf.js');
-        const _bcFile = `${_bcCompany.replace(/[^a-z0-9]/gi, '_')}_Business_Card.pdf`;
-        const _bcResult = await createPDF({
-          filename: _bcFile,
-          content: [{
-            type: 'business_card',
-            cardData: {
-              companyName: _bcCompany,
-              personName: _bcPerson,
-              title: _bcTitle,
-              email: _bcEmail,
-              phone: _bcPhone,
-              website: _bcWebsite,
-              tagline: _bcTagline || `${_bcCompany} — AI-Powered Solutions`,
-              primaryColor: '#2563eb',
-            }
-          }]
-        });
-
-        if (_bcResult.success) {
-          const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
-          const _bcUrl = (_bcResult.url || _bcResult.filepath || '');
-          const _bcFullUrl = _bcUrl.startsWith('http') ? _bcUrl : `${_agBase}${_bcUrl}`;
-          aiResponse.content = `Your professional business card is ready!\n\n**File:** ${_bcFile}\n**Download:** ${_bcFullUrl}\n\nThe card features a modern design with your branding. Both front and back sides are included. Print at standard business card size (3.5" × 2").`;
-          aiResponse.actions = [{ type: 'create_pdf' as any, params: { filename: _bcFile } }];
-          console.log(`[BUSINESS-CARD-FAST-PATH] Created: ${_bcFullUrl}`);
-          isTaskComplete = true;
-          aiSignaledComplete = true;
-        } else {
-          const _bcErrMsg = _bcResult.error || 'unknown error';
-          console.warn('[BUSINESS-CARD-FAST-PATH] createPDF failed:', _bcErrMsg);
-          void getSupabaseClient().from('tasks').update({ stuck_reason: `[BUSINESS-CARD] createPDF failed: ${_bcErrMsg}` }).eq('id', taskId);
-        }
-      } catch (_bcErr) {
-        const _bcErrStr = _bcErr instanceof Error ? _bcErr.message : String(_bcErr);
-        console.error('[BUSINESS-CARD-FAST-PATH] Error:', _bcErrStr);
-        void getSupabaseClient().from('tasks').update({ stuck_reason: `[BUSINESS-CARD] Exception: ${_bcErrStr.substring(0, 300)}` }).eq('id', taskId);
-      }
-    }
+    // Business card fast path was moved to top-level (section 2b) for reliability
 
     if (_isDocumentAction && !_isBusinessCard && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && aiResponse.model !== 'fallback') {
       console.log('[DOC-FAST-PATH] Document task detected — generating content and creating file directly (bypass iteration loop)');
