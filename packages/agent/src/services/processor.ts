@@ -2242,8 +2242,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const isEmailReadTask = EMAIL_READ_KEYWORDS.some(kw => taskTextForFastPath.includes(kw));
     // Don't treat scheduling requests as email reads — "remind me to check my email in 3 minutes"
     const isActuallySchedule = /\b(remind|schedule|later|in\s+\d+\s*(min|sec|hour|minute|second|day|hr|[smhd]))\b/i.test(taskTextForFastPath);
+    // Don't fast-path compound email tasks that need AI analysis/action
+    // e.g., "check emails AND draft replies", "see if anything urgent", "respond to important ones"
+    const isCompoundEmailTask = /\b(draft|reply|respond|answer|write back|forward|summarize|prioritize|urgent|important|action|attention|flag|organize|categorize|sort)\b/i.test(taskTextForFastPath);
 
-    if (isEmailReadTask && !isActuallySchedule) {
+    if (isEmailReadTask && !isActuallySchedule && !isCompoundEmailTask) {
       const userQuery = `${subject} ${body}`.trim();
       const isSpecificQuery = /regarding|about|from\s+\w|subject|mention|related to|contain|saying|with\s+\w|where|which|tks|cnbc/i.test(userQuery);
 
