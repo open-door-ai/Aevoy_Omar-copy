@@ -368,6 +368,8 @@ app.get("/health", async (_req, res) => {
     conversationRelay: USE_CONVERSATION_RELAY,
     database: supabaseStatus,
     capsolver: !!process.env.CAPSOLVER_API_KEY,
+    groqApi: !!process.env.GROQ_API_KEY,
+    deepseekApi: !!process.env.DEEPSEEK_API_KEY,
     googleApi: !!process.env.GOOGLE_API_KEY,
     anthropicApi: !!process.env.ANTHROPIC_API_KEY,
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
