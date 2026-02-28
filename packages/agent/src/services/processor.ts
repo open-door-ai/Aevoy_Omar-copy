@@ -4444,6 +4444,17 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
       if (isTaskComplete) break;
 
+      // IMAGE GENERATION FAILURE: If this is an image task and generate_image just failed,
+      // stop immediately — don't let the AI iterate and search for stock photos or Canva
+      const _imgFailThisRound = iterationResults.find(r => r.action.type === 'generate_image' && !r.success);
+      if (_imgFailThisRound && _isImageCreationTask) {
+        aiResponse.content = `I wasn't able to generate the image right now (${_imgFailThisRound.error || 'API unavailable'}). Please try again in a few minutes.`;
+        isTaskComplete = true;
+        aiSignaledComplete = true;
+        console.log(`[IMAGE-FAIL] Image generation failed in loop — stopping: ${_imgFailThisRound.error}`);
+        break;
+      }
+
       // POST-ACTION SIGNUP DETECTION: After browsing to a signup page, immediately
       // fill the form using Playwright directly instead of waiting for the AI to
       // signal TASK_COMPLETE with advice. The AI can't fill forms — we do it mechanically.
@@ -5620,6 +5631,15 @@ Use training knowledge for all content. Do NOT search for templates. Just output
       totalTokens += nextResponse.tokensUsed || 0;
       aiResponse = nextResponse;
 
+      // IMAGE-STRIP (in-loop): If this is an image task, strip search/browse from new AI response
+      if (_isImageCreationTask && !_isDocumentAction && aiResponse.actions.length > 0) {
+        const _ilImgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'].includes(a.type));
+        if (_ilImgNonSearch.length < aiResponse.actions.length) {
+          console.log(`[IMAGE-STRIP-LOOP] Stripped ${aiResponse.actions.length - _ilImgNonSearch.length} search/browse actions in iteration ${currentIteration}`);
+          aiResponse.actions = _ilImgNonSearch;
+        }
+      }
+
       // Check iteration timeout
       const iterationDuration = Date.now() - iterationStart;
       if (iterationDuration > ITERATION_TIMEOUT_MS) {
@@ -6082,8 +6102,9 @@ Extract the ACTUAL phone number from search results and call them:
     } else if (_imgFailed && _isImageCreationTask) {
       // Image task but generation failed — give clear error, don't let AI iterate to suggest Canva
       aiResponse.content = `I wasn't able to generate the image right now (${_imgFailed.error || 'API unavailable'}). Please try again in a few minutes.`;
-      aiResponse.content += '\n[TASK_COMPLETE]';
-      console.log(`[IMAGE-FAIL] Image creation task but generate_image failed: ${_imgFailed.error}`);
+      isTaskComplete = true;
+      aiSignaledComplete = true;
+      console.log(`[IMAGE-FAIL] Image creation task but generate_image failed — stopping loop: ${_imgFailed.error}`);
     }
     const hasDirectResultData = signupAutoCompleted || _isRealGeneratedContent || !!_imgResult || actionResults.some(r =>
       ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
