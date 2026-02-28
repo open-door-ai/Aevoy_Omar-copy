@@ -2413,15 +2413,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       effectiveBody = `${body || _scheduledTask}\n\n[EXECUTION CONTEXT: This task was previously scheduled and is NOW FIRING. Execute "${_scheduledTask}" immediately. Do NOT use schedule/remind actions — the task is already triggered. Complete it and report the outcome to the user.]`;
     }
 
-    // FULL SEND MODE — signup auto-credential injection:
-    // When full_send_mode is enabled and this is a signup/account-creation task,
-    // auto-generate credentials so the agent never needs to ask the user for a password.
+    // AUTO-CREDENTIAL INJECTION for signup/account-creation tasks:
+    // The agent uses its OWN email (username@aevoy.com) — this is NOT fake, it's the agent's identity.
+    // Auto-generate credentials so the agent never needs to ask the user for a password.
     const _fullSendTaskText = `${subject} ${body}`.toLowerCase();
     const _isSignupContext = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|create\b.*\bprofile|register|enroll|open\b.*\baccount|make\b.*\baccount|make\s+me\s+an?\s+account)\b/i.test(_fullSendTaskText);
     if (_isSignupContext) {
       try {
-        const _fsSettings = await getUserSettings(userId);
-        if (_fsSettings.fullSendMode) {
           // Fetch user's email address for the signup
           const { data: _fsProfile } = await getSupabaseClient()
             .from('profiles')
@@ -2464,7 +2462,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             effectiveBody = `${effectiveBody}\n\n[AUTO-CREDENTIALS: email=${_userEmail}, password={primary_password}]\nUse these credentials to complete the signup. Do not ask the user for their password.`;
             console.log(`[FULL-SEND] Auto-credentials injected for signup task using template password (email=${_userEmail})`);
           }
-        }
       } catch (fsErr) {
         console.error('[FULL-SEND] Failed to inject auto-credentials:', fsErr);
         // Non-critical — continue without injection
