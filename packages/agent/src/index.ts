@@ -375,6 +375,46 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+// ---- Image generation test endpoint ----
+app.get("/debug/test-image-gen", async (req, res) => {
+  const googleKey = process.env.GOOGLE_API_KEY;
+  if (!googleKey) return res.json({ error: "GOOGLE_API_KEY not set" });
+
+  const models = [
+    'gemini-2.0-flash-exp-image-generation',
+    'gemini-2.0-flash-preview-image-generation',
+    'gemini-2.0-flash',
+  ];
+  const results: Record<string, string> = {};
+
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': googleKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Generate an image: A simple red circle on white background' }] }],
+          generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '1:1' } },
+        }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        results[model] = `ERROR ${resp.status}: ${errText.substring(0, 200)}`;
+      } else {
+        const data = await resp.json() as any;
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        const hasImage = parts.some((p: any) => p.inlineData?.data);
+        results[model] = hasImage ? `SUCCESS (image returned, ${parts.length} parts)` : `NO IMAGE in response (${parts.length} parts)`;
+      }
+    } catch (err: any) {
+      results[model] = `EXCEPTION: ${err.message}`;
+    }
+  }
+
+  res.json({ models: results, keyPrefix: googleKey.substring(0, 8) });
+});
+
 // ---- Voice diagnostic endpoint (for verifying TwiML generation) ----
 app.get("/debug/voice-twiml", (req, res) => {
   const secret = req.query.secret;

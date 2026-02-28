@@ -1446,6 +1446,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           }
         }
 
+        if (!_ifpBase64) {
+          // Log which models failed so we can debug
+          const _ifpFailMsg = `[IMAGE-FAST-PATH-FAIL] All Gemini image models exhausted/unavailable`;
+          console.error(_ifpFailMsg);
+          void getSupabaseClient().from('tasks').update({ stuck_reason: _ifpFailMsg }).eq('id', taskId);
+        }
+
         if (_ifpBase64) {
           // Save image
           const _ifpFs = await import('fs');
