@@ -7819,13 +7819,26 @@ RULES:
           // "Want me to book it?" is INTENTIONAL (system prompt tells model to use this wording) — ALLOW.
           // Block only: "Would you like me to" / "Shall I" / "Do you want me to" / generic "I can help"
           const _isPassiveFollowup = /^(would you like|shall i|do you want me to|i can help you|i could help|is there anything else)/i.test(followupQ);
-          if (!_isPassiveFollowup && followupQ.length > 5) {
+          // Reject follow-ups that offer to do the SAME action the user already asked for.
+          // If user said "order me pizza" and follow-up is "Want me to place the order?" — that's not a NEXT step, it's the SAME step.
+          const _subjectLower = (subject || '').toLowerCase();
+          const _followLower = followupQ.toLowerCase();
+          const _isRepeatAction = (
+            (/\b(order|buy|purchase)\b/.test(_subjectLower) && /\b(order|buy|purchase|place the order)\b/.test(_followLower)) ||
+            (/\b(book|reserv)\b/.test(_subjectLower) && /\b(book|reserv|make.*(booking|reservation))\b/.test(_followLower)) ||
+            (/\b(sign\s*up|register|create.*account)\b/.test(_subjectLower) && /\b(sign\s*up|register|create.*account|start.*profile)\b/.test(_followLower)) ||
+            (/\b(cancel|unsubscribe)\b/.test(_subjectLower) && /\b(cancel|unsubscribe)\b/.test(_followLower)) ||
+            (/\b(apply|submit.*application)\b/.test(_subjectLower) && /\b(apply|submit)\b/.test(_followLower))
+          );
+          if (!_isPassiveFollowup && !_isRepeatAction && followupQ.length > 5) {
             cleanResponse = cleanResponse + '\n\n' + followupQ;
             console.log(`[PROACTIVE] Added follow-up: "${followupQ}"`);
             // Update the DB response with the follow-up included
             await getSupabaseClient().from('tasks').update({ response_text: cleanResponse }).eq('id', taskId);
           } else if (_isPassiveFollowup) {
             console.log(`[PROACTIVE] Rejected passive follow-up: "${followupQ}"`);
+          } else if (_isRepeatAction) {
+            console.log(`[PROACTIVE] Rejected repeat-action follow-up: "${followupQ}" (user already asked for this)`);
           }
         }
       }

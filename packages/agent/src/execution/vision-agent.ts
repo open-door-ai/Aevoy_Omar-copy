@@ -760,6 +760,8 @@ SIGNUP: Try "Continue with Google/Apple" FIRST (faster). Fall back to email form
 
 BOOKING: If party/date/time selectors visible → fill them, click Search/Find Table, pick time slot, fill contact form (name/email/phone from credentials), click Confirm. DONE only with confirmation details.
 
+ORDER/PURCHASE: Navigate to menu → find item → ADD TO CART → proceed to CHECKOUT → fill delivery address + phone + name from credentials → complete order → DONE with order confirmation. Finding the price/store info is NOT done — you must go through the FULL checkout flow. If you hit a payment wall, DONE with "Order ready in cart — payment required" and include the total.
+
 NEVER describe what you COULD do. ACT. Never fabricate data — only report what's on screen.`;
 
 /**
@@ -1141,13 +1143,27 @@ export async function runVisionAgent(
           // "users sign in" / "customers can" — third-person instructions
           /\b(users|customers|subscribers|members) (can|should|need to|must|sign|log)\b/i.test(doneResult)
         );
-        if (isPassiveDone || _isAdviceDone) {
+        // ORDER/PURCHASE DONE REJECTION: If this is an ordering task and DONE only has
+        // price/location/menu info without order confirmation, it's research not completion.
+        const _isOrderTask = /\b(order|purchase|buy|checkout|add to cart|get me a|get.*deliver)\b/i.test(task);
+        const _isOrderInfoOnly = _isOrderTask && !isPassiveDone && !_isAdviceDone && (
+          // Has price info but no order confirmation
+          (/\$\d+|\bcosts?\b|\bpric(e|ed|ing)\b|\bper\s+(night|person|item)\b/i.test(doneResult) &&
+           !/\b(order(ed|.*confirm)|receipt|confirmation|checkout complete|added to cart|in.*cart|order.*placed|order.*number|transaction)\b/i.test(doneResult)) ||
+          // Has store/menu info but no actual order
+          (/\b(menu|store|location|address|deliver(y|s) to)\b/i.test(doneResult) &&
+           !/\b(order(ed|.*confirm)|receipt|added to cart|in.*cart|placed|transaction|checkout)\b/i.test(doneResult))
+        );
+        if (isPassiveDone || _isAdviceDone || _isOrderInfoOnly) {
           const credHint = taskCreds.email
             ? ` Credentials already provided: email=${taskCreds.email}, password=${taskCreds.password}. USE THEM.`
             : '';
-          const reason = isPassiveDone ? 'PASSIVE' : 'ADVICE';
+          const reason = isPassiveDone ? 'PASSIVE' : _isOrderInfoOnly ? 'ORDER-INCOMPLETE' : 'ADVICE';
           console.log(`[VISION-AGENT] REJECTED ${reason} DONE at step ${steps + 1}: "${doneResult.substring(0, 80)}"`);
-          history.push(`⚠️ ${reason} DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint} You MUST actually complete the task. Click buttons, fill forms, submit. If truly impossible after many tries, output FAIL (not DONE with advice). DONE = task succeeded. FAIL = task impossible. Advice = neither.`);
+          const orderHint = _isOrderInfoOnly
+            ? ' Finding prices/locations is RESEARCH, not completing the order. You must: ADD TO CART → CHECKOUT → FILL delivery info → COMPLETE ORDER. Go back to the menu/cart and continue.'
+            : '';
+          history.push(`⚠️ ${reason} DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint}${orderHint} You MUST actually complete the task. Click buttons, fill forms, submit. If truly impossible after many tries, output FAIL (not DONE with advice). DONE = task succeeded. FAIL = task impossible. Advice = neither.`);
           // If we've rejected 3+ DONE attempts, force FAIL to prevent infinite loop
           const doneRejectCount = history.filter(h => h.includes('DONE REJECTED')).length;
           if (doneRejectCount >= 3) {
