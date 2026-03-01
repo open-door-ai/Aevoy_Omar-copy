@@ -5436,8 +5436,8 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           }).eq('id', taskId).then(() => {});
 
           try {
-            // Wrap vision agent with 10-minute hard timeout to prevent infinite loops
-            const VISION_TIMEOUT_MS = 600000; // 10 minutes
+            // Wrap vision agent with 8-minute hard timeout to prevent infinite loops
+            const VISION_TIMEOUT_MS = 480000; // 8 minutes
             const visionResult = await Promise.race([
               runVisionAgent(visionPage, visionTask, userId, taskId, username),
               new Promise<never>((_, reject) =>
