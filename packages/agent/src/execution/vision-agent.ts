@@ -769,6 +769,14 @@ RULES:
 
 SIGNUP: Try "Continue with Google/Apple" FIRST (faster). Fall back to email form. Multi-step forms: click "Continue/Next" after email. If "Check your email" appears → WAIT (auto-verified).
 
+SHOPPING: On retail sites (Amazon, Best Buy, Walmart, etc.):
+- If "Continue shopping" or "Sign in" modal appears → press Escape or click X/Close
+- To find a specific product → use the site's SEARCH BAR, type the query, press Enter
+- On search results → CLICK the specific product you want (not category links)
+- On product page → extract: product name, price, star rating, then CLICK "Add to Cart"
+- If asked to sign in → skip/close and continue as guest if possible
+- DONE must include the EXACT product name, price, and rating you saw on the page
+
 BOOKING: If party/date/time selectors visible → fill them, click Search/Find Table, pick time slot, fill contact form (name/email/phone from credentials), click Confirm. DONE only with confirmation details.
 
 ORDER/PURCHASE: Navigate to menu → find item → ADD TO CART → proceed to CHECKOUT → fill delivery address + phone + name from credentials → complete order → DONE with order confirmation. Finding the price/store info is NOT done — you must go through the FULL checkout flow. If you hit a payment wall, DONE with "Order ready in cart — payment required" and include the total.
@@ -989,6 +997,33 @@ export async function runVisionAgent(
           await handleCaptchaIfPresent(activePage, userId, taskId);
         }
       } catch { /* non-critical */ }
+
+      // AUTO-DISMISS COMMON MODALS: Cookie banners, sign-in prompts, newsletter popups,
+      // "Continue shopping" overlays — these trap the agent in loops on retail sites
+      if (steps % 3 === 0) {
+        try {
+          await activePage.evaluate(() => {
+            // Common modal/overlay selectors — click dismiss/close/X buttons
+            const dismissSelectors = [
+              '[aria-label="Close"]', '[aria-label="Dismiss"]', '[aria-label="close"]',
+              'button.close', '.modal-close', '.popup-close', '.overlay-close',
+              '[data-dismiss="modal"]', '.cookie-close', '#cookie-accept',
+              'button[id*="accept"]', 'button[id*="cookie"]',
+              '.newsletter-close', '#newsletter-dismiss',
+            ];
+            for (const sel of dismissSelectors) {
+              const btn = document.querySelector(sel) as HTMLElement;
+              if (btn && btn.offsetParent !== null) { btn.click(); break; }
+            }
+            // Remove overlay divs that block interaction
+            document.querySelectorAll('[class*="overlay"][style*="fixed"], [class*="modal"][style*="fixed"], [class*="popup"][style*="fixed"]').forEach(el => {
+              if ((el as HTMLElement).style.position === 'fixed' || getComputedStyle(el).position === 'fixed') {
+                (el as HTMLElement).style.display = 'none';
+              }
+            });
+          }).catch(() => {});
+        } catch { /* non-critical */ }
+      }
 
       // BOT WALL DETECTION: Cloudflare, DataDome, PerimeterX block pages
       // Detected by: checking for challenge/blocked page content
