@@ -5370,8 +5370,26 @@ YOU must complete the task using a DIFFERENT approach:
                   aiResponse.content = `I've completed the task on the website (${visionPage?.url() || 'canva.com'}).`;
                 }
               } else {
-                aiResponse.content = rawVisionResult;
+                // ORDER-INCOMPLETE CHECK at processor level:
+                // If task is an order/purchase and vision result only has price/location
+                // without actual order confirmation, reject and continue trying
+                const _isOrderTaskP = /\b(order|purchase|buy|checkout|add to cart|get me a|get.*deliver)\b/i.test(subject);
+                const _hasOrderConfirmP = /\b(order(ed|.*confirm)|receipt|confirmation|checkout complete|added to cart|in.*cart|order.*placed|order.*number|transaction)\b/i.test(rawVisionResult);
+                const _hasOnlyInfoP = _isOrderTaskP && !_hasOrderConfirmP && (
+                  /\$\d+|\bpric(e|ed|ing)\b/i.test(rawVisionResult) ||
+                  /\b(location|address|store|menu)\b/i.test(rawVisionResult)
+                );
+                if (_hasOnlyInfoP) {
+                  console.warn(`[VISION-VERIFY] ORDER-INCOMPLETE: Vision found price/location but didn't complete the order. Continuing...`);
+                  lastVisionFailed = true;
+                  visionFailureNote = `[ORDER NOT COMPLETED] The browser found price/location info but did NOT actually place the order. ` +
+                    `You MUST: ADD TO CART → CHECKOUT → FILL delivery info → COMPLETE ORDER. ` +
+                    `Info found: "${rawVisionResult.substring(0, 200)}"`;
+                } else {
+                  aiResponse.content = rawVisionResult;
+                }
               }
+              if (!lastVisionFailed) {
               isTaskComplete = true;
               aiSignaledComplete = true;
               // Only protect from quality gates if vision result shows actual completion
@@ -5415,6 +5433,7 @@ YOU must complete the task using a DIFFERENT approach:
                 }
               } catch { /* non-critical */ }
               break;
+              } // close if (!lastVisionFailed) block
               } // close booking verification else block
             } else {
               const errMsg = visionResult.error || 'Unknown error';
