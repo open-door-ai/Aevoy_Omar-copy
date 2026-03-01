@@ -1762,7 +1762,7 @@ export async function generateVisionResponse(
 
       const response = await withTimeout(getGeminiClient().chat.completions.create({
         model: "gemini-2.0-flash",
-        max_tokens: 512,
+        max_tokens: 1024,
         messages: [{ role: "user", content: msgContent }],
       }), 15000);
 
@@ -1792,7 +1792,7 @@ export async function generateVisionResponse(
 
       const response = await withTimeout(getGroqClient().chat.completions.create({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        max_tokens: 512,
+        max_tokens: 1024,
         messages: [
           ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
           { role: "user" as const, content: groqVisionContent }
@@ -1822,7 +1822,7 @@ export async function generateVisionResponse(
         : [{ type: "text" as const, text: prompt }];
       const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-3-5-haiku-latest",
-        max_tokens: 512,
+        max_tokens: 1024,
         system: systemPrompt || "Analyze this image and respond concisely.",
         messages: [{ role: "user", content: haikuContent }]
       }), 15000);
@@ -1846,7 +1846,7 @@ export async function generateVisionResponse(
         : [{ type: "text" as const, text: prompt }];
       const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 512,
+        max_tokens: 1024,
         system: systemPrompt || "Analyze this image and respond concisely.",
         messages: [{ role: "user", content: sonnetContent }]
       }), 20000);

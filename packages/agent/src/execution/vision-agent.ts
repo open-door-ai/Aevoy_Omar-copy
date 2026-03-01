@@ -53,10 +53,11 @@ interface ElementInfo {
 /**
  * Extract all interactive elements from the page with numeric indices.
  * Returns a compact list the AI can reference by number.
+ * Traverses: main DOM, shadow DOM, and cross-origin iframes.
  */
 async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> {
-  return await page.evaluate((sel) => {
-    // Traverse both main DOM and shadow roots (Stripe, Shopify, etc. hide forms in shadow DOM)
+  // 1. Main document + shadow DOM elements
+  const mainElements = await page.evaluate((sel) => {
     function collectElements(root: Document | ShadowRoot | Element, depth = 0): Element[] {
       if (depth > 5) return [];
       const els: Element[] = Array.from(root.querySelectorAll(sel));
@@ -76,7 +77,6 @@ async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> 
 
     let idx = 0;
     for (const el of interactive) {
-      // Skip invisible elements
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
       const style = window.getComputedStyle(el);
@@ -89,7 +89,6 @@ async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> 
       const role = el.getAttribute('role') || undefined;
       const value = tag === 'input' || tag === 'textarea' ? (el as HTMLInputElement).value || undefined : undefined;
 
-      // Get visible text (button/link label)
       let text = el.textContent?.trim().substring(0, 60) || undefined;
       if (!text && el.getAttribute('aria-label')) text = el.getAttribute('aria-label') || undefined;
       if (!text && el.getAttribute('title')) text = el.getAttribute('title') || undefined;
@@ -99,11 +98,61 @@ async function extractElements(page: Page, sel: string): Promise<ElementInfo[]> 
       results.push({ index: idx, tag, type, text: text || undefined, placeholder, name, href, value, role });
       idx++;
 
-      if (idx >= 200) break; // cap at 200 elements (same as browser-use)
+      if (idx >= 200) break;
     }
 
     return results;
   }, sel);
+
+  // 2. Iframe elements — booking widgets (OpenTable, Resy, Stripe) hide forms in iframes
+  // Use Playwright's frame() API which can access cross-origin iframe content
+  try {
+    const frames = page.frames();
+    let iframeIdx = mainElements.length;
+    for (const frame of frames) {
+      if (frame === page.mainFrame()) continue; // skip main frame
+      if (iframeIdx >= 200) break;
+      try {
+        const frameElements = await frame.evaluate(([sel, startIdx]: [string, number]) => {
+          const els = Array.from(document.querySelectorAll(sel)).filter(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) return false;
+            const s = window.getComputedStyle(el);
+            return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+          });
+          const results: Array<{
+            index: number; tag: string; type?: string; text?: string;
+            placeholder?: string; name?: string; href?: string; value?: string; role?: string;
+            _iframe: true;
+          }> = [];
+          let idx = startIdx;
+          for (const el of els) {
+            const tag = el.tagName.toLowerCase();
+            const type = el.getAttribute('type') || undefined;
+            const placeholder = el.getAttribute('placeholder') || undefined;
+            const name = el.getAttribute('name') || el.getAttribute('id') || undefined;
+            const role = el.getAttribute('role') || undefined;
+            const value = tag === 'input' || tag === 'textarea' ? (el as HTMLInputElement).value || undefined : undefined;
+            let text = el.textContent?.trim().substring(0, 60) || undefined;
+            if (!text && el.getAttribute('aria-label')) text = el.getAttribute('aria-label') || undefined;
+            const href = tag === 'a' ? (el as HTMLAnchorElement).href?.substring(0, 100) || undefined : undefined;
+            results.push({ index: idx, tag, type, text: text || undefined, placeholder, name, href, value, role, _iframe: true });
+            idx++;
+            if (idx >= 200) break;
+          }
+          return results;
+        }, [sel, iframeIdx] as [string, number]).catch(() => []);
+        if (frameElements.length > 0) {
+          for (const fe of frameElements) {
+            mainElements.push({ index: fe.index, tag: `IFRAME>${fe.tag}`, type: fe.type, text: fe.text, placeholder: fe.placeholder, name: fe.name, href: fe.href, value: fe.value, role: fe.role });
+            iframeIdx = fe.index + 1;
+          }
+        }
+      } catch { /* frame may be detached or sandboxed */ }
+    }
+  } catch { /* non-critical */ }
+
+  return mainElements;
 }
 
 // Selector for all interactive elements (serialized as string to pass into page.evaluate)
@@ -123,6 +172,41 @@ const INTERACTIVE_SELECTOR =
   '[tabindex="0"],' +
   '[aria-haspopup],' +
   'summary';
+
+/**
+ * Resolve the correct page/frame for an element index.
+ * If the element lives in an iframe (tag starts with "IFRAME>"), find and return the matching frame.
+ * Otherwise return the main page. Also returns the adjusted index within that frame.
+ */
+async function resolveFrameForIndex(page: Page, index: number, elements: ElementInfo[]): Promise<{ target: Page | import('patchright').Frame; adjustedIndex: number }> {
+  const elem = elements.find(e => e.index === index);
+  if (elem && elem.tag.startsWith('IFRAME>')) {
+    // Find which iframe this element belongs to by counting iframe elements before this one
+    const iframeElements = elements.filter(e => e.tag.startsWith('IFRAME>'));
+    const firstIframeIdx = iframeElements[0]?.index ?? index;
+    const offsetInIframes = index - firstIframeIdx;
+
+    const frames = page.frames().filter(f => f !== page.mainFrame());
+    for (const frame of frames) {
+      try {
+        const sel = INTERACTIVE_SELECTOR;
+        const count = await frame.evaluate((sel: string) => {
+          return Array.from(document.querySelectorAll(sel)).filter(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) return false;
+            const s = window.getComputedStyle(el);
+            return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+          }).length;
+        }, sel).catch(() => 0);
+
+        if (offsetInIframes < count) {
+          return { target: frame, adjustedIndex: offsetInIframes };
+        }
+      } catch { /* frame detached */ }
+    }
+  }
+  return { target: page, adjustedIndex: index };
+}
 
 /**
  * Get interactive element count (for post-action change detection).
@@ -655,6 +739,8 @@ CLICK_AT IS YOUR SECRET WEAPON (CRITICAL):
 - Modern SPAs render custom components (date pickers, time selectors, reservation slots, card buttons) that don't appear in the element list. Look at the SCREENSHOT, find the element visually, estimate its center x,y coordinates, and CLICK_AT.
 - CLICK_AT is always available. Element list is helpful but NOT required to click things.
 
+IFRAME ELEMENTS: Elements prefixed with "IFRAME>" live inside embedded widgets (booking forms, payment frames, etc.). Interact with them using the SAME actions (CLICK, TYPE, FILL) — the system handles frame switching automatically.
+
 NEVER DESCRIBE, ALWAYS ACT:
 - NEVER output DONE saying "here's the info" or "you can do X". That means you FAILED.
 - NEVER output DONE with advice like "visit the website", "call them", "confirm directly". YOU must do it.
@@ -1122,20 +1208,15 @@ export async function runVisionAgent(
         });
       } catch { /* non-critical */ }
 
-      // OBSERVE: DOM-first with screenshots-as-needed (Browser Use / Manus technique)
-      // Screenshots add ~0.8s latency from image encoder. On a 50-step task that's 40s overhead.
-      // Only capture screenshots when visual context is truly needed:
-      //   1. First step (need to see the page)
-      //   2. URL changed (new page loaded)
-      //   3. Every 3rd step (periodic visual check)
-      //   4. After form submit (need to verify state)
-      //   5. When stuck (same URL for 3+ steps)
-      //   6. Fewer elements than expected (page might be loading/broken)
+      // OBSERVE: Screenshots are critical for interactive tasks where the AI needs to see
+      // custom widgets (date pickers, time slots, design tools) that don't appear in the DOM element list.
+      // For simple research/lookup tasks, DOM-first saves ~0.8s/step.
       const url = activePage.url();
       const urlChanged = url !== lastUrl;
       const isStuck = !urlChanged && sameUrlCount >= 2;
-      const needsScreenshot = steps === 0 || urlChanged || steps % 3 === 0 || isStuck ||
-        (lastAction && /submit|NAVIGATE|PRESS:Enter/i.test(lastAction));
+      // Interactive tasks ALWAYS get screenshots — AI needs visual context for CLICK_AT on custom widgets
+      const needsScreenshot = isComplexBrowserTask || steps === 0 || urlChanged || steps % 2 === 0 || isStuck ||
+        (lastAction && /submit|NAVIGATE|PRESS:Enter|CLICK_AT/i.test(lastAction));
 
       let screenshot: string;
       let elements: ElementInfo[];
@@ -1482,6 +1563,19 @@ export async function runVisionAgent(
       }
 
       // Execute the action
+      // If targeting an iframe element, resolve the correct frame for action execution
+      let actionPage: Page | import('patchright').Frame = activePage;
+      let actionIndex = action.index;
+      if (action.index !== undefined && elements.find(e => e.index === action.index && e.tag.startsWith('IFRAME>'))) {
+        try {
+          const resolved = await resolveFrameForIndex(activePage, action.index, elements);
+          actionPage = resolved.target;
+          actionIndex = resolved.adjustedIndex;
+          if (actionPage !== activePage) {
+            console.log(`[VISION-AGENT] Routing action to iframe frame (index ${action.index} → ${actionIndex})`);
+          }
+        } catch { /* fall back to main page */ }
+      }
       let actionOk = false;
       try {
         switch (action.type) {
@@ -1507,7 +1601,7 @@ export async function runVisionAgent(
             const countBeforeClick = elements.length;
 
             actionOk = await Promise.race([
-              clickByIndex(activePage, action.index!),
+              clickByIndex(actionPage as Page, actionIndex!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
 
@@ -1635,7 +1729,7 @@ export async function runVisionAgent(
 
           case 'dblclick': {
             actionOk = await Promise.race([
-              dblclickByIndex(activePage, action.index!),
+              dblclickByIndex(actionPage as Page, actionIndex!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
             if (actionOk) {
@@ -1647,7 +1741,7 @@ export async function runVisionAgent(
 
           case 'rightclick': {
             actionOk = await Promise.race([
-              rightclickByIndex(activePage, action.index!),
+              rightclickByIndex(actionPage as Page, actionIndex!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
             if (actionOk) {
@@ -1658,7 +1752,7 @@ export async function runVisionAgent(
 
           case 'hover': {
             actionOk = await Promise.race([
-              hoverByIndex(activePage, action.index!),
+              hoverByIndex(actionPage as Page, actionIndex!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
             if (actionOk) {
@@ -1669,7 +1763,7 @@ export async function runVisionAgent(
 
           case 'longpress': {
             actionOk = await Promise.race([
-              longpressByIndex(activePage, action.index!),
+              longpressByIndex(actionPage as Page, actionIndex!),
               new Promise<boolean>(resolve => setTimeout(() => resolve(false), 5000)),
             ]);
             if (actionOk) {
@@ -1693,7 +1787,7 @@ export async function runVisionAgent(
 
           case 'type': {
             hasReachedForm = true;
-            actionOk = await typeByIndex(activePage, action.index!, action.text!);
+            actionOk = await typeByIndex(actionPage as Page, actionIndex!, action.text!);
             if (actionOk) {
               hasFilledAnyField = true;
               await activePage.waitForTimeout(100);
@@ -1715,7 +1809,7 @@ export async function runVisionAgent(
 
           case 'fill': {
             hasReachedForm = true;
-            actionOk = await fillByIndex(activePage, action.index!, action.text!);
+            actionOk = await fillByIndex(actionPage as Page, actionIndex!, action.text!);
             if (actionOk) {
               hasFilledAnyField = true;
               await activePage.waitForTimeout(100);
@@ -1737,7 +1831,7 @@ export async function runVisionAgent(
 
           case 'select': {
             hasReachedForm = true;
-            actionOk = await selectByIndex(activePage, action.index!, action.text!);
+            actionOk = await selectByIndex(actionPage as Page, actionIndex!, action.text!);
             if (actionOk) hasFilledAnyField = true;
             break;
           }
@@ -1879,55 +1973,80 @@ export async function runVisionAgent(
         }
       }
 
-      // BATCH EXECUTION: If AI returned multiple actions, execute remaining ones
-      // Skip batch if first action failed, was navigation (page changed), or was done/fail
+      // BATCH EXECUTION: If AI returned multiple actions, execute remaining ones.
+      // Uses main code paths (fillByIndex, typeByIndex, clickByIndex) for full verification.
+      // Re-extracts elements after each action to prevent index drift from SPA re-renders.
       if (batchSize > 1 && actionOk && !['navigate', 'done', 'fail', 'scroll', 'wait', 'switch_tab'].includes(action.type)) {
         for (let bi = 1; bi < parsedActions.length && bi < 8; bi++) {
           const batchAction = parsedActions[bi]!;
           if (!batchAction || batchAction.type === 'done' || batchAction.type === 'fail' || batchAction.type === 'navigate') break;
+
+          // Re-extract elements after each action to prevent index drift
+          // SPA re-renders after form fills shift ordinal indices
+          await activePage.waitForTimeout(150);
+
           try {
             let bOk = false;
             switch (batchAction.type) {
               case 'fill': {
-                bOk = await activePage.evaluate(([idx, val, sel]: [number, string, string]) => {
-                  const els = Array.from(document.querySelectorAll(sel)).filter(el => {
-                    const r = el.getBoundingClientRect();
-                    const s = window.getComputedStyle(el);
-                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
-                  });
-                  const el = els[idx] as HTMLInputElement | undefined;
-                  if (!el) return false;
-                  el.focus();
-                  const nativeSetter = Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype, 'value'
-                  )?.set || Object.getOwnPropertyDescriptor(
-                    window.HTMLTextAreaElement.prototype, 'value'
-                  )?.set;
-                  if (nativeSetter) nativeSetter.call(el, val);
-                  else el.value = val;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return true;
-                }, [batchAction.index!, batchAction.text!, INTERACTIVE_SELECTOR] as [number, string, string]).catch(() => false);
+                hasReachedForm = true;
+                bOk = await fillByIndex(activePage, batchAction.index!, batchAction.text!);
+                if (bOk) hasFilledAnyField = true;
                 break;
               }
               case 'type': {
+                hasReachedForm = true;
                 bOk = await typeByIndex(activePage, batchAction.index!, batchAction.text!);
+                if (bOk) hasFilledAnyField = true;
+                break;
+              }
+              case 'select': {
+                hasReachedForm = true;
+                bOk = await selectByIndex(activePage, batchAction.index!, batchAction.text!);
+                if (bOk) hasFilledAnyField = true;
                 break;
               }
               case 'click': {
                 bOk = await clickByIndex(activePage, batchAction.index!);
+                if (bOk) {
+                  await waitForSpaStable(activePage, 1000);
+                }
                 break;
               }
               case 'click_at': {
                 const bx = batchAction.index!;
                 const by = parseInt(batchAction.text!);
-                await activePage.mouse.click(bx, by);
+                const bjx = bx + (Math.random() - 0.5) * 4;
+                const bjy = by + (Math.random() - 0.5) * 4;
+                try {
+                  const cdpB = await (activePage.context() as any).newCDPSession(activePage);
+                  await cdpB.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: bjx, y: bjy, button: 'left' });
+                  await cdpB.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: bjx, y: bjy, button: 'left', clickCount: 1 });
+                  await activePage.waitForTimeout(30 + Math.floor(Math.random() * 60));
+                  await cdpB.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: bjx, y: bjy, button: 'left', clickCount: 1 });
+                  await cdpB.detach().catch(() => {});
+                } catch {
+                  await activePage.mouse.click(bjx, bjy);
+                }
                 bOk = true;
                 break;
               }
+              case 'hover': {
+                bOk = await hoverByIndex(activePage, batchAction.index!);
+                break;
+              }
+              case 'dblclick': {
+                bOk = await dblclickByIndex(activePage, batchAction.index!);
+                break;
+              }
               case 'press': {
-                await activePage.keyboard.press(batchAction.text || 'Enter');
+                await activePage.keyboard.press(batchAction.key || batchAction.text || 'Enter');
+                bOk = true;
+                break;
+              }
+              case 'scroll': {
+                const bDir = batchAction.text === 'up' ? -600 : 600;
+                await activePage.mouse.wheel(0, bDir);
                 bOk = true;
                 break;
               }
@@ -1941,14 +2060,13 @@ export async function runVisionAgent(
               console.log(`[VISION-AGENT] BATCH ${bi}: ${batchAction.type}:${batchAction.index ?? ''} → FAIL, stopping batch`);
               break;
             }
-            await activePage.waitForTimeout(100); // Brief pause between batch actions
           } catch (batchErr) {
             console.warn(`[VISION-AGENT] Batch action ${bi} failed: ${batchErr}`);
             break;
           }
         }
         // Wait for page to settle after batch
-        await waitForSpaStable(activePage, 1500);
+        await waitForSpaStable(activePage, 2000);
       }
     }
 

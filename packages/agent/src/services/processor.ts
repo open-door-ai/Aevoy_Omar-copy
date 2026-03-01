@@ -3678,6 +3678,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 const vgName = senderName || username;
                 const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy. Submit the form.`;
                 const vgResult = await runVisionAgent(signupPage, vgTask, userId, taskId, username);
+                totalAiCost += vgResult.cost || 0; // Track vision agent costs for billing
                 if (vgResult.success) {
                   aiResponse.content = vgResult.result || `Signed up using ${vgEmail}.`;
                   isTaskComplete = true;
@@ -5337,6 +5338,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 setTimeout(() => reject(new Error(`Vision agent timeout after ${VISION_TIMEOUT_MS / 60000} minutes`)), VISION_TIMEOUT_MS)
               ),
             ]);
+            totalAiCost += visionResult.cost || 0; // Track vision agent costs for billing
             console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
             if (visionResult.success) {
               const rawVisionResult = visionResult.result || 'Task completed successfully.';
@@ -6335,6 +6337,7 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                   const agName = senderName || username;
                   const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy. Complete the task fully.`;
                   const agResult = await runVisionAgent(advGatePage, agTask, userId, taskId, username);
+                  totalAiCost += agResult.cost || 0; // Track vision agent costs for billing
                   if (agResult.success) {
                     aiResponse.content = agResult.result || `Task completed.`;
                     console.log(`[ADVICE-GATE] Vision agent completed: ${aiResponse.content.substring(0, 80)}`);
