@@ -358,7 +358,7 @@ async function callProvider(
           { role: "user", content: userPrompt },
         ],
         max_tokens: maxTokens,
-        temperature: 0.7,
+        temperature: 0.3,
         stream: true,
         stream_options: { include_usage: true },
       });
@@ -435,7 +435,7 @@ async function callProvider(
           { role: "user", content: userPrompt },
         ],
         max_tokens: maxTokens,
-        temperature: 0.7,
+        temperature: 0.3,
         stream: true,
       });
       let content = '';
@@ -1217,7 +1217,14 @@ HOW TO SOUND HUMAN:
 - Be direct: if the answer is one sentence, write one sentence. Don't pad.
 - Dry humor and mild opinions are fine: "insurance is... something", "traffic APIs have strong feelings about that"
 - Never narrate your process: don't say "I'm going to search for X" — just do it and report the outcome.
-- Short responses are almost always better than long ones. Don't over-explain.`;
+- Short responses are almost always better than long ones. Don't over-explain.
+
+=== OUTPUT FORMAT — NON-NEGOTIABLE ===
+Every response that involves DOING something MUST contain at least one [ACTION:...] tag.
+Responses with NO action tags are DISCARDED by the execution engine — the user sees nothing.
+[ACTION:search("query")] [ACTION:browse("url")] [ACTION:send_email("to","subj","body")] [ACTION:send_sms("+num","msg")] [ACTION:call_user("msg")] [ACTION:schedule("desc","time")] [ACTION:remember("fact")] [ACTION:create_excel("name","data")] [ACTION:create_powerpoint("title","slides")]
+If you write "I'll search for X" without [ACTION:search("X")], NOTHING HAPPENS. The [ACTION:] tag IS the execution.
+=== END FORMAT ===`;
 
 // Lightweight system prompt for generate tasks — skips the 11k-token AGI action prompt
 // which massively inflates input tokens and causes timeout on code/HTML generation.
@@ -1414,8 +1421,33 @@ export async function generateResponse(
       const startTime = Date.now();
       // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
       const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
+
+      // PROACTIVE ACTION ENFORCEMENT for non-Claude providers (DeepSeek/Groq/Kimi)
+      // These models need explicit format reminders at the END of the prompt (recency bias)
+      // Claude/Gemini follow the system prompt's action format reliably — skip for them
+      let effectiveUserPrompt = userPrompt;
+      if (taskType !== 'generate' && taskType !== 'validate' &&
+          (config.provider === 'deepseek' || config.provider === 'groq' || config.provider === 'kimi')) {
+        effectiveUserPrompt = userPrompt + `\n\n=== MANDATORY OUTPUT FORMAT ===
+YOUR RESPONSE **MUST** CONTAIN [ACTION:...] TAGS to execute anything.
+[ACTION:search("query")] — search the web
+[ACTION:browse("https://example.com")] — navigate to a URL
+[ACTION:fill("field_name", "value")] — fill a form field
+[ACTION:click("button text")] — click a button
+[ACTION:send_email("to@email.com", "Subject", "Body")] — send email
+[ACTION:send_sms("+1234567890", "message")] — send text message
+[ACTION:call_user("message to say")] — call the user
+[ACTION:call_external("+1234567890", "what to say")] — call a business
+[ACTION:schedule("task description", "cron_or_time")] — schedule a task
+[ACTION:remember("important fact")] — save to memory
+[ACTION:create_excel("filename", "sheet data")] — create spreadsheet
+[ACTION:create_powerpoint("title", "slide content")] — create presentation
+Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output tags NOW.
+=== END FORMAT ===`;
+      }
+
       const result = await withTimeout(
-        callProvider(config, systemPromptWithUser, userPrompt, maxOutputTokens),
+        callProvider(config, systemPromptWithUser, effectiveUserPrompt, maxOutputTokens),
         timeout,
         `${config.provider}/${config.model}`
       );
@@ -1444,9 +1476,54 @@ export async function generateResponse(
         }).catch(() => {}); // fire-and-forget
       }
 
+      const parsedActions = parseActions(result.content);
+
+      // SYNTHETIC ACTION EXTRACTION: If provider returned 0 actions but described them in text,
+      // extract intents and synthesize action tags. Catches DeepSeek/Groq's text-only responses
+      // without wasting a full re-prompt round-trip (saves 5-15 seconds per failure).
+      if (parsedActions.length === 0 && taskType !== 'generate' && taskType !== 'validate' && taskType !== 'respond') {
+        const text = result.content;
+        const syntheticActions: Action[] = [];
+
+        // "I'll search for X" / "Let me search for X" / "Searching for X"
+        const searchMatch = text.match(/(?:I'll|let me|I will|I'm going to|going to)\s+search\s+(?:for\s+)?["']?([^"'\n.]{5,80})["']?/i);
+        if (searchMatch) syntheticActions.push({ type: 'search', params: { query: searchMatch[1].trim() } } as Action);
+
+        // "navigate to https://..." / "go to https://..."
+        const browseMatch = text.match(/(?:navigate|browse|go|visit|head)\s+to\s+(https?:\/\/[^\s"')\]]+)/i);
+        if (browseMatch) syntheticActions.push({ type: 'browse', params: { url: browseMatch[1] } } as Action);
+
+        // "send a text/sms to +1234567890"
+        const smsMatch = text.match(/(?:send|text)\s+(?:a\s+)?(?:text|sms|message)\s+to\s+(\+?\d[\d\s-]{8,15})/i);
+        if (smsMatch) {
+          const msgMatch = text.match(/(?:saying|with|:)\s*["']?([^"'\n]{10,200})["']?/i);
+          syntheticActions.push({ type: 'send_sms', params: { to: smsMatch[1].replace(/[\s-]/g, ''), message: msgMatch?.[1] || text.substring(0, 200) } } as Action);
+        }
+
+        // "send an email to X"
+        const emailMatch = text.match(/(?:send|write)\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i);
+        if (emailMatch) syntheticActions.push({ type: 'send_email', params: { to: emailMatch[1], subject: taskSubject?.substring(0, 80) || 'Message from Aevoy', body: text.substring(0, 500) } } as Action);
+
+        // "call +1234567890" / "call the restaurant"
+        const callMatch = text.match(/(?:call|phone|dial)\s+(?:the\s+)?(?:user|them|him|her|you|back)\b/i);
+        if (callMatch) syntheticActions.push({ type: 'call_user', params: { message: text.substring(0, 300) } } as Action);
+
+        const callExtMatch = text.match(/(?:call|phone|dial)\s+(?:the\s+)?(?:restaurant|business|store|shop|place|number)\s*(?:at\s+)?(\+?\d[\d\s-]{8,15})?/i);
+        if (callExtMatch && callExtMatch[1]) syntheticActions.push({ type: 'call_external', params: { to: callExtMatch[1].replace(/[\s-]/g, ''), message: text.substring(0, 300) } } as Action);
+
+        // "schedule/remind"
+        const schedMatch = text.match(/(?:schedule|remind|set\s+(?:a\s+)?reminder)\s+(?:to\s+|for\s+)?["']?([^"'\n]{5,100})["']?/i);
+        if (schedMatch) syntheticActions.push({ type: 'schedule', params: { description: schedMatch[1].trim(), cronExpression: 'once' } } as Action);
+
+        if (syntheticActions.length > 0) {
+          console.log(`[SYNTHETIC-ACTION] Extracted ${syntheticActions.length} actions from text-only response (provider: ${config.provider}/${config.model})`);
+          parsedActions.push(...syntheticActions);
+        }
+      }
+
       const aiResponse: AIResponse = {
         content: result.content,
-        actions: parseActions(result.content),
+        actions: parsedActions,
         tokensUsed: totalTokens,
         cost,
         model: config.model,
