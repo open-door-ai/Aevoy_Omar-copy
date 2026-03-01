@@ -812,17 +812,12 @@ EXECUTION MODEL (Reason → Observe → Plan → Act):
   * "Find romantic restaurant Vancouver" → [ACTION:search("best romantic dinner restaurants downtown Vancouver 2025")]
   * "Find Italian restaurant near me" → [ACTION:search("best Italian restaurant downtown Vancouver site:yelp.com OR site:tripadvisor.com")]
   * NEVER browse("yelp.com/search?...") — Yelp is JavaScript-rendered and returns empty HTML to bots.
-- PRICE LOOKUP STRATEGY (use search() FIRST for all major retailers — never browse directly to product pages):
-  * Amazon → [ACTION:search("MacBook Pro 16 M4 Pro amazon price site:amazon.com")] — Amazon blocks bots
-  * Best Buy → [ACTION:search("iPhone 16 Pro 256GB bestbuy.ca price")] — Best Buy is slow for bots
-  * Apple Store → [ACTION:search("MacBook Pro 16 M4 Pro apple canada price site:apple.com/ca")]
-  * Walmart, Costco, Target → [ACTION:search("[product] walmart price 2026")]
-  * "Check price at Best Buy AND Apple" → one search per store is usually enough. 90 seconds vs 15 minutes.
-  * Only browse to a retailer site as LAST RESORT if 2 searches return nothing useful.
-  * NEVER use screenshot_ocr on retailer sites — it captures bot-detection pages, not products.
-  * ⚠️ CRITICAL: For price lookups, NEVER launch a browser/vision agent. Search results contain prices directly.
-    If search returns the price: report it immediately. DONE. Do NOT also browse the product page.
-    If 2+ searches fail to return the price: then and only then browse the specific product URL.
+- PRICE LOOKUP STRATEGY:
+  * When the user says "find me the cheapest X" without naming a site → search first: [ACTION:search("product name price")]
+  * When the user says "go to amazon.ca" or "go to bestbuy.ca" → BROWSE THAT SITE. The user explicitly asked to go there.
+  * ⚠️ CRITICAL: If the user names a specific website ("go to X", "use X", "on X.com"), ALWAYS browse there.
+    User intent overrides optimization. [ACTION:browse("https://www.amazon.ca")] — then use the site's search bar.
+  * If no specific site is named and you just need a price, search is faster than browsing.
 - screenshot_ocr IS FOR: physical documents, scanned PDFs, images with text, receipts. NOT for reading regular web pages — use browse() for that.
 - BE RESOURCEFUL: If one approach fails, try a COMPLETELY different approach. Use APIs, plain-text websites,
   mobile versions of sites (m.site.com), or cached pages. Figure it out — don't give up.

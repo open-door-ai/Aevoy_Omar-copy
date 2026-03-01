@@ -783,7 +783,11 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     // Autonomous planning decomposes into "research subtasks" that return advice ("here's how to sign up")
     // instead of ACTUALLY doing the action. Browser tasks must bypass it entirely.
     const directBrowserTaskText = `${subject} ${body || ''}`;
-    const isDirectBrowserTask = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes)|order\s+(me\s+)?(a|some|food|pizza|burger|coffee|sushi|lunch|dinner|breakfast|groceries|delivery)|order\s+from\b|place\s+an?\s+order|add\s+to\s+cart|checkout\s+(at|on|from)|get\s+(me\s+)?(food|pizza|delivery|groceries)\s+from)\b/i.test(directBrowserTaskText);
+    // Detect explicit domain references — "go to amazon.ca", "navigate to kijiji.ca", "use autotrader.ca"
+    const _hasExplicitDomain = /\b(go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(directBrowserTaskText) ||
+      /\b(at|on|via|through|from)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) ||
+      /\bhttps?:\/\/\S+/i.test(directBrowserTaskText);
+    const isDirectBrowserTask = _hasExplicitDomain || /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes)|order\s+(me\s+)?(a|some|food|pizza|burger|coffee|sushi|lunch|dinner|breakfast|groceries|delivery)|order\s+from\b|place\s+an?\s+order|add\s+to\s+cart|checkout\s+(at|on|from)|get\s+(me\s+)?(food|pizza|delivery|groceries)\s+from)\b/i.test(directBrowserTaskText);
 
     // GENERATION BYPASS: Writing/coding/generation tasks must also skip autonomous planning.
     // Autonomous planning decomposes "write me HTML" into research sub-tasks which never generate code.
@@ -3069,7 +3073,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     const actionResults: ActionResult[] = [];
 
     // Check if we need browser for any action (browser actions already stripped above if not needed)
-    const needsBrowser = aiResponse.actions.some(a =>
+    let needsBrowser = aiResponse.actions.some(a =>
       BROWSER_ACTION_TYPES.includes(a.type)
     );
     // Track whether any action type produces data that needs AI synthesis in round 2
@@ -3077,6 +3081,21 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
       ['read_email', 'remember', 'search', 'browse', 'extract'].includes(a.type)
     );
 
+    if (needsBrowser) {
+      // CONCURRENCY GATE: Wait for a browser slot before initializing
+      const { canAcceptBrowserTask, incrementBrowserTasks } = await import("../utils/concurrency.js");
+      if (!canAcceptBrowserTask()) {
+        console.log(`[BROWSER] No slot available — waiting up to 120s for a browser slot...`);
+        const waitStart = Date.now();
+        while (!canAcceptBrowserTask() && Date.now() - waitStart < 120000) {
+          await new Promise(r => setTimeout(r, 3000));
+        }
+        if (!canAcceptBrowserTask()) {
+          console.warn(`[BROWSER] No browser slot after 120s wait — falling back to search-only`);
+          needsBrowser = false;
+        }
+      }
+    }
     if (needsBrowser) {
       // Initialize browser when AI generates browser actions — trust the AI's judgment,
       // don't gate on classifier.needsBrowser which can be wrong for ambiguous queries
@@ -4572,9 +4591,20 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         // This enables the AGI browser-first paradigm — agent can always escalate to browser mid-task
         if (BROWSER_ACTION_TYPES.includes(action.type) && !executionEngine) {
           try {
+            // CONCURRENCY GATE: Wait for a browser slot before lazy-init
+            const { canAcceptBrowserTask, incrementBrowserTasks } = await import("../utils/concurrency.js");
+            if (!canAcceptBrowserTask()) {
+              console.log(`[BROWSER] Lazy-init waiting for browser slot...`);
+              const _waitStart = Date.now();
+              while (!canAcceptBrowserTask() && Date.now() - _waitStart < 60000) {
+                await new Promise(r => setTimeout(r, 3000));
+              }
+              if (!canAcceptBrowserTask()) {
+                throw new Error('No browser slot available after 60s wait');
+              }
+            }
             console.log(`[BROWSER] Lazy-init: action '${action.type}' needs browser, initializing on-demand`);
             executionEngine = new ExecutionEngine(lockedIntent);
-            const { incrementBrowserTasks } = await import("../utils/concurrency.js");
             incrementBrowserTasks();
             await executionEngine.initialize(userId, undefined, taskId);
             console.log(`[BROWSER] Execution engine lazy-initialized for mid-task browser escalation`);
@@ -5547,7 +5577,11 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       const _noFollowUpActions = !aiResponse.actions.some(a =>
         ['browse', 'send_email', 'send_sms', 'call_user', 'call_external', 'fill_form', 'schedule'].includes(a.type)
       );
-      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2) {
+      // Never fast-exit on search when user explicitly asked to GO TO a specific site
+      const _userWantsBrowser = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
+        /\bhttps?:\/\/\S+/i.test(subject) ||
+        /\b(add\s+to\s+cart|sign\s*up|book|reserve|fill.*form|complete.*form)\b/i.test(subject);
+      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser) {
         try {
           const searchData = String(_richSearchResult.result).substring(0, 3000);
           console.log(`[SEARCH-FAST-EXIT] Rich search results (${searchData.length} chars) — summarizing and completing`);
@@ -7598,7 +7632,26 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       .replace(/\n{3,}/g, '\n\n')                 // Collapse excess whitespace
       .trim();
     if (!cleanResponse || cleanResponse.length < 5) {
-      cleanResponse = `I worked on your request "${subject}". Please try again if the result wasn't what you expected.`;
+      // Generate a meaningful response from whatever data we have — never cop out
+      try {
+        const actionLog = actionResults
+          .filter(r => r.success)
+          .map(r => `${r.action.type}: ${String(r.result || '').substring(0, 500)}`)
+          .join('\n');
+        if (actionLog.length > 20) {
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const fallbackSummary = await generateForcedDirectAnswer(
+            subject,
+            `Actions completed:\n${actionLog}\n\nSummarize what was accomplished. Be specific. List any URLs, prices, names, or details found. If the task couldn't be completed, explain exactly what happened and what step failed.`,
+            username
+          );
+          cleanResponse = fallbackSummary.content || `I attempted "${subject}" but couldn't complete it fully. Here's what I found: ${actionLog.substring(0, 300)}`;
+        } else {
+          cleanResponse = `I attempted "${subject}" but wasn't able to complete the task. The browser may have encountered a block or the site didn't load properly. Would you like me to try a different approach?`;
+        }
+      } catch {
+        cleanResponse = `I attempted "${subject}" but ran into issues completing it. Would you like me to try again with a different approach?`;
+      }
     }
 
     // Prepend any response prefix (e.g. clarification timeout notice)
