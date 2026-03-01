@@ -4679,9 +4679,10 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         console.log(`[ACTION] Result: ${action.type} → success=${result.success}${result.error ? ` error=${result.error}` : ''}`);
 
         // Action-level retry: on failure, retry once after 3s delay
-        // Skip retry for bot-blocked actions — retrying won't help
+        // Skip retry for bot-blocked/timeout actions — retrying won't help
         const isBotBlockedAction = result.error?.includes('Bot-blocked') || result.error?.includes('bot-block');
-        if (!result.success && result.error && !isBotBlockedAction && !result.error.startsWith('Security:') && !result.error.startsWith('Action not')) {
+        const isBrowseTimeout = result.error?.includes('Browse timeout') || result.error?.includes('HARD NAV TIMEOUT');
+        if (!result.success && result.error && !isBotBlockedAction && !isBrowseTimeout && !result.error.startsWith('Security:') && !result.error.startsWith('Action not')) {
           console.log(`[RETRY] Action '${action.type}' failed (${result.error}), retrying in 3s...`);
           await new Promise(resolve => setTimeout(resolve, 3000));
           const retryResult = await executeActionWithLearning(
@@ -4693,6 +4694,30 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           if (retryResult.success) {
             console.log(`[RETRY] Action '${action.type}' succeeded on retry`);
             result = retryResult;
+          }
+        }
+
+        // EARLY-BAIL: When browse/navigate fails (timeout, bot-block, crash), skip ALL subsequent
+        // page-dependent actions (click, fill, extract, scroll, etc.) — they'll all fail anyway
+        // since there's no valid page state. This prevents 8-action batches from timing out
+        // one-by-one (90s × 8 = 12 minutes) when the first browse fails in 90s.
+        const PAGE_DEPENDENT_ACTIONS = ['click', 'fill', 'fill_form', 'select', 'submit', 'login', 'scroll', 'wait', 'extract', 'screenshot', 'screenshot_ocr'];
+        if (!result.success && ['browse', 'navigate'].includes(action.type)) {
+          const skippableCount = aiResponse.actions.slice(actionIndex + 1).filter(a => PAGE_DEPENDENT_ACTIONS.includes(a.type)).length;
+          if (skippableCount > 0) {
+            console.warn(`[EARLY-BAIL] Browse/navigate failed — skipping ${skippableCount} page-dependent actions (would all fail)`);
+            for (let skipIdx = actionIndex + 1; skipIdx < aiResponse.actions.length; skipIdx++) {
+              const skipAction = aiResponse.actions[skipIdx];
+              if (PAGE_DEPENDENT_ACTIONS.includes(skipAction.type)) {
+                iterationResults.push({
+                  action: skipAction,
+                  success: false,
+                  error: `Skipped: browser navigation failed (${result.error?.substring(0, 80)}). Use [ACTION:search("...")] instead.`
+                });
+                globalActionIndex++;
+              }
+            }
+            break; // Exit action loop — non-page-dependent actions (search, send_email) already ran
           }
         }
 
