@@ -2047,7 +2047,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // 5e. TASK DECOMPOSITION: Check if task is complex enough to benefit from decomposition
-    const isComplexTask = body.length > 200 || classification.taskType.includes("multi");
+    // NEVER decompose browser tasks — they're one continuous session, decomposition loses browser state
+    const _taskMentionsSite = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
+      /\bhttps?:\/\/\S+/i.test(subject) || /\b(sign\s*up|book|reserve|add\s+to\s+cart|fill.*form)\b/i.test(subject);
+    const isComplexTask = (body.length > 200 || classification.taskType.includes("multi")) && !_taskMentionsSite;
     if (isComplexTask && difficultyPrediction && (difficultyPrediction.difficulty === "hard" || difficultyPrediction.difficulty === "nightmare")) {
       try {
         const decomposed = await decomposeTask(body, userId);

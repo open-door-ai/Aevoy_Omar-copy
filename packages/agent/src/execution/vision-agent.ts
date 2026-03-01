@@ -1382,11 +1382,20 @@ export async function runVisionAgent(
           (/\b(menu|store|location|address|deliver(y|s) to)\b/i.test(doneResult) &&
            !/\b(order(ed|.*confirm)|receipt|added to cart|in.*cart|placed|transaction|checkout)\b/i.test(doneResult))
         );
-        if (isPassiveDone || _isAdviceDone || _isOrderInfoOnly) {
+        // DATA-MISSING DONE REJECTION: If task asks for specific data (prices, links, deals,
+        // listings) and DONE result doesn't contain any, reject. "Done! Scrolled down" is not an answer.
+        const _taskWantsData = /\b(price|deal|listing|link|rating|review|cost|address|phone|result|find|give me|tell me|show me|report|compare)\b/i.test(task);
+        const _doneHasData = doneResult.length > 80 && (
+          /\$\d+|\d+\.\d{2}|\bhttps?:\/\/\S+|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b|\b\d+\s*\/\s*5\b|\b\d+\s*star/i.test(doneResult) ||
+          /\b(found|here|result|listing|option|deal|price|cost|total|rating)\b/i.test(doneResult)
+        );
+        const _isDataMissingDone = _taskWantsData && !_doneHasData && !isPassiveDone && !_isAdviceDone && !_isOrderInfoOnly && doneResult.length < 200;
+
+        if (isPassiveDone || _isAdviceDone || _isOrderInfoOnly || _isDataMissingDone) {
           const credHint = taskCreds.email
             ? ` Credentials already provided: email=${taskCreds.email}, password=${taskCreds.password}. USE THEM.`
             : '';
-          const reason = isPassiveDone ? 'PASSIVE' : _isOrderInfoOnly ? 'ORDER-INCOMPLETE' : 'ADVICE';
+          const reason = isPassiveDone ? 'PASSIVE' : _isOrderInfoOnly ? 'ORDER-INCOMPLETE' : _isDataMissingDone ? 'DATA-MISSING' : 'ADVICE';
           console.log(`[VISION-AGENT] REJECTED ${reason} DONE at step ${steps + 1}: "${doneResult.substring(0, 80)}"`);
           const orderHint = _isOrderInfoOnly
             ? ' Finding prices/locations is RESEARCH, not completing the order. You must: ADD TO CART → CHECKOUT → FILL delivery info → COMPLETE ORDER. Go back to the menu/cart and continue.'
