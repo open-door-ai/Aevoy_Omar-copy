@@ -1790,15 +1790,14 @@ export async function generateVisionResponse(
         ]
       : [{ type: "text", text: prompt }];
 
-  // ═══ 1. OpenRouter FREE — Qwen3-VL-30B (BEST GUI agent model, tops OSWorld benchmark) ═══
-  // Free tier: 200 RPD, $0.00/M tokens. Purpose-built for screen understanding.
-  // Fallback models: Nemotron Nano 12B VL, Gemma 3 27B (also free)
+  // ═══ 1. OpenRouter FREE — 20 RPM shared across all free models ═══
+  // Best for vision: Qwen3-VL (thinking), Gemma 3 27B, Nemotron Nano 12B VL, Mistral Small 3.1
   if (process.env.OPENROUTER_API_KEY) {
-    // Try multiple free models in sequence — each has independent 200 RPD limit
     const freeModels = [
-      { model: "qwen/qwen3-vl-30b-a3b:free", name: "Qwen3-VL-30B", provider: "openrouter" },
-      { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL", provider: "openrouter" },
-      { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B", provider: "openrouter" },
+      { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B" },
+      { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL" },
+      { model: "mistralai/mistral-small-3.1-24b-instruct:free", name: "Mistral-Small-3.1" },
+      { model: "qwen/qwen3-vl-30b-a3b-thinking", name: "Qwen3-VL-30B-Thinking" },
     ];
 
     for (const fm of freeModels) {
@@ -1810,24 +1809,20 @@ export async function generateVisionResponse(
             ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
             { role: "user" as const, content: buildImageContent() }
           ],
-        }), 20000); // 20s timeout — free models can be slower
+        }), 25000); // 25s timeout — free models can be slower
 
         const content = response.choices[0]?.message?.content || "";
         if (content.length > 10) {
           const inTok = response.usage?.prompt_tokens || 0;
           const outTok = response.usage?.completion_tokens || 0;
-          const cost = 0; // Free model — no cost
           console.log(`[AI] Vision (${fm.name} FREE) | Cost: $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
-          if (userId) trackApiCall(userId, fm.model, inTok, outTok, cost, fm.provider, taskId, "vision").catch(() => {});
-          return { content, cost };
+          if (userId) trackApiCall(userId, fm.model, inTok, outTok, 0, "openrouter", taskId, "vision").catch(() => {});
+          return { content, cost: 0 };
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         console.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
-        // If rate limited (429), try next free model
-        if (!msg.includes('429') && !msg.includes('rate') && !msg.includes('limit')) {
-          continue; // Non-rate-limit error, still try next
-        }
+        continue; // Always try next model regardless of error type
       }
     }
   }
