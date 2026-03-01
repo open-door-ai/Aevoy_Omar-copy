@@ -878,16 +878,56 @@ export async function runVisionAgent(
     const isBlankOrError = !currentStartUrl || currentStartUrl === 'about:blank' ||
       currentStartUrl.startsWith('chrome-error://') || currentStartUrl.startsWith('about:');
     if (isBlankOrError) {
+      // 1. Explicit URL in task text
       const urlInTask = task.match(/https?:\/\/[^\s,)]+/)?.[0] ||
         task.match(/\bon\s+([\w.-]+\.(com|org|net|io|co|app))/i)?.[1];
       const planUrl = taskPlan.match(/https?:\/\/[^\s,)]+/)?.[0];
-      const startUrl = urlInTask?.startsWith('http') ? urlInTask
+      let startUrl = urlInTask?.startsWith('http') ? urlInTask
         : urlInTask ? `https://www.${urlInTask}`
         : planUrl?.startsWith('http') ? planUrl : null;
+
+      // 2. If no explicit URL, extract service name from task description
+      // "Create a LinkedIn account" → linkedin.com, "Sign up for GitHub" → github.com
+      // Generic — works for any service name that matches a .com domain
+      if (!startUrl) {
+        const serviceMatch = task.match(
+          /\b(?:sign\s*up|create\s+(?:a|an|my)\s+(?:\w+\s+)?account|log\s*in|cancel\s+(?:my\s+)?|go\s+to|navigate\s+to|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+(?:\s*[A-Z][a-zA-Z]*)?)/i
+        );
+        if (serviceMatch) {
+          const serviceName = serviceMatch[1].trim().toLowerCase().replace(/\s+/g, '');
+          // Avoid false positives: skip generic words that aren't service names
+          const genericWords = new Set(['account', 'free', 'new', 'the', 'this', 'that', 'email', 'user', 'test', 'subscription', 'membership', 'trial']);
+          if (!genericWords.has(serviceName) && serviceName.length >= 3) {
+            startUrl = `https://www.${serviceName}.com`;
+            console.log(`[VISION-AGENT] Inferred service URL from task: "${serviceMatch[1]}" → ${startUrl}`);
+          }
+        }
+      }
+
       if (startUrl) {
         console.log(`[VISION-AGENT] Pre-navigating to ${startUrl}`);
         await activePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
         await activePage.waitForTimeout(1000);
+      }
+    }
+
+    // SERVICE MISMATCH CHECK: If page is loaded but on the WRONG site, redirect
+    // e.g. task says "LinkedIn" but page is on notion.com → navigate to linkedin.com
+    const _postNavUrl = activePage.url();
+    if (_postNavUrl && !_postNavUrl.startsWith('about:') && !_postNavUrl.startsWith('chrome-error://')) {
+      const _taskServiceMatch = task.match(
+        /\b(?:sign\s*up|create\s+(?:a|an|my)\s+\w*\s*account|log\s*in|cancel\s+(?:my\s+)?|go\s+to|navigate\s+to|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+)/i
+      );
+      if (_taskServiceMatch) {
+        const _expectedService = _taskServiceMatch[1].toLowerCase();
+        const _currentDomain = new URL(_postNavUrl).hostname.toLowerCase();
+        const _genericSkip = new Set(['account', 'free', 'new', 'the', 'email', 'user', 'test', 'subscription', 'membership', 'trial']);
+        if (!_genericSkip.has(_expectedService) && _expectedService.length >= 3 && !_currentDomain.includes(_expectedService)) {
+          const _correctUrl = `https://www.${_expectedService}.com`;
+          console.log(`[VISION-AGENT] SERVICE MISMATCH: Task expects "${_expectedService}" but page is on "${_currentDomain}" → redirecting to ${_correctUrl}`);
+          await activePage.goto(_correctUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+          await activePage.waitForTimeout(1000);
+        }
       }
     }
 
