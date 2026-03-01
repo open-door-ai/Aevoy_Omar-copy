@@ -1463,6 +1463,17 @@ export async function runVisionAgent(
 
       if (action.type === 'done') {
         const doneResult = action.result || '';
+
+        // ERROR PAGE DONE REJECTION: If browser is on an error page, DONE is fabricated.
+        // The agent can't have completed anything if the page failed to load.
+        const _currentDoneUrl = activePage.url();
+        const _isOnErrorPage = _currentDoneUrl.startsWith('chrome-error://') || _currentDoneUrl.startsWith('about:blank') || _currentDoneUrl === '';
+        if (_isOnErrorPage) {
+          console.log(`[VISION-AGENT] REJECTED DONE on error page: ${_currentDoneUrl}`);
+          history.push(`⚠️ DONE REJECTED: Browser is on an ERROR PAGE (${_currentDoneUrl}). You cannot claim success from an error page. NAVIGATE to the correct website and complete the task. The task URL may be in the TASK description above.`);
+          continue;
+        }
+
         // PASSIVE DONE REJECTION: If DONE says "want me to", "I'll need", etc.
         // it means the AI described what it COULD do instead of DOING it. Force continue.
         const isPassiveDone = /want me to|i['']ll need|would you like|shall i|let me know|i need your|please provide|do you want|can i proceed|should i|could you|please tell me|start the (sign.?up|process|registration|booking|order)|ready to (start|begin|proceed)|i can (help|assist) (you )?(with|to)|if you('d| would) like/i.test(doneResult);

@@ -2491,13 +2491,17 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Detect pure writing/generation tasks → use 'generate' chain which is tuned for content output
     // EXCLUDE: document/spreadsheet tasks that must use action tags (create_excel, create_word, etc.)
     // Those need the full SYSTEM_PROMPT where [ACTION:] tags are defined — not GENERATE_SYSTEM_PROMPT
-    const _isDocumentAction = /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(`${subject} ${body}`);
+    // BUT: If user names a specific website ("go to canva.com and create a business card"), this is a BROWSER task
+    const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
+      /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`);
+    const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(`${subject} ${body}`);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
     const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
     // Research tasks that also ask to "draft" something are NOT pure writing tasks — they need search first
     const _hasResearchVerb = /\b(find|search|look up|look for|get me|show me|list|compare|check)\b/i.test(`${subject} ${body}`);
-    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && !_hasResearchVerb && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a (?:poem|song|story|joke|haiku|limerick|sonnet|riddle|paragraph|summary|bio|speech|review|blurb|tagline|slogan|caption|tweet|post|article|blog|report))\b/i.test(`${subject} ${body}`);
+    // If user names a specific website ("go to canva.com and create..."), this is a BROWSER task, not a writing task
+    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && !_hasResearchVerb && !_taskNamesWebsite && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a (?:poem|song|story|joke|haiku|limerick|sonnet|riddle|paragraph|summary|bio|speech|review|blurb|tagline|slogan|caption|tweet|post|article|blog|report))\b/i.test(`${subject} ${body}`);
     // Signup tasks MUST use Claude (complex) — Groq/DeepSeek refuse despite system prompt
     const aiTaskType = forceCheapModel ? "validate" as const : (_earlySignupCheck ? "complex" as const : (_isWritingTask ? "generate" as const : undefined));
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI

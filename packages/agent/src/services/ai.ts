@@ -1763,7 +1763,10 @@ export async function generateVisionResponse(
       const response = await withTimeout(getGeminiClient().chat.completions.create({
         model: "gemini-2.0-flash",
         max_tokens: 1024,
-        messages: [{ role: "user", content: msgContent }],
+        messages: [
+          ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+          { role: "user" as const, content: msgContent },
+        ],
       }), 15000);
 
       const content = response.choices[0]?.message?.content || "";
@@ -1783,12 +1786,15 @@ export async function generateVisionResponse(
 
   // 1.5. Groq Vision (Llama 4 Scout) — FREE vision model, good quality, fast
   // CRITICAL: This is the working vision fallback when Gemini/Anthropic keys are broken
-  if (process.env.GROQ_API_KEY && hasImage) {
+  // Works for both image (vision) and text-only (DOM element reasoning) calls
+  if (process.env.GROQ_API_KEY) {
     try {
-      const groqVisionContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
-        { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
-        { type: "text", text: prompt }
-      ];
+      const groqVisionContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = hasImage
+        ? [
+            { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
+            { type: "text", text: prompt }
+          ]
+        : [{ type: "text", text: prompt }];
 
       const response = await withTimeout(getGroqClient().chat.completions.create({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
