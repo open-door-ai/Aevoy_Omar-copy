@@ -405,6 +405,7 @@ app.get("/health", async (_req, res) => {
     deepseekApi: !!process.env.DEEPSEEK_API_KEY,
     googleApi: !!process.env.GOOGLE_API_KEY,
     anthropicApi: !!process.env.ANTHROPIC_API_KEY,
+    openRouterApi: !!process.env.OPENROUTER_API_KEY,
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
     remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
   });

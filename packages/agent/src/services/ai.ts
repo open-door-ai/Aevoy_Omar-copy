@@ -69,6 +69,7 @@ let geminiClient: OpenAI | null = null;
 let kimiClient: OpenAI | null = null;
 let groqClient: OpenAI | null = null;
 let ollamaClient: OpenAI | null = null;
+let openRouterClient: OpenAI | null = null;
 
 // ---- OpenRouter per-user client cache ----
 // Keyed by decrypted API key (not userId) — shared across users with same key
@@ -224,6 +225,22 @@ function getOllamaClient(): OpenAI | null {
     });
   }
   return ollamaClient;
+}
+
+// getPlatformOpenRouterClient — uses the platform's OPENROUTER_API_KEY env var
+// (distinct from the per-user getOpenRouterClient(apiKey) above which uses user-provided keys)
+function getPlatformOpenRouterClient(): OpenAI {
+  if (!openRouterClient) {
+    openRouterClient = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY || "",
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://www.aevoy.com",
+        "X-Title": "Aevoy AI Assistant",
+      },
+    });
+  }
+  return openRouterClient;
 }
 
 // ---- Model Configuration ----
@@ -1739,8 +1756,12 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 
 /**
  * Generate response for vision tasks.
- * Order: Gemini Flash (FREE, fast) → Claude Haiku (cheap) → Claude Sonnet (expensive, last resort)
+ * Order: OpenRouter FREE (Qwen3-VL, best GUI agent) → Groq (near-free) → Gemini → Haiku → Sonnet (LAST RESORT)
  * All calls have 15s timeout to prevent iteration loop hangs.
+ *
+ * Cost per 40-step task:
+ *   OpenRouter free: $0.000  |  Groq: $0.012  |  Gemini: $0.012
+ *   Haiku: $0.032  |  Sonnet: $0.384 (30x more expensive — emergency only)
  */
 export async function generateVisionResponse(
   prompt: string,
@@ -1760,28 +1781,98 @@ export async function generateVisionResponse(
       new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Vision timeout after ${ms}ms`)), ms))
     ]);
 
-  // 1. Gemini Flash FIRST — free and fast (best for iteration loops)
-  if (process.env.GOOGLE_API_KEY) {
-    try {
-      const msgContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = hasImage
-        ? [
-            { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
-            { type: "text", text: prompt }
-          ]
-        : [{ type: "text", text: prompt }];
+  // Build standard OpenAI-format image+text content (used by OpenRouter, Groq, Gemini)
+  const buildImageContent = (): OpenAI.Chat.Completions.ChatCompletionContentPart[] =>
+    hasImage
+      ? [
+          { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
+          { type: "text", text: prompt }
+        ]
+      : [{ type: "text", text: prompt }];
 
-      const response = await withTimeout(getGeminiClient().chat.completions.create({
-        model: "gemini-2.0-flash",
+  // ═══ 1. OpenRouter FREE — Qwen3-VL-30B (BEST GUI agent model, tops OSWorld benchmark) ═══
+  // Free tier: 200 RPD, $0.00/M tokens. Purpose-built for screen understanding.
+  // Fallback models: Nemotron Nano 12B VL, Gemma 3 27B (also free)
+  if (process.env.OPENROUTER_API_KEY) {
+    // Try multiple free models in sequence — each has independent 200 RPD limit
+    const freeModels = [
+      { model: "qwen/qwen3-vl-30b-a3b:free", name: "Qwen3-VL-30B", provider: "openrouter" },
+      { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL", provider: "openrouter" },
+      { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B", provider: "openrouter" },
+    ];
+
+    for (const fm of freeModels) {
+      try {
+        const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
+          model: fm.model,
+          max_tokens: 1024,
+          messages: [
+            ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+            { role: "user" as const, content: buildImageContent() }
+          ],
+        }), 20000); // 20s timeout — free models can be slower
+
+        const content = response.choices[0]?.message?.content || "";
+        if (content.length > 10) {
+          const inTok = response.usage?.prompt_tokens || 0;
+          const outTok = response.usage?.completion_tokens || 0;
+          const cost = 0; // Free model — no cost
+          console.log(`[AI] Vision (${fm.name} FREE) | Cost: $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+          if (userId) trackApiCall(userId, fm.model, inTok, outTok, cost, fm.provider, taskId, "vision").catch(() => {});
+          return { content, cost };
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
+        // If rate limited (429), try next free model
+        if (!msg.includes('429') && !msg.includes('rate') && !msg.includes('limit')) {
+          continue; // Non-rate-limit error, still try next
+        }
+      }
+    }
+  }
+
+  // ═══ 2. Groq Vision (Llama 4 Scout) — near-free, fast ═══
+  // $0.11/$0.34 per M tokens. 30 RPM, 1K RPD free tier.
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const response = await withTimeout(getGroqClient().chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
         max_tokens: 1024,
         messages: [
           ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
-          { role: "user" as const, content: msgContent },
+          { role: "user" as const, content: buildImageContent() }
         ],
       }), 15000);
 
       const content = response.choices[0]?.message?.content || "";
       if (content.length > 10) {
-        // Gemini Flash pricing: $0.10/1M input, $0.40/1M output (essentially free but track it)
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        const cost = (inTok * 0.11 + outTok * 0.34) / 1_000_000;
+        console.log(`[AI] Vision (Groq Llama4 Scout) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, "llama-4-scout-17b-16e-instruct", inTok, outTok, cost, "groq", taskId, "vision").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ 3. Gemini Flash — cheap, fast ═══
+  if (process.env.GOOGLE_API_KEY) {
+    try {
+      const response = await withTimeout(getGeminiClient().chat.completions.create({
+        model: "gemini-2.0-flash",
+        max_tokens: 1024,
+        messages: [
+          ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+          { role: "user" as const, content: buildImageContent() },
+        ],
+      }), 15000);
+
+      const content = response.choices[0]?.message?.content || "";
+      if (content.length > 10) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
@@ -1794,43 +1885,7 @@ export async function generateVisionResponse(
     }
   }
 
-  // 1.5. Groq Vision (Llama 4 Scout) — FREE vision model, good quality, fast
-  // CRITICAL: This is the working vision fallback when Gemini/Anthropic keys are broken
-  // Works for both image (vision) and text-only (DOM element reasoning) calls
-  if (process.env.GROQ_API_KEY) {
-    try {
-      const groqVisionContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = hasImage
-        ? [
-            { type: "image_url", image_url: { url: `data:${mediaType};base64,${imageBase64}` } },
-            { type: "text", text: prompt }
-          ]
-        : [{ type: "text", text: prompt }];
-
-      const response = await withTimeout(getGroqClient().chat.completions.create({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        max_tokens: 1024,
-        messages: [
-          ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
-          { role: "user" as const, content: groqVisionContent }
-        ],
-      }), 15000);
-
-      const content = response.choices[0]?.message?.content || "";
-      if (content.length > 10) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        // Groq Llama 4 Scout: essentially free tier
-        const cost = (inTok * 0.11 + outTok * 0.34) / 1_000_000;
-        console.log(`[AI] Vision (Groq Llama4 Scout) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
-        if (userId) trackApiCall(userId, "llama-4-scout-17b-16e-instruct", inTok, outTok, cost, "groq", taskId, "vision").catch(() => {});
-        return { content, cost };
-      }
-    } catch (error) {
-      console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // 2. Claude Haiku — cheap and decent vision
+  // ═══ 4. Claude Haiku — mid-cost, good quality ═══
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const haikuContent = hasImage
@@ -1854,7 +1909,8 @@ export async function generateVisionResponse(
     }
   }
 
-  // 3. Claude Sonnet — expensive, last resort
+  // ═══ 5. Claude Sonnet — EXPENSIVE, ABSOLUTE LAST RESORT ═══
+  // $3/$15 per M tokens = $0.384 per 40-step task. Only if everything else fails.
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const sonnetContent = hasImage
@@ -1870,7 +1926,7 @@ export async function generateVisionResponse(
       const content = response.content[0].type === "text" ? response.content[0].text : "";
       const cost = (response.usage.input_tokens * 3.00 + response.usage.output_tokens * 15.00) / 1_000_000;
 
-      console.log(`[AI] Vision (Sonnet) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
+      console.log(`[AI] Vision (Sonnet LAST RESORT) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
       if (userId) trackApiCall(userId, "claude-sonnet-4-20250514", response.usage.input_tokens, response.usage.output_tokens, cost, "anthropic", taskId, "vision").catch(() => {});
       return { content, cost };
     } catch (error) {
