@@ -1918,8 +1918,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 4. Create action validator
     const validator = new ActionValidator(lockedIntent);
 
-    // 5. Load user's memory
-    const memory = await loadMemory(userId);
+    // 5. Load user's memory (5s timeout — must not block task execution)
+    let memory: Awaited<ReturnType<typeof loadMemory>> = { facts: '', recentLogs: '' };
+    try {
+      const _memResult = await Promise.race([
+        loadMemory(userId),
+        new Promise<null>((resolve) => setTimeout(() => {
+          console.warn('[MEMORY] 5s timeout — using empty memory');
+          resolve(null);
+        }, 5000)),
+      ]);
+      if (_memResult) memory = _memResult;
+    } catch {
+      // Non-critical — continue with empty memory
+    }
 
     // 5a. SELF-LEARNING: Predict difficulty + load intelligence BEFORE execution
     const primaryDomain = classification.domains[0] || "";
@@ -1928,120 +1940,129 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     let patternWarnings: string[] = [];
 
     try {
-      // Run predictions in parallel for speed
-      const [diffPred, corrections, warnings] = await Promise.all([
-        predictDifficulty(primaryDomain, classification.taskType),
-        getKnownCorrections(primaryDomain, classification.taskType),
-        getPatternWarnings(primaryDomain),
+      // Run predictions in parallel for speed — 5s hard timeout (non-critical)
+      const _intelResult = await Promise.race([
+        Promise.all([
+          predictDifficulty(primaryDomain, classification.taskType),
+          getKnownCorrections(primaryDomain, classification.taskType),
+          getPatternWarnings(primaryDomain),
+        ]),
+        new Promise<null>((resolve) => setTimeout(() => {
+          console.warn('[INTELLIGENCE] 5s timeout — skipping predictions');
+          resolve(null);
+        }, 5000)),
       ]);
 
-      difficultyPrediction = diffPred;
-      knownCorrections = corrections;
-      patternWarnings = warnings;
+      if (_intelResult) {
+        const [diffPred, corrections, warnings] = _intelResult;
+        difficultyPrediction = diffPred;
+        knownCorrections = corrections;
+        patternWarnings = warnings;
 
-      if (diffPred.confidence > 0) {
-        console.log(
-          `[INTELLIGENCE] Predicted: ${diffPred.difficulty} (${diffPred.predictedSuccessRate}% success, ` +
-          `confidence: ${diffPred.confidence}%, method: ${diffPred.recommendedMethod})`
-        );
-      }
-      if (corrections.length > 0) {
-        console.log(`[INTELLIGENCE] Pre-applying ${corrections.length} known corrections`);
-      }
-      if (warnings.length > 0) {
-        console.log(`[INTELLIGENCE] ${warnings.length} pattern warnings for ${primaryDomain}`);
+        if (diffPred.confidence > 0) {
+          console.log(
+            `[INTELLIGENCE] Predicted: ${diffPred.difficulty} (${diffPred.predictedSuccessRate}% success, ` +
+            `confidence: ${diffPred.confidence}%, method: ${diffPred.recommendedMethod})`
+          );
+        }
+        if (corrections.length > 0) {
+          console.log(`[INTELLIGENCE] Pre-applying ${corrections.length} known corrections`);
+        }
+        if (warnings.length > 0) {
+          console.log(`[INTELLIGENCE] ${warnings.length} pattern warnings for ${primaryDomain}`);
+        }
       }
     } catch {
       // Non-critical — intelligence is bonus, not required
     }
 
     // 5a-ii. ADVANCED INTELLIGENCE: Quality prediction, cost optimization, failure prevention
+    // 10s hard timeout — these are bonus intelligence, must NOT block task execution
     try {
-      const { predictQuality } = await import("./quality-predictor.js");
-      const { chooseOptimalPath } = await import("./cost-optimizer.js");
-      const { preventFailures } = await import("./failure-preventer.js");
-      const { applyTransferLearning } = await import("./transfer-learning.js");
+      await Promise.race([
+        (async () => {
+          const { predictQuality } = await import("./quality-predictor.js");
+          const { chooseOptimalPath } = await import("./cost-optimizer.js");
+          const { preventFailures } = await import("./failure-preventer.js");
+          const { applyTransferLearning } = await import("./transfer-learning.js");
 
-      // Predict quality
-      const qualityPred = await predictQuality(userId, classification.taskType, primaryDomain, body);
-      console.log(`[QUALITY] Predicted: ${qualityPred.overallScore}/100 (${qualityPred.recommendedVerification} verification)`);
+          const qualityPred = await predictQuality(userId, classification.taskType, primaryDomain, body);
+          console.log(`[QUALITY] Predicted: ${qualityPred.overallScore}/100 (${qualityPred.recommendedVerification} verification)`);
 
-      // Optimize cost
-      const optimalPath = await chooseOptimalPath(userId, classification.taskType, primaryDomain, "medium");
-      console.log(`[COST] Optimal: ${optimalPath.method} ($${optimalPath.estimatedCost}, ${optimalPath.estimatedDuration}s)`);
+          const optimalPath = await chooseOptimalPath(userId, classification.taskType, primaryDomain, "medium");
+          console.log(`[COST] Optimal: ${optimalPath.method} ($${optimalPath.estimatedCost}, ${optimalPath.estimatedDuration}s)`);
 
-      // Prevent failures
-      const prevention = await preventFailures(userId, classification.taskType, primaryDomain, body);
-      if (!prevention.readyToExecute) {
-        console.log(`[PREVENTION] Task blocked: ${prevention.blockingIssues.join(", ")}`);
-        // Send blocking issues to user
-        await sendResponse({
-          to: from,
-          from: `${username}@aevoy.com`,
-          subject: `Action Required: ${subject}`,
-          body: `Cannot proceed with your request:\n\n${prevention.blockingIssues.map(i => `• ${i}`).join("\n")}\n\nPlease address these issues and try again.`,
-        });
-        return { taskId, success: false, response: "Blocked by prevention checks", actions: [], error: prevention.blockingIssues[0] };
-      }
-      console.log(`[PREVENTION] Risk reduced: ${prevention.originalRisk}% → ${prevention.reducedRisk}%`);
+          const prevention = await preventFailures(userId, classification.taskType, primaryDomain, body);
+          console.log(`[PREVENTION] Risk: ${prevention.originalRisk}% → ${prevention.reducedRisk}%`);
 
-      // Apply transfer learning for new domains
-      if (primaryDomain && difficultyPrediction && difficultyPrediction.confidence < 50) {
-        const transfer = await applyTransferLearning(primaryDomain, classification.taskType);
-        if (transfer.applied) {
-          console.log(`[TRANSFER] Applied knowledge from ${transfer.sourceDomain} (${transfer.confidence}% confidence)`);
-        }
-      }
+          if (primaryDomain && difficultyPrediction && difficultyPrediction.confidence < 50) {
+            const transfer = await applyTransferLearning(primaryDomain, classification.taskType);
+            if (transfer.applied) {
+              console.log(`[TRANSFER] Applied knowledge from ${transfer.sourceDomain} (${transfer.confidence}% confidence)`);
+            }
+          }
+        })(),
+        new Promise<void>((resolve) => setTimeout(() => {
+          console.warn('[ADVANCED-INTEL] 10s timeout — skipping');
+          resolve();
+        }, 10000)),
+      ]);
     } catch (error) {
       console.log(`[ADVANCED-INTEL] Optional intelligence failed:`, error);
       // Non-critical - continue without advanced intelligence
     }
 
-    // 5b. CONTEXT CARRYOVER: Load recent context from related tasks (24hr window)
+    // 5b. CONTEXT CARRYOVER + HIVE LEARNINGS — 5s combined timeout (non-critical)
     let contextCarryover = "";
+    let learningsHint = "";
     try {
-      const recentContext = await getRecentContext(userId, body);
-      if (recentContext) {
-        contextCarryover = formatContextForPrompt(recentContext);
-        console.log(`[CONTEXT] Found relevant context from task ${recentContext.taskId.slice(0, 8)} (score-based match)`);
-      }
-    } catch {
-      // Non-critical — context carryover is bonus
-    }
-
-    // 5c. Query Hive learnings for known approaches
-    let learningsHint = contextCarryover; // Start with context
-    try {
-      const domain = primaryDomain;
-      const { data: learnings } = await getSupabaseClient()
-        .from("learnings")
-        .select("title, steps, gotchas, difficulty, success_rate, times_used, service")
-        .or(`service.ilike.*${domain}*,task_type.eq.${classification.taskType}`)
-        .order("success_rate", { ascending: false })
-        .limit(5);
-
-      if (learnings && learnings.length > 0) {
-        const hints = learnings.map(l => {
-          const parts: string[] = [];
-          if (l.title) parts.push(`Task: ${l.title}`);
-          // steps and gotchas are JSONB arrays
-          if (l.steps && Array.isArray(l.steps) && l.steps.length > 0) {
-            parts.push(`Steps: ${l.steps.join(" → ")}`);
+      const _contextResult = await Promise.race([
+        (async () => {
+          // Context carryover from related tasks (24hr window)
+          const recentContext = await getRecentContext(userId, body);
+          if (recentContext) {
+            contextCarryover = formatContextForPrompt(recentContext);
+            console.log(`[CONTEXT] Found relevant context from task ${recentContext.taskId.slice(0, 8)}`);
           }
-          if (l.gotchas && Array.isArray(l.gotchas) && l.gotchas.length > 0) {
-            parts.push(`Watch for: ${l.gotchas.join(", ")}`);
+
+          // Hive learnings for known approaches
+          const domain = primaryDomain;
+          const { data: learnings } = await getSupabaseClient()
+            .from("learnings")
+            .select("title, steps, gotchas, difficulty, success_rate, times_used, service")
+            .or(`service.ilike.*${domain}*,task_type.eq.${classification.taskType}`)
+            .order("success_rate", { ascending: false })
+            .limit(5);
+
+          if (learnings && learnings.length > 0) {
+            const hints = learnings.map(l => {
+              const parts: string[] = [];
+              if (l.title) parts.push(`Task: ${l.title}`);
+              if (l.steps && Array.isArray(l.steps) && l.steps.length > 0) {
+                parts.push(`Steps: ${l.steps.join(" → ")}`);
+              }
+              if (l.gotchas && Array.isArray(l.gotchas) && l.gotchas.length > 0) {
+                parts.push(`Watch for: ${l.gotchas.join(", ")}`);
+              }
+              if (l.success_rate) parts.push(`Success rate: ${l.success_rate}%`);
+              return parts.join(". ");
+            }).filter(Boolean);
+            if (hints.length > 0) {
+              contextCarryover += `\n\nPRIOR LEARNINGS (from past tasks — use these to work smarter):\n${hints.join("\n")}`;
+              console.log(`[LEARNINGS] Found ${hints.length} relevant hints for ${domain || classification.taskType}`);
+            }
           }
-          if (l.success_rate) parts.push(`Success rate: ${l.success_rate}%`);
-          return parts.join(". ");
-        }).filter(Boolean);
-        if (hints.length > 0) {
-          learningsHint += `\n\nPRIOR LEARNINGS (from past tasks — use these to work smarter):\n${hints.join("\n")}`;
-          console.log(`[LEARNINGS] Found ${hints.length} relevant hints for ${domain || classification.taskType}`);
-        }
-      }
+          return true;
+        })(),
+        new Promise<null>((resolve) => setTimeout(() => {
+          console.warn('[CONTEXT/LEARNINGS] 5s timeout — skipping');
+          resolve(null);
+        }, 5000)),
+      ]);
     } catch {
-      // Non-critical — learnings table may not exist yet
+      // Non-critical
     }
+    learningsHint = contextCarryover;
 
     // 5d. SELF-LEARNING: Append pattern warnings + known corrections to learnings
     if (patternWarnings.length > 0) {
@@ -2169,12 +2190,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
-    // 5f. Create execution plan
+    // 5f. Create execution plan (10s timeout — planning must not block execution)
     let planId: string | null = null;
     let plan: import("../types/index.js").ExecutionPlan | null = null;
     try {
       const { createPlan } = await import("./planner.js");
-      plan = await createPlan(userId, taskId, classification, memory, learningsHint);
+      const _planResult = await Promise.race([
+        createPlan(userId, taskId, classification, memory, learningsHint),
+        new Promise<null>((resolve) => setTimeout(() => {
+          console.warn('[PLANNER] 10s timeout — skipping plan creation');
+          resolve(null);
+        }, 10000)),
+      ]);
+      if (!_planResult) throw new Error('Plan creation timed out');
+      plan = _planResult;
 
       // Check user's confirmation_mode for plan approval
       const userSettings = await getUserSettings(userId);
