@@ -111,7 +111,7 @@ export class ProcessorV2 {
         username: request.username,
         from: request.email || `${request.username}@aevoy.com`,
         subject: request.task,
-        body: '',
+        body: request.task,
         inputChannel: (request.channel as any) || 'web',
         suppressEmail: true, // Web dashboard gets response directly — no email needed
       });

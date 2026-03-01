@@ -1725,6 +1725,39 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // Text-only AI fast path — pure computation/writing tasks that NEVER need a browser
+    // Catches: calculations, unit conversions, writing (haiku, poem, essay), trivia, time zones
+    // These were timing out at 20 minutes because the AI would launch a browser unnecessarily
+    const textOnlyPatterns = /^(calculate|compute|convert|what is \d|how much is|write (?:me )?a |compose |draft a |what time is it|when is the next|how far is|how long|what.s the population|tell me a joke|explain |define |translate |summarize this|list \d)/i;
+    const textOnlyText = (subject || '').trim();
+    const hasDeliveryAction = /\b(send|email|text me|sms|call)\b/i.test(textOnlyText);
+    if (textOnlyPatterns.test(textOnlyText) && !hasDeliveryAction) {
+      console.log(`[FAST-PATH] Text-only AI task detected: "${textOnlyText.slice(0, 60)}"`);
+      try {
+        const { quickValidate } = await import("./ai.js");
+        const textResult = await quickValidate(
+          `User request: "${subject}${body ? '\n' + body : ''}"\n\nRespond with a complete, helpful answer. Be specific and accurate. If it's a calculation, show the work. If it's writing, produce the full piece.`,
+          'You are Aevoy, a helpful AI assistant. Be thorough but concise. For calculations, show the formula and result. For writing tasks, produce the complete piece.'
+        );
+        const textResponse = textResult?.result;
+        if (textResponse && textResponse.length > 20) {
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed', completed_at: new Date().toISOString(),
+            execution_time_ms: Date.now() - startTime, response_text: textResponse,
+            action_count: 0, action_success_count: 0,
+          }).eq('id', taskId);
+          if (!task.suppressEmail) {
+            sendResponse({ to: from, from: `${username}@aevoy.com`, subject, body: textResponse }).catch(() => {});
+          }
+          clearTimeout(masterTimer);
+          console.log(`[FAST-PATH] Text-only complete in ${Date.now() - startTime}ms`);
+          return { taskId, success: true, response: textResponse, actions: [] };
+        }
+      } catch (textErr) {
+        console.log(`[FAST-PATH] Text-only fast path failed, falling through:`, textErr);
+      }
+    }
+
     // SMS fast path ("text me", "send me a text") — bypass AI completely
     // Only triggers when SMS is the PRIMARY intent, not a compound request like "check weather and text me"
     const smsStart = Date.now();
@@ -7891,6 +7924,7 @@ RULES:
           response_text: gracefulErrorMsg,
           error_message: errorMessage,
           completed_at: new Date().toISOString(),
+          execution_time_ms: Date.now() - startTime,
         })
         .eq("id", taskId)
         .eq("status", "processing"); // Only update if SIGTERM handler hasn't already set needs_review
