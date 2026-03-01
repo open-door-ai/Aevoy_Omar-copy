@@ -2681,7 +2681,9 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // If the AI generated search/browse actions, KEEP THEM — the AI knows the task better.
     // Only strip heavy browser actions (click/fill/login/submit) when classifier says no browser,
     // but ALWAYS keep search actions since they're lightweight and essential.
-    const BROWSER_ACTION_TYPES = ['browse', 'search', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
+    // search is NOT here — it uses fetch-based APIs (DDG/Brave) and only optionally uses browser
+    // for deep research. Including it wastes a browser slot + Chromium RAM for simple info queries.
+    const BROWSER_ACTION_TYPES = ['browse', 'screenshot', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait', 'extract'];
     const HEAVY_BROWSER_TYPES = ['fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'];
 
     // GENERATION TASK ACTION STRIP: For writing/generation tasks, the AI should produce content
@@ -8728,9 +8730,11 @@ async function executeAction(
         // ── DEEP RESEARCH: Browse top result URLs for actual page data ──
         // DDG/Brave snippets are thin text — browse the actual pages to get real data
         // (job listings, product details, restaurant info, reviews, prices, etc.)
-        // The user demands: "go there, find what you're looking for, browse it for you"
+        // Hard 60s timeout: prevents page.goto() hangs from blocking the entire search action
         if (executionEngine && rawSearchHtml) {
           try {
+            const _deepStart = Date.now();
+            const DEEP_RESEARCH_TIMEOUT = 60000; // 60s max for all deep research
             // Extract result URLs from raw search engine HTML
             const _deepUrls: string[] = [];
             const _hrefRegex = /href="([^"]+)"/gi;
@@ -8766,6 +8770,11 @@ async function executeAction(
 
               if (_page && !_page.isClosed()) {
                 for (const _deepUrl of _resultUrls) {
+                  // Hard timeout check — abort deep research if total time exceeded
+                  if (Date.now() - _deepStart > DEEP_RESEARCH_TIMEOUT) {
+                    console.log(`[SEARCH] Deep research timeout (${DEEP_RESEARCH_TIMEOUT / 1000}s) — returning with ${_deepData.length} page(s)`);
+                    break;
+                  }
                   try {
                     await _page.goto(_deepUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
                     // Wait for JS rendering
