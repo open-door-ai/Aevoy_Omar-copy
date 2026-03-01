@@ -3195,8 +3195,10 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|pdf document|create.*pdf|make.*pdf|business plan|budget tracker|expense tracker|invoice template)\b/i.test(_agentTeamText);
       // Skip agent team for factual lookups — single-goal queries that just need a search
       // "cheapest flight to X", "price of X", "what is X", "how much does X cost" — agent team is overkill
-      const _isFactualLookup = /\b(cheapest\s+(flight|price|deal|ticket|rate)|what is the (price|cost|rate|fee)|how much (does|is|costs?)|current price|price check|find the cheapest|cheapest.*to\b|price.*in Canada|price.*in US)\b/i.test(_agentTeamText) ||
-        /^(what is|how much|what's the|what are the prices?|find the cheapest|cheapest)\b/i.test(_agentTeamText.trim());
+      const _isFactualLookup = /\b(cheapest\s+(flight|price|deal|ticket|rate)|what is the (price|cost|rate|fee)|how much (does|is|costs?)|current price|price check|find (me )?the cheapest|cheapest.*to\b|price.*in Canada|price.*in US)\b/i.test(_agentTeamText) ||
+        /^(what is|how much|what's the|what are the prices?|find (me )?the cheapest|cheapest)\b/i.test(_agentTeamText.trim()) ||
+        // ANY task with an explicit domain = direct browser task, NOT agent team decomposition
+        /\S+\.(com|ca|org|net|io|co|app)\b/i.test(_agentTeamText);
       if (isComplexTask(_agentTeamText) && !task.suppressEmail && !_isActionTask && !_isGenerationTask && !_isFactualLookup) {
         try {
           const teamResult = await getAgentTeam().executeWithTeam(
