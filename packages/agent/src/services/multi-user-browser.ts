@@ -174,6 +174,8 @@ export class MultiUserBrowserService {
       userAgent: this.getRotatedUserAgent(),
       locale: "en-US",
       timezoneId: "America/New_York",
+      acceptDownloads: false,
+      permissions: [],
       // Each context gets its own isolated storage
       storageState: await this.loadStorageState(),
     });

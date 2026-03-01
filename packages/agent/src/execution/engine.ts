@@ -210,6 +210,8 @@ export class ExecutionEngine {
       userAgent: getRealisticUserAgent(),
       locale: 'en-US',
       timezoneId: 'America/New_York',
+      acceptDownloads: false,
+      permissions: [],
     });
 
     await applyStealthPatches(this.context);
