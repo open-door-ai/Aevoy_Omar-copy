@@ -50,7 +50,7 @@ export const globalLimiter: RequestHandler = rateLimit({
  */
 export const taskLimiter: RequestHandler = rateLimit({
   windowMs: 60 * 1000,
-  max: 200, // Temporarily raised for batch testing (was 10)
+  max: 10,
   keyGenerator: (req) => req.body?.userId || getClientIp(req),
   standardHeaders: true,
   legacyHeaders: false,
