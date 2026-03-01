@@ -800,6 +800,7 @@ export async function runVisionAgent(
   let lastUrl = '';
   let sameUrlCount = 0;
   let lastActionKey = '';
+  let lastAction = '';   // Full action text for DOM-first screenshot decisions
   let sameActionCount = 0;
   // Track element signatures to highlight elements that are NEW this step (appeared after last action)
   let prevElementSigs = new Set<string>();
@@ -996,20 +997,39 @@ export async function runVisionAgent(
         });
       } catch { /* non-critical */ }
 
-      // OBSERVE: Screenshot + extract elements from activePage
+      // OBSERVE: DOM-first with screenshots-as-needed (Browser Use / Manus technique)
+      // Screenshots add ~0.8s latency from image encoder. On a 50-step task that's 40s overhead.
+      // Only capture screenshots when visual context is truly needed:
+      //   1. First step (need to see the page)
+      //   2. URL changed (new page loaded)
+      //   3. Every 3rd step (periodic visual check)
+      //   4. After form submit (need to verify state)
+      //   5. When stuck (same URL for 3+ steps)
+      //   6. Fewer elements than expected (page might be loading/broken)
+      const url = activePage.url();
+      const urlChanged = url !== lastUrl;
+      const isStuck = !urlChanged && sameUrlCount >= 2;
+      const needsScreenshot = steps === 0 || urlChanged || steps % 3 === 0 || isStuck ||
+        (lastAction && /submit|NAVIGATE|PRESS:Enter/i.test(lastAction));
+
       let screenshot: string;
       let elements: ElementInfo[];
       try {
-        [screenshot, elements] = await Promise.all([
-          takeScreenshot(activePage),
-          extractElements(activePage, INTERACTIVE_SELECTOR),
-        ]);
+        if (needsScreenshot) {
+          [screenshot, elements] = await Promise.all([
+            takeScreenshot(activePage),
+            extractElements(activePage, INTERACTIVE_SELECTOR),
+          ]);
+          screenshots.push(screenshot);
+        } else {
+          // DOM-only step — skip expensive screenshot, use element text for reasoning
+          elements = await extractElements(activePage, INTERACTIVE_SELECTOR);
+          screenshot = screenshots.length > 0 ? screenshots[screenshots.length - 1] : ''; // reuse last
+          console.log(`[VISION-AGENT] Step ${steps + 1}: DOM-only (skipped screenshot — saves ~0.8s)`);
+        }
       } catch (err) {
         return { success: false, error: `Page capture failed: ${err}`, steps, cost: totalCost, screenshots };
       }
-
-      screenshots.push(screenshot);
-      const url = activePage.url();
       console.log(`[VISION-AGENT] Step ${steps + 1}: ${url} — ${elements.length} elements (active tab: ${activePage === page ? 'main' : 'popup'})`);
 
       // Compute which elements are NEW this step (appeared after the last action)
@@ -1121,6 +1141,7 @@ export async function runVisionAgent(
         lastActionKey = actionKey;
         sameActionCount = 0;
       }
+      lastAction = aiResponse; // Track full action for DOM-first screenshot decisions
       if (!action) {
         console.warn(`[VISION-AGENT] Could not parse action: "${aiResponse}"`);
         history.push(`Step ${steps + 1}: parse failed`);
