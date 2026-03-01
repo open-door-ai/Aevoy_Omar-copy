@@ -7916,6 +7916,98 @@ RULES:
       // Non-critical — proactive follow-up is bonus
     }
 
+    // 17. PROACTIVE EXTRA-MILE: Go above and beyond — do things the user didn't ask for but would love.
+    // This is NOT hardcoded per task type. The AI dynamically evaluates what extra actions make sense.
+    // Examples: booked restaurant → add to calendar, found product → save price comparison,
+    //           wrote content → format it nicely, researched topic → organize findings.
+    try {
+      const completedActions = actionResults.filter(r => r.success).map(r => r.action.type);
+      const hasCalendarAction = completedActions.includes('create_event') || completedActions.includes('check_calendar');
+      const hasRememberAction = completedActions.includes('remember');
+
+      // Only run extra-mile if task was substantive (not greetings/simple questions)
+      const isSubstantiveTask = cleanResponse.length > 100 && completedActions.length > 0;
+
+      if (isSubstantiveTask) {
+        const extraMilePrompt = `COMPLETED TASK: "${(subject || '').substring(0, 200)}"
+RESULT: "${cleanResponse.substring(0, 400)}"
+ACTIONS TAKEN: ${completedActions.join(', ')}
+USER: ${username}, email=${from}
+CALENDAR ALREADY ADDED: ${hasCalendarAction ? 'YES' : 'NO'}
+MEMORY ALREADY SAVED: ${hasRememberAction ? 'YES' : 'NO'}
+
+You are evaluating what EXTRA-MILE actions to take automatically — things the user didn't ask for but would appreciate. Think like a genius executive assistant who anticipates needs.
+
+EVALUATE each potential extra action (output ONLY the ones worth doing):
+- ADD_CALENDAR: If a date/time/event was mentioned, add it to their calendar
+- SAVE_MEMORY: If useful info was found (prices, contacts, addresses), save to user's memory for future reference
+- NONE: No extra actions needed (simple response, no actionable data)
+
+RULES:
+- Only suggest actions where you have CONCRETE data to act on (specific dates, prices, contacts)
+- Do NOT suggest actions already taken (check ACTIONS TAKEN list)
+- Do NOT suggest vague actions — every action must have specific parameters
+- If the response is just information/advice, output NONE
+- Maximum 2 extra actions
+
+OUTPUT FORMAT (one per line):
+ADD_CALENDAR:"event title"|"date/time"|"location"
+SAVE_MEMORY:"key fact to remember"
+NONE`;
+
+        const extraMileResult = await quickValidate(extraMilePrompt, 'You evaluate which extra-mile actions are worth taking automatically. Be selective — only concrete, valuable extras.').catch(() => null);
+        if (extraMileResult?.result && !extraMileResult.result.includes('NONE')) {
+          const extraLines = extraMileResult.result.split('\n').filter((l: string) => l.trim().length > 0);
+          for (const line of extraLines) {
+            // ADD_CALENDAR: Create a calendar event
+            const calMatch = line.match(/ADD_CALENDAR:"([^"]+)"\|"([^"]+)"\|"([^"]*)"/);
+            if (calMatch && !hasCalendarAction) {
+              const [, title, dateTime, location] = calMatch;
+              console.log(`[EXTRA-MILE] Auto-adding calendar event: "${title}" at ${dateTime}`);
+              try {
+                await getSupabaseClient().from('scheduled_tasks').insert({
+                  user_id: userId,
+                  task_description: `Calendar event: ${title}${location ? ' at ' + location : ''}`,
+                  cron_expression: 'once',
+                  next_run_at: new Date(dateTime).toISOString(),
+                  status: 'active',
+                  created_at: new Date().toISOString(),
+                });
+                cleanResponse += `\n\n📅 I've also added "${title}" to your schedule${location ? ' at ' + location : ''}.`;
+                console.log(`[EXTRA-MILE] Calendar event created successfully`);
+              } catch (calErr) {
+                console.warn(`[EXTRA-MILE] Calendar creation failed:`, calErr);
+              }
+            }
+
+            // SAVE_MEMORY: Remember useful info for future reference
+            const memMatch = line.match(/SAVE_MEMORY:"([^"]+)"/);
+            if (memMatch && !hasRememberAction) {
+              const fact = memMatch[1];
+              console.log(`[EXTRA-MILE] Auto-saving to memory: "${fact.substring(0, 60)}"`);
+              try {
+                await getSupabaseClient().from('user_memory').insert({
+                  user_id: userId,
+                  memory_type: 'episodic',
+                  content: fact,
+                  source: 'extra_mile_auto',
+                  created_at: new Date().toISOString(),
+                });
+              } catch (memErr) {
+                console.warn(`[EXTRA-MILE] Memory save failed:`, memErr);
+              }
+            }
+          }
+          // Update DB with enhanced response if calendar was added
+          if (cleanResponse.includes('📅')) {
+            await getSupabaseClient().from('tasks').update({ response_text: cleanResponse }).eq('id', taskId);
+          }
+        }
+      }
+    } catch {
+      // Non-critical — extra-mile is bonus
+    }
+
     return {
       taskId,
       success: true,

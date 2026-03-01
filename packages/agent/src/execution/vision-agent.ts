@@ -551,7 +551,7 @@ function extractTaskCredentials(task: string): { email: string; password: string
 /**
  * Build the AI prompt: element list + current URL + task.
  */
-function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }, creds?: { email: string; password: string; name: string }, newElemIndices?: Set<number>): string {
+function buildObservePrompt(elements: ElementInfo[], url: string, task: string, history: string[], plan: string = '', viewport?: { width: number; height: number }, creds?: { email: string; password: string; name: string }, newElemIndices?: Set<number>, triedAndFailed?: string, explorationHint?: string): string {
   const elemLines = elements.map(e => {
     const isNew = newElemIndices && newElemIndices.has(e.index);
     const parts = [isNew ? `★NEW [${e.index}] ${e.tag.toUpperCase()}` : `[${e.index}] ${e.tag.toUpperCase()}`];
@@ -565,8 +565,19 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
     return parts.join(' ');
   }).join('\n');
 
+  // Show last 15 steps (VY/Vercept: agents need more context to avoid repeating mistakes)
   const historyText = history.length > 0
-    ? `\nPREVIOUS STEPS:\n${history.slice(-6).join('\n')}\n`
+    ? `\nPREVIOUS STEPS:\n${history.slice(-15).join('\n')}\n`
+    : '';
+
+  // ALREADY TRIED section — persistent memory of failed approaches (VY/Vercept: never retry same action)
+  const triedSection = triedAndFailed
+    ? `\nALREADY TRIED (DO NOT REPEAT THESE — they failed):\n${triedAndFailed}\n`
+    : '';
+
+  // EXPLORATION STRATEGIES — injected when stuck to guide alternative approaches
+  const exploreSection = explorationHint
+    ? `\n${explorationHint}\n`
     : '';
 
   // If on an error page, tell the agent explicitly
@@ -589,7 +600,7 @@ function buildObservePrompt(elements: ElementInfo[], url: string, task: string, 
 
   return `TASK: ${task}
 URL: ${url}
-${vpNote}${credNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${historyText}${newElemNote}
+${vpNote}${credNote}${errorNote}${plan ? `\nEXECUTION PLAN:\n${plan}\n` : ''}${triedSection}${exploreSection}${historyText}${newElemNote}
 INTERACTIVE ELEMENTS (reference by number, ★NEW = appeared after last action):
 ${elemLines || '(none visible)'}
 
@@ -807,6 +818,38 @@ export async function runVisionAgent(
   const getElemSig = (e: ElementInfo) =>
     `${e.tag}|${e.type ?? ''}|${e.name ?? ''}|${e.placeholder ?? ''}|${e.text ?? ''}`.toLowerCase();
 
+  // ═══ ACTION MEMORY (VY/Vercept + browser-use pattern) ═══
+  // Persistent record of ALL attempted actions with outcomes. Never forgets.
+  // The AI gets a "ALREADY TRIED" section so it never repeats a failed approach.
+  // This is the core difference from the old 6-step sliding window.
+  interface ActionMemoryEntry {
+    actionSig: string;      // semantic hash: "click|button|Submit|5"
+    rawAction: string;      // original action text: "CLICK:5"
+    outcome: 'success' | 'fail' | 'no_effect';
+    step: number;
+    reason?: string;        // why it failed/had no effect
+    url: string;            // page URL when attempted
+  }
+  const actionMemory: ActionMemoryEntry[] = [];
+  const failedActionSigs = new Set<string>(); // Quick lookup for failed signatures
+
+  // Hash an action + element into a semantic signature for dedup
+  function hashAction(actionType: string, elemIndex: number | undefined, elements: ElementInfo[], url: string): string {
+    if (elemIndex !== undefined && elemIndex < elements.length) {
+      const elem = elements.find(e => e.index === elemIndex);
+      if (elem) {
+        // Semantic signature: action type + element tag + text/name + domain
+        const domain = new URL(url).hostname.replace('www.', '');
+        return `${actionType}|${elem.tag}|${(elem.text || elem.name || elem.placeholder || '').substring(0, 30)}|${domain}`.toLowerCase();
+      }
+    }
+    return `${actionType}|idx${elemIndex}|${new URL(url).pathname}`.toLowerCase();
+  }
+
+  // Track milestones for dynamic step budget
+  let milestonesHit = 0;  // Each milestone adds 20 steps to budget
+  let dynamicMaxSteps = 0; // Computed after effectiveMaxSteps is set
+
   console.log(`[VISION-AGENT] Starting task: "${task.substring(0, 100)}"`);
 
   // Extract credentials from the task string so they're always visible in every step prompt
@@ -854,13 +897,14 @@ export async function runVisionAgent(
     const isOrderingOrBookingTask = /\b(order|reserve|book|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*coffee|get.*sushi|call.*for)\b/i.test(task);
     const BOT_WALL_BAIL_ATTEMPTS = isOrderingOrBookingTask ? 2 : 4;
     const effectiveMaxSteps = isOrderingOrBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS;
+    dynamicMaxSteps = effectiveMaxSteps; // Dynamic: grows when milestones are hit
     let botWallCount = 0;
     let lastBotWallUrl = '';
     let lastProgressCheckStep = 0;
     let hasReachedForm = false;     // Detected form fields (input, select, submit)
     let hasFilledAnyField = false;  // Successfully typed/filled into a field
 
-    for (steps = 0; steps < effectiveMaxSteps; steps++) {
+    for (steps = 0; steps < dynamicMaxSteps; steps++) {
       // Check total timeout
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
         return { success: false, error: 'Timeout: 45 minutes exceeded', steps, cost: totalCost, screenshots };
@@ -1052,6 +1096,77 @@ export async function runVisionAgent(
           return { success: false, error: `Site unreachable (bot-blocked or error page). CALL-GATE will call the business directly.`, steps, cost: totalCost, screenshots };
         }
 
+        // ═══ EXPLORATION STRATEGY INJECTION (VY/Vercept pattern) ═══
+        // When stuck on same URL, analyze the page for alternative navigation paths.
+        // This is what made VY find the screensaver setting under Wallpaper — it used search.
+        if (sameUrlCount === 3) {
+          // Analyze page for search bars, unexplored menus, and alternative paths
+          try {
+            const explorationData = await activePage.evaluate((sel: string) => {
+              const allEls = Array.from(document.querySelectorAll(sel)).filter(el => {
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+              });
+              // Find search bars
+              const searchInputs = allEls.filter(el => {
+                const tag = el.tagName.toLowerCase();
+                const type = el.getAttribute('type') || '';
+                const placeholder = (el.getAttribute('placeholder') || '').toLowerCase();
+                const name = (el.getAttribute('name') || '').toLowerCase();
+                const role = el.getAttribute('role') || '';
+                return (tag === 'input' && type === 'search') ||
+                  placeholder.includes('search') || name.includes('search') ||
+                  role === 'searchbox' || role === 'search';
+              });
+              // Find unexplored navigation menus
+              const navItems = allEls.filter(el => {
+                const tag = el.tagName.toLowerCase();
+                const role = el.getAttribute('role') || '';
+                return (tag === 'nav' || role === 'navigation' || role === 'menubar' ||
+                  role === 'menu' || el.closest('nav') !== null) &&
+                  (tag === 'a' || tag === 'button' || role === 'menuitem');
+              });
+              // Find sidebar links
+              const sidebarLinks = allEls.filter(el => {
+                const parent = el.closest('[class*="sidebar"], [class*="side-nav"], [class*="menu"], [role="complementary"]');
+                return parent && (el.tagName.toLowerCase() === 'a' || el.getAttribute('role') === 'link');
+              });
+              return {
+                hasSearch: searchInputs.length > 0,
+                searchCount: searchInputs.length,
+                navItemCount: navItems.length,
+                sidebarLinkCount: sidebarLinks.length,
+                totalInteractive: allEls.length,
+                // Get labels of first few search inputs for the nudge
+                searchLabels: searchInputs.slice(0, 3).map(el => ({
+                  placeholder: el.getAttribute('placeholder') || '',
+                  name: el.getAttribute('name') || '',
+                  idx: allEls.indexOf(el),
+                })),
+              };
+            }, INTERACTIVE_SELECTOR).catch(() => null);
+
+            if (explorationData) {
+              const nudgeParts: string[] = [];
+              if (explorationData.hasSearch) {
+                nudgeParts.push(`🔍 SEARCH BAR AVAILABLE: This page has ${explorationData.searchCount} search input(s). TYPE your goal keywords into the search bar to find what you need directly — this is faster than clicking through menus.`);
+              }
+              if (explorationData.navItemCount > 5) {
+                nudgeParts.push(`📂 UNEXPLORED NAVIGATION: ${explorationData.navItemCount} nav items on this page. Look for menu items you haven't tried yet. HOVER over menu headers to reveal sub-items.`);
+              }
+              if (explorationData.sidebarLinkCount > 3) {
+                nudgeParts.push(`📋 SIDEBAR LINKS: ${explorationData.sidebarLinkCount} sidebar links available. Check the sidebar for the section you need.`);
+              }
+              if (nudgeParts.length > 0) {
+                const nudge = `⚡ STUCK ${sameUrlCount} STEPS — EXPLORATION STRATEGIES:\n${nudgeParts.join('\n')}\nTry a FUNDAMENTALLY different approach. If you've been clicking, try searching. If you've been scrolling, try a different menu. Keyboard shortcut Ctrl+F may also find text on the page.`;
+                history.push(nudge);
+                console.log(`[VISION-AGENT] Exploration nudge injected (search=${explorationData.hasSearch}, nav=${explorationData.navItemCount})`);
+              }
+            }
+          } catch { /* non-critical */ }
+        }
+
         if (sameUrlCount === 4) {
           console.log(`[VISION-AGENT] Stuck on same URL for 4 steps — forcing scroll down`);
           await activePage.mouse.wheel(0, 600);
@@ -1060,13 +1175,15 @@ export async function runVisionAgent(
           console.log(`[VISION-AGENT] Stuck for 7 steps — scrolling back up`);
           await activePage.mouse.wheel(0, -600);
           await activePage.waitForTimeout(400);
+          // Second exploration nudge with keyboard shortcut hint
+          history.push(`⚡ STILL STUCK ${sameUrlCount} STEPS — Try: (1) Ctrl+K or Cmd+K (command palette on many apps), (2) Tab key to cycle through elements, (3) NAVIGATE to a different section of the site, (4) Use the browser's address bar (NAVIGATE to a sub-page like /settings, /account, /search).`);
         } else if (sameUrlCount === 10) {
           // Long stuck: try a page reload
           console.log(`[VISION-AGENT] Stuck for 10 steps — refreshing page`);
           await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
           await activePage.waitForTimeout(2000);
-        } else if (sameUrlCount >= 15) {
-          // Hard exit: stuck on same URL for 15+ steps despite scroll, scroll-up, and reload
+        } else if (sameUrlCount >= 20) {
+          // Hard exit raised from 15→20 to give exploration strategies more room
           console.log(`[VISION-AGENT] HARD STUCK: Same URL for ${sameUrlCount} steps — bailing out`);
           return { success: false, error: `Stuck on ${url} for ${sameUrlCount} steps — page is unresponsive. CALL-GATE: Search for the business phone number and call directly.`, steps, cost: totalCost, screenshots };
         }
@@ -1075,9 +1192,29 @@ export async function runVisionAgent(
         sameUrlCount = 0;
       }
 
+      // ═══ COMPUTE ACTION MEMORY CONTEXT ═══
+      // Build "ALREADY TRIED" section from failed actions so AI never repeats them
+      const failedEntries = actionMemory.filter(m => m.outcome === 'fail' || m.outcome === 'no_effect');
+      let triedAndFailedText = '';
+      if (failedEntries.length > 0) {
+        // Show most recent 15 failed actions (avoid prompt bloat)
+        const recentFails = failedEntries.slice(-15);
+        triedAndFailedText = recentFails.map(f =>
+          `- Step ${f.step}: ${f.rawAction} → ${f.outcome.toUpperCase()}${f.reason ? ` (${f.reason})` : ''}`
+        ).join('\n');
+      }
+
+      // Compute exploration hint based on stuck state
+      let currentExplorationHint = '';
+      if (sameUrlCount >= 3 && sameUrlCount < 7) {
+        currentExplorationHint = `⚡ YOU ARE STUCK (${sameUrlCount} steps same URL). You MUST try a fundamentally different approach. Do NOT repeat any action from the ALREADY TRIED list.`;
+      } else if (sameUrlCount >= 7) {
+        currentExplorationHint = `🚨 CRITICALLY STUCK (${sameUrlCount} steps same URL). Previous approaches ALL failed. Try: search bar, keyboard shortcuts (Ctrl+F, Ctrl+K), navigate to a different URL path, or use CLICK_AT on elements visible in screenshot but not in element list.`;
+      }
+
       // REASON: Ask AI what to do
       const viewport = activePage.viewportSize() || { width: 1280, height: 800 };
-      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport, taskCreds, newElemIndices);
+      const prompt = buildObservePrompt(elements, url, task, history, taskPlan, viewport, taskCreds, newElemIndices, triedAndFailedText, currentExplorationHint);
       let aiResponse: string;
       let stepCost = 0;
       try {
@@ -1123,19 +1260,33 @@ export async function runVisionAgent(
         console.log(`[VISION-AGENT] BATCH: ${batchSize} actions in one response`);
       }
 
-      // LOOP DETECTION (Manus-style): Detect frozen loops, ping-pong oscillation, and retry loops
+      // ═══ LOOP DETECTION (VY/Vercept + browser-use ActionLoopDetector) ═══
+      // Uses semantic action signatures from memory, not just exact string matching.
       const actionKey = aiResponse.trim().split('\n')[0].trim();
+
+      // Check if this action was already tried and failed (semantic dedup)
+      if (action && action.type !== 'done' && action.type !== 'fail' && action.type !== 'wait') {
+        const proposedSig = hashAction(action.type, action.index, elements, url);
+        if (failedActionSigs.has(proposedSig)) {
+          const failEntry = actionMemory.find(m => m.actionSig === proposedSig && (m.outcome === 'fail' || m.outcome === 'no_effect'));
+          history.push(`🚫 BLOCKED: "${actionKey}" matches a previously FAILED action (step ${failEntry?.step || '?'}: ${failEntry?.reason || 'failed'}). The exact same approach will fail again. You MUST try a fundamentally different strategy: different element, different URL, different action type, or use the search bar.`);
+          console.log(`[VISION-AGENT] Semantic dedup blocked: "${actionKey}" matches failed sig "${proposedSig}"`);
+        }
+      }
+
       if (actionKey === lastActionKey) {
         sameActionCount++;
         if (sameActionCount >= 3) {
-          history.push(`⚠️ FROZEN LOOP: You repeated "${actionKey}" ${sameActionCount} times. You MUST try a completely different approach. Options: (1) SCROLL to find different elements, (2) NAVIGATE to a different URL, (3) FILL instead of TYPE, (4) CLICK_AT coordinates instead of element index.`);
+          // Count total unique failed actions — if many, the agent is truly stuck
+          const uniqueFailedApproaches = failedActionSigs.size;
+          history.push(`⚠️ FROZEN LOOP: You repeated "${actionKey}" ${sameActionCount} times. ${uniqueFailedApproaches} different approaches have already failed. You MUST try something COMPLETELY NEW: (1) Use the SEARCH BAR if available, (2) NAVIGATE to a different page/URL entirely, (3) Try keyboard: PRESS:Tab then PRESS:Enter, (4) CLICK_AT pixel coordinates from screenshot, (5) Try a different section of the site.`);
         }
       } else {
         // Check for ping-pong: last 4 actions form A-B-A-B pattern
         if (history.length >= 4) {
           const recent = history.slice(-4).map(h => h.split(': ')[1] || h);
           if (recent[0] === recent[2] && recent[1] === recent[3] && recent[0] !== recent[1]) {
-            history.push(`⚠️ PING-PONG LOOP: You keep alternating between "${recent[0]}" and "${recent[1]}". This oscillation won't complete the task. Try a third, different approach.`);
+            history.push(`⚠️ PING-PONG LOOP: You keep alternating between "${recent[0]}" and "${recent[1]}". This oscillation won't complete the task. Try a THIRD, completely different approach — like using the search bar or navigating to a different URL.`);
           }
         }
         lastActionKey = actionKey;
@@ -1582,6 +1733,47 @@ export async function runVisionAgent(
 
       console.log(`[VISION-AGENT] ${action.type}${action.index !== undefined ? ':' + action.index : ''} → ${actionOk ? 'ok' : 'FAIL'}`);
 
+      // ═══ RECORD ACTION OUTCOME IN MEMORY ═══
+      {
+        const sig = hashAction(action.type, action.index, elements, url);
+        const urlAfterAction = activePage.url();
+        const urlChanged2 = urlAfterAction !== url;
+        // Determine outcome: success (page changed), no_effect (page unchanged), fail (action threw)
+        let outcome: 'success' | 'fail' | 'no_effect' = 'fail';
+        let reason: string | undefined;
+        if (actionOk) {
+          if (urlChanged2 || newElemIndices.size > 2 || ['type', 'fill', 'select', 'scroll', 'wait', 'press', 'navigate'].includes(action.type)) {
+            outcome = 'success';
+            // Milestone detection: URL change = progress = extend step budget
+            if (urlChanged2 && !isOrderingOrBookingTask) {
+              milestonesHit++;
+              const newBudget = effectiveMaxSteps + (milestonesHit * 20);
+              if (newBudget > dynamicMaxSteps && newBudget <= 300) {
+                dynamicMaxSteps = newBudget;
+                console.log(`[VISION-AGENT] Milestone! URL changed → step budget extended to ${dynamicMaxSteps}`);
+              }
+            }
+          } else {
+            outcome = 'no_effect';
+            reason = 'page unchanged after action';
+          }
+        } else {
+          outcome = 'fail';
+          reason = 'action execution failed';
+        }
+        actionMemory.push({
+          actionSig: sig,
+          rawAction: `${action.type.toUpperCase()}${action.index !== undefined ? ':' + action.index : ''}${action.text ? ':"' + action.text.substring(0, 30) + '"' : ''}`,
+          outcome,
+          step: steps + 1,
+          reason,
+          url,
+        });
+        if (outcome === 'fail' || outcome === 'no_effect') {
+          failedActionSigs.add(sig);
+        }
+      }
+
       // BATCH EXECUTION: If AI returned multiple actions, execute remaining ones
       // Skip batch if first action failed, was navigation (page changed), or was done/fail
       if (batchSize > 1 && actionOk && !['navigate', 'done', 'fail', 'scroll', 'wait', 'switch_tab'].includes(action.type)) {
@@ -1671,7 +1863,7 @@ export async function runVisionAgent(
         : `CALL-GATE: Browser couldn't complete reservation after ${steps} steps. Search for phone number and call the restaurant.`;
       return { success: false, error: callGateMsg, steps, cost: totalCost, screenshots };
     }
-    return { success: false, error: `Max steps (${effectiveMaxSteps}) reached — task is too complex or site is bot-blocking`, steps, cost: totalCost, screenshots };
+    return { success: false, error: `Max steps (${dynamicMaxSteps}) reached — task is too complex or site is bot-blocking`, steps, cost: totalCost, screenshots };
 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
