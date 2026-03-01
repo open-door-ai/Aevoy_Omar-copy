@@ -979,12 +979,16 @@ export async function runVisionAgent(
       await activePage.waitForLoadState('domcontentloaded').catch(() => {});
       await activePage.waitForTimeout(250);
 
-      // Handle CAPTCHAs automatically (every 3 steps to save ~100ms/step on non-CAPTCHA pages)
-      if (steps % 3 === 0) {
-        try {
+      // Handle CAPTCHAs automatically EVERY step — CapSolver is fast (<5s) and
+      // missing a CAPTCHA wastes 3+ steps of blind clicking
+      try {
+        const captchaSolved = await handleCaptchaIfPresent(activePage, userId, taskId);
+        if (captchaSolved === false) {
+          // CAPTCHA detected but not solved — wait and retry once
+          await activePage.waitForTimeout(3000);
           await handleCaptchaIfPresent(activePage, userId, taskId);
-        } catch { /* non-critical */ }
-      }
+        }
+      } catch { /* non-critical */ }
 
       // BOT WALL DETECTION: Cloudflare, DataDome, PerimeterX block pages
       // Detected by: checking for challenge/blocked page content
@@ -1002,11 +1006,13 @@ export async function runVisionAgent(
           }
           console.log(`[VISION-AGENT] Bot wall detected at ${wallUrl} (count=${botWallCount})`);
           if (botWallCount === 1) {
-            // First hit: wait for Cloudflare to auto-pass (it often does within 5s)
+            // First hit: wait for Cloudflare auto-pass (5s) then try CapSolver on Turnstile
             await activePage.waitForTimeout(6000);
+            try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
           } else if (botWallCount === 2) {
-            // Second hit: try reloading with a different user agent via headers
-            history.push(`⚠️ BOT WALL DETECTED (attempt ${botWallCount}): Site is blocking automated access. Waiting for challenge to resolve. If stuck, try NAVIGATE to a different path on the same site or NAVIGATE to a backup search result.`);
+            // Second hit: CapSolver again (Turnstile tokens sometimes need 2 attempts)
+            history.push(`⚠️ BOT WALL DETECTED (attempt ${botWallCount}): Site is blocking automated access. Attempting CAPTCHA solve...`);
+            try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
             await activePage.waitForTimeout(4000);
           } else if (botWallCount >= BOT_WALL_BAIL_ATTEMPTS) {
             // Persistent bot wall: bail out so processor can escalate to phone call
