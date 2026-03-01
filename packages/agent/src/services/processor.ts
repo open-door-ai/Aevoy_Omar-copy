@@ -3535,6 +3535,23 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
 
+        // BROWSER INTERACTION GATE: When the task explicitly mentions a website ("Go to X.com")
+        // and requires physical interaction (add to cart, book, sign up, fill form), REJECT
+        // completion if the vision agent has never run. Search results alone can't interact.
+        // DeepSeek/Groq hallucinate "added to cart" from search — this gate catches that.
+        const _needsBrowserInteraction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe)\b/i.test(`${subject} ${body}`);
+        if (_hasExplicitDomainForBrowse && _needsBrowserInteraction && visionAgentInvocations === 0 && currentIteration <= 3 && executionEngine) {
+          const _domBrowseTarget = `${subject} ${body}`.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i)?.[1]
+            || `${subject} ${body}`.match(/\bhttps?:\/\/(\S+)/i)?.[1];
+          if (_domBrowseTarget) {
+            const _browseTarget = _domBrowseTarget.startsWith('http') ? _domBrowseTarget : `https://www.${_domBrowseTarget}`;
+            console.warn(`[BROWSER-GATE] REJECTED: Task requires visiting ${_domBrowseTarget} but vision agent never ran. Injecting browse("${_browseTarget}").`);
+            aiResponse.content = '';
+            aiResponse.actions = [{ type: 'browse' as any, params: { url: _browseTarget } }];
+            // Don't set isTaskComplete — loop continues, browse executes, vision agent triggers
+          }
+        }
+
         // SIGNUP COMPLETION GATE (independent of real actions):
         // If this is a signup/account creation task and AI signaled TASK_COMPLETE but never
         // filled any forms, it just browsed to the page and gave advice. REJECT.
