@@ -41,3 +41,5 @@ packages/agent/dist/
 test-results/
 apps/web/test-results/
 .archive/
+.claude/
+railway-home.md
