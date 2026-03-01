@@ -5634,7 +5634,9 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         ['browse', 'send_email', 'send_sms', 'call_user', 'call_external', 'fill_form', 'schedule'].includes(a.type)
       );
       // Never fast-exit on search when user explicitly asked to GO TO a specific site
+      // Includes prepositions (on/at/from/via) — "find X on bestbuy.ca" means visit the site
       const _userWantsBrowser = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
+        /\b(on|at|from|via|through)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
         /\bhttps?:\/\/\S+/i.test(subject) ||
         /\b(add\s+to\s+cart|sign\s*up|book|reserve|fill.*form|complete.*form)\b/i.test(subject);
       if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser) {
@@ -8480,24 +8482,42 @@ async function executeAction(
       }
 
       const url = action.params.url as string;
-      let result = await executionEngine.executeSteps([
-        { action: 'navigate', params: { url } },
-        { action: 'extract', params: { selector: 'body' } }
-      ]);
-
-      // If page crashed (OOM on Railway), try to recover with fresh browser context
-      if (!result.success && result.error && /crash|not available|closed|disposed/i.test(result.error)) {
-        console.log(`[BROWSE] Page crashed on ${url} — attempting browser recovery`);
-        try {
-          await executionEngine.cleanup();
-          await executionEngine.initialize(userId);
-          result = await executionEngine.executeSteps([
-            { action: 'navigate', params: { url } },
-            { action: 'extract', params: { selector: 'body' } }
-          ]);
-        } catch (recoveryErr) {
-          console.error(`[BROWSE] Recovery failed:`, recoveryErr);
-        }
+      // HARD 90s TIMEOUT: page.goto() can hang indefinitely on Cloudflare/WAF sites
+      // (bestbuy.ca, canadiantire.ca) — the Playwright 30s timeout doesn't always fire.
+      // This backstop prevents 20-minute hangs from the engine's TASK_TIMEOUT_MS.
+      const BROWSE_TIMEOUT_MS = 90000;
+      let result: { success: boolean; data?: unknown; error?: string };
+      try {
+        result = await Promise.race([
+          (async () => {
+            let r = await executionEngine!.executeSteps([
+              { action: 'navigate', params: { url } },
+              { action: 'extract', params: { selector: 'body' } }
+            ]);
+            // If page crashed (OOM on Railway), try to recover with fresh browser context
+            if (!r.success && r.error && /crash|not available|closed|disposed/i.test(r.error)) {
+              console.log(`[BROWSE] Page crashed on ${url} — attempting browser recovery`);
+              try {
+                await executionEngine!.cleanup();
+                await executionEngine!.initialize(userId);
+                r = await executionEngine!.executeSteps([
+                  { action: 'navigate', params: { url } },
+                  { action: 'extract', params: { selector: 'body' } }
+                ]);
+              } catch (recoveryErr) {
+                console.error(`[BROWSE] Recovery failed:`, recoveryErr);
+              }
+            }
+            return r;
+          })(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Browse timeout: ${url} did not respond in ${BROWSE_TIMEOUT_MS / 1000}s`)), BROWSE_TIMEOUT_MS)
+          ),
+        ]);
+      } catch (browseTimeoutErr) {
+        const errMsg = browseTimeoutErr instanceof Error ? browseTimeoutErr.message : 'Browse timed out';
+        console.error(`[BROWSE] HARD TIMEOUT: ${errMsg}`);
+        result = { success: false, error: errMsg };
       }
 
       return {

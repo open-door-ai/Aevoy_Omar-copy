@@ -1076,6 +1076,32 @@ export class ExecutionEngine {
       return { success: false, action: 'navigate', error: urlBlockReason };
     }
 
+    // HARD 45s BACKSTOP: page.goto() timeout (30s) doesn't always fire on WAF/Cloudflare sites.
+    // handleCloudflare waits 30s. Total: goto(30) + SPA(10) + antibot(30) = 70s possible.
+    // This backstop prevents indefinite hangs regardless of what Chromium does.
+    const NAV_HARD_TIMEOUT = 45000;
+    try {
+      return await Promise.race([
+        this._doNavigate(url),
+        new Promise<StepResult>((resolve) =>
+          setTimeout(() => {
+            console.error(`[ENGINE] HARD NAV TIMEOUT: ${url} did not complete in ${NAV_HARD_TIMEOUT / 1000}s`);
+            resolve({
+              success: false,
+              action: 'navigate',
+              error: `Navigation to ${url} timed out after ${NAV_HARD_TIMEOUT / 1000}s. Site may be blocking automated browsers. Use [ACTION:search("...")] instead.`
+            });
+          }, NAV_HARD_TIMEOUT)
+        ),
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown navigation error';
+      console.error(`[ENGINE] Navigation failed for ${url}: ${message}`);
+      return { success: false, action: 'navigate', error: `Navigation to ${url} failed: ${message}` };
+    }
+  }
+
+  private async _doNavigate(url: string): Promise<StepResult> {
     try {
       console.log(`[ENGINE] Navigating to: ${url} (${this.isMultiUser ? 'vps' : 'local'})`);
       await this.page!.goto(url, {
