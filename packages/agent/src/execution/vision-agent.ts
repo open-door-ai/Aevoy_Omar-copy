@@ -1435,10 +1435,15 @@ export async function runVisionAgent(
           const orderHint = _isOrderInfoOnly
             ? ' Finding prices/locations is RESEARCH, not completing the order. You must: ADD TO CART → CHECKOUT → FILL delivery info → COMPLETE ORDER. Go back to the menu/cart and continue.'
             : '';
-          history.push(`⚠️ ${reason} DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint}${orderHint} You MUST actually complete the task. Click buttons, fill forms, submit. If truly impossible after many tries, output FAIL (not DONE with advice). DONE = task succeeded. FAIL = task impossible. Advice = neither.`);
-          // If we've rejected 3+ DONE attempts, force FAIL to prevent infinite loop
+          const dataMissingHint = _isDataMissingDone
+            ? ' Your DONE result has NO DATA. The task asked for specific information (prices, links, etc.) but you returned nothing useful. READ the page content — look at product listings, prices, URLs visible on screen — and include them in your DONE result. Example: DONE:Found 3 PS5 listings: 1) $350 like new https://kijiji.ca/xxx 2) $380 used https://kijiji.ca/yyy'
+            : '';
+          history.push(`⚠️ ${reason} DONE REJECTED: "${doneResult.substring(0, 100)}". This is NOT complete — you described what you COULD do instead of DOING IT.${credHint}${orderHint}${dataMissingHint} You MUST actually complete the task. Click buttons, fill forms, submit. If truly impossible after many tries, output FAIL (not DONE with advice). DONE = task succeeded. FAIL = task impossible. Advice = neither.`);
+          // If we've rejected too many DONE attempts, force FAIL to prevent infinite loop
+          // Data-missing gets 5 tries (AI can learn to extract data), others get 3
           const doneRejectCount = history.filter(h => h.includes('DONE REJECTED')).length;
-          if (doneRejectCount >= 3) {
+          const maxRejects = _isDataMissingDone ? 5 : 3;
+          if (doneRejectCount >= maxRejects) {
             console.log(`[VISION-AGENT] 3+ DONE rejections — forcing FAIL to prevent infinite loop`);
             return { success: false, error: `Agent could not complete task after ${steps + 1} steps — kept giving advice instead of acting. Last attempt: "${doneResult.substring(0, 200)}"`, steps: steps + 1, cost: totalCost, screenshots };
           }
