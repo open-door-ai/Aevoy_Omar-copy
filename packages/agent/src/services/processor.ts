@@ -410,6 +410,10 @@ async function tryScheduleFastPath(
   const remindMatch = lower.match(/remind\s+(?:me\s+)?(?:at|in)\s+(?:exactly\s+|about\s+|roughly\s+|around\s+|like\s+)?(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd])|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)(?:\s+(?:to|about|that)\s+(.+)|$)/i);
   // Pattern 2b: "remind me to <task> in <time>" — task comes BEFORE the time
   const remindToMatch = !remindMatch ? lower.match(/remind\s+(?:me\s+)?(?:to|about|that)\s+(.+?)\s+in\s+(\d+\s*(?:seconds?|minutes?|hours?|min|sec|hrs?|[smhd]))/i) : null;
+  // Pattern 2c: RECURRING — "remind me every [weekday/day/morning/evening] at <time> to <task>"
+  const remindRecurringMatch = !remindMatch && !remindToMatch ? lower.match(
+    /remind\s+(?:me\s+)?every\s+(weekday|day|morning|evening|night|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|hour)s?\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?|noon|midnight)?(?:\s+(?:to|about|that)\s+(.+)|$)/i
+  ) : null;
   // Pattern 3: "schedule <task> at/in <time>"
   const scheduleMatch = lower.match(/schedule\s+(.+?)\s+(?:at|in)\s+(.+)/i);
 
@@ -435,6 +439,66 @@ async function tryScheduleFastPath(
     timeStr = remindToMatch[2].trim();
     const reminderText = remindToMatch[1].trim() || 'Reminder from your AI assistant';
     description = `send_sms:${reminderText}`;
+  } else if (remindRecurringMatch) {
+    // "remind me every weekday at 8am to review my portfolio"
+    action = 'send_sms';
+    const frequency = remindRecurringMatch[1].trim().toLowerCase();
+    const timeOfDay = remindRecurringMatch[2]?.trim() || '9am';
+    const reminderText = remindRecurringMatch[3]?.trim() || taskText.replace(/remind\s+me\s+every\s+\S+\s+(?:at\s+)?\S+\s+(?:to\s+)?/i, '').trim() || 'Recurring reminder';
+    description = `send_sms:${reminderText}`;
+    // Convert to cron expression
+    const hourMatch = timeOfDay.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i);
+    let cronHour = 9, cronMin = 0;
+    if (hourMatch) {
+      cronHour = parseInt(hourMatch[1]);
+      cronMin = parseInt(hourMatch[2] || '0');
+      const meridiem = (hourMatch[3] || '').replace(/\./g, '').toLowerCase();
+      if (meridiem === 'pm' && cronHour < 12) cronHour += 12;
+      if (meridiem === 'am' && cronHour === 12) cronHour = 0;
+    }
+    // Map frequency to cron day-of-week
+    const cronDayMap: Record<string, string> = {
+      weekday: '1-5', day: '*', morning: '*', evening: '*', night: '*', hour: '*',
+      monday: '1', mon: '1', tuesday: '2', tue: '2', wednesday: '3', wed: '3',
+      thursday: '4', thu: '4', friday: '5', fri: '5', saturday: '6', sat: '6', sunday: '0', sun: '0',
+    };
+    const cronDay = cronDayMap[frequency] || '*';
+    timeStr = `${cronMin} ${cronHour} * * ${cronDay}`;
+    // Set nextRun to next occurrence
+    const now = new Date();
+    const nextRunDate2 = new Date(now);
+    nextRunDate2.setHours(cronHour, cronMin, 0, 0);
+    if (nextRunDate2 <= now) nextRunDate2.setDate(nextRunDate2.getDate() + 1);
+    // Skip to next valid weekday if needed
+    if (frequency === 'weekday') {
+      while (nextRunDate2.getDay() === 0 || nextRunDate2.getDay() === 6) {
+        nextRunDate2.setDate(nextRunDate2.getDate() + 1);
+      }
+    }
+    // Create recurring schedule directly — bypass one-time path
+    try {
+      await getSupabaseClient().from('scheduled_tasks').insert({
+        user_id: userId,
+        description: description,
+        task_template: description,
+        cron_expression: timeStr,
+        next_run_at: nextRunDate2.toISOString(),
+        is_active: true,
+      });
+      const freqLabel = frequency === 'weekday' ? 'every weekday' : frequency === 'day' ? 'every day' : `every ${frequency}`;
+      const timeLabel = timeOfDay || '9:00 AM';
+      const responseText2 = `Got it — I'll remind you ${freqLabel} at ${timeLabel} to ${reminderText}.`;
+      if (existingTaskId) {
+        await getSupabaseClient().from('tasks').update({
+          status: 'completed', completed_at: new Date().toISOString(),
+          response_text: responseText2,
+        }).eq('id', existingTaskId);
+      }
+      return { taskId: existingTaskId || '', success: true, response: responseText2, actions: [] };
+    } catch (err2) {
+      console.error('[FAST-PATH-SCHEDULE] Recurring schedule failed:', err2);
+      // Fall through to AI
+    }
   } else if (scheduleMatch) {
     description = scheduleMatch[1].trim();
     timeStr = scheduleMatch[2].trim();
@@ -1591,8 +1655,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
     // Weather fast path — instant weather via Open-Meteo (cloud-friendly) + wttr.in fallback
     const weatherText0 = subject + ' ' + (body || '');
-    const weatherMatch = weatherText0.match(/\b(?:in|for|at)\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+right now|\s+today|\s+now|\?|$)/i)
-      || weatherText0.match(/weather\s+(?:in|for|at)?\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+right now|\s+today|\s+now|\?|$)/i);
+    const weatherMatch = weatherText0.match(/\b(?:in|for|at)\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+(?:right now|today|now|this|tomorrow|tonight|next|and|over)|\?|$)/i)
+      || weatherText0.match(/weather\s+(?:in|for|at)?\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+(?:right now|today|now|this|tomorrow|tonight|next|and|over)|\?|$)/i);
     const isWeatherQuery = /\b(weather|temperature|forecast|how (hot|cold|warm)|will it rain|is it raining|is it sunny)\b/i.test(weatherText0);
     if (isWeatherQuery && weatherMatch?.[1]) {
       const rawLocation = weatherMatch[1].trim();
