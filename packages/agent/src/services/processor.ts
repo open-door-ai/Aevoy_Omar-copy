@@ -5259,6 +5259,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign)\b/i.test(taskTextLower)
         // Also trigger if the AI already browsed and is clearly doing UI work (has form fills or clicks)
         || (hasBrowseEver && actionResults.some(r => ['fill', 'fill_form', 'click', 'submit'].includes(r.action?.type || '') && !r.success))
+        // ALWAYS invoke vision agent when user explicitly asked to visit a site ("Go to X.com and do Y")
+        // This covers ALL types of site interaction (search forms, date pickers, filters, etc.)
+        || (hasBrowseEver && /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
       );
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {
         const visionPage = executionEngine.getPage?.();
