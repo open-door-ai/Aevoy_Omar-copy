@@ -721,7 +721,25 @@ app.post("/task", taskLimiter, async (req, res) => {
     .then((result) => {
       console.log(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
     })
-    .catch((error) => console.error("Task processing failed:", error))
+    .catch(async (error) => {
+      console.error("Task processing failed:", error);
+      // SAFETY NET: If processTask crashes without updating the DB,
+      // mark the task as needs_review so it doesn't stay "processing" forever
+      if (task.taskId) {
+        try {
+          const { getSupabaseClient } = await import("./utils/supabase.js");
+          await getSupabaseClient().from('tasks')
+            .update({
+              status: 'needs_review',
+              response_text: 'I ran into a technical issue processing your request. Please try again!',
+              error_message: error instanceof Error ? error.message : String(error),
+              completed_at: new Date().toISOString(),
+            })
+            .eq('id', task.taskId)
+            .eq('status', 'processing');
+        } catch { /* last resort — watchdog will clean up */ }
+      }
+    })
     .finally(() => { activeTasks--; processQueuedTasks(); });
 });
 
