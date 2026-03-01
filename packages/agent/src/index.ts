@@ -1242,20 +1242,20 @@ app.post("/webhook/voice/external-call-twiml", async (req, res) => {
     } catch { /* use default */ }
   }
 
-  // Opening line for the business (spoken immediately when they pick up)
-  const greeting = script
-    ? script.substring(0, 200) // Use the script as the opening line
-    : `Hi, I'm calling on behalf of a customer to make a reservation.`;
-  const escGreeting = greeting.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // SHORT welcomeGreeting — just "Hi" spoken immediately when business picks up.
+  // The FULL script is passed via Parameter and delivered by the AI as its first
+  // response. This eliminates the 10s dead air (TTS+WS+AI startup before interaction).
+  const fullScript = script || `Hi, I'm calling on behalf of a customer to make a reservation.`;
+  const escScript = fullScript.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escGreeting}">
+    <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="Hi there.">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="external_call" />
       <Parameter name="contextKey" value="${contextKey}" />
-      <Parameter name="script" value="${escGreeting}" />
+      <Parameter name="script" value="${escScript}" />
       <Parameter name="businessName" value="${businessName.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" />
     </ConversationRelay>
   </Connect>

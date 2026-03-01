@@ -787,7 +787,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const _hasExplicitDomain = /\b(go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(directBrowserTaskText) ||
       /\b(at|on|via|through|from)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) ||
       /\bhttps?:\/\/\S+/i.test(directBrowserTaskText);
-    const isDirectBrowserTask = _hasExplicitDomain || /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes)|order\s+(me\s+)?(a|some|food|pizza|burger|coffee|sushi|lunch|dinner|breakfast|groceries|delivery)|order\s+from\b|place\s+an?\s+order|add\s+to\s+cart|checkout\s+(at|on|from)|get\s+(me\s+)?(food|pizza|delivery|groceries)\s+from)\b/i.test(directBrowserTaskText);
+    const isDirectBrowserTask = _hasExplicitDomain || /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes)|order\s+(me\s+)?(a|some|food|pizza|burger|coffee|sushi|lunch|dinner|breakfast|groceries|delivery)|order\s+from\b|place\s+an?\s+order|add\s+to\s+cart|checkout\s+(at|on|from)|get\s+(me\s+)?(food|pizza|delivery|groceries)\s+from|use\s+(the\s+)?browser|open\s+(the\s+)?browser|launch\s+(the\s+)?browser|browse\s+(to|for|the)|check\s+(the\s+)?browser|go\s+on\s+(the\s+)?(web|internet|browser))\b/i.test(directBrowserTaskText);
 
     // GENERATION BYPASS: Writing/coding/generation tasks must also skip autonomous planning.
     // Autonomous planning decomposes "write me HTML" into research sub-tasks which never generate code.
@@ -7429,7 +7429,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
-    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register|create.*account|make.*account|cancel|unsubscribe|book|reserv|buy|order|purchase|subscribe|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b)\b/i.test(subject + ' ' + (body || ''));
+    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register(?:ed|ing)?|create.*account|make.*account|cancel(?:l?ed|l?ing)?|unsubscrib(?:e|ed|ing)|book(?:ed|ing)?|reserv(?:ation|e|ed|ing)?|buy|order(?:ed|ing)?|purchas(?:e|ed|ing)|subscrib(?:e|ed|ing)|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b|use\s+(the\s+)?browser|open\s+(the\s+)?browser|go\s+to\s+\w+\.(com|ca|org|net|io))\b/i.test(subject + ' ' + (body || ''));
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search', 'screenshot', 'screenshot_ocr', 'extract'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
@@ -7566,7 +7566,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // Pattern 2: "here are the findings/steps" — gives instructions instead of doing it
       // Catches: "here are the findings", "here's how to", "you can book at", "direct links:",
       // and "page available at URL where you can create account" (giving link, not doing task)
-      const _isTask = /\b(book|reserv|cancel|sign.?up|sign up|register|create|make|set.?up|buy|order|purchase|subscribe|account|join|design|build|generate|develop)\b/i.test(subject + ' ' + (body || ''));
+      const _isTask = /\b(book(?:ed|ing)?|reserv(?:ation|e|ed|ing)?|cancel(?:l?ed|l?ing)?|sign.?up|sign up|register(?:ed|ing)?|create|make|set.?up|buy|order(?:ed|ing)?|purchas(?:e|ed|ing)|subscrib(?:e|ed|ing)|account|join|design|build|generat(?:e|ed|ing)|develop|use\s+(the\s+)?browser|go\s+to)\b/i.test(subject + ' ' + (body || ''));
       const _givesInstructions = _isTask && (
         /\b(here are (the|your|some) (finding|step|next step|instruction|detail|option|link|result))|here'?s? how to|you can book|you can access|direct link|visit (the|their|this) (site|page|url|link)|you'?ll need to (visit|go to|click|navigate|choose|select|sign|register|create|set up)|you can (find|make|create|book|sign|register|access|cancel|subscribe|view|see|check|look|call)\b/i.test(cleanResponse) ||
         // "sign up yourself" / "to get started, you'll need to" — telling user to do it
@@ -7702,38 +7702,37 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       cleanResponse = `I wasn't able to access the design tool to create this for you. The browser wasn't used, so no actual design was made — I described what it would look like instead, which isn't helpful. Please resend the task and I'll navigate directly to Canva (or similar) to build your design.`;
     }
 
-    // ── AUTO-CALL TRIGGER FOR BOOKING TASKS ─────────────────────────────────
-    // When a booking/reservation task found a phone number but gave ADVICE instead of
-    // calling, extract the number and actually call the restaurant. This is the core
-    // AGI principle: DO things, don't tell the user how to do things.
+    // ── AUTO-ACTION TRIGGER — GENERIC ─────────────────────────────────────
+    // When ANY task found actionable info (phone number, URL) but gave ADVICE
+    // instead of acting, extract the info and execute the action. AGI principle:
+    // DO things, don't tell the user how. NOT task-specific — works for any task.
     {
-      const _isBookingTask = /\b(book|reserv|table|make\s+a?\s*(reservation|booking|reso)|dinner|lunch|brunch)\b/i.test(subject + ' ' + (body || ''));
       const _didNotCall = !actionResults.some(r => r.action.type === 'call_external' && r.success);
       const _phoneInResponse = cleanResponse.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-      const _noCompletionAction = !/\b(booked|reserved|confirmed|reservation.*made|table.*booked|called.*restaurant|made.*reservation)\b/i.test(cleanResponse);
-      if (_isBookingTask && _didNotCall && _phoneInResponse && _noCompletionAction) {
+      const _completedAction = /\b(booked|reserved|confirmed|called|completed|signed up|created|cancelled|sent|ordered|purchased)\b/i.test(cleanResponse);
+      // Detect if response is GIVING a phone number as advice (not reporting a completed call)
+      const _givingPhoneAsAdvice = _phoneInResponse && !_completedAction && _didNotCall &&
+        (/\b(call them|their (phone )?number|can be reached|reach them|contact them|phone number is|call at|dial)\b/i.test(cleanResponse) ||
+         /\b(you can call|try calling|give them a call|for (reservations?|availability|booking|appointments?))\b/i.test(cleanResponse));
+
+      if (_givingPhoneAsAdvice && _isActionTaskByType) {
         const _phoneNum = _phoneInResponse[0].replace(/[^\d+]/g, '');
-        const _formattedPhone = _phoneNum.startsWith('+') ? _phoneNum : `+1${_phoneNum}`;
-        // Extract restaurant name from response
-        const _restNameMatch = cleanResponse.match(/(?:at\s+|for\s+)?([A-Z][A-Za-z'&\s]+?)(?:\s+(?:can be|is|phone|call|reach|located|at\s+\())/);
-        const _restName = _restNameMatch?.[1]?.trim() || 'the restaurant';
-        // Extract booking details from user input
-        const _partyMatch = (subject + ' ' + (body || '')).match(/(\d+)\s*(?:people|person|guests?|pax|of us)/i);
-        const _timeMatch = (subject + ' ' + (body || '')).match(/(?:at\s+|for\s+|around\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
-        const _dateMatch = (subject + ' ' + (body || '')).match(/\b(today|tonight|tomorrow|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2})\b/i);
-        const _partySize = _partyMatch?.[1] || '2';
-        const _time = _timeMatch?.[1] || 'tonight';
-        const _date = _dateMatch?.[1] || 'tonight';
-        console.log(`[AUTO-CALL] Booking task found phone ${_formattedPhone} for ${_restName} — calling now`);
+        const _formattedPhone = _phoneNum.startsWith('+') ? _phoneNum : (_phoneNum.length === 10 ? `+1${_phoneNum}` : `+${_phoneNum}`);
+        // Extract business name from response
+        const _bizNameMatch = cleanResponse.match(/(?:at\s+|for\s+|called\s+)?([A-Z][A-Za-z'&\s]{2,30}?)(?:\s+(?:can be|is|'s|phone|call|reach|located|at\s+\(|in\s+))/);
+        const _bizName = _bizNameMatch?.[1]?.trim() || 'the business';
+        // Build a contextual call script from the original task
+        const _taskContext = (subject + ' ' + (body || '')).substring(0, 200);
+        console.log(`[AUTO-ACTION] Task found phone ${_formattedPhone} for ${_bizName} — calling (task: "${_taskContext.substring(0,80)}")`);
         try {
           const { callExternal } = await import("./twilio.js");
-          const callScript = `Hi, I'd like to make a reservation for ${_partySize} people ${_date} at ${_time} please. The name is ${username}.`;
-          await callExternal(userId, _formattedPhone, callScript, true, _restName);
-          cleanResponse = `I found ${_restName}'s number (${_phoneInResponse[0]}) and called to make a reservation for ${_partySize} at ${_time} ${_date}. The call has been placed — I'll update you with the confirmation.`;
-          console.log(`[AUTO-CALL] Call placed to ${_formattedPhone} for reservation`);
+          const callScript = `Hi, I'm calling on behalf of ${username}. ${_taskContext.substring(0, 150)}`;
+          await callExternal(userId, _formattedPhone, callScript, true, _bizName);
+          cleanResponse = `I found ${_bizName}'s number (${_phoneInResponse[0]}) and placed a call on your behalf. I'll update you with the result.`;
+          console.log(`[AUTO-ACTION] Call placed to ${_formattedPhone}`);
         } catch (callErr) {
-          console.error(`[AUTO-CALL] Failed to call ${_formattedPhone}:`, callErr);
-          cleanResponse = `I found ${_restName}'s number (${_phoneInResponse[0]}) and tried to call for a reservation but the call couldn't be completed. You can call them directly at ${_phoneInResponse[0]} to book a table for ${_partySize} at ${_time}.`;
+          console.error(`[AUTO-ACTION] Failed to call ${_formattedPhone}:`, callErr);
+          // Don't hide the phone number on failure — user needs it as fallback
         }
       }
     }
