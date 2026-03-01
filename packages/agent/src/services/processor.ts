@@ -5339,7 +5339,21 @@ YOU must complete the task using a DIFFERENT approach:
               // user-facing summary via AI instead of showing the raw output.
               const isTrivialResult = rawVisionResult.trim().length < 60
                 || /^(done!?|waited\s*\d+|ok\.?|completed?\.?\s*$|success\.?\s*$)/i.test(rawVisionResult.trim());
-              if (isTrivialResult) {
+              // Detect raw page content (HTML/JS/CSS/JSON) leaking into vision result
+              const _isGarbageResult = !isTrivialResult && (
+                // Raw HTML tags
+                /<(div|span|script|style|html|body|head|meta|link|button|form|input|label|section|article|footer|header|nav|table|tr|td|th|ul|li|img)\b/i.test(rawVisionResult) ||
+                // CSS rules
+                /\{[\s\S]{0,200}?(background-color|font-size|display:\s*\w|position:\s*\w|margin:|padding:|border:|z-index)\s*:/i.test(rawVisionResult) ||
+                // JavaScript code patterns
+                /\b(typeof\s+\w+|function\s*\(|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|document\.|window\.|querySelector|getElementById|addEventListener|\.prototype\.|module\.exports)\b/i.test(rawVisionResult) ||
+                // JSON-like structures (API responses, configs)
+                /\{"\w+":\s*"[^"]*",\s*"\w+":/.test(rawVisionResult) ||
+                // Very high ratio of special chars (code-heavy content)
+                (rawVisionResult.replace(/[a-zA-Z0-9\s.,!?'"\-$%()]/g, '').length / rawVisionResult.length > 0.3 && rawVisionResult.length > 200)
+              );
+              if (isTrivialResult || _isGarbageResult) {
+                if (_isGarbageResult) console.warn(`[VISION-VERIFY] Garbage/raw page content detected in vision result — re-summarizing via AI`);
                 try {
                   const { quickValidate } = await import("./ai.js");
                   const summary = await quickValidate(

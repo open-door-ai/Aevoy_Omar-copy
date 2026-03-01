@@ -1354,8 +1354,18 @@ export async function runVisionAgent(
           }
           continue; // Force the loop to keep going
         }
-        console.log(`[VISION-AGENT] DONE after ${steps + 1} steps: ${doneResult}`);
-        return { success: true, result: doneResult, steps: steps + 1, cost: totalCost, screenshots };
+        // Strip raw page content (HTML/JS/CSS) from done result before returning
+        let cleanDoneResult = doneResult;
+        if (/<(div|span|script|style|html|body|head|meta|form|input|table|section)\b/i.test(doneResult) ||
+            /\b(typeof\s+\w+|const\s+\w+\s*=|function\s*\(|document\.|window\.)\b/.test(doneResult) ||
+            /\{[\s\S]{0,200}?(background-color|font-size|display:|position:|z-index)/i.test(doneResult)) {
+          // Extract only the first readable sentence before the garbage starts
+          const firstSentence = doneResult.match(/^[^<{]*?[.!]\s/)?.[0]?.trim();
+          cleanDoneResult = firstSentence || `Task completed on ${activePage.url()}`;
+          console.log(`[VISION-AGENT] Stripped raw page content from DONE result. Clean: ${cleanDoneResult.substring(0, 100)}`);
+        }
+        console.log(`[VISION-AGENT] DONE after ${steps + 1} steps: ${cleanDoneResult.substring(0, 200)}`);
+        return { success: true, result: cleanDoneResult, steps: steps + 1, cost: totalCost, screenshots };
       }
 
       if (action.type === 'fail') {
