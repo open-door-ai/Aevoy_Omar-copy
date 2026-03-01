@@ -311,37 +311,4 @@ export function resetAiCallCounter(userId: string): void {
   aiCallStore.delete(userId);
 }
 
-// ============================================================================
-// BROWSER TASK CONCURRENCY LIMITER
-// ============================================================================
-
-let activeBrowserTasks = 0;
-const MAX_CONCURRENT_BROWSER_TASKS = 10;
-
-/**
- * Check if system can accept another browser task
- */
-export function canAcceptBrowserTask(): boolean {
-  return activeBrowserTasks < MAX_CONCURRENT_BROWSER_TASKS;
-}
-
-/**
- * Increment active browser task counter
- */
-export function incrementBrowserTasks(): void {
-  activeBrowserTasks++;
-}
-
-/**
- * Decrement active browser task counter
- */
-export function decrementBrowserTasks(): void {
-  activeBrowserTasks = Math.max(0, activeBrowserTasks - 1);
-}
-
-/**
- * Get current browser task count
- */
-export function getActiveBrowserTasks(): number {
-  return activeBrowserTasks;
-}
+// Browser task concurrency — use utils/concurrency.ts (single source of truth)

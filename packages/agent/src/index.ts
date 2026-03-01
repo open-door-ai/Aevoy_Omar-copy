@@ -313,7 +313,7 @@ import { getActiveBrowserTasks, canAcceptBrowserTask } from "./utils/concurrency
 
 let activeTasks = 0;
 const MAX_CONCURRENT_TASKS = 10;
-const MAX_CONCURRENT_BROWSER_TASKS = 10; // Using VPS Browser or local Playwright
+const MAX_CONCURRENT_BROWSER_TASKS = 3; // Railway ~512MB-2GB — each Chrome ~300MB
 const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
 
 function canProcessTask(needsBrowser: boolean): boolean {
@@ -338,7 +338,7 @@ function processQueuedTasks(): void {
   }
 }
 
-// Counter self-healing: reconcile activeTasks with DB every 2 minutes
+// Counter self-healing: reconcile activeTasks AND browserTasks with DB every 2 minutes
 setInterval(async () => {
   try {
     const { count } = await getSupabaseClient()
@@ -346,6 +346,8 @@ setInterval(async () => {
       .select('id', { count: 'exact', head: true })
       .eq('status', 'processing');
     const dbProcessing = count || 0;
+    const browserCount = getActiveBrowserTasks();
+
     if (activeTasks > 0 && dbProcessing === 0) {
       console.log(`[COUNTER-HEAL] Resetting activeTasks from ${activeTasks} to 0 (DB shows 0 processing)`);
       activeTasks = 0;
@@ -353,6 +355,15 @@ setInterval(async () => {
       console.log(`[COUNTER-HEAL] Adjusting activeTasks from ${activeTasks} to ${dbProcessing} (DB has ${dbProcessing} processing)`);
       activeTasks = dbProcessing;
     }
+
+    // Browser counter healing: if no tasks processing but browser counter > 0, reset it
+    if (dbProcessing === 0 && browserCount > 0) {
+      console.log(`[COUNTER-HEAL] Resetting browser counter from ${browserCount} to 0`);
+      // Reset by decrementing to 0
+      const { decrementBrowserTasks: decBrowser } = await import("./utils/concurrency.js");
+      for (let i = 0; i < browserCount; i++) decBrowser();
+    }
+
     // Also process queued tasks if any
     if (taskQueue.length > 0) processQueuedTasks();
   } catch (err) {
