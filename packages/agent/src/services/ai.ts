@@ -519,14 +519,19 @@ async function trackApiCall(
   try {
     // Apply 20% platform markup
     const billedCost = costUsd * BILLING_MARKUP;
-    const costCents = Math.max(1, Math.round(billedCost * 100)); // minimum 1 cent
+    // Use actual cost rounded to nearest cent — no artificial minimum.
+    // Old Math.max(1, ...) inflated costs: 2,632 calls × 1¢ minimum = $26+ phantom charges.
+    // Cheap calls (Groq/Gemini at $0.0001) should cost $0.0001, not $0.01.
+    const costCents = Math.round(billedCost * 100);
 
-    // Track usage via RPC (handles upsert + increment atomically)
-    await getSupabaseClient().rpc("track_usage", {
-      p_user_id: userId,
-      p_task_type: "ai_call",
-      p_ai_cost_cents: costCents,
-    });
+    // Track usage via RPC (handles upsert + increment atomically) — skip if 0 cents
+    if (costCents > 0) {
+      await getSupabaseClient().rpc("track_usage", {
+        p_user_id: userId,
+        p_task_type: "ai_call",
+        p_ai_cost_cents: costCents,
+      });
+    }
 
     // Per-call cost logging for granular tracking (stores billed cost incl. markup)
     await getSupabaseClient().from("ai_cost_log").insert({
@@ -541,14 +546,16 @@ async function trackApiCall(
       cached: false,
     });
 
-    // Deduct from credit wallet (atomic, race-safe)
-    const description = `AI: ${model} (${inputTokens + outputTokens} tokens)`;
-    await getSupabaseClient().rpc("deduct_credits", {
-      p_user_id: userId,
-      p_amount_cents: costCents,
-      p_description: description,
-      p_task_id: taskId || null,
-    });
+    // Deduct from credit wallet (atomic, race-safe) — skip if 0 cents to avoid noise
+    if (costCents > 0) {
+      const description = `AI: ${model} (${inputTokens + outputTokens} tokens)`;
+      await getSupabaseClient().rpc("deduct_credits", {
+        p_user_id: userId,
+        p_amount_cents: costCents,
+        p_description: description,
+        p_task_id: taskId || null,
+      });
+    }
   } catch {
     // Non-critical — don't fail the task over tracking
   }
@@ -569,34 +576,37 @@ export async function trackServiceCost(
   if (!userId || rawCostUsd <= 0) return;
   try {
     const billedCost = rawCostUsd * BILLING_MARKUP;
-    const costCents = Math.max(1, Math.round(billedCost * 100));
+    const costCents = Math.round(billedCost * 100); // No artificial minimum — actual cost only
 
-    await Promise.all([
-      getSupabaseClient().rpc("track_usage", {
-        p_user_id: userId,
-        p_task_type: "ai_call",
-        p_ai_cost_cents: costCents,
-      }),
-      getSupabaseClient().from("ai_cost_log").insert({
-        user_id: userId,
-        task_id: taskId || null,
-        provider,
-        model,
-        input_tokens: 0,
-        output_tokens: 0,
-        cost_usd: billedCost,
-        purpose,
-        cached: false,
-      }),
-    ]);
-
-    // Deduct from credit wallet
-    await getSupabaseClient().rpc("deduct_credits", {
-      p_user_id: userId,
-      p_amount_cents: costCents,
-      p_description: `${purpose} (${provider})`,
-      p_task_id: taskId || null,
+    // Always log to ai_cost_log (source of truth for task cost queries)
+    await getSupabaseClient().from("ai_cost_log").insert({
+      user_id: userId,
+      task_id: taskId || null,
+      provider,
+      model,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost_usd: billedCost,
+      purpose,
+      cached: false,
     });
+
+    // Only deduct/track if cost rounds to at least 1 cent
+    if (costCents > 0) {
+      await Promise.all([
+        getSupabaseClient().rpc("track_usage", {
+          p_user_id: userId,
+          p_task_type: "ai_call",
+          p_ai_cost_cents: costCents,
+        }),
+        getSupabaseClient().rpc("deduct_credits", {
+          p_user_id: userId,
+          p_amount_cents: costCents,
+          p_description: `${purpose} (${provider})`,
+          p_task_id: taskId || null,
+        }),
+      ]);
+    }
   } catch {
     // Non-critical
   }

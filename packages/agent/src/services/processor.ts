@@ -6579,12 +6579,16 @@ Extract the ACTUAL phone number from search results and call them:
         // Only request takeover if: live view available, low success, AND many actions tried
         const isTakeoverEligible = taskType !== 'general' && taskType !== 'research';
         if (takeoverUrl && taskId && successRate < 0.3 && actionResults.length >= 4 && isTakeoverEligible) {
-          // Update cost before takeover (otherwise cost data is lost)
-          const aiCost = aiResponse.cost || 0;
-          const browserCost = executionEngine?.getTotalCost() || 0;
+          // Update cost before takeover — query ai_cost_log for accurate billed cost
+          let takeoverCost = 0;
+          try {
+            const { data: tCostRows } = await getSupabaseClient()
+              .from('ai_cost_log').select('cost_usd').eq('task_id', taskId);
+            if (tCostRows) takeoverCost = tCostRows.reduce((s: number, r: { cost_usd: number }) => s + (r.cost_usd || 0), 0);
+          } catch { takeoverCost = (aiResponse.cost || 0) + (executionEngine?.getTotalCost() || 0); }
           await getSupabaseClient().from("tasks").update({
             tokens_used: aiResponse.tokensUsed || 0,
-            cost_usd: aiCost + browserCost,
+            cost_usd: takeoverCost,
             type: taskType,
             execution_time_ms: Date.now() - startTime,
           }).eq("id", taskId);
@@ -7850,9 +7854,31 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // 12. Update task as completed with cost tracking + verification
     const elapsedMs = Date.now() - startTime;
-    const aiCost = aiResponse.cost || 0;
-    const browserCost = executionEngine?.getTotalCost() || 0;
-    const totalCost = aiCost + browserCost;
+
+    // DEFINITIVE COST TRACKING: Query ai_cost_log for this task's actual billed cost.
+    // This is the single source of truth — every API call fires trackApiCall() which
+    // logs to ai_cost_log with 1.2x billing markup, regardless of timeouts or errors.
+    // Previous approach (accumulating via return values) missed costs when:
+    // - Vision agent timed out (8min) — 30+ API calls lost
+    // - Per-step AI calls failed — cost already logged but return value lost
+    // - Raw cost stored instead of billed cost (20% under-reported)
+    let totalCost = 0;
+    try {
+      const { data: costRows } = await getSupabaseClient()
+        .from('ai_cost_log')
+        .select('cost_usd')
+        .eq('task_id', taskId);
+      if (costRows && costRows.length > 0) {
+        totalCost = costRows.reduce((sum: number, row: { cost_usd: number }) => sum + (row.cost_usd || 0), 0);
+        console.log(`[COST] ai_cost_log query: ${costRows.length} calls, total $${totalCost.toFixed(4)} (billed, incl. 1.2x markup)`);
+      }
+    } catch (costErr) {
+      // Fallback to accumulated raw cost if DB query fails
+      const aiCost = aiResponse.cost || 0;
+      const browserCost = executionEngine?.getTotalCost() || 0;
+      totalCost = aiCost + browserCost;
+      console.warn(`[COST] ai_cost_log query failed, using fallback: $${totalCost.toFixed(4)} (raw, no markup)`);
+    }
 
     // Use confidence >= tier target to determine pass, not just verificationResult.passed
     // (verificationResult.passed uses a fixed threshold that may not match the tier target)
@@ -7910,7 +7936,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       })
       .eq("id", taskId);
     
-    console.log(`[COST] Task cost: $${totalCost.toFixed(6)} (AI: $${aiCost.toFixed(6)}, Browser: $${browserCost.toFixed(6)})`);
+    console.log(`[COST] Task cost: $${totalCost.toFixed(6)} (from ai_cost_log, billed incl. 1.2x markup)`);
 
     // Update execution plan status
     if (planId) {
