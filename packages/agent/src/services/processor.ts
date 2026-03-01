@@ -3412,6 +3412,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // only search() actions (no browse), inject a browse("https://domain") action.
     // DeepSeek/Groq commonly produce search() when the user explicitly wants to visit a site.
     const _hasExplicitDomainForBrowse = /\b(go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
+      /\b(at|on|via|through|from)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`);
     if (_hasExplicitDomainForBrowse) {
       const hasBrowseAction = aiResponse.actions.some(a => a.type === 'browse');
@@ -5262,6 +5263,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         // ALWAYS invoke vision agent when user explicitly asked to visit a site ("Go to X.com and do Y")
         // This covers ALL types of site interaction (search forms, date pickers, filters, etc.)
         || (hasBrowseEver && /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
+        // If we've browsed to a site AND the task mentions a domain, ALWAYS need vision to see the page
+        // Catches "find X on bestbuy.ca", "search for Y at amazon.com", "get prices from walmart.ca"
+        || (hasBrowseEver && /\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
       );
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {
         const visionPage = executionEngine.getPage?.();
@@ -5421,6 +5425,18 @@ YOU must complete the task using a DIFFERENT approach:
               );
               if (isTrivialResult || _isGarbageResult) {
                 if (_isGarbageResult) console.warn(`[VISION-VERIFY] Garbage/raw page content detected in vision result — re-summarizing via AI`);
+                // DATA-WANTING TASK REJECTION: If the task asks for specific data (prices, listings,
+                // ratings, links) and vision returned trivial garbage, don't generate a fake summary.
+                // Treat as failure so the processor can retry with vision or fall back to search.
+                const _taskWantsDataP = /\b(price|deal|listing|link|rating|review|cost|address|phone|result|find|give me|tell me|show me|report|compare|cheapest|best|top|lowest)\b/i.test(subject);
+                if (isTrivialResult && _taskWantsDataP) {
+                  console.warn(`[VISION-VERIFY] TRIVIAL RESULT REJECTED: Task wants data but vision returned "${rawVisionResult.substring(0, 60)}". Treating as failure.`);
+                  lastVisionFailed = true;
+                  visionFailureNote = `[BROWSER DATA EXTRACTION FAILED] The browser agent navigated to ${visionPage?.url() || 'the site'} but returned NO DATA. ` +
+                    `The task asked for specific information (prices, listings, etc.) but the agent returned: "${rawVisionResult.substring(0, 100)}". ` +
+                    `You MUST retry: use [ACTION:browse("${visionPage?.url() || ''}")] and READ the page — extract product names, prices, links, ratings. ` +
+                    `Or fall back to [ACTION:search("...")] to find the information.`;
+                } else {
                 try {
                   const { quickValidate } = await import("./ai.js");
                   const summary = await quickValidate(
@@ -5435,6 +5451,7 @@ YOU must complete the task using a DIFFERENT approach:
                   console.log(`[VISION-AGENT] Generated proper summary for trivial result: ${aiResponse.content.substring(0, 100)}`);
                 } catch {
                   aiResponse.content = `I've completed the task on the website (${visionPage?.url() || 'canva.com'}).`;
+                }
                 }
               } else {
                 // ORDER-INCOMPLETE CHECK at processor level:
