@@ -15,7 +15,7 @@
 
 import type { Page } from 'patchright';
 
-export type CaptchaType = 'recaptcha_v2' | 'recaptcha_v3' | 'hcaptcha' | 'turnstile' | 'image' | 'funcaptcha' | 'geetest' | 'datadome' | 'none';
+export type CaptchaType = 'recaptcha_v2' | 'recaptcha_v3' | 'hcaptcha' | 'turnstile' | 'image' | 'funcaptcha' | 'geetest' | 'datadome' | 'perimeterx' | 'verification_page' | 'none';
 
 interface CaptchaDetection {
   type: CaptchaType;
@@ -112,6 +112,24 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
       return { type: 'image' as const, siteKey: undefined, imageUrl };
     }
 
+    // PerimeterX / Bot Manager / custom verification pages
+    // These don't have standard CAPTCHA widgets but block with "verify you are human" text
+    const bodyText = (document.body?.innerText || '').toLowerCase().substring(0, 2000);
+    const isVerificationPage = (
+      /\b(verify you are (a )?human|are you a robot|prove you('re| are) not a (bot|robot)|human verification|bot detection|access denied|please verify|security check|checking your browser|just a moment)\b/i.test(bodyText) &&
+      // Page must be mostly empty (verification pages have minimal content)
+      bodyText.length < 1500
+    );
+    if (isVerificationPage) {
+      // Check for PerimeterX specifically
+      const pxScript = document.querySelector('script[src*="perimeterx"], script[src*="px-captcha"], #px-captcha, .px-captcha');
+      if (pxScript) {
+        return { type: 'perimeterx' as const, siteKey: undefined };
+      }
+      // Generic verification page — treat as image CAPTCHA for screenshot-based solving
+      return { type: 'verification_page' as const, siteKey: undefined };
+    }
+
     return { type: 'none' as const, siteKey: undefined };
   });
 
@@ -147,12 +165,13 @@ export async function solveCaptcha(
     {
       name: 'capsolver',
       fn: () => solveWithCapSolver(page, detection, capsolverKey!),
-      available: !!capsolverKey && !!detection.siteKey,
+      // CapSolver works with siteKey-based CAPTCHAs AND screenshot-based solving for verification pages
+      available: !!capsolverKey && (!!detection.siteKey || detection.type === 'image' || detection.type === 'verification_page' || detection.type === 'perimeterx'),
     },
     {
       name: '2captcha',
       fn: () => solveWith2Captcha(page, detection, twocaptchaKey!),
-      available: !!twocaptchaKey && (!!detection.siteKey || detection.type === 'image'),
+      available: !!twocaptchaKey && (!!detection.siteKey || detection.type === 'image' || detection.type === 'verification_page'),
     },
     {
       name: 'claude_vision',
@@ -263,14 +282,33 @@ async function solveWithCapSolver(
         };
         break;
       case 'image':
+      case 'verification_page':
         taskType = 'ImageToTextTask';
         const screenshot = await captureImageCaptcha(page);
         if (!screenshot) {
+          // For verification pages, also try full-page screenshot as fallback
+          if (detection.type === 'verification_page') {
+            try {
+              const fullPage = await page.screenshot({ type: 'png' });
+              taskData = {
+                body: Buffer.from(fullPage).toString('base64'),
+                module: 'common',
+              };
+              break;
+            } catch { /* fall through */ }
+          }
           return { success: false, error: 'Could not capture image CAPTCHA' };
         }
         taskData = {
           body: screenshot,
-          module: 'common', // common, queueit, funcaptcha
+          module: 'common',
+        };
+        break;
+      case 'perimeterx':
+        // PerimeterX uses AntiPerimeterX task type in CapSolver
+        taskType = 'AntiPerimeterXTaskProxyLess';
+        taskData = {
+          websiteURL: detection.pageUrl,
         };
         break;
       default:
@@ -367,6 +405,8 @@ function calculateCapSolverCost(type: CaptchaType): number {
     funcaptcha: 0.002, // $2.00 per 1000
     geetest: 0.002, // $2.00 per 1000
     datadome: 0.0025, // $2.50 per 1000
+    perimeterx: 0.003, // $3.00 per 1000
+    verification_page: 0.001, // $1.00 per 1000 (screenshot-based)
     image: 0.0005, // $0.50 per 1000
     none: 0,
   };

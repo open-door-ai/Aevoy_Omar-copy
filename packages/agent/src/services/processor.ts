@@ -3408,6 +3408,26 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     const methodTypesAttempted = new Map<MethodType, number>(); // methodType -> attemptCount
     const MAX_SAME_METHOD_TYPE_RETRIES = 5;
 
+    // 6z. FORCED BROWSE INJECTION: When user explicitly says "Go to X.com" but AI generated
+    // only search() actions (no browse), inject a browse("https://domain") action.
+    // DeepSeek/Groq commonly produce search() when the user explicitly wants to visit a site.
+    const _hasExplicitDomainForBrowse = /\b(go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
+      /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`);
+    if (_hasExplicitDomainForBrowse) {
+      const hasBrowseAction = aiResponse.actions.some(a => a.type === 'browse');
+      if (!hasBrowseAction) {
+        const _domainMatch = `${subject} ${body}`.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on|via|through|from)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i) ||
+          `${subject} ${body}`.match(/\bhttps?:\/\/(\S+)/i);
+        if (_domainMatch) {
+          const _targetDomain = _domainMatch[1].replace(/[,;!?)\]]+$/, '');
+          const _browseUrl = _targetDomain.startsWith('http') ? _targetDomain : `https://${_targetDomain}`;
+          console.log(`[BROWSE-INJECT] User explicitly asked to visit ${_targetDomain} but AI only generated search — injecting browse("${_browseUrl}")`);
+          aiResponse.actions.unshift({ type: 'browse' as any, params: { url: _browseUrl } });
+          aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
+        }
+      }
+    }
+
     // PROOF OF ACTION: Send the first concrete result as tactile proof (voice/SMS only).
     // This replaces generic "working on it" — users get real evidence the system acted.
     let sentFirstProof = false;
@@ -5499,7 +5519,7 @@ YOU must complete the task using a DIFFERENT approach:
               } catch { /* non-critical */ }
               // BOT WALL → PHONE ESCALATION: If the website blocked access and the task is
               // ordering/booking/calling, pivot to phone immediately instead of retrying browser.
-              const isBotWallError = /CALL-GATE|bot-blocking|bot wall|anti-bot|blocked by|access denied/i.test(errMsg);
+              const isBotWallError = /CALL-GATE|bot-blocking|bot wall|anti-bot|blocked by|access denied|captcha_blocked|captcha.*unsolvable|verification.*page/i.test(errMsg);
               const isOrderOrBookingTask = /\b(order|reserve|book|buy|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*sushi)\b/i.test(taskTextLower);
               // Also escalate booking tasks that failed (form too complex) — not just bot walls
               const isBookingFormFail = /\b(book|reserv|table for|reso\b)\b/i.test(taskTextLower) && /\b(too complex|form|booking form|couldn't|could not|failed|unable)\b/i.test(errMsg);

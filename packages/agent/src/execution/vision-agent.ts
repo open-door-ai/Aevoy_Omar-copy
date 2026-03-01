@@ -890,6 +890,7 @@ export async function runVisionAgent(
   const history: string[] = [];
   let totalCost = 0;
   let steps = 0;
+  let captchaFailCount = 0;
 
   // POPUP/NEW TAB TRACKING — OAuth flows, payment, email verification all open popups.
   // Track the latest popup and allow AI to switch into it with SWITCH_TAB action.
@@ -1080,7 +1081,26 @@ export async function runVisionAgent(
         if (captchaSolved === false) {
           // CAPTCHA detected but not solved — wait and retry once
           await activePage.waitForTimeout(3000);
-          await handleCaptchaIfPresent(activePage, userId, taskId);
+          const retried = await handleCaptchaIfPresent(activePage, userId, taskId);
+          if (!retried) {
+            // Track consecutive CAPTCHA failures
+            captchaFailCount = (captchaFailCount || 0) + 1;
+            if (captchaFailCount >= 3) {
+              history.push(`⚠️ CAPTCHA/verification page unsolvable after ${captchaFailCount} attempts — bailing out to search fallback`);
+              return {
+                success: false,
+                result: `Site blocked by CAPTCHA/bot detection (${activePage.url()}). Could not bypass verification after ${captchaFailCount} attempts.`,
+                error: 'captcha_blocked',
+                steps,
+                cost: totalCost,
+                screenshots,
+              };
+            }
+          } else {
+            captchaFailCount = 0;
+          }
+        } else {
+          captchaFailCount = 0;
         }
       } catch { /* non-critical */ }
 
