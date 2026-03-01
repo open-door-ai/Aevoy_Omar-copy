@@ -2576,6 +2576,7 @@ export async function classifyTask(userMessage: string): Promise<{
     needsBrowser = false;
   } else if (/\b(write|draft|compose)\b/.test(text)) {
     taskType = "writing";
+    needsBrowser = false; // Writing tasks should NEVER launch a browser
   } else if (/\b(call|phone|dial)\b/.test(text)) {
     taskType = "voice";
   } else if (/\b(sign ?up|signup|create (an? )?(account|profile)|register|enroll|open (an? )?account)\b/.test(text)) {

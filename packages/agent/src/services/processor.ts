@@ -2426,7 +2426,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
     // Research tasks that also ask to "draft" something are NOT pure writing tasks — they need search first
     const _hasResearchVerb = /\b(find|search|look up|look for|get me|show me|list|compare|check)\b/i.test(`${subject} ${body}`);
-    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && !_hasResearchVerb && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a poem|write a song|write a story|write a joke)\b/i.test(`${subject} ${body}`);
+    const _isWritingTask = !forceCheapModel && !_isDocumentAction && !_earlySignupCheck && !_earlyBookingCheck && !_hasResearchVerb && /\b(write me|create me|make me|build me|html code|full html|complete html|portfolio website|landing page|source code|return the code|give me.*code|generate.*code|write.*code|create.*website|build.*website|make.*website|generate.*website|html file|html css|inline css|one.?page html|single.*html|html portfolio|create.*html|return.*html|write.*html|write.*function|write.*script|write.*program|write.*essay|draft.*email|draft.*letter|write a (?:poem|song|story|joke|haiku|limerick|sonnet|riddle|paragraph|summary|bio|speech|review|blurb|tagline|slogan|caption|tweet|post|article|blog|report))\b/i.test(`${subject} ${body}`);
     // Signup tasks MUST use Claude (complex) — Groq/DeepSeek refuse despite system prompt
     const aiTaskType = forceCheapModel ? "validate" as const : (_earlySignupCheck ? "complex" as const : (_isWritingTask ? "generate" as const : undefined));
     // For [Scheduled] tasks that aren't reminders: inject execution context so AI
@@ -5436,6 +5436,40 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         console.log('[ITERATE] All actions succeeded (non-browser, no data), task complete');
         isTaskComplete = true;
         break;
+      }
+
+      // SEARCH-COMPLETE FAST EXIT: If the ONLY action was a search AND it returned
+      // rich results (>200 chars), summarize with AI and complete immediately.
+      // This prevents research tasks from looping 15 times when we already have the answer.
+      const _searchOnlyRound = iterationResults.length > 0 &&
+        iterationResults.every(r => r.action.type === 'search') &&
+        successfulActions.length > 0;
+      const _richSearchResult = successfulActions.find(r =>
+        r.action.type === 'search' && r.result && String(r.result).length > 200
+      );
+      const _noFollowUpActions = !aiResponse.actions.some(a =>
+        ['browse', 'send_email', 'send_sms', 'call_user', 'call_external', 'fill_form', 'schedule'].includes(a.type)
+      );
+      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2) {
+        try {
+          const searchData = String(_richSearchResult.result).substring(0, 3000);
+          console.log(`[SEARCH-FAST-EXIT] Rich search results (${searchData.length} chars) — summarizing and completing`);
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const summary = await generateForcedDirectAnswer(
+            `${subject} ${body}`,
+            `SEARCH RESULTS:\n${searchData}`,
+            username
+          );
+          if (summary.content && summary.content.length > 30) {
+            aiResponse.content = summary.content.trim();
+            aiResponse.cost = (aiResponse.cost || 0) + (summary.cost || 0);
+            isTaskComplete = true;
+            console.log(`[SEARCH-FAST-EXIT] Complete in round ${currentIteration}, ${aiResponse.content.length} chars`);
+            break;
+          }
+        } catch (_sfErr) {
+          console.warn('[SEARCH-FAST-EXIT] Summary failed, continuing iteration:', _sfErr);
+        }
       }
 
       // EARLY EXIT: If ALL actions failed for 2 consecutive rounds on a research/general task,
