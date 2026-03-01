@@ -3142,7 +3142,13 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         }
       }
 
-      await executionEngine.initialize(userId, domain || undefined, taskId);
+      // 30s timeout on browser init — chromium.launch() can hang on Railway under memory pressure
+      await Promise.race([
+        executionEngine.initialize(userId, domain || undefined, taskId),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Browser initialization timed out after 30s')), 30000)
+        ),
+      ]);
       console.log(`[BROWSER] Execution engine initialized`);
 
       // Save Live View URL to task record for takeover feature
@@ -4644,7 +4650,13 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             console.log(`[BROWSER] Lazy-init: action '${action.type}' needs browser, initializing on-demand`);
             executionEngine = new ExecutionEngine(lockedIntent);
             incrementBrowserTasks();
-            await executionEngine.initialize(userId, undefined, taskId);
+            // 30s timeout on browser init — chromium.launch() can hang on Railway under memory pressure
+            await Promise.race([
+              executionEngine.initialize(userId, undefined, taskId),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Browser initialization timed out after 30s')), 30000)
+              ),
+            ]);
             console.log(`[BROWSER] Execution engine lazy-initialized for mid-task browser escalation`);
 
             // Save Live View URL
