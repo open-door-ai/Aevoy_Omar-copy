@@ -338,6 +338,28 @@ function processQueuedTasks(): void {
   }
 }
 
+// Counter self-healing: reconcile activeTasks with DB every 2 minutes
+setInterval(async () => {
+  try {
+    const { count } = await getSupabaseClient()
+      .from('tasks')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'processing');
+    const dbProcessing = count || 0;
+    if (activeTasks > 0 && dbProcessing === 0) {
+      console.log(`[COUNTER-HEAL] Resetting activeTasks from ${activeTasks} to 0 (DB shows 0 processing)`);
+      activeTasks = 0;
+    } else if (activeTasks > dbProcessing + 2) {
+      console.log(`[COUNTER-HEAL] Adjusting activeTasks from ${activeTasks} to ${dbProcessing} (DB has ${dbProcessing} processing)`);
+      activeTasks = dbProcessing;
+    }
+    // Also process queued tasks if any
+    if (taskQueue.length > 0) processQueuedTasks();
+  } catch (err) {
+    // Silent — don't crash on healing
+  }
+}, 2 * 60 * 1000);
+
 // ---- Health Check (Enhanced) ----
 
 app.get("/health", async (_req, res) => {
@@ -668,6 +690,19 @@ app.post("/task", taskLimiter, async (req, res) => {
     timestamp: new Date().toISOString(),
   });
 
+  // Gate concurrency — queue if at capacity
+  if (activeTasks >= MAX_CONCURRENT_TASKS) {
+    console.log(`[TASK] Queued (${activeTasks}/${MAX_CONCURRENT_TASKS} active, queue=${taskQueue.length})`);
+    res.json({ status: "queued", message: "Task queued — processing shortly" });
+    taskQueue.push({
+      task,
+      resolve: (result) => console.log(`Queued task completed: ${result.taskId}`),
+      reject: (err) => console.error("Queued task failed:", err),
+    });
+    processQueuedTasks();
+    return;
+  }
+
   res.json({ status: "queued", message: "Task received and processing" });
 
   activeTasks++;
@@ -676,7 +711,7 @@ app.post("/task", taskLimiter, async (req, res) => {
       console.log(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
     })
     .catch((error) => console.error("Task processing failed:", error))
-    .finally(() => { activeTasks--; });
+    .finally(() => { activeTasks--; processQueuedTasks(); });
 });
 
 app.post("/task/incoming", taskLimiter, async (req, res) => {
@@ -702,6 +737,27 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     channel: task.inputChannel || "email",
     timestamp: new Date().toISOString(),
   });
+
+  // Gate concurrency — queue if at capacity
+  if (activeTasks >= MAX_CONCURRENT_TASKS) {
+    console.log(`[TASK] Incoming queued (${activeTasks}/${MAX_CONCURRENT_TASKS} active, queue=${taskQueue.length})`);
+    res.json({ status: "queued", message: "Task queued — processing shortly" });
+    const incomingTask: TaskRequest = {
+      userId: task.userId,
+      username: task.username,
+      from: task.from,
+      subject: sanitizedIncoming.subject,
+      body: sanitizedIncoming.body,
+      inputChannel: (task.inputChannel as "email" | "sms" | "voice" | "web") || "email",
+    };
+    taskQueue.push({
+      task: incomingTask,
+      resolve: (result) => console.log(`Queued incoming task completed: ${result.taskId || 'unknown'}`),
+      reject: (err) => console.error("Queued incoming task failed:", err),
+    });
+    processQueuedTasks();
+    return;
+  }
 
   res.json({ status: "queued", message: "Task received and processing" });
 
@@ -783,7 +839,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
         console.error('[CRASH-RECOVERY] Failed to update task in DB:', dbErr);
       }
     })
-    .finally(() => { activeTasks--; });
+    .finally(() => { activeTasks--; processQueuedTasks(); });
 });
 
 /**
