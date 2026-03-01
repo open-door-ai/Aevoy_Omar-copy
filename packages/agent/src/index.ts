@@ -1172,8 +1172,14 @@ app.post("/webhook/voice/outbound-twiml", async (req, res) => {
     } catch { /* use default */ }
   }
 
-  const greeting = message || 'Hey! Your AI assistant is calling back. What can I help you with?';
-  const escGreeting = greeting.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const fullMessage = message || 'Hey! Your AI assistant is calling back. What can I help you with?';
+  // Cap welcomeGreeting to prevent ElevenLabs TTS buffering delay (long text = 10s silence)
+  // Full message is passed as a Parameter for handleSetup to use in conversation context
+  const shortGreeting = fullMessage.length > 80
+    ? fullMessage.substring(0, fullMessage.lastIndexOf(' ', 80)) + '...'
+    : fullMessage;
+  const escGreeting = shortGreeting.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escFullMessage = fullMessage.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // Use <Parameter> elements (not URL query params) so handleSetup receives them via customParameters
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -1182,6 +1188,7 @@ app.post("/webhook/voice/outbound-twiml", async (req, res) => {
     <ConversationRelay url="${wsUrl}" ttsProvider="ElevenLabs" voice="${voiceId}" transcriptionProvider="Deepgram" dtmfDetection="true" interruptible="false" welcomeGreeting="${escGreeting}">
       <Parameter name="userId" value="${userId}" />
       <Parameter name="callType" value="callback" />
+      <Parameter name="fullMessage" value="${escFullMessage}" />
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">${escGreeting}</Say>

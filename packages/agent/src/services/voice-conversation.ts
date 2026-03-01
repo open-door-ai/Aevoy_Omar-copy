@@ -336,6 +336,24 @@ VOICE STYLE: Warm, casual, like a friend making a call. Not corporate. Not robot
     console.log(`[VOICE-WS] External call setup: business=${bizName}, caller=${callerName}`);
   }
 
+  // ---- CALLBACK CALL — inject the full message as conversation context ----
+  const isCallback = callType === 'callback';
+  if (isCallback && customParameters.fullMessage) {
+    const callbackMsg = customParameters.fullMessage;
+    memoryContext = `CALL TYPE: CALLBACK — You are calling the user back with a response.
+
+CONTEXT: The user previously asked you something, and now you're calling them back with the answer.
+The full message you need to deliver is:
+"${callbackMsg}"
+
+RULES:
+- Start by greeting the user and then naturally deliver the message content.
+- Be conversational — don't just read the message robotically.
+- After delivering the message, ask if they need anything else.
+- Keep it brief and friendly.`;
+    console.log(`[VOICE-WS] Callback with full message: ${callbackMsg.slice(0, 80)}...`);
+  }
+
   if (userId) {
     // Load profile, settings, and memory in parallel — wrapped in try/catch so session is ALWAYS created
     try {
@@ -561,10 +579,10 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
 
     clearTimeout(thinkingTimer); // Cancel thinking message if AI responded in time
 
-    // If thinking message was already sent, clear the TTS queue before sending real response
-    // This prevents the thinking message from playing over the actual response
-    if (thinkingSent && session.ws.readyState === WebSocket.OPEN) {
-      session.ws.send(JSON.stringify({ type: "clear" }));
+    // If thinking message was already sent, the real response will queue after it naturally.
+    // ConversationRelay doesn't support a "clear" message type — TTS messages are queued sequentially.
+    if (thinkingSent) {
+      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Thinking message was sent — real response queued after it`);
     }
 
     // Extract [REMEMBER:...] and [SAVE:...] tags before sending to TTS
@@ -593,10 +611,8 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       if (digits.length > 0) {
         const allDigits = digits.join('');
         console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} SENDING DTMF: ${allDigits}`);
-        // Send each digit as a DTMF tone via ConversationRelay
-        for (const d of allDigits) {
-          session.ws.send(JSON.stringify({ type: "dtmf", digit: d }));
-        }
+        // ConversationRelay expects { type: "sendDigits", digits: "123" } format
+        session.ws.send(JSON.stringify({ type: "sendDigits", digits: allDigits }));
       }
     }
 
