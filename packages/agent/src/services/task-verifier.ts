@@ -763,9 +763,20 @@ Respond with JSON ONLY:
 
     try {
       const result = JSON.parse(content);
+      let confidence = Math.min(result.confidence || 70, 100);
+      const reason = (result.reason || '').toLowerCase();
+
+      // SANITY CHECK: If the reason contradicts the score, cap confidence.
+      // AI models hallucinate high scores even when evidence is "blank screenshot" / "cannot determine".
+      const negativeSignals = /\b(blank|empty|no evidence|cannot (see|determine|verify|confirm)|unable to (verify|determine|see)|no content|no visible|white screen|loading|not (visible|clear|evident|loaded))\b/i;
+      if (negativeSignals.test(reason) && confidence > 30) {
+        console.warn(`[VERIFY] Smart review sanity check: reason="${result.reason}" contradicts confidence=${confidence} — capping at 30`);
+        confidence = 30;
+      }
+
       return {
-        passed: result.success === true,
-        confidence: Math.min(result.confidence || 70, 100),
+        passed: result.success === true && confidence >= 50,
+        confidence,
         method: "smart_review",
         evidence: result.reason || "Smart review completed",
         screenshotBase64: base64,
@@ -775,7 +786,7 @@ Respond with JSON ONLY:
       const isSuccess = content.toLowerCase().includes("success") || content.toLowerCase().includes("completed");
       return {
         passed: isSuccess,
-        confidence: 60,
+        confidence: 40,
         method: "smart_review",
         evidence: content.substring(0, 200),
         screenshotBase64: base64,

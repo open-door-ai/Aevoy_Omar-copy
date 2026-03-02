@@ -259,25 +259,25 @@ interface ModelConfig {
 }
 
 // Task type → ordered list of models to try
+// ROUTING_TABLE — model chains per task type.
+// REMOVED: DeepSeek (402 no balance on Railway), Kimi (401 invalid key).
+// Each chain has 3+ models across separate rate limit buckets for resilience.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 }, // 60 RPM, separate bucket from Llama
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   plan: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   reason: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
-    { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
   ],
@@ -288,36 +288,32 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   validate: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
   ],
   respond: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'ollama', model: 'mistral', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   classify: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
   ],
   generate: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },  // ~200 tok/s — fastest for large HTML/code
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },         // High quality code gen
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },              // FREE, fast
-    { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   complex: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
-    { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
-    // Safety net: if Kimi/DeepSeek keys not set or all fail, Haiku + Groq always work
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
   ],
@@ -335,14 +331,17 @@ const MODEL_TIMEOUTS: Record<ModelProvider, number> = {
   openrouter: 45000,
 };
 
-// ---- Circuit breakers per provider ----
-const providerCircuitBreakers: Map<ModelProvider, CircuitBreaker> = new Map();
+// ---- Circuit breakers per model (NOT per provider) ----
+// Groq has 3 models on separate rate limit buckets (Scout 30 RPM, Qwen 60 RPM, Llama-3.3 30 RPM).
+// Per-provider breakers meant one Scout 429 blocked ALL Groq models — catastrophic under load.
+const modelCircuitBreakers: Map<string, CircuitBreaker> = new Map();
 
-function getCircuitBreaker(provider: ModelProvider): CircuitBreaker {
-  let cb = providerCircuitBreakers.get(provider);
+function getCircuitBreaker(provider: ModelProvider, model?: string): CircuitBreaker {
+  const key = model ? `${provider}:${model}` : provider;
+  let cb = modelCircuitBreakers.get(key);
   if (!cb) {
     cb = new CircuitBreaker({ threshold: 5, windowMs: 600000, cooldownMs: 60000 });
-    providerCircuitBreakers.set(provider, cb);
+    modelCircuitBreakers.set(key, cb);
   }
   return cb;
 }
@@ -1441,11 +1440,11 @@ export async function generateResponse(
       continue;
     }
 
-    // Check circuit breaker
-    const cb = getCircuitBreaker(config.provider);
+    // Check circuit breaker (per-model, not per-provider)
+    const cb = getCircuitBreaker(config.provider, config.model);
     if (!cb.canExecute()) {
-      console.log(`[AI] ${config.provider} circuit breaker open, skipping`);
-      providerErrors.push(`${config.provider}: circuit breaker open`);
+      console.log(`[AI] ${config.provider}/${config.model} circuit breaker open, skipping`);
+      providerErrors.push(`${config.provider}/${config.model}: circuit breaker open`);
       continue;
     }
 

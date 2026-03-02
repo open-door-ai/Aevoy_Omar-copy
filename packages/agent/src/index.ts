@@ -382,13 +382,14 @@ app.get("/task/:taskId/status", async (req, res) => {
   try {
     const { data } = await getSupabaseClient()
       .from("tasks")
-      .select("id, status, input_text, email_subject, iteration_count, cost_usd, execution_time_ms, progress_message, checkpoint_data, created_at, completed_at, error_message, stuck_reason")
+      .select("id, status, input_text, email_subject, iteration_count, cost_usd, execution_time_ms, progress_message, verification_data, created_at, completed_at, error_message, stuck_reason")
       .eq("id", req.params.taskId)
       .single();
     if (!data) return res.status(404).json({ error: "not_found" });
     const elapsed = data.completed_at
       ? new Date(data.completed_at).getTime() - new Date(data.created_at).getTime()
       : Date.now() - new Date(data.created_at).getTime();
+    const vd = data.verification_data as any;
     res.json({
       id: data.id,
       status: data.status,
@@ -399,13 +400,13 @@ app.get("/task/:taskId/status", async (req, res) => {
       cost: data.cost_usd,
       progress: data.progress_message,
       error: data.error_message || data.stuck_reason,
-      visionAgent: data.checkpoint_data?.visionAgent ? {
-        currentStep: data.checkpoint_data.currentStep,
-        maxSteps: data.checkpoint_data.maxSteps,
-        currentUrl: data.checkpoint_data.currentUrl,
-        totalCost: data.checkpoint_data.totalCost,
-        stuckCount: data.checkpoint_data.stuckCount,
-        recentSteps: data.checkpoint_data.recentSteps || [],
+      visionAgent: vd?.visionAgent ? {
+        currentStep: vd.currentStep,
+        maxSteps: vd.maxSteps,
+        currentUrl: vd.currentUrl,
+        totalCost: vd.totalCost,
+        stuckCount: vd.stuckCount,
+        recentSteps: vd.recentSteps || [],
       } : null,
     });
   } catch (err) {
@@ -422,21 +423,24 @@ app.get("/tasks/active", async (req, res) => {
   try {
     const { data } = await getSupabaseClient()
       .from("tasks")
-      .select("id, status, email_subject, progress_message, checkpoint_data, created_at, cost_usd")
+      .select("id, status, email_subject, progress_message, verification_data, created_at, cost_usd")
       .eq("status", "processing")
       .order("created_at", { ascending: false })
       .limit(20);
-    const tasks = (data || []).map((t: any) => ({
-      id: t.id,
-      task: (t.email_subject || '').substring(0, 60),
-      elapsed: `${Math.floor((Date.now() - new Date(t.created_at).getTime()) / 60000)}m`,
-      cost: t.cost_usd,
-      progress: t.progress_message,
-      visionStep: t.checkpoint_data?.currentStep || null,
-      visionMaxSteps: t.checkpoint_data?.maxSteps || null,
-      currentUrl: t.checkpoint_data?.currentUrl?.substring(0, 80) || null,
-      stuck: t.checkpoint_data?.stuckCount >= 3 || false,
-    }));
+    const tasks = (data || []).map((t: any) => {
+      const vd = t.verification_data as any;
+      return {
+        id: t.id,
+        task: (t.email_subject || '').substring(0, 60),
+        elapsed: `${Math.floor((Date.now() - new Date(t.created_at).getTime()) / 60000)}m`,
+        cost: t.cost_usd,
+        progress: t.progress_message,
+        visionStep: vd?.currentStep || null,
+        visionMaxSteps: vd?.maxSteps || null,
+        currentUrl: vd?.currentUrl?.substring(0, 80) || null,
+        stuck: (vd?.stuckCount || 0) >= 3,
+      };
+    });
     res.json({ active: tasks, count: tasks.length });
   } catch (err) {
     res.status(500).json({ error: "internal", message: String(err) });

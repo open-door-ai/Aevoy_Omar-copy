@@ -7214,8 +7214,17 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         method: 'quality_gate' as const,
         evidence: `Response is a placeholder, not a real task completion`
       };
-    } else if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
-      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : signupAutoCompleted ? 'signup-auto completed' : _awaitingCredentials ? 'awaiting user credentials' : 'search-only research';
+    } else if (allActionsFailed && aiResponse.content) {
+      // ALL actions failed — this is NOT a pass. Mark for review.
+      console.warn(`[VERIFY] REJECTED: All ${actionResults.length} actions failed — task did not complete`);
+      verificationResult = {
+        passed: false,
+        confidence: 15,
+        method: 'quality_gate' as const,
+        evidence: `All ${actionResults.length} actions failed — task did not complete successfully`
+      };
+    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
+      const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : signupAutoCompleted ? 'signup-auto completed' : _awaitingCredentials ? 'awaiting user credentials' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
         passed: true,
