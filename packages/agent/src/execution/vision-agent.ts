@@ -647,12 +647,12 @@ export async function runVisionAgent(
     console.log(`[BROWSER-AGENT] Credentials: email=${taskCreds.email}, password=${taskCreds.password ? '***' : '(none)'}${taskCreds.phone ? `, phone=${taskCreds.phone}` : ''}`);
   }
 
-  // ── Pre-planning for complex tasks ──
+  // ── Pre-planning for complex tasks (fast text model, not vision cascade) ──
   let taskPlan = '';
   if (isComplexTask) {
     try {
       const planPrompt = `TASK: ${task}\n\nOutput 3-5 bullet points: target URL, fields to fill, buttons to click, success criteria. Max 80 words.`;
-      const planResult = await generateVisionResponse(planPrompt, '', SYSTEM_PROMPT, userId, taskId);
+      const planResult = await generateBrowserStepResponse(planPrompt, SYSTEM_PROMPT, userId, taskId);
       taskPlan = planResult.content.substring(0, 300);
       totalCost += planResult.cost;
       console.log(`[BROWSER-AGENT] Plan: ${taskPlan.substring(0, 120)}`);
@@ -685,8 +685,8 @@ export async function runVisionAgent(
 
       if (startUrl && isSafeUrl(startUrl)) {
         console.log(`[BROWSER-AGENT] Pre-navigating to ${startUrl}`);
-        await activePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-        await activePage.waitForTimeout(1000);
+        await activePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        await activePage.waitForTimeout(300);
       }
     }
 
@@ -703,8 +703,8 @@ export async function runVisionAgent(
         if (!skip.has(expected) && expected.length >= 3 && currentDomain && !currentDomain.includes(expected)) {
           const correctUrl = `https://www.${expected}.com`;
           console.log(`[BROWSER-AGENT] Service mismatch: expected "${expected}" but on "${currentDomain}" → ${correctUrl}`);
-          await activePage.goto(correctUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-          await activePage.waitForTimeout(1000);
+          await activePage.goto(correctUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          await activePage.waitForTimeout(300);
         }
       }
     }
