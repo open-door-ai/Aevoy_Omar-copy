@@ -386,19 +386,19 @@ function getCircuitBreaker(provider: ModelProvider, model?: string): CircuitBrea
 }
 
 // ---- Per-model call pacer (prevents burst-induced 429s) ----
-// Groq free tier: big models = 1000 RPD (~0.7 RPM), 8B = 14400 RPD (~10 RPM)
-// Without pacing, rapid sequential calls (understand → complex → reason) all 429.
+// Groq free tier rate limits (verified via x-ratelimit-limit headers):
+//   Scout: 1000 RPD, 30K TPM | Kimi K2: 1000 RPD, 10K TPM
+//   Qwen3-32B: 1000 RPD, 6K TPM | Llama-3.3: 1000 RPD, 12K TPM
+//   Llama-3.1-8B: 14400 RPD, 6K TPM
+// Intervals balance TPM constraints vs task speed.
 const modelLastCall: Map<string, number> = new Map();
 const MODEL_MIN_INTERVAL: Record<string, number> = {
-  // Groq big models: 1000 RPD → space 8s between calls to same model
-  'meta-llama/llama-4-scout-17b-16e-instruct': 8000,
-  'moonshotai/kimi-k2-instruct-0905': 8000,
-  'qwen/qwen3-32b': 8000,
-  'llama-3.3-70b-versatile': 8000,
-  // Groq small: 14400 RPD → 3s between calls
-  'llama-3.1-8b-instant': 3000,
-  // Gemini: 10 RPM → 6s between calls
-  'gemini-2.5-flash': 6000,
+  'meta-llama/llama-4-scout-17b-16e-instruct': 12000, // 30K TPM — generous
+  'moonshotai/kimi-k2-instruct-0905': 20000,          // 10K TPM — moderate
+  'qwen/qwen3-32b': 30000,                            // 6K TPM — tightest, 2 calls/min max
+  'llama-3.3-70b-versatile': 20000,                    // 12K TPM
+  'llama-3.1-8b-instant': 8000,                        // 6K TPM but ~2K per call, browser workhorse
+  'gemini-2.5-flash': 8000,                            // separate pool, generous
 };
 
 async function paceModelCall(model: string): Promise<void> {
