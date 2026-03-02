@@ -71,6 +71,11 @@ let groqClient: OpenAI | null = null;
 let ollamaClient: OpenAI | null = null;
 let openRouterClient: OpenAI | null = null;
 
+// ---- Rate limit backoff tracking ----
+// Skip models temporarily after 429/402 errors to avoid wasting time on doomed requests
+const groqRateLimitBackoff = new Map<string, number>(); // model → backoff-until timestamp
+let deepseekBackoffUntil = 0; // single timestamp for all DeepSeek calls
+
 // ---- OpenRouter per-user client cache ----
 // Keyed by decrypted API key (not userId) — shared across users with same key
 const openRouterClients = new Map<string, OpenAI>();
@@ -1805,38 +1810,51 @@ export async function generateVisionResponse(
       : [{ type: "text", text: prompt }];
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
-  // When no image, try fast text models first (2-5s) before slow vision cascade (25-100s)
-  // Parameters matched EXACTLY to the working cascade calls for reliability
+  // Uses qwen3-32b (60 RPM) instead of llama-4-scout (30 RPM) to avoid competing
+  // with the vision cascade step 2 which also uses llama-4-scout.
+  // Rate limit backoff: skip model for 60s after a 429.
   if (!hasImage) {
-    // Groq text (fastest) — exact same params as the working Groq Vision cascade (step 2)
-    // 6s timeout: Groq usually responds in 1-3s. Must leave room for DeepSeek within 15s outer timeout.
+    const fastModels: Array<{ model: string; name: string }> = [
+      { model: "qwen/qwen3-32b", name: "Qwen3-32B" },
+      { model: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama4-Scout" },
+    ];
     if (process.env.GROQ_API_KEY) {
-      try {
-        const response = await withTimeout(getGroqClient().chat.completions.create({
-          model: "meta-llama/llama-4-scout-17b-16e-instruct",
-          max_tokens: 1024,
-          messages: [
-            ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
-            { role: "user" as const, content: buildImageContent() }
-          ],
-        }), 6000);
-        const content = response.choices[0]?.message?.content || '';
-        if (content.length > 10) {
-          const inTok = response.usage?.prompt_tokens || 0;
-          const outTok = response.usage?.completion_tokens || 0;
-          console.log(`[AI] VisionText (Groq Scout) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
-          if (userId) trackApiCall(userId, "llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
-          return { content, cost: 0 };
+      for (const fm of fastModels) {
+        // Skip if rate-limited recently
+        const backoffKey = `groq:${fm.model}`;
+        const backoffUntil = groqRateLimitBackoff.get(backoffKey) || 0;
+        if (Date.now() < backoffUntil) continue;
+
+        try {
+          const response = await withTimeout(getGroqClient().chat.completions.create({
+            model: fm.model,
+            max_tokens: 1024,
+            messages: [
+              ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+              { role: "user" as const, content: buildImageContent() }
+            ],
+          }), 6000);
+          const content = response.choices[0]?.message?.content || '';
+          if (content.length > 10) {
+            const inTok = response.usage?.prompt_tokens || 0;
+            const outTok = response.usage?.completion_tokens || 0;
+            console.log(`[AI] VisionText (Groq ${fm.name}) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+            if (userId) trackApiCall(userId, fm.model, inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
+            return { content, cost: 0 };
+          }
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.warn(`[AI] VisionText (Groq ${fm.name}) failed: ${errMsg}`);
+          // Rate limit backoff: skip this model for 60s
+          if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
+            groqRateLimitBackoff.set(backoffKey, Date.now() + 60000);
+          }
+          if (userId) trackApiCall(userId, `ERR:groq-${fm.name}:${errMsg.substring(0, 60)}`, 0, 0, 0, "groq", taskId, "browser-step-error").catch(() => {});
         }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        console.warn(`[AI] VisionText (Groq) failed: ${errMsg}`);
-        if (userId) trackApiCall(userId, `ERR:groq:${errMsg.substring(0, 80)}`, 0, 0, 0, "groq", taskId, "browser-step-error").catch(() => {});
       }
     }
-    // DeepSeek text — NON-streaming so withTimeout covers entire response (not just stream creation)
-    // 7s timeout: DeepSeek usually responds in 2-5s. Must fit within 15s outer timeout after Groq.
-    if (process.env.DEEPSEEK_API_KEY) {
+    // DeepSeek text — NON-streaming fallback (cheap, good reasoning)
+    if (process.env.DEEPSEEK_API_KEY && Date.now() >= (deepseekBackoffUntil || 0)) {
       try {
         const response = await withTimeout(getDeepSeekClient().chat.completions.create({
           model: 'deepseek-chat',
@@ -1858,10 +1876,14 @@ export async function generateVisionResponse(
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
         console.warn(`[AI] VisionText (DeepSeek) failed: ${errMsg}`);
-        if (userId) trackApiCall(userId, `ERR:deepseek:${errMsg.substring(0, 80)}`, 0, 0, 0, "deepseek", taskId, "browser-step-error").catch(() => {});
+        // Balance/auth errors: skip DeepSeek for 5min (no point retrying)
+        if (errMsg.includes('402') || errMsg.includes('401')) {
+          deepseekBackoffUntil = Date.now() + 300000;
+        }
+        if (userId) trackApiCall(userId, `ERR:deepseek:${errMsg.substring(0, 60)}`, 0, 0, 0, "deepseek", taskId, "browser-step-error").catch(() => {});
       }
     }
-    // If both fast text models fail, fall through to the full vision cascade below
+    // If all fast text models fail, fall through to the full vision cascade below
     console.warn(`[AI] VisionText fast path failed — falling through to vision cascade`);
   }
 
