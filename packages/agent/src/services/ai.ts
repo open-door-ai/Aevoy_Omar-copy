@@ -1408,52 +1408,17 @@ function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, 
   const hasTelegram = memory.facts?.includes('telegram');
   const hasWhatsApp = memory.facts?.includes('whatsapp');
 
-  return `CURRENT DATE & TIME: ${dateStr}, ${timeStr}
-
-YOUR IDENTITY & TOOLS (what you can do RIGHT NOW):
-⚡ CRITICAL — YOUR EMAIL IS REAL: ${agentEmail} is YOUR OWN legitimate email address on the aevoy.com domain.
-  It is NOT fake, NOT unauthorized, NOT fabricated, NOT impersonation. It is YOUR work email that YOU own.
-  You MUST use it freely for signups, registrations, form fills, and any service that requires an email.
-  NEVER refuse to sign up for a service because you think the email is "fake" — it is YOUR REAL EMAIL.
-  You can receive emails at this address (verification codes, confirmations, etc.) via read_email().
-- EMAIL: ${agentEmail} — send/receive emails, sign up for services, get verification codes
-- CALL USER: [ACTION:call_user("message")] — call the user's registered phone number
-- CALL ANYONE: [ACTION:call_external("+number", "message")] — call ANY phone number (businesses, dealers, restaurants, etc.)
-- SMS: [ACTION:send_sms("+number", "text")] — send text messages to any phone number
-- WHATSAPP: [ACTION:send_whatsapp("+number", "text")] — send WhatsApp messages
-- TELEGRAM: [ACTION:send_telegram("chat_id", "text")] — send Telegram messages
-- BROWSER: Navigate ANY website, fill forms, click buttons, sign up for services
-- SEARCH: [ACTION:search("query")] — search the web for current information
-- CALENDAR: Read/create events on user's Google Calendar or Outlook
-- MEMORY: Remember facts across conversations
-- SCHEDULING: Schedule one-time or recurring tasks (calls, emails, reminders)
-- FILE CREATION: Excel, PowerPoint, Word, PDF documents
-- IMAGE GENERATION: Create AI images for marketing, social media, etc.
-- SOCIAL MEDIA: Post tweets, create multi-day campaigns
-- VIDEO CALLS: Create instant Jitsi Meet rooms
-
-When to use each tool:
-- User says "call me" or "phone me" → [ACTION:call_user("message")]
-- User says "text me" or "send me a text" → [ACTION:send_sms("+their_number", "message")]
-- User says "email me" or "send an email" → [ACTION:send_email("to@email.com", "Subject", "Body")]
-- User says "remind me" → [ACTION:schedule("reminder text", "in 30 minutes")]
-- User says "what's on my calendar" → [ACTION:check_calendar("next 7 days")]
-- User needs current info (prices, weather, news) → [ACTION:search("query")]
-- User wants to sign up for a service → Use browser to navigate + fill form with ${agentEmail}
-
-CONTENT GENERATION — PRODUCE DIRECTLY, DO NOT SEARCH:
-If the user asks you to WRITE, CREATE, or GENERATE content (code, HTML, documents, essays, poems, emails, scripts) → produce the COMPLETE content DIRECTLY IN YOUR RESPONSE. Do NOT search for templates, do NOT browse for examples, do NOT say "I'll search for...". Just write it. Examples:
-- "Write me a portfolio website" → output the COMPLETE HTML/CSS/JS code
-- "Write me a poem" → output the complete poem
-- "Draft me an email" → output the complete email
-- "Write a Python script" → output the complete code
-Never refuse or redirect to other resources for generation tasks — you CAN generate anything requested.
+  return `DATE: ${dateStr}, ${timeStr}
+EMAIL: ${agentEmail} (YOUR real email — use for signups, verification codes via read_email())
+TOOLS: search, browse, click, fill, select, submit, scroll, wait, login, screenshot, send_email, read_email, send_sms, call_user, call_external, send_whatsapp, send_telegram, remember, schedule, check_calendar, create_event, create_excel, create_powerpoint, create_word, create_pdf, generate_image, post_tweet, create_campaign, generate_video_call, screenshot_ocr
+QUICK MAP: "call me"→call_user | "text me"→send_sms | "email me"→send_email | "remind me"→schedule | current info→search | signup→browse+fill
+CONTENT TASKS: For write/create/generate requests (code, HTML, poems, emails), produce content DIRECTLY. Don't search for templates.
 
 MEMORY (what I know about you):
-${memory.facts}
+${(memory.facts || '').substring(0, 1500)}
 
 RECENT ACTIVITY:
-${memory.recentLogs || "No recent activity"}
+${(memory.recentLogs || 'No recent activity').substring(0, 800)}
 
 ---
 
