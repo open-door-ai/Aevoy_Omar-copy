@@ -1858,13 +1858,17 @@ export async function generateVisionResponse(
       : [{ type: "text", text: prompt }];
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
-  // 3 Groq models on separate rate-limit buckets → effective 120 RPM combined:
+  // 4 Groq models on separate rate-limit buckets → effective 150 RPM combined:
+  //   Llama-3.1-8B: 30 RPM, fast (560 tps) — DEDICATED for browser steps, not used in main pipeline
   //   Scout: 30 RPM, 30K TPM (best for large prompts)
   //   Qwen3-32B: 60 RPM, 6K TPM (fast but throttles on big prompts)
-  //   Llama-3.3-70B: 30 RPM, 12K TPM (best reasoning, separate bucket from Scout)
+  //   Llama-3.3-70B: 30 RPM, 12K TPM (best reasoning)
   // Rate limit backoff: skip model for 60s after a 429, 30s after timeout.
+  // CRITICAL: Llama-3.1-8B is first because it has a SEPARATE rate limit bucket from
+  // all main pipeline models, preventing contention during concurrent task execution.
   if (!hasImage) {
     const fastModels: Array<{ model: string; name: string; timeoutMs: number }> = [
+      { model: "llama-3.1-8b-instant", name: "Llama3.1-8B", timeoutMs: 5000 },
       { model: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama4-Scout", timeoutMs: 8000 },
       { model: "qwen/qwen3-32b", name: "Qwen3-32B", timeoutMs: 10000 },
       { model: "llama-3.3-70b-versatile", name: "Llama3.3-70B", timeoutMs: 8000 },
