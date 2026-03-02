@@ -1755,6 +1755,126 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 }
 
 /**
+ * Fast text-only response for browser automation steps.
+ * Used when the vision agent sends an accessibility snapshot (text) without a screenshot.
+ * Goes DIRECTLY to fast text models — no vision model cascade.
+ *
+ * Groq llama-3.3-70b: ~1-3s response, free tier
+ * DeepSeek: ~2-5s response, $0.27/$1.10 per M tokens
+ * OpenRouter free text: ~3-8s, $0
+ *
+ * This is the KEY FIX for vision agent speed. Previously, text-only steps went through
+ * generateVisionResponse which cycles 4 OpenRouter vision models (25s timeout each)
+ * before reaching text fallbacks — causing 60-120s per step instead of 2-5s.
+ */
+export async function generateBrowserStepResponse(
+  prompt: string,
+  systemPrompt: string,
+  userId?: string,
+  taskId?: string
+): Promise<{ content: string; cost: number }> {
+  const withTO = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Text timeout ${ms}ms`)), ms))
+    ]);
+
+  // ═══ 1. Groq — fastest text model (1-3s), free tier ═══
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const stream = await withTO(getGroqClient().chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 512,
+        temperature: 0.2,
+        stream: true,
+      }), 8000);
+
+      let content = '';
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+      }
+
+      if (content.length > 5) {
+        console.log(`[AI] BrowserStep (Groq 70b) | ~$0 | ${content.length} chars`);
+        if (userId) trackApiCall(userId, 'llama-3.3-70b-versatile', 0, 0, 0, 'groq', taskId, 'browser-step').catch(() => {});
+        return { content, cost: 0 };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Groq) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ 2. DeepSeek — fast, cheap, good reasoning ═══
+  if (process.env.DEEPSEEK_API_KEY) {
+    try {
+      const stream = await withTO(getDeepSeekClient().chat.completions.create({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 512,
+        temperature: 0.2,
+        stream: true,
+        stream_options: { include_usage: true },
+      }), 10000);
+
+      let content = '';
+      let inTok = 0, outTok = 0;
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+        if (chunk.usage) { inTok = chunk.usage.prompt_tokens || 0; outTok = chunk.usage.completion_tokens || 0; }
+      }
+
+      if (content.length > 5) {
+        const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
+        console.log(`[AI] BrowserStep (DeepSeek) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, 'deepseek-chat', inTok, outTok, cost, 'deepseek', taskId, 'browser-step').catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (DeepSeek) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ 3. OpenRouter free text models — fallback ═══
+  if (process.env.OPENROUTER_API_KEY) {
+    const textModels = [
+      { model: 'google/gemma-3-27b-it:free', name: 'Gemma-3-27B' },
+      { model: 'mistralai/mistral-small-3.1-24b-instruct:free', name: 'Mistral-Small-3.1' },
+    ];
+    for (const fm of textModels) {
+      try {
+        const response = await withTO(getPlatformOpenRouterClient().chat.completions.create({
+          model: fm.model,
+          max_tokens: 512,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt },
+          ],
+        }), 12000);
+
+        const content = response.choices[0]?.message?.content || '';
+        if (content.length > 5) {
+          console.log(`[AI] BrowserStep (${fm.name} FREE) | $0 | ${content.length} chars`);
+          if (userId) trackApiCall(userId, fm.model, 0, 0, 0, 'openrouter', taskId, 'browser-step').catch(() => {});
+          return { content, cost: 0 };
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // ═══ 4. Absolute fallback — use the full vision cascade (slow but guaranteed) ═══
+  return generateVisionResponse(prompt, '', systemPrompt, userId, taskId);
+}
+
+/**
  * Generate response for vision tasks.
  * Order: OpenRouter FREE (Qwen3-VL, best GUI agent) → Groq (near-free) → Gemini → Haiku → Sonnet (LAST RESORT)
  * All calls have 15s timeout to prevent iteration loop hangs.

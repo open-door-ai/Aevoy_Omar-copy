@@ -16,7 +16,7 @@
  */
 
 import type { Page } from 'patchright';
-import { generateVisionResponse } from '../services/ai.js';
+import { generateVisionResponse, generateBrowserStepResponse } from '../services/ai.js';
 import { handleCaptchaIfPresent } from './captcha.js';
 import { extractVerificationCode } from '../utils/email-code-extractor.js';
 import { getSupabaseClient } from '../utils/supabase.js';
@@ -718,11 +718,12 @@ export async function runVisionAgent(
       if (!taskId) return;
       try {
         const elapsed = Date.now() - startTime;
-        const recentSteps = stepLogs.slice(-20); // Keep last 20 for DB size
+        const recentSteps = stepLogs.slice(-15); // Keep last 15 for DB size
+        // Write to verification_data (JSONB) — not checkpoint_data which the processor overwrites
         await getSupabaseClient().from('tasks').update({
-          checkpoint_data: {
+          verification_data: {
             visionAgent: true,
-            currentStep: steps,
+            currentStep: steps + 1,
             maxSteps: effectiveMaxSteps,
             currentUrl: activePage.url(),
             elapsedMs: elapsed,
@@ -895,11 +896,16 @@ export async function runVisionAgent(
       let aiResponse: string;
       let stepCost = 0;
       try {
-        // Send as text-only (empty screenshot) — AI reasons from accessibility tree, not pixels
-        const useScreenshot = sameUrlCount >= 3; // Only send screenshot when stuck for visual help
+        // Text-only steps (95%): use fast text models (Groq 1-3s, DeepSeek 2-5s)
+        // Screenshot steps (stuck): use vision model cascade (slower but can analyze images)
+        const useScreenshot = sameUrlCount >= 3;
         const screenshotData = useScreenshot ? (screenshots[screenshots.length - 1] || '') : '';
+        const hasScreenshot = screenshotData.length > 100;
+
         const result = await Promise.race([
-          generateVisionResponse(prompt, screenshotData, SYSTEM_PROMPT, userId, taskId),
+          hasScreenshot
+            ? generateVisionResponse(prompt, screenshotData, SYSTEM_PROMPT, userId, taskId)
+            : generateBrowserStepResponse(prompt, SYSTEM_PROMPT, userId, taskId),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('AI timeout')), STEP_TIMEOUT_MS)),
         ]);
         aiResponse = result.content;
