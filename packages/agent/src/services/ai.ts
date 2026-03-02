@@ -1810,13 +1810,13 @@ export async function generateVisionResponse(
       : [{ type: "text", text: prompt }];
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
-  // Uses qwen3-32b (60 RPM) instead of llama-4-scout (30 RPM) to avoid competing
-  // with the vision cascade step 2 which also uses llama-4-scout.
-  // Rate limit backoff: skip model for 60s after a 429.
+  // Scout first: 30K TPM (handles 2000+ token browser prompts at 12+ calls/min)
+  // Qwen3-32B fallback: only 6K TPM (throttles at >3 calls/min with large prompts)
+  // Rate limit backoff: skip model for 60s after a 429, 30s after timeout.
   if (!hasImage) {
     const fastModels: Array<{ model: string; name: string }> = [
-      { model: "qwen/qwen3-32b", name: "Qwen3-32B" },
       { model: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama4-Scout" },
+      { model: "qwen/qwen3-32b", name: "Qwen3-32B" },
     ];
     if (process.env.GROQ_API_KEY) {
       for (const fm of fastModels) {
