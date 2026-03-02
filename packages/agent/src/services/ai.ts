@@ -1810,13 +1810,16 @@ export async function generateVisionResponse(
       : [{ type: "text", text: prompt }];
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
-  // Scout first: 30K TPM (handles 2000+ token browser prompts at 12+ calls/min)
-  // Qwen3-32B fallback: only 6K TPM (throttles at >3 calls/min with large prompts)
+  // 3 Groq models on separate rate-limit buckets → effective 120 RPM combined:
+  //   Scout: 30 RPM, 30K TPM (best for large prompts)
+  //   Qwen3-32B: 60 RPM, 6K TPM (fast but throttles on big prompts)
+  //   Llama-3.3-70B: 30 RPM, 12K TPM (best reasoning, separate bucket from Scout)
   // Rate limit backoff: skip model for 60s after a 429, 30s after timeout.
   if (!hasImage) {
-    const fastModels: Array<{ model: string; name: string }> = [
-      { model: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama4-Scout" },
-      { model: "qwen/qwen3-32b", name: "Qwen3-32B" },
+    const fastModels: Array<{ model: string; name: string; timeoutMs: number }> = [
+      { model: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama4-Scout", timeoutMs: 8000 },
+      { model: "qwen/qwen3-32b", name: "Qwen3-32B", timeoutMs: 10000 },
+      { model: "llama-3.3-70b-versatile", name: "Llama3.3-70B", timeoutMs: 8000 },
     ];
     if (process.env.GROQ_API_KEY) {
       for (const fm of fastModels) {
@@ -1833,7 +1836,7 @@ export async function generateVisionResponse(
               ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
               { role: "user" as const, content: buildImageContent() }
             ],
-          }), fm.model.includes('qwen') ? 10000 : 8000); // Qwen3: 10s (6K TPM throttle), Scout: 8s (large snapshots)
+          }), fm.timeoutMs);
           const content = response.choices[0]?.message?.content || '';
           if (content.length > 10) {
             const inTok = response.usage?.prompt_tokens || 0;
@@ -1857,36 +1860,7 @@ export async function generateVisionResponse(
         }
       }
     }
-    // DeepSeek text — NON-streaming fallback (cheap, good reasoning)
-    if (process.env.DEEPSEEK_API_KEY && Date.now() >= (deepseekBackoffUntil || 0)) {
-      try {
-        const response = await withTimeout(getDeepSeekClient().chat.completions.create({
-          model: 'deepseek-chat',
-          max_tokens: 1024,
-          messages: [
-            ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-            { role: 'user' as const, content: prompt },
-          ],
-        }), 7000);
-        const content = response.choices[0]?.message?.content || '';
-        if (content.length > 10) {
-          const inTok = response.usage?.prompt_tokens || 0;
-          const outTok = response.usage?.completion_tokens || 0;
-          const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
-          console.log(`[AI] VisionText (DeepSeek) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
-          if (userId) trackApiCall(userId, 'deepseek-chat', inTok, outTok, cost, 'deepseek', taskId, 'browser-step').catch(() => {});
-          return { content, cost };
-        }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        console.warn(`[AI] VisionText (DeepSeek) failed: ${errMsg}`);
-        // Balance/auth errors: skip DeepSeek for 5min (no point retrying)
-        if (errMsg.includes('402') || errMsg.includes('401')) {
-          deepseekBackoffUntil = Date.now() + 300000;
-        }
-        if (userId) trackApiCall(userId, `ERR:deepseek:${errMsg.substring(0, 60)}`, 0, 0, 0, "deepseek", taskId, "browser-step-error").catch(() => {});
-      }
-    }
+    // DeepSeek removed — Railway has $0 balance (402 on every call, wasted 7s each attempt)
     // If all fast text models fail, fall through to the full vision cascade below
     console.warn(`[AI] VisionText fast path failed — falling through to vision cascade`);
   }
@@ -1930,7 +1904,9 @@ export async function generateVisionResponse(
 
   // ═══ 2. Groq Vision (Llama 4 Scout) — near-free, fast ═══
   // $0.11/$0.34 per M tokens. 30 RPM, 1K RPD free tier.
-  if (process.env.GROQ_API_KEY) {
+  // Shares rate limit bucket with fast text shortcut — check backoff map.
+  const scoutBackoffKey = "groq:meta-llama/llama-4-scout-17b-16e-instruct";
+  if (process.env.GROQ_API_KEY && Date.now() >= (groqRateLimitBackoff.get(scoutBackoffKey) || 0)) {
     try {
       const response = await withTimeout(getGroqClient().chat.completions.create({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -1951,7 +1927,12 @@ export async function generateVisionResponse(
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${errMsg}`);
+      // Update shared backoff map so fast text shortcut also skips Scout
+      if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
+        groqRateLimitBackoff.set(scoutBackoffKey, Date.now() + 60000);
+      }
     }
   }
 
