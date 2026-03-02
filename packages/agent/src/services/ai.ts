@@ -1833,7 +1833,7 @@ export async function generateVisionResponse(
               ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
               { role: "user" as const, content: buildImageContent() }
             ],
-          }), fm.model.includes('qwen') ? 10000 : 6000); // Qwen3 needs 7-8s for large prompts, Scout is 1-3s
+          }), fm.model.includes('qwen') ? 10000 : 8000); // Qwen3: 10s (6K TPM throttle), Scout: 8s (large snapshots)
           const content = response.choices[0]?.message?.content || '';
           if (content.length > 10) {
             const inTok = response.usage?.prompt_tokens || 0;
