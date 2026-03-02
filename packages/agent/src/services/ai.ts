@@ -1806,59 +1806,59 @@ export async function generateVisionResponse(
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
   // When no image, try fast text models first (2-5s) before slow vision cascade (25-100s)
+  // Parameters matched EXACTLY to the working cascade calls for reliability
   if (!hasImage) {
-    // Groq text (fastest, free tier)
+    // Groq text (fastest) — exact same params as the working Groq Vision cascade (step 2)
+    // 6s timeout: Groq usually responds in 1-3s. Must leave room for DeepSeek within 15s outer timeout.
     if (process.env.GROQ_API_KEY) {
       try {
         const response = await withTimeout(getGroqClient().chat.completions.create({
-          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+          model: "meta-llama/llama-4-scout-17b-16e-instruct",
+          max_tokens: 1024,
           messages: [
-            ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-            { role: 'user' as const, content: buildImageContent() },
+            ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+            { role: "user" as const, content: buildImageContent() }
           ],
-          max_tokens: 512,
-          temperature: 0.2,
-        }), 10000);
+        }), 6000);
         const content = response.choices[0]?.message?.content || '';
-        if (content.length > 5) {
+        if (content.length > 10) {
           const inTok = response.usage?.prompt_tokens || 0;
           const outTok = response.usage?.completion_tokens || 0;
           console.log(`[AI] VisionText (Groq Scout) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
-          if (userId) trackApiCall(userId, 'meta-llama/llama-4-scout-17b-16e-instruct', inTok, outTok, 0, 'groq', taskId, 'browser-step').catch(() => {});
+          if (userId) trackApiCall(userId, "llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
           return { content, cost: 0 };
         }
       } catch (error) {
-        console.warn(`[AI] VisionText (Groq) failed: ${error instanceof Error ? error.message : String(error)}`);
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[AI] VisionText (Groq) failed: ${errMsg}`);
+        if (userId) trackApiCall(userId, `ERR:groq:${errMsg.substring(0, 80)}`, 0, 0, 0, "groq", taskId, "browser-step-error").catch(() => {});
       }
     }
-    // DeepSeek text (cheap, good reasoning)
+    // DeepSeek text — NON-streaming so withTimeout covers entire response (not just stream creation)
+    // 7s timeout: DeepSeek usually responds in 2-5s. Must fit within 15s outer timeout after Groq.
     if (process.env.DEEPSEEK_API_KEY) {
       try {
-        const stream = await withTimeout(getDeepSeekClient().chat.completions.create({
+        const response = await withTimeout(getDeepSeekClient().chat.completions.create({
           model: 'deepseek-chat',
+          max_tokens: 1024,
           messages: [
             ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
             { role: 'user' as const, content: prompt },
           ],
-          max_tokens: 512,
-          temperature: 0.2,
-          stream: true,
-          stream_options: { include_usage: true },
-        }), 12000);
-        let content = '';
-        let inTok = 0, outTok = 0;
-        for await (const chunk of stream) {
-          content += chunk.choices[0]?.delta?.content || '';
-          if (chunk.usage) { inTok = chunk.usage.prompt_tokens || 0; outTok = chunk.usage.completion_tokens || 0; }
-        }
-        if (content.length > 5) {
+        }), 7000);
+        const content = response.choices[0]?.message?.content || '';
+        if (content.length > 10) {
+          const inTok = response.usage?.prompt_tokens || 0;
+          const outTok = response.usage?.completion_tokens || 0;
           const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
           console.log(`[AI] VisionText (DeepSeek) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
           if (userId) trackApiCall(userId, 'deepseek-chat', inTok, outTok, cost, 'deepseek', taskId, 'browser-step').catch(() => {});
           return { content, cost };
         }
       } catch (error) {
-        console.warn(`[AI] VisionText (DeepSeek) failed: ${error instanceof Error ? error.message : String(error)}`);
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[AI] VisionText (DeepSeek) failed: ${errMsg}`);
+        if (userId) trackApiCall(userId, `ERR:deepseek:${errMsg.substring(0, 80)}`, 0, 0, 0, "deepseek", taskId, "browser-step-error").catch(() => {});
       }
     }
     // If both fast text models fail, fall through to the full vision cascade below
