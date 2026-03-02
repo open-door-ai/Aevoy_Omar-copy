@@ -1515,6 +1515,27 @@ export async function generateResponse(
 
   const providerErrors: string[] = [];
 
+  // PROACTIVE ACTION ENFORCEMENT for ALL free models — calculate once before the loop
+  // These models need explicit format reminders at the END of the prompt (recency bias)
+  const effectiveUserPrompt = (taskType !== 'generate' && taskType !== 'validate')
+    ? userPrompt + `\n\n=== MANDATORY OUTPUT FORMAT ===
+YOUR RESPONSE **MUST** CONTAIN [ACTION:...] TAGS to execute anything.
+[ACTION:search("query")] — search the web
+[ACTION:browse("https://example.com")] — navigate to a URL
+[ACTION:fill("field_name", "value")] — fill a form field
+[ACTION:click("button text")] — click a button
+[ACTION:send_email("to@email.com", "Subject", "Body")] — send email
+[ACTION:send_sms("+1234567890", "message")] — send text message
+[ACTION:call_user("message to say")] — call the user
+[ACTION:call_external("+1234567890", "what to say")] — call a business
+[ACTION:schedule("task description", "cron_or_time")] — schedule a task
+[ACTION:remember("important fact")] — save to memory
+[ACTION:create_excel("filename", "sheet data")] — create spreadsheet
+[ACTION:create_powerpoint("title", "slide content")] — create presentation
+Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output tags NOW.
+=== END FORMAT ===`
+    : userPrompt;
+
   for (const config of chain) {
     if (!isProviderAvailable(config.provider, config)) {
       providerErrors.push(`${config.provider}: unavailable (no API key)`);
@@ -1531,39 +1552,12 @@ export async function generateResponse(
 
     try {
       const baseTimeout = MODEL_TIMEOUTS[config.provider] || 30000;
-      // generate: 240s — lightweight prompt but HTML output can be large; Groq at 200 tok/s = ~40s, DeepSeek streaming ~200s for HTML
-      // complex: 120s — full AGI prompt + reasoning
       const timeout = taskType === 'generate' ? Math.max(baseTimeout, 240000)
         : taskType === 'complex' ? Math.max(baseTimeout, 120000)
         : baseTimeout;
-      console.log(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms | maxTokens=${(taskType === 'generate' || taskType === 'complex') ? 8192 : 4096}`);
+      console.log(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms`);
       const startTime = Date.now();
-      // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
       const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
-
-      // PROACTIVE ACTION ENFORCEMENT for ALL free models
-      // These models need explicit format reminders at the END of the prompt (recency bias)
-      // With 100% free routing, ALL providers benefit from this reinforcement
-      let effectiveUserPrompt = userPrompt;
-      if (taskType !== 'generate' && taskType !== 'validate' &&
-          (config.provider === 'deepseek' || config.provider === 'groq' || config.provider === 'kimi' || config.provider === 'openrouter' || config.provider === 'gemini')) {
-        effectiveUserPrompt = userPrompt + `\n\n=== MANDATORY OUTPUT FORMAT ===
-YOUR RESPONSE **MUST** CONTAIN [ACTION:...] TAGS to execute anything.
-[ACTION:search("query")] — search the web
-[ACTION:browse("https://example.com")] — navigate to a URL
-[ACTION:fill("field_name", "value")] — fill a form field
-[ACTION:click("button text")] — click a button
-[ACTION:send_email("to@email.com", "Subject", "Body")] — send email
-[ACTION:send_sms("+1234567890", "message")] — send text message
-[ACTION:call_user("message to say")] — call the user
-[ACTION:call_external("+1234567890", "what to say")] — call a business
-[ACTION:schedule("task description", "cron_or_time")] — schedule a task
-[ACTION:remember("important fact")] — save to memory
-[ACTION:create_excel("filename", "sheet data")] — create spreadsheet
-[ACTION:create_powerpoint("title", "slide content")] — create presentation
-Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output tags NOW.
-=== END FORMAT ===`;
-      }
 
       const result = await withTimeout(
         callProvider(config, systemPromptWithUser, effectiveUserPrompt, maxOutputTokens),
@@ -1703,6 +1697,46 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
       const isRateLimit = errorMessage.includes('429') || errorMessage.toLowerCase().includes('rate limit');
       if (!isRateLimit) {
         cb.recordFailure();
+      }
+    }
+  }
+
+  // RATE-LIMIT GLOBAL RETRY: If ALL errors were 429/rate-limit, wait 15-30s with jitter and retry top 3 models.
+  // This prevents the death spiral where 3 concurrent tasks exhaust all providers simultaneously.
+  const allRateLimited = providerErrors.length >= 2 && providerErrors.every(e => e.includes('429') || e.toLowerCase().includes('rate limit') || e.includes('circuit breaker'));
+  if (allRateLimited) {
+    const delayMs = 15000 + Math.random() * 15000; // 15-30s jitter
+    console.log(`[AI] All ${providerErrors.length} models rate-limited. Waiting ${Math.round(delayMs / 1000)}s before global retry...`);
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+
+    for (const config of chain.slice(0, 3)) {
+      if (!isProviderAvailable(config.provider, config)) continue;
+      try {
+        const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
+        const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
+        console.log(`[AI] Global retry: ${config.provider}/${config.model}`);
+        const result = await withTimeout(
+          callProvider(config, systemPromptWithUser, effectiveUserPrompt, maxOutputTokens),
+          timeout,
+          `${config.provider}/${config.model} global-retry`
+        );
+        const cost = calculateCost(config, result.inputTokens, result.outputTokens);
+        const totalTokens = result.inputTokens + result.outputTokens;
+        const cb = getCircuitBreaker(config.provider, config.model);
+        cb.recordSuccess();
+        await trackApiCall(userId, config.model, result.inputTokens, result.outputTokens, cost, config.provider, taskId, taskType);
+        result.content = stripThinkTags(result.content);
+        console.log(`[AI] Global retry SUCCESS: ${config.provider}/${config.model} | Tokens: ${totalTokens}`);
+        return {
+          content: result.content,
+          actions: parseActions(result.content),
+          tokensUsed: totalTokens,
+          cost,
+          model: config.model,
+        };
+      } catch (retryErr: unknown) {
+        const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.log(`[AI] Global retry failed: ${config.provider}/${config.model}: ${msg.substring(0, 100)}`);
       }
     }
   }
