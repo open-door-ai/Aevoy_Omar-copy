@@ -1767,6 +1767,55 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // Reddit fast path — fetch top/hot/new posts via Reddit JSON API (no auth needed)
+    const redditText0 = subject + ' ' + (body || '');
+    const redditSubMatch = redditText0.match(/\br\/([a-zA-Z0-9_]+)\b/);
+    const isRedditQuery = redditSubMatch && /\b(top|hot|new|trending|best|popular|posts?|front\s*page)\b/i.test(redditText0);
+    if (isRedditQuery && redditSubMatch?.[1]) {
+      const sub = redditSubMatch[1];
+      const sortMatch = redditText0.match(/\b(hot|new|top|rising|controversial)\b/i);
+      const sort = sortMatch?.[1]?.toLowerCase() || 'top';
+      const timeMap: Record<string, string> = { today: 'day', 'this week': 'week', 'this month': 'month', 'all time': 'all' };
+      let timeFilter = 'day';
+      for (const [k, v] of Object.entries(timeMap)) {
+        if (redditText0.toLowerCase().includes(k)) { timeFilter = v; break; }
+      }
+      const countMatch = redditText0.match(/\b(top|first|show)\s+(\d+)\b/i) || redditText0.match(/\b(\d+)\s+(top|best|posts)\b/i);
+      const limit = countMatch ? Math.min(parseInt(countMatch[2] || countMatch[1]) + 2, 25) : 7;
+
+      console.log(`[FAST-PATH-REDDIT] r/${sub} sort=${sort} t=${timeFilter} limit=${limit}`);
+      try {
+        const rUrl = `https://www.reddit.com/r/${sub}/${sort}.json?t=${timeFilter}&limit=${limit}`;
+        const rRes = await fetch(rUrl, {
+          signal: AbortSignal.timeout(6000),
+          headers: { 'User-Agent': 'AevoyAgent/1.0 (by Aevoy)' },
+        });
+        if (rRes.ok) {
+          const rJson = await rRes.json() as { data?: { children?: Array<{ data: { title: string; score: number; num_comments: number; author: string; permalink: string } }> } };
+          const posts = rJson.data?.children || [];
+          if (posts.length > 0) {
+            const lines = posts.map((p: any, i: number) => {
+              const d = p.data;
+              return `${i + 1}. **${d.title}**\n   r/${sub} | ${d.score?.toLocaleString()} upvotes | ${d.num_comments} comments | u/${d.author}\n   https://www.reddit.com${d.permalink}`;
+            });
+            const redditResponse = `Reddit posts from r/${sub} (${sort}, ${timeFilter}):\n\n${lines.join('\n\n')}`;
+            console.log(`[FAST-PATH-REDDIT] Got ${posts.length} posts`);
+            await getSupabaseClient().from('tasks').update({
+              status: 'completed', response_text: redditResponse,
+              completed_at: new Date().toISOString(), type: 'general',
+            }).eq('id', taskId);
+            if (!task.suppressEmail) {
+              sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, redditResponse).catch(() => {});
+            }
+            clearTimeout(masterTimer);
+            return { taskId, success: true, response: redditResponse, actions: [] };
+          }
+        }
+      } catch (redditErr) {
+        console.warn(`[FAST-PATH-REDDIT] Failed (${redditErr}), falling through to main processor`);
+      }
+    }
+
     // [Scheduled] task handling: when the scheduler fires a previously-created task,
     // DO NOT re-schedule it. For "Reminder:" tasks, just notify the user and complete.
     // For action tasks ([Scheduled] Buy milk), fall through to AI loop but skip
