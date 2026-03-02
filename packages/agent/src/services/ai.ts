@@ -269,70 +269,74 @@ interface ModelConfig {
 
 // Task type → ordered list of models to try
 // ROUTING_TABLE — model chains per task type.
-// REMOVED: DeepSeek (402 no balance on Railway), Kimi (401 invalid key).
-// Each chain ends with OpenRouter free model as ULTIMATE fallback — different rate limit pool.
-// This prevents ALL-MODELS-FAILED when Groq+Gemini+Anthropic are all rate-limited.
+// STRATEGY: 100% FREE models. No Anthropic (expensive + no funds on Railway).
+// 7 separate rate-limit buckets totaling ~225 RPM:
+//   Groq Kimi K2: 60 RPM, 262K ctx, best tool calling (primary)
+//   Groq Qwen3-32B: 60 RPM, strong reasoning
+//   Groq Llama-3.3-70B: 30 RPM, 12K TPM
+//   Groq Scout: 30 RPM, 30K TPM (best for large prompts)
+//   Gemini 2.5 Flash: 10 RPM, 1M ctx, best quality (retiring 2.0 → 2.5)
+//   OpenRouter: 20 RPM shared (Mistral Small, Qwen3-coder, Gemma-3)
+// Quick tasks (classify/validate): Groq first (fastest) → Gemini → OpenRouter
+// Heavy tasks (reason/complex/generate): Gemini first (big context) → Groq → OpenRouter
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   reason: [
-    { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   vision: [
-    { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'nvidia/nemotron-nano-12b-v2-vl:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   validate: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   respond: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'ollama', model: 'mistral', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   classify: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   generate: [
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'qwen/qwen3-coder:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
-    { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
-    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
 };
@@ -1477,12 +1481,12 @@ export async function generateResponse(
       // Use higher token limit for generation/complex tasks to allow long outputs (code, essays, etc.)
       const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
 
-      // PROACTIVE ACTION ENFORCEMENT for non-Claude providers (DeepSeek/Groq/Kimi)
+      // PROACTIVE ACTION ENFORCEMENT for ALL free models
       // These models need explicit format reminders at the END of the prompt (recency bias)
-      // Claude/Gemini follow the system prompt's action format reliably — skip for them
+      // With 100% free routing, ALL providers benefit from this reinforcement
       let effectiveUserPrompt = userPrompt;
       if (taskType !== 'generate' && taskType !== 'validate' &&
-          (config.provider === 'deepseek' || config.provider === 'groq' || config.provider === 'kimi' || config.provider === 'openrouter')) {
+          (config.provider === 'deepseek' || config.provider === 'groq' || config.provider === 'kimi' || config.provider === 'openrouter' || config.provider === 'gemini')) {
         effectiveUserPrompt = userPrompt + `\n\n=== MANDATORY OUTPUT FORMAT ===
 YOUR RESPONSE **MUST** CONTAIN [ACTION:...] TAGS to execute anything.
 [ACTION:search("query")] — search the web
@@ -1643,19 +1647,36 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
     }
   }
 
-  // All models failed — return a generic helpful response (never expose internals)
+  // All models failed — inject browse action for browser tasks, or give honest error.
+  // NEVER return "I'm processing..." placeholder — it gets stored as the final response.
   console.error(`[AI] All models in chain failed for taskType=${taskType}. Errors: ${providerErrors.join(' | ')}`);
-  // Log to Supabase for remote debugging
   if (userId) {
     trackApiCall(userId, `ALL-FAILED:${taskType}:${providerErrors.map(e => e.substring(0, 80)).join('|')}`, 0, 0, 0, "groq", taskId, "all-models-failed").catch(() => {});
   }
+
+  // For browser-type tasks, inject a browse action so the pipeline doesn't skip browser entirely
+  const isBrowserSubject = /\b(sign\s?up|signup|book|reserv|add\s+to\s+cart|order|buy|purchase|cancel|browse|go\s+to|navigate|open|visit)\b/i.test(taskSubject || '');
+  const domainMatch = (taskSubject || '').match(/\b(\S+\.(com|ca|org|net|io|co|app))\b/i);
+  if (isBrowserSubject || domainMatch) {
+    const browseUrl = domainMatch ? `https://www.${domainMatch[1]}` : `https://www.google.com/search?q=${encodeURIComponent(taskSubject || 'search')}`;
+    console.log(`[AI] All models failed but task needs browser — injecting browse(${browseUrl})`);
+    return {
+      content: `Starting the task now...`,
+      actions: [{ type: 'browse' as const, params: { url: browseUrl } }] as Action[],
+      tokensUsed: 0,
+      cost: 0,
+      model: "fallback-browse",
+      _providerErrors: providerErrors,
+    } as AIResponse & { _providerErrors: string[] };
+  }
+
   return {
-    content: `I'm processing your request about "${taskSubject}". This is taking longer than expected — I'll follow up shortly with results.`,
-    actions: [],
+    content: `I encountered a temporary issue processing your request. Let me try a different approach.`,
+    actions: [{ type: 'search' as const, params: { query: taskSubject || 'help' } }] as Action[],
     tokensUsed: 0,
     cost: 0,
     model: "fallback",
-    _providerErrors: providerErrors, // diagnostic field, stripped before user-facing response
+    _providerErrors: providerErrors,
   } as AIResponse & { _providerErrors: string[] };
 }
 
@@ -1697,37 +1718,32 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
     return clean; // Return empty string if ALL lines were narration
   };
 
-  // Try Claude Haiku first (best instruction following)
-  if (process.env.ANTHROPIC_API_KEY) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 1500)); // 1.5s retry delay for rate limits
-      try {
-        const client = getAnthropicClient();
-        const response = await client.messages.create({
-          model: "claude-3-5-haiku-latest",
-          max_tokens: 300,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userContent }]
-        });
-        const content = response.content[0]?.type === "text" ? response.content[0].text : "";
-        const inputTokens = response.usage?.input_tokens || 0;
-        const outputTokens = response.usage?.output_tokens || 0;
-        const cost = inputTokens * 0.25 / 1_000_000 + outputTokens * 1.25 / 1_000_000;
-        const clean = stripNarration(content);
-        if (clean && clean.length > 20) {
-          trackApiCall(userId, "claude-3-5-haiku-latest", inputTokens, outputTokens, cost, "anthropic", taskId, "fallback_direct_answer").catch(() => {});
-          console.log(`[FALLBACK-HAIKU] Direct answer via Haiku attempt ${attempt+1} (${clean.length} chars, $${cost.toFixed(5)})`);
-          return { content: clean, cost, tokensUsed: inputTokens + outputTokens };
-        }
-      } catch (haikuErr) {
-        const msg = haikuErr instanceof Error ? haikuErr.message : String(haikuErr);
-        console.warn(`[FALLBACK-HAIKU] Haiku attempt ${attempt+1} failed: ${msg}`);
-        if (!msg.includes('429') && !msg.includes('rate') && !msg.includes('overloaded')) break; // Non-rate-limit error, don't retry
+  // Try Gemini 2.5 Flash first (best free quality, great instruction following)
+  if (process.env.GOOGLE_API_KEY) {
+    try {
+      const response = await getGeminiClient().chat.completions.create({
+        model: "gemini-2.5-flash",
+        max_tokens: 300,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent }
+        ]
+      });
+      const content = response.choices[0]?.message?.content || "";
+      const clean = stripNarration(content);
+      if (clean && clean.length > 20) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "fallback_direct_answer").catch(() => {});
+        console.log(`[FALLBACK-GEMINI] Direct answer via Gemini (${clean.length} chars, $0)`);
+        return { content: clean, cost: 0, tokensUsed: inTok + outTok };
       }
+    } catch (gemErr) {
+      console.warn(`[FALLBACK-GEMINI] Gemini fallback failed: ${gemErr instanceof Error ? gemErr.message : String(gemErr)}`);
     }
   }
 
-  // Second fallback: Groq (llama-3.3-70b) — better instruction following than DeepSeek
+  // Second fallback: Groq (Kimi K2) — best tool calling, eloquent
   if (process.env.GROQ_API_KEY) {
     try {
       const groqClient = getGroqClient();
@@ -1890,7 +1906,33 @@ export async function generateVisionResponse(
         }
       }
     }
-    // DeepSeek removed — Railway has $0 balance (402 on every call, wasted 7s each attempt)
+    // Gemini 2.5 Flash as fallback — different rate limit pool, huge context, free
+    if (process.env.GOOGLE_API_KEY) {
+      try {
+        const response = await withTimeout(getGeminiClient().chat.completions.create({
+          model: "gemini-2.5-flash",
+          max_tokens: 1024,
+          messages: [
+            ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+            { role: "user" as const, content: buildImageContent() }
+          ],
+        }), 12000);
+        const rawContent = response.choices[0]?.message?.content || '';
+        const content = stripThinkTags(rawContent);
+        if (content.length > 10) {
+          const inTok = response.usage?.prompt_tokens || 0;
+          const outTok = response.usage?.completion_tokens || 0;
+          console.log(`[AI] VisionText (Gemini 2.5 Flash) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+          if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "browser-step").catch(() => {});
+          return { content, cost: 0 };
+        }
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[AI] VisionText (Gemini 2.5 Flash) failed: ${errMsg}`);
+        if (userId) trackApiCall(userId, `ERR:gemini-flash:${errMsg.substring(0, 60)}`, 0, 0, 0, "google", taskId, "browser-step-error").catch(() => {});
+      }
+    }
+
     // If all fast text models fail, fall through to the full vision cascade below
     console.warn(`[AI] VisionText fast path failed — falling through to vision cascade`);
   }
@@ -1970,7 +2012,7 @@ export async function generateVisionResponse(
   if (process.env.GOOGLE_API_KEY) {
     try {
       const response = await withTimeout(getGeminiClient().chat.completions.create({
-        model: "gemini-2.0-flash",
+        model: "gemini-2.5-flash",
         max_tokens: 1024,
         messages: [
           ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
@@ -1984,7 +2026,7 @@ export async function generateVisionResponse(
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
         console.log(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
-        if (userId) trackApiCall(userId, "gemini-2.0-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
+        if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
@@ -1992,56 +2034,9 @@ export async function generateVisionResponse(
     }
   }
 
-  // ═══ 4. Claude Haiku — mid-cost, good quality ═══
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const haikuContent = hasImage
-        ? [{ type: "image" as const, source: { type: "base64" as const, media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } }, { type: "text" as const, text: prompt }]
-        : [{ type: "text" as const, text: prompt }];
-      const response = await withTimeout(getAnthropicClient().messages.create({
-        model: "claude-3-5-haiku-latest",
-        max_tokens: 1024,
-        system: systemPrompt || "Analyze this image and respond concisely.",
-        messages: [{ role: "user", content: haikuContent }]
-      }), 15000);
+  // Anthropic removed — no funds on Railway, user wants 100% free models
 
-      const content = response.content[0].type === "text" ? response.content[0].text : "";
-      const cost = (response.usage.input_tokens * 0.25 + response.usage.output_tokens * 1.25) / 1_000_000;
-
-      console.log(`[AI] Vision (Haiku) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
-      if (userId) trackApiCall(userId, "claude-3-5-haiku-latest", response.usage.input_tokens, response.usage.output_tokens, cost, "anthropic", taskId, "vision").catch(() => {});
-      return { content, cost };
-    } catch (error) {
-      console.warn(`[AI] Vision (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // ═══ 5. Claude Sonnet — EXPENSIVE, ABSOLUTE LAST RESORT ═══
-  // $3/$15 per M tokens = $0.384 per 40-step task. Only if everything else fails.
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const sonnetContent = hasImage
-        ? [{ type: "image" as const, source: { type: "base64" as const, media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } }, { type: "text" as const, text: prompt }]
-        : [{ type: "text" as const, text: prompt }];
-      const response = await withTimeout(getAnthropicClient().messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        system: systemPrompt || "Analyze this image and respond concisely.",
-        messages: [{ role: "user", content: sonnetContent }]
-      }), 20000);
-
-      const content = response.content[0].type === "text" ? response.content[0].text : "";
-      const cost = (response.usage.input_tokens * 3.00 + response.usage.output_tokens * 15.00) / 1_000_000;
-
-      console.log(`[AI] Vision (Sonnet LAST RESORT) | Cost: $${cost.toFixed(6)} | ${content.length} chars`);
-      if (userId) trackApiCall(userId, "claude-sonnet-4-20250514", response.usage.input_tokens, response.usage.output_tokens, cost, "anthropic", taskId, "vision").catch(() => {});
-      return { content, cost };
-    } catch (error) {
-      console.warn(`[AI] Vision (Sonnet) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // 4. DeepSeek text-only fallback — CRITICAL for Railway where no vision model keys are set.
+  // ═══ 4. DeepSeek text-only fallback — CRITICAL for Railway where no vision model keys are set.
   // The buildObservePrompt already contains full DOM text, form fields, current URL, and history.
   // DeepSeek can make accurate browser automation decisions from text alone (no screenshot needed).
   // Without this, the vision agent cycles 150 steps × 2-3s each = 5-7 min of doing nothing.
@@ -2128,7 +2123,7 @@ export async function quickValidate(
   if (process.env.GOOGLE_API_KEY) {
     try {
       const response = await getGeminiClient().chat.completions.create({
-        model: "gemini-2.0-flash",
+        model: "gemini-2.5-flash",
         max_tokens: 256,
         messages: [
           { role: "system", content: sys },
