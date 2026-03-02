@@ -262,15 +262,16 @@ interface ModelConfig {
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 }, // 60 RPM, separate bucket from Llama
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
-    { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   plan: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
-    { provider: 'kimi', model: 'kimi-k2', costPerMInput: 0.60, costPerMOutput: 2.50 },
+    { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
   ],
   reason: [
@@ -1620,6 +1621,10 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
 
   // All models failed — return a generic helpful response (never expose internals)
   console.error(`[AI] All models in chain failed for taskType=${taskType}. Errors: ${providerErrors.join(' | ')}`);
+  // Log to Supabase for remote debugging
+  if (userId) {
+    trackApiCall(userId, `ALL-FAILED:${taskType}:${providerErrors.map(e => e.substring(0, 40)).join('|')}`, 0, 0, 0, "groq", taskId, "all-models-failed").catch(() => {});
+  }
   return {
     content: `I'm processing your request about "${taskSubject}". This is taking longer than expected — I'll follow up shortly with results.`,
     actions: [],
