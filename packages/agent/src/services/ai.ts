@@ -232,6 +232,15 @@ function getOllamaClient(): OpenAI | null {
   return ollamaClient;
 }
 
+// Strip <think>...</think> tags from model responses (Qwen3, DeepSeek R1, Mistral)
+function stripThinkTags(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*/gi, '')
+    .replace(/<\/think>/gi, '')
+    .trim();
+}
+
 // getPlatformOpenRouterClient — uses the platform's OPENROUTER_API_KEY env var
 // (distinct from the per-user getOpenRouterClient(apiKey) above which uses user-provided keys)
 function getPlatformOpenRouterClient(): OpenAI {
@@ -1522,6 +1531,8 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         }).catch(() => {}); // fire-and-forget
       }
 
+      // Strip <think> tags before parsing actions (Qwen3, DeepSeek R1)
+      result.content = stripThinkTags(result.content);
       const parsedActions = parseActions(result.content);
 
       // SYNTHETIC ACTION EXTRACTION: If provider returned 0 actions but described them in text,
@@ -1855,7 +1866,8 @@ export async function generateVisionResponse(
               { role: "user" as const, content: buildImageContent() }
             ],
           }), fm.timeoutMs);
-          const content = response.choices[0]?.message?.content || '';
+          const rawContent = response.choices[0]?.message?.content || '';
+          const content = stripThinkTags(rawContent);
           if (content.length > 10) {
             const inTok = response.usage?.prompt_tokens || 0;
             const outTok = response.usage?.completion_tokens || 0;
