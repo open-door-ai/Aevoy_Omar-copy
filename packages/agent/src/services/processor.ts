@@ -7510,6 +7510,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect garbage: too short, looks like code/selectors/JSON fragments, no real words
     const isGarbageResponse = (text: string): boolean => {
       if (!text || text.trim().length === 0) return true;
+      // Placeholder responses from ALL-MODELS-FAILED fallback — never show these to users
+      const lowerTrimmed = text.trim().toLowerCase();
+      if (lowerTrimmed.startsWith('starting the task now') || lowerTrimmed.startsWith('i encountered a temporary issue')) return true;
       // Selector/code fragments: starts with >, ), ], or contains mostly non-word chars
       if (/^[>\)\]\."',;:\s]/.test(text.trim())) return true;
       // Mostly punctuation/symbols (less than 40% word characters) — only check for longer text
