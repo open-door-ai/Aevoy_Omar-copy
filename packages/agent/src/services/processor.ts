@@ -3854,7 +3854,11 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 const vgName = senderName || username;
                 const vgPhone = userTwilioPhone;
                 const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy${vgPhone ? `, phone=${vgPhone}` : ''}. Submit the form.`;
-                const vgResult = await runVisionAgent(signupPage, vgTask, userId, taskId, username, userTwilioPhone);
+                const VG_TIMEOUT_MS = 480000; // 8 minutes — same as main vision timeout
+                const vgResult = await Promise.race([
+                  runVisionAgent(signupPage, vgTask, userId, taskId, username, userTwilioPhone),
+                  new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Vision agent signup timeout after 8 minutes')), VG_TIMEOUT_MS)),
+                ]);
                 totalAiCost += vgResult.cost || 0; // Track vision agent costs for billing
                 if (vgResult.success) {
                   aiResponse.content = vgResult.result || `Signed up using ${vgEmail}.`;
@@ -6601,7 +6605,11 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                   const agName = senderName || username;
                   const agPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';
                   const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy${agPhoneCtx}. Complete the task fully.`;
-                  const agResult = await runVisionAgent(advGatePage, agTask, userId, taskId, username, userTwilioPhone);
+                  const AG_TIMEOUT_MS = 480000; // 8 minutes
+                  const agResult = await Promise.race([
+                    runVisionAgent(advGatePage, agTask, userId, taskId, username, userTwilioPhone),
+                    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Vision agent advice-gate timeout after 8 minutes')), AG_TIMEOUT_MS)),
+                  ]);
                   totalAiCost += agResult.cost || 0; // Track vision agent costs for billing
                   if (agResult.success) {
                     aiResponse.content = agResult.result || `Task completed.`;

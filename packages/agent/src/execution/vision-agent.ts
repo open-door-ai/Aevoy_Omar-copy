@@ -24,7 +24,7 @@ import { getSupabaseClient } from '../utils/supabase.js';
 const MAX_STEPS = 150;
 const MAX_STEPS_BOOKING = 50;
 const STEP_TIMEOUT_MS = 20000; // Must exceed inner AI timeout (Qwen 10s + Scout 6s + buffer)
-const TOTAL_TIMEOUT_MS = 2700000; // 45 minutes
+const TOTAL_TIMEOUT_MS = 600000; // 10 minutes (safety net — processor wraps with 8-min timeout)
 
 export interface VisionAgentResult {
   success: boolean;
@@ -787,7 +787,7 @@ export async function runVisionAgent(
 
     for (steps = 0; steps < dynamicMaxSteps; steps++) {
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
-        return { success: false, error: 'Timeout: 45 minutes exceeded', steps, cost: totalCost, screenshots };
+        return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots };
       }
 
       // Heartbeat every 10 steps
