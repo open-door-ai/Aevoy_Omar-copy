@@ -1780,10 +1780,10 @@ export async function generateBrowserStepResponse(
     ]);
 
   // ═══ 1. Groq — fastest text model (1-3s), free tier ═══
-  // Use llama-4-scout (proven working on Railway) — llama-3.3-70b-versatile fails on Railway
+  // Non-streaming: timeout wraps the ENTIRE call including response — more reliable than streaming
   if (process.env.GROQ_API_KEY) {
     try {
-      const stream = await withTO(getGroqClient().chat.completions.create({
+      const response = await withTO(getGroqClient().chat.completions.create({
         model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [
           { role: 'system', content: systemPrompt },
@@ -1791,17 +1791,14 @@ export async function generateBrowserStepResponse(
         ],
         max_tokens: 512,
         temperature: 0.2,
-        stream: true,
-      }), 8000);
+      }), 10000); // 10s for full response
 
-      let content = '';
-      for await (const chunk of stream) {
-        content += chunk.choices[0]?.delta?.content || '';
-      }
-
+      const content = response.choices[0]?.message?.content || '';
       if (content.length > 5) {
-        console.log(`[AI] BrowserStep (Groq Scout) | ~$0 | ${content.length} chars`);
-        if (userId) trackApiCall(userId, 'meta-llama/llama-4-scout-17b-16e-instruct', 0, 0, 0, 'groq', taskId, 'browser-step').catch(() => {});
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        console.log(`[AI] BrowserStep (Groq Scout) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, 'meta-llama/llama-4-scout-17b-16e-instruct', inTok, outTok, 0, 'groq', taskId, 'browser-step').catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
@@ -1810,9 +1807,10 @@ export async function generateBrowserStepResponse(
   }
 
   // ═══ 2. DeepSeek — fast, cheap, good reasoning ═══
+  // Non-streaming: safe for 512 max_tokens (streaming only needed for 2000+ tokens)
   if (process.env.DEEPSEEK_API_KEY) {
     try {
-      const stream = await withTO(getDeepSeekClient().chat.completions.create({
+      const response = await withTO(getDeepSeekClient().chat.completions.create({
         model: 'deepseek-chat',
         messages: [
           { role: 'system', content: systemPrompt },
@@ -1820,18 +1818,12 @@ export async function generateBrowserStepResponse(
         ],
         max_tokens: 512,
         temperature: 0.2,
-        stream: true,
-        stream_options: { include_usage: true },
-      }), 10000);
+      }), 12000); // 12s for full response
 
-      let content = '';
-      let inTok = 0, outTok = 0;
-      for await (const chunk of stream) {
-        content += chunk.choices[0]?.delta?.content || '';
-        if (chunk.usage) { inTok = chunk.usage.prompt_tokens || 0; outTok = chunk.usage.completion_tokens || 0; }
-      }
-
+      const content = response.choices[0]?.message?.content || '';
       if (content.length > 5) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
         console.log(`[AI] BrowserStep (DeepSeek) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
         if (userId) trackApiCall(userId, 'deepseek-chat', inTok, outTok, cost, 'deepseek', taskId, 'browser-step').catch(() => {});
