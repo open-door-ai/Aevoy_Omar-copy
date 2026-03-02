@@ -805,8 +805,8 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       /\b(write (a|an|the|me a|me an|me the)|create (a|an|the)|draft (a|an|the)|generate (a|an|the)|code (a|an|the)|build (a|an|the))\b.{0,40}\b(website|webpage|html|css|javascript|python|function|script|program|poem|story|email|letter|essay|app|api|portfolio)\b/i.test(directBrowserTaskText) ||
       /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText) ||
       // Document/spreadsheet/card creation — these use create_excel/word/ppt/pdf actions directly, never browse online
-      // SKIP: If user names a specific website ("go to canva.com and design"), route to browser instead
-      (!(/\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) || /\bhttps?:\/\/\S+/i.test(directBrowserTaskText)) &&
+      // SKIP: If user names a specific website ("go to canva.com and design" or "go to Canva"), route to browser instead
+      (!(/\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) || /\bhttps?:\/\/\S+/i.test(directBrowserTaskText) || /\b(go\s+to|visit|use|open)\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(directBrowserTaskText)) &&
       (/\b(create|make|build|generate|give me|design)\b.{0,50}\b(spreadsheet|excel|xlsx|word document|docx|powerpoint|pptx|presentation|pdf|csv|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(directBrowserTaskText) ||
       /\b(spreadsheet|excel file|word file|powerpoint|presentation|business cards?)\b.{0,40}\b(for|to track|to manage|template|tracker)\b/i.test(directBrowserTaskText)));
 
@@ -1418,7 +1418,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // SKIP: If user names a specific website ("go to canva.com"), this is a BROWSER task.
     const _earlyBcText = `${subject} ${body || ''}`;
     const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_earlyBcText) ||
-      /\bhttps?:\/\/\S+/i.test(_earlyBcText);
+      /\bhttps?:\/\/\S+/i.test(_earlyBcText) ||
+      /\b(go\s+to|visit|use|open)\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(_earlyBcText);
     const _earlyIsBc = !_earlyBcUsesWebsite && /\b(business cards?)\b/i.test(_earlyBcText);
     if (_earlyIsBc) {
       console.log(`[BUSINESS-CARD-FAST-PATH] Detected business card task — creating PDF directly`);
