@@ -463,12 +463,21 @@ async function tryScheduleFastPath(
       thursday: '4', thu: '4', friday: '5', fri: '5', saturday: '6', sat: '6', sunday: '0', sun: '0',
     };
     const cronDay = cronDayMap[frequency] || '*';
-    timeStr = `${cronMin} ${cronHour} * * ${cronDay}`;
-    // Set nextRun to next occurrence
+    // Fetch user timezone for recurring schedule — cron hours need UTC conversion
+    let recurUserTz = 'America/Los_Angeles';
+    try {
+      const { data: tzProf } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
+      if (tzProf?.timezone) recurUserTz = tzProf.timezone;
+    } catch { /* use default */ }
+    // Set nextRun to next occurrence (timezone-aware: 9am user-local → correct UTC)
     const now = new Date();
     const nextRunDate2 = new Date(now);
-    nextRunDate2.setHours(cronHour, cronMin, 0, 0);
+    _setLocalHours(nextRunDate2, cronHour, cronMin, recurUserTz);
     if (nextRunDate2 <= now) nextRunDate2.setDate(nextRunDate2.getDate() + 1);
+    // Convert cron hour from user-local to UTC so scheduler fires at correct time
+    const cronHourUtc = nextRunDate2.getUTCHours();
+    const cronMinUtc = nextRunDate2.getUTCMinutes();
+    timeStr = `${cronMinUtc} ${cronHourUtc} * * ${cronDay}`;
     // Skip to next valid weekday if needed
     if (frequency === 'weekday') {
       while (nextRunDate2.getDay() === 0 || nextRunDate2.getDay() === 6) {
@@ -1340,6 +1349,29 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       } else if (budget.remaining < 1) {
         forceCheapModel = true;
       }
+    }
+
+    // 1c. Resolve user's Twilio phone number (for signups, SMS verification, form filling)
+    let userTwilioPhone = '';
+    try {
+      const { data: twilioNum } = await getSupabaseClient()
+        .from('user_twilio_numbers')
+        .select('phone_number')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .limit(1)
+        .single();
+      userTwilioPhone = twilioNum?.phone_number || '';
+    } catch { /* no dedicated number */ }
+    if (!userTwilioPhone) {
+      try {
+        const { data: profilePhone } = await getSupabaseClient()
+          .from('profiles')
+          .select('twilio_number, phone_number')
+          .eq('id', userId)
+          .single();
+        userTwilioPhone = profilePhone?.twilio_number || profilePhone?.phone_number || '';
+      } catch { /* non-critical */ }
     }
 
     // 2. Create or update task record
@@ -3539,7 +3571,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         // and requires physical interaction (add to cart, book, sign up, fill form), REJECT
         // completion if the vision agent has never run. Search results alone can't interact.
         // DeepSeek/Groq hallucinate "added to cart" from search — this gate catches that.
-        const _needsBrowserInteraction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe)\b/i.test(`${subject} ${body}`);
+        const _needsBrowserInteraction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|connect\b|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(`${subject} ${body}`);
         if (_hasExplicitDomainForBrowse && _needsBrowserInteraction && visionAgentInvocations === 0 && currentIteration <= 3 && executionEngine) {
           const _domBrowseTarget = `${subject} ${body}`.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i)?.[1]
             || `${subject} ${body}`.match(/\bhttps?:\/\/(\S+)/i)?.[1];
@@ -3762,8 +3794,9 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 try { const { getAgentPasswords } = await import("./agent-passwords.js"); const vgP = await getAgentPasswords(userId); vgPw = vgP?.primary || 'AevoyAgent2026!'; } catch { vgPw = 'AevoyAgent2026!'; }
                 const vgEmail = `${username}@aevoy.com`;
                 const vgName = senderName || username;
-                const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy. Submit the form.`;
-                const vgResult = await runVisionAgent(signupPage, vgTask, userId, taskId, username);
+                const vgPhone = userTwilioPhone;
+                const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy${vgPhone ? `, phone=${vgPhone}` : ''}. Submit the form.`;
+                const vgResult = await runVisionAgent(signupPage, vgTask, userId, taskId, username, userTwilioPhone);
                 totalAiCost += vgResult.cost || 0; // Track vision agent costs for billing
                 if (vgResult.success) {
                   aiResponse.content = vgResult.result || `Signed up using ${vgEmail}.`;
@@ -5344,7 +5377,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // Broad detection: any task that requires interacting with a web page UI
       // Covers "sign me up", "make an account", "make a design", "complete the form", etc.
       const isBrowserInteractionTask = (
-        /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign)\b/i.test(taskTextLower)
+        /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|connect\b|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(taskTextLower)
         // Also trigger if the AI already browsed and is clearly doing UI work (has form fills or clicks)
         || (hasBrowseEver && actionResults.some(r => ['fill', 'fill_form', 'click', 'submit'].includes(r.action?.type || '') && !r.success))
         // ALWAYS invoke vision agent when user explicitly asked to visit a site ("Go to X.com and do Y")
@@ -5441,9 +5474,10 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           }
           // For signup tasks: explicit FILL command, not passive "if filling forms"
           const _isVisionSignup = /\b(sign\s?up|signup|register|create.*account|make.*account|enroll)\b/i.test(`${subject} ${body}`);
+          const _visionPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';
           const _visionFormCtx = _isVisionSignup
-            ? `FILL the signup form NOW: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy. Click the Sign Up/Create Account/Register button. DO NOT describe the page. DO NOT say "registration is initiated". ACTUALLY FILL THE FORM AND CLICK SUBMIT.`
-            : `If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy, phone=604-000-0000. Complete the task fully on the page.`;
+            ? `FILL the signup form NOW: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy${_visionPhoneCtx}. Click the Sign Up/Create Account/Register button. DO NOT describe the page. DO NOT say "registration is initiated". ACTUALLY FILL THE FORM AND CLICK SUBMIT.`
+            : `If filling forms use: email=${visionEmail}, password=${visionPassword}, name=${visionName}, last_name=Aevoy${_visionPhoneCtx}. Complete the task fully on the page.`;
           const visionTask = `${subject} ${body}. ${_visionFormCtx}${_vBookingCtx}${visionLearnings}`;
 
           visionAgentInvocations++;
@@ -5456,7 +5490,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             // Wrap vision agent with 8-minute hard timeout to prevent infinite loops
             const VISION_TIMEOUT_MS = 480000; // 8 minutes
             const visionResult = await Promise.race([
-              runVisionAgent(visionPage, visionTask, userId, taskId, username),
+              runVisionAgent(visionPage, visionTask, userId, taskId, username, userTwilioPhone),
               new Promise<never>((_, reject) =>
                 setTimeout(() => reject(new Error(`Vision agent timeout after ${VISION_TIMEOUT_MS / 60000} minutes`)), VISION_TIMEOUT_MS)
               ),
@@ -5723,7 +5757,7 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       const _userWantsBrowser = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
         /\b(on|at|from|via|through)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
         /\bhttps?:\/\/\S+/i.test(subject) ||
-        /\b(add\s+to\s+cart|sign\s*up|book|reserve|fill.*form|complete.*form)\b/i.test(subject);
+        /\b(add\s+to\s+cart|sign\s*up|book|reserve|fill.*form|complete.*form|star\b|follow\b|like\b|subscribe|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|join\b|share\b|retweet|repost)\b/i.test(subject);
       if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser) {
         try {
           const searchData = String(_richSearchResult.result).substring(0, 3000);
@@ -6473,8 +6507,9 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                   try { const { getAgentPasswords } = await import("./agent-passwords.js"); const agP = await getAgentPasswords(userId); agPw = agP?.primary || 'AevoyAgent2026!'; } catch { agPw = 'AevoyAgent2026!'; }
                   const agEmail = `${username}@aevoy.com`;
                   const agName = senderName || username;
-                  const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy. Complete the task fully.`;
-                  const agResult = await runVisionAgent(advGatePage, agTask, userId, taskId, username);
+                  const agPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';
+                  const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy${agPhoneCtx}. Complete the task fully.`;
+                  const agResult = await runVisionAgent(advGatePage, agTask, userId, taskId, username, userTwilioPhone);
                   totalAiCost += agResult.cost || 0; // Track vision agent costs for billing
                   if (agResult.success) {
                     aiResponse.content = agResult.result || `Task completed.`;
@@ -7446,7 +7481,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
-    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register(?:ed|ing)?|create.*account|make.*account|cancel(?:l?ed|l?ing)?|unsubscrib(?:e|ed|ing)|book(?:ed|ing)?|reserv(?:ation|e|ed|ing)?|buy|order(?:ed|ing)?|purchas(?:e|ed|ing)|subscrib(?:e|ed|ing)|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b|use\s+(the\s+)?browser|open\s+(the\s+)?browser|go\s+to\s+\w+\.(com|ca|org|net|io))\b/i.test(subject + ' ' + (body || ''));
+    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register(?:ed|ing)?|create.*account|make.*account|cancel(?:l?ed|l?ing)?|unsubscrib(?:e|ed|ing)|book(?:ed|ing)?|reserv(?:ation|e|ed|ing)?|buy|order(?:ed|ing)?|purchas(?:e|ed|ing)|subscrib(?:e|ed|ing)|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b|use\s+(the\s+)?browser|open\s+(the\s+)?browser|go\s+to\s+\w+\.(com|ca|org|net|io)|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(subject + ' ' + (body || ''));
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search', 'screenshot', 'screenshot_ocr', 'extract'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
@@ -7778,6 +7813,26 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       .replace(/^(?:Based on (?:the|my) (?:analysis|search|results?|findings?))[,:]?[^\n]*$/gm, '')
       .replace(/\n{3,}/g, '\n\n')                 // Collapse excess whitespace
       .trim();
+
+    // DEDUP: Remove duplicate paragraphs/sentences that AI models sometimes repeat.
+    // "Got it — I'll do that at 9:00 AM\n\nGot it — I'll do that at 9:00 AM" → single copy.
+    if (cleanResponse) {
+      const paragraphs = cleanResponse.split(/\n\n/);
+      const seen = new Set<string>();
+      const deduped: string[] = [];
+      for (const p of paragraphs) {
+        const key = p.trim().toLowerCase();
+        if (!key) continue;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(p);
+      }
+      if (deduped.length < paragraphs.length) {
+        console.log(`[DEDUP] Removed ${paragraphs.length - deduped.length} duplicate paragraph(s) from response`);
+        cleanResponse = deduped.join('\n\n');
+      }
+    }
+
     if (!cleanResponse || cleanResponse.length < 5) {
       // Generate a meaningful response from whatever data we have — never cop out
       try {
@@ -8327,6 +8382,25 @@ NONE`;
       // Non-critical — extra-mile is bonus
     }
 
+    // 18. AUTO-MONITOR: If the agent signed up for a platform, auto-register monitoring
+    // so it keeps checking for messages, notifications, earnings, etc.
+    try {
+      const subjectLc = (subject || '').toLowerCase();
+      const responseLc = cleanResponse.toLowerCase();
+      const isSignupTask = /\b(sign\s*up|signup|create.*account|register|enroll|joined|signed up|account created)\b/i.test(subjectLc + ' ' + responseLc);
+      const platformMatch = (subjectLc + ' ' + responseLc).match(/\b(swagbucks|tiktok|twitter|instagram|youtube|fiverr|upwork|linkedin|discord|reddit|github|trello|notion|slack|pinterest|snapchat|twitch)\b/i);
+
+      if (isSignupTask && platformMatch) {
+        const platform = platformMatch[1];
+        const monitorDesc = `Check ${platform} for new messages, notifications, and activity every 30min`;
+        const { registerMonitoringJob: regMon } = await import('./monitoring.js');
+        await regMon(userId, username, monitorDesc, 30 * 60 * 1000);
+        console.log(`[AUTO-MONITOR] Registered monitoring for ${platform} after signup`);
+      }
+    } catch {
+      // Non-critical
+    }
+
     return {
       taskId,
       success: true,
@@ -8587,11 +8661,86 @@ async function executeAction(
     }
 
     case "browse": {
+      const url = action.params.url as string;
+
+      // ── REDDIT JSON API SHORTCUT FOR BROWSE ──
+      // Reddit pages are JS-heavy SPAs that often fail to render in headless browsers.
+      // If the URL is a Reddit subreddit/listing, fetch structured data via JSON API instead.
+      const redditBrowseMatch = url.match(/reddit\.com\/r\/(\w+)(?:\/(top|hot|new|rising))?/i);
+      if (redditBrowseMatch) {
+        try {
+          const browseSub = redditBrowseMatch[1];
+          const browseSort = redditBrowseMatch[2] || 'hot';
+          const browseRedditUrl = `https://www.reddit.com/r/${browseSub}/${browseSort}.json?t=day&limit=15`;
+          console.log(`[BROWSE] Reddit JSON API shortcut for r/${browseSub}: ${browseRedditUrl}`);
+
+          const browseRedditResp = await fetch(browseRedditUrl, {
+            headers: {
+              'User-Agent': 'AevoyAgent/1.0 (compatible; bot)',
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (browseRedditResp.ok) {
+            const browseRedditJson = await browseRedditResp.json() as {
+              data?: {
+                children?: Array<{
+                  data?: {
+                    title?: string;
+                    score?: number;
+                    num_comments?: number;
+                    permalink?: string;
+                    author?: string;
+                    selftext?: string;
+                    url?: string;
+                    is_self?: boolean;
+                    created_utc?: number;
+                  };
+                }>;
+              };
+            };
+
+            const browsePosts = browseRedditJson?.data?.children || [];
+            if (browsePosts.length > 0) {
+              const browseFormatted = browsePosts
+                .filter(p => p.data && p.data.title)
+                .map((p, i) => {
+                  const d = p.data!;
+                  const score = d.score != null ? `${d.score.toLocaleString()} upvotes` : '';
+                  const comments = d.num_comments != null ? `${d.num_comments} comments` : '';
+                  const author = d.author ? `u/${d.author}` : '';
+                  const link = d.permalink ? `https://www.reddit.com${d.permalink}` : '';
+                  const selftext = d.selftext ? d.selftext.substring(0, 200).replace(/\n/g, ' ') : '';
+                  const externalUrl = (!d.is_self && d.url) ? `Link: ${d.url}` : '';
+                  const meta = [score, comments, author].filter(Boolean).join(' | ');
+                  let entry = `${i + 1}. **${d.title}**\n   ${meta}\n   ${link}`;
+                  if (selftext) entry += `\n   Preview: ${selftext}...`;
+                  if (externalUrl) entry += `\n   ${externalUrl}`;
+                  return entry;
+                })
+                .join('\n\n');
+
+              const browseResult = `Reddit r/${browseSub} (${browseSort}):\n\n${browseFormatted}`;
+              console.log(`[BROWSE] Reddit JSON API succeeded: ${browsePosts.length} posts`);
+
+              return {
+                action,
+                success: true,
+                result: `Browsed: ${browseResult}`,
+              };
+            }
+          }
+          console.log(`[BROWSE] Reddit JSON API didn't return posts — falling through to browser`);
+        } catch (redditBrowseErr) {
+          console.log(`[BROWSE] Reddit JSON API failed: ${redditBrowseErr instanceof Error ? redditBrowseErr.message : redditBrowseErr} — falling through to browser`);
+        }
+      }
+
       if (!executionEngine) {
         return { action, success: false, error: "Browser not available" };
       }
 
-      const url = action.params.url as string;
       // HARD 90s TIMEOUT: page.goto() can hang indefinitely on Cloudflare/WAF sites
       // (bestbuy.ca, canadiantire.ca) — the Playwright 30s timeout doesn't always fire.
       // This backstop prevents 20-minute hangs from the engine's TASK_TIMEOUT_MS.
@@ -8660,6 +8809,118 @@ async function executeAction(
         // If 3+ JS signals, or error page, or text is mostly single-char words
         return isErrorPage || jsHits >= 3 || (text.length > 200 && text.replace(/\s+/g, ' ').split(' ').filter(w => w.length > 3).length < 20);
       };
+
+      // ── REDDIT JSON API SHORTCUT ──
+      // Reddit's .json API returns structured post data — far more reliable than scraping
+      // Detects: "r/technology", "reddit r/technology", "reddit.com/r/technology", "subreddit technology"
+      const redditSubMatch = query.match(/(?:reddit(?:\.com)?\/)?r\/(\w+)/i) ||
+        query.match(/\breddit\b.*?\b(r\/\w+)/i) ||
+        query.match(/\bsubreddit\b\s+(\w+)/i);
+      if (redditSubMatch || /\breddit\b/i.test(query)) {
+        try {
+          // Extract subreddit name
+          let subreddit = '';
+          if (redditSubMatch) {
+            subreddit = redditSubMatch[1].replace(/^r\//, '');
+          }
+
+          // Determine sort (top/hot/new) and time filter from query
+          let sort = 'hot';
+          let timeFilter = 'day';
+          if (/\btop\b/i.test(query)) sort = 'top';
+          if (/\bnew\b|\blatest\b|\brecent\b/i.test(query)) sort = 'new';
+          if (/\bhot\b|\btrending\b/i.test(query)) sort = 'hot';
+          if (/\btoday\b|\bdaily\b/i.test(query)) timeFilter = 'day';
+          if (/\bthis week\b|\bweekly\b/i.test(query)) timeFilter = 'week';
+          if (/\bthis month\b|\bmonthly\b/i.test(query)) timeFilter = 'month';
+          if (/\ball.?time\b|\bever\b/i.test(query)) timeFilter = 'all';
+
+          // Determine how many posts to fetch
+          let limit = 10;
+          const limitMatch = query.match(/\btop\s+(\d+)\b/i) || query.match(/\b(\d+)\s+(?:posts?|threads?|items?)/i);
+          if (limitMatch) limit = Math.min(parseInt(limitMatch[1], 10) + 2, 25); // fetch a couple extra
+
+          // Build Reddit JSON API URL
+          let redditApiUrl: string;
+          if (subreddit) {
+            redditApiUrl = `https://www.reddit.com/r/${subreddit}/${sort}.json?t=${timeFilter}&limit=${limit}`;
+          } else {
+            // Generic reddit search (no specific subreddit)
+            const searchTerms = query.replace(/\breddit\b/gi, '').trim();
+            redditApiUrl = `https://www.reddit.com/search.json?q=${encodeURIComponent(searchTerms)}&sort=${sort === 'hot' ? 'relevance' : sort}&t=${timeFilter}&limit=${limit}`;
+          }
+
+          console.log(`[SEARCH] Reddit JSON API shortcut: ${redditApiUrl}`);
+          const redditResponse = await fetch(redditApiUrl, {
+            headers: {
+              'User-Agent': 'AevoyAgent/1.0 (compatible; bot)',
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (redditResponse.ok) {
+            const redditJson = await redditResponse.json() as {
+              data?: {
+                children?: Array<{
+                  data?: {
+                    title?: string;
+                    score?: number;
+                    num_comments?: number;
+                    url?: string;
+                    permalink?: string;
+                    author?: string;
+                    selftext?: string;
+                    subreddit_name_prefixed?: string;
+                    created_utc?: number;
+                    upvote_ratio?: number;
+                    is_self?: boolean;
+                    domain?: string;
+                  };
+                }>;
+              };
+            };
+
+            const posts = redditJson?.data?.children || [];
+            if (posts.length > 0) {
+              const formattedPosts = posts
+                .filter(p => p.data && p.data.title)
+                .map((p, i) => {
+                  const d = p.data!;
+                  const sub = d.subreddit_name_prefixed || '';
+                  const score = d.score != null ? `${d.score.toLocaleString()} upvotes` : '';
+                  const comments = d.num_comments != null ? `${d.num_comments} comments` : '';
+                  const author = d.author ? `u/${d.author}` : '';
+                  const link = d.permalink ? `https://www.reddit.com${d.permalink}` : (d.url || '');
+                  const selftext = d.selftext ? d.selftext.substring(0, 200).replace(/\n/g, ' ') : '';
+                  const externalUrl = (!d.is_self && d.url) ? `Link: ${d.url}` : '';
+                  const meta = [sub, score, comments, author].filter(Boolean).join(' | ');
+                  let entry = `${i + 1}. **${d.title}**\n   ${meta}\n   ${link}`;
+                  if (selftext) entry += `\n   Preview: ${selftext}...`;
+                  if (externalUrl) entry += `\n   ${externalUrl}`;
+                  return entry;
+                })
+                .join('\n\n');
+
+              const subredditLabel = subreddit ? `r/${subreddit}` : 'Reddit';
+              const redditResult = `Reddit posts from ${subredditLabel} (${sort}, ${timeFilter}):\n\n${formattedPosts}`;
+              console.log(`[SEARCH] Reddit JSON API succeeded: ${posts.length} posts, ${redditResult.length} chars`);
+
+              return {
+                action,
+                success: true,
+                result: redditResult,
+              };
+            } else {
+              console.log(`[SEARCH] Reddit JSON API returned 0 posts — falling through to general search`);
+            }
+          } else {
+            console.log(`[SEARCH] Reddit JSON API HTTP ${redditResponse.status} — falling through to general search`);
+          }
+        } catch (redditErr) {
+          console.log(`[SEARCH] Reddit JSON API failed: ${redditErr instanceof Error ? redditErr.message : redditErr} — falling through`);
+        }
+      }
 
       // Strategy 0: API-based search using fetch (no browser needed, avoids bot detection)
       // DuckDuckGo Lite works without JS and returns HTML that's easy to parse
@@ -9242,8 +9503,15 @@ async function executeAction(
         || lower === 'once' || lower === 'now' || lower === 'at noon' || lower === 'noon'
         || lower === 'at midnight' || lower === 'midnight';
 
-      // Calculate next run time
-      const nextRun = calculateNextRun(cron);
+      // Fetch user's timezone BEFORE calculating next run — "9am" means 9am in their timezone, not UTC
+      let schedTz = 'America/Los_Angeles';
+      try {
+        const { data: tzProf } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
+        if (tzProf?.timezone) schedTz = tzProf.timezone;
+      } catch { /* use default */ }
+
+      // Calculate next run time using user's timezone
+      const nextRun = calculateNextRun(cron, schedTz);
 
       const { error } = await getSupabaseClient()
         .from("scheduled_tasks")
@@ -9260,12 +9528,7 @@ async function executeAction(
         console.error(`[SCHEDULE] Failed to create scheduled task:`, error.message);
       }
 
-      // Use user's timezone for display
-      let schedTz = 'America/Los_Angeles';
-      try {
-        const { data: tzProf } = await getSupabaseClient().from('profiles').select('timezone').eq('id', userId).single();
-        if (tzProf?.timezone) schedTz = tzProf.timezone;
-      } catch { /* use default */ }
+      // Display time in user's timezone
       let humanTime = '9:00 AM';
       try { humanTime = new Date(nextRun).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: schedTz }); } catch { /* fallback */ }
       return {
@@ -10239,13 +10502,13 @@ function calculateNextRun(cron: string, userTz = 'UTC'): string {
     if (cron === '0 8 * * 1') {
       const next = new Date(now);
       next.setDate(next.getDate() + ((1 + 7 - next.getDay()) % 7 || 7));
-      next.setHours(8, 0, 0, 0);
+      _setLocalHours(next, 8, 0, userTz);
       return next.toISOString();
     }
 
     if (hour && hour !== '*') {
       const next = new Date(now);
-      next.setHours(parseInt(hour), parseInt(minute) || 0, 0, 0);
+      _setLocalHours(next, parseInt(hour), parseInt(minute) || 0, userTz);
       if (next <= now) {
         next.setDate(next.getDate() + 1);
       }

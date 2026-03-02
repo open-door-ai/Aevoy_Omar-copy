@@ -19,6 +19,7 @@ import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } fro
 import { sendResponse } from './email.js';
 import { sendSms } from './twilio.js';
 import { quickValidate } from './ai.js';
+import type { TaskRequest } from '../types/index.js';
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.MONITORING_INTERVAL_MS || '') || 15 * 60 * 1000;
 const DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -226,6 +227,47 @@ export function extractMonitorTag(fact: string): string | null {
 /**
  * Run a single monitoring job check — calls AI with context and notifies user if needed.
  */
+/**
+ * Detect if a monitoring job requires browser/platform checks vs simple AI reasoning.
+ * Platform checks need a real task execution; simple checks just need AI.
+ */
+function needsRealCheck(description: string): boolean {
+  const lc = description.toLowerCase();
+  return /\b(check|monitor|watch|track|inbox|message|notification|reply|response|new order|listing|post|follower|earning|point|balance|survey|video|view|comment|like)\b/.test(lc)
+    && /\b(swagbucks|tiktok|twitter|x\.com|instagram|youtube|reddit|fiverr|upwork|linkedin|facebook|discord|slack|notion|trello|github|gmail|outlook|indeed|craigslist)\b/.test(lc);
+}
+
+/**
+ * Extract a URL or platform name from a monitoring description.
+ */
+function extractPlatformUrl(description: string): string | null {
+  // Direct URL
+  const urlMatch = description.match(/https?:\/\/[^\s)]+/);
+  if (urlMatch) return urlMatch[0];
+
+  // Platform name → URL mapping
+  const platforms: Record<string, string> = {
+    swagbucks: 'https://www.swagbucks.com/account/summary',
+    tiktok: 'https://www.tiktok.com/notifications',
+    twitter: 'https://twitter.com/notifications',
+    'x.com': 'https://x.com/notifications',
+    instagram: 'https://www.instagram.com/accounts/activity/',
+    youtube: 'https://studio.youtube.com/',
+    fiverr: 'https://www.fiverr.com/inbox',
+    upwork: 'https://www.upwork.com/nx/messages',
+    linkedin: 'https://www.linkedin.com/messaging/',
+    discord: 'https://discord.com/channels/@me',
+    reddit: 'https://www.reddit.com/notifications',
+    github: 'https://github.com/notifications',
+  };
+
+  const lc = description.toLowerCase();
+  for (const [name, url] of Object.entries(platforms)) {
+    if (lc.includes(name)) return url;
+  }
+  return null;
+}
+
 async function runJobCheck(job: MonitoringJob): Promise<void> {
   console.log(`[MONITORING] Running check for job ${job.id} (user ${job.userId.substring(0, 8)}): "${job.description.substring(0, 60)}"`);
 
@@ -252,27 +294,82 @@ async function runJobCheck(job: MonitoringJob): Promise<void> {
 
     const preferredChannel = settings?.proactive_channel || 'email';
 
-    // Call AI with monitoring context (quickValidate imported at top-level)
-    const prompt = `You are monitoring: "${job.description}"
+    let aiResponse = '';
+
+    // ---- Strategy: real task execution for platform checks ----
+    if (needsRealCheck(job.description)) {
+      const platformUrl = extractPlatformUrl(job.description);
+      console.log(`[MONITORING] Platform check: "${job.description.substring(0, 50)}" → ${platformUrl || 'no URL'}`);
+
+      try {
+        // Fire a real subtask through the processor (suppressed email)
+        const { processTask } = await import('./processor.js');
+        const checkSubject = `[MONITOR CHECK] ${job.description}. Report what you find — any new messages, notifications, earnings, points, followers, or changes. Be specific with numbers.`;
+
+        const subtaskRequest: TaskRequest = {
+          userId: job.userId,
+          username: job.username,
+          from: `${job.username}@aevoy.com`,
+          subject: checkSubject,
+          body: platformUrl ? `Start by browsing ${platformUrl}` : '',
+          inputChannel: 'proactive',
+          suppressEmail: true,
+          sessionHint: platformUrl ? { userId: job.userId, domain: new URL(platformUrl).hostname } : undefined,
+        };
+
+        const result = await Promise.race([
+          processTask(subtaskRequest),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5 * 60 * 1000)), // 5 min timeout
+        ]);
+
+        if (result && 'response' in result) {
+          aiResponse = (result as any).response || '';
+        }
+      } catch (taskErr) {
+        console.error(`[MONITORING] Subtask execution failed for job ${job.id}:`, taskErr);
+        // Fall through to quickValidate
+      }
+    }
+
+    // ---- Fallback: AI-only check (inbox, email, simple reasoning) ----
+    if (!aiResponse) {
+      // Check email inbox for replies if description mentions inbox/reply/email
+      let inboxContext = '';
+      const lc = job.description.toLowerCase();
+      if (/\b(inbox|email|reply|response|message)\b/.test(lc) && !needsRealCheck(job.description)) {
+        try {
+          const { fetchRecentEmails } = await import('./inbox-poller.js');
+          const emails = await fetchRecentEmails(job.userId, 5);
+          if (emails?.length) {
+            inboxContext = `\n\nRecent emails in inbox:\n${emails.map((e: any) => `- From: ${e.from}, Subject: ${e.subject}, Date: ${e.date}`).join('\n')}`;
+          }
+        } catch {
+          // Inbox check failed — continue without it
+        }
+      }
+
+      const prompt = `You are monitoring: "${job.description}"
 
 Last checked: ${job.lastCheckedAt ? new Date(job.lastCheckedAt).toLocaleString() : 'never (first check)'}
 Current time: ${new Date().toLocaleString()}
+${inboxContext}
 
 Your job is to check if there is anything NEW or ACTIONABLE since the last check.
 
 Instructions:
 1. If there is nothing new to report, respond with exactly: NO_UPDATE
-2. If there IS something new and actionable, respond with a brief, clear message for the user (1-3 sentences max). Be specific and direct — include any relevant numbers, names, or details.
-3. Do NOT include disclaimers, explanations of what you checked, or meta-commentary about your monitoring role. Just the useful information.
+2. If there IS something new and actionable, respond with a brief, clear message for the user (1-3 sentences max). Be specific and direct.
+3. Do NOT include disclaimers or meta-commentary. Just the useful information.
 
 What do you find?`;
 
-    const result = await quickValidate(
-      prompt,
-      `You are an AI monitoring agent. You check on things and report back only if there is something actionable. Be concise and specific.`
-    );
+      const result = await quickValidate(
+        prompt,
+        `You are an AI monitoring agent. You check on things and report back only if there is something actionable. Be concise and specific.`
+      );
 
-    const aiResponse = result?.result?.trim() || '';
+      aiResponse = result?.result?.trim() || '';
+    }
 
     if (!aiResponse || aiResponse === 'NO_UPDATE' || aiResponse.toUpperCase().includes('NO_UPDATE') || aiResponse.toUpperCase().includes('NOTHING NEW')) {
       console.log(`[MONITORING] No update for job ${job.id}`);
@@ -282,50 +379,61 @@ What do you find?`;
     // AI found something actionable — notify user
     console.log(`[MONITORING] Actionable update for job ${job.id}: "${aiResponse.substring(0, 100)}"`);
 
-    const notificationMessage = `[Monitoring] ${job.description.substring(0, 50)}...\n\n${aiResponse}`;
-    const emailSubject = `[Aevoy Monitor] ${job.description.substring(0, 60)}`;
-
-    try {
-      if (preferredChannel === 'telegram' && profile.telegram_chat_id) {
-        const { sendTelegramMessage } = await import('./telegram.js');
-        await sendTelegramMessage(profile.telegram_chat_id, notificationMessage);
-      } else if (preferredChannel === 'whatsapp' && profile.whatsapp_phone) {
-        const { sendWhatsAppMessage } = await import('./whatsapp.js');
-        await sendWhatsAppMessage(profile.whatsapp_phone, notificationMessage);
-      } else if ((preferredChannel === 'sms' || preferredChannel === 'voice') && profile.phone_number) {
-        const smsBody = notificationMessage.length > 1500
-          ? notificationMessage.substring(0, 1500) + '...'
-          : notificationMessage;
-        await sendSms({ userId: job.userId, to: profile.phone_number as string, body: smsBody });
-      } else {
-        // Default: email
-        await sendResponse({
-          to: profile.email,
-          from: `${job.username}@aevoy.com`,
-          subject: emailSubject,
-          body: aiResponse,
-        });
-      }
-    } catch (sendErr) {
-      console.error(`[MONITORING] Failed to send notification for job ${job.id}:`, sendErr);
-      // Fallback: email
-      try {
-        await sendResponse({
-          to: profile.email,
-          from: `${job.username}@aevoy.com`,
-          subject: emailSubject,
-          body: aiResponse,
-        });
-      } catch {
-        // Silent — can't notify the user right now
-      }
-    }
+    await notifyUser(job, profile, settings, aiResponse);
   } catch (err) {
     console.error(`[MONITORING] Error running job check ${job.id}:`, err);
   } finally {
     // Update last checked + next check timestamps
     job.lastCheckedAt = new Date().toISOString();
     job.nextCheckAt = new Date(Date.now() + job.checkIntervalMs).toISOString();
+  }
+}
+
+/**
+ * Send a monitoring notification to the user via their preferred channel.
+ */
+async function notifyUser(
+  job: MonitoringJob,
+  profile: { email: string; phone_number?: string | null; telegram_chat_id?: string | null; whatsapp_phone?: string | null },
+  settings: { proactive_channel?: string } | null,
+  message: string
+): Promise<void> {
+  const preferredChannel = settings?.proactive_channel || 'email';
+  const notificationMessage = `[Monitoring] ${job.description.substring(0, 50)}...\n\n${message}`;
+  const emailSubject = `[Aevoy Monitor] ${job.description.substring(0, 60)}`;
+
+  try {
+    if (preferredChannel === 'telegram' && profile.telegram_chat_id) {
+      const { sendTelegramMessage } = await import('./telegram.js');
+      await sendTelegramMessage(profile.telegram_chat_id, notificationMessage);
+    } else if (preferredChannel === 'whatsapp' && profile.whatsapp_phone) {
+      const { sendWhatsAppMessage } = await import('./whatsapp.js');
+      await sendWhatsAppMessage(profile.whatsapp_phone, notificationMessage);
+    } else if ((preferredChannel === 'sms' || preferredChannel === 'voice') && profile.phone_number) {
+      const smsBody = notificationMessage.length > 1500
+        ? notificationMessage.substring(0, 1500) + '...'
+        : notificationMessage;
+      await sendSms({ userId: job.userId, to: profile.phone_number as string, body: smsBody });
+    } else {
+      await sendResponse({
+        to: profile.email,
+        from: `${job.username}@aevoy.com`,
+        subject: emailSubject,
+        body: message,
+      });
+    }
+  } catch (sendErr) {
+    console.error(`[MONITORING] Failed to send notification for job ${job.id}:`, sendErr);
+    try {
+      await sendResponse({
+        to: profile.email,
+        from: `${job.username}@aevoy.com`,
+        subject: emailSubject,
+        body: message,
+      });
+    } catch {
+      // Silent
+    }
   }
 }
 
