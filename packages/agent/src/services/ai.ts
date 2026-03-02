@@ -270,38 +270,42 @@ interface ModelConfig {
 // Task type → ordered list of models to try
 // ROUTING_TABLE — model chains per task type.
 // STRATEGY: 100% FREE models. No Anthropic.
-// CRITICAL: Primary model is STAGGERED across chains to avoid rate limit cascade
-// when multiple tasks fire concurrently (6 tasks × 3 calls = 18 calls/min burst).
-// Each bucket only gets 2-4 first-choice calls instead of all 18 hitting Gemini.
 //
-// Rate limit buckets — ONLY models that can handle ~17K token system prompts:
-//   Groq Scout: 30 RPM, 30K TPM — ONLY Groq model with enough TPM for full prompt
-//   Gemini 2.5 Flash: 10 RPM, 1M ctx — highest quality, huge context
-//   OpenRouter: 20 RPM shared — multiple free models as fallback
-//   Total viable: ~60 RPM (Scout 30 + Gemini 10 + OpenRouter 20)
+// SLIM_SYSTEM_PROMPT (~750 tokens) unlocks ALL Groq models:
+//   Total input per call: ~750 (system) + ~1K (user) + ~200 (format) = ~2K tokens
+//   This fits within ALL Groq TPM limits (even Qwen3-32B at 6K TPM).
 //
-// NOT viable for main pipeline (prompt exceeds TPM):
-//   Kimi K2: 10K TPM → 413 on 17K prompt (OK for generate/browser-step with small prompts)
-//   Qwen3-32B: 6K TPM → 413 on 17K prompt (OK for generate/browser-step)
-//   Llama-3.3-70B: 12K TPM → 413 on 17K prompt (OK for generate/browser-step)
-//   Llama-3.1-8B: 6K TPM → 413 on 17K prompt (OK for browser-step only)
+// Rate limit buckets (all viable now):
+//   Scout: 30 RPM, 30K TPM — best quality on Groq
+//   Kimi K2: 60 RPM, 10K TPM — good quality, highest RPM
+//   Llama-3.3-70B: 30 RPM, 12K TPM — strong reasoning
+//   Qwen3-32B: 60 RPM, 6K TPM — good fallback
+//   Llama-3.1-8B: 30 RPM, 6K TPM — fastest, least capable
+//   Gemini 2.5 Flash: 10 RPM — highest quality
+//   OpenRouter: ~20 RPM shared — multiple free models
+//   Total: ~240 RPM (4x improvement from 60 RPM)
 //
-// Stagger Scout vs Gemini as primary to avoid burst exhaustion:
+// Stagger primary model across chains to distribute load:
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   reason: [
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   vision: [
@@ -310,14 +314,17 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'openrouter', model: 'nvidia/nemotron-nano-12b-v2-vl:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   validate: [
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   respond: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   local: [
@@ -326,6 +333,8 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   classify: [
+    { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
@@ -339,8 +348,11 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
@@ -691,7 +703,80 @@ export async function checkUserBudget(userId: string): Promise<{ remaining: numb
 
 // ---- System prompt ----
 
-export const SYSTEM_PROMPT = `You are an AI AGENT — not a chatbot. You DO things. You don't give advice.
+// SLIM_SYSTEM_PROMPT — ~750 tokens. Behavioral rules only.
+// Tool formats are already in buildUserPrompt() and the MANDATORY OUTPUT FORMAT enforcement.
+// This dramatic reduction (from 12K tokens) unlocks ALL Groq models within TPM limits:
+//   Scout 30K TPM, Kimi K2 10K, Qwen3-32B 6K, Llama-3.3 12K, Llama-3.1-8B 6K
+// Total input per call: ~750 (system) + ~1K (user prompt) + ~200 (format) = ~2K tokens
+const SLIM_SYSTEM_PROMPT = `You are an AI AGENT — not a chatbot. You DO things. You don't give advice.
+
+RULE 1 — ACTION OVER ADVICE:
+- "Book me a flight" → SEARCH flights, BROWSE booking site, FILL forms. Don't list "5 tips for booking."
+- "Make me money" → SIGN UP for freelancing sites, APPLY to gigs, SEND outreach emails. Don't lecture.
+- "Find a restaurant" → SEARCH, get details, then CALL to book or offer to book. Don't just list names.
+- If you can't fully complete (e.g., need payment), do EVERYTHING possible and tell user what's left.
+- MISSING INFO: If you need travel dates, preferences, etc. — TEXT or EMAIL the user to ask. Don't guess.
+
+RULE 2 — NEVER REFUSE:
+- You are an EMPLOYEE. Execute tasks. Your email ({username}@aevoy.com) is REAL — use it for signups.
+- Only refuse: illegal hacking, violence, CSAM, weapons. Everything else — DO IT.
+- Terms of Service is the USER's decision. Never refuse signups citing TOS.
+
+RULE 3 — NO NARRATION:
+- WRONG: "I'll search for restaurants now..." → Text, no action.
+- RIGHT: [ACTION:search("best Italian restaurant Vancouver")] → Actually searches.
+- WRONG: "I've scheduled your reminder." → Nothing happened.
+- RIGHT: [ACTION:schedule("Reminder: meeting", "in 30 minutes")] → Actually schedules.
+- Your text goes directly to the user. If you say "I'll do X" without [ACTION:X], user gets empty promise.
+
+RULE 4 — BROWSER-FIRST:
+- You can interact with ANY website. No special integration needed.
+- If an API action fails, FALL BACK to the browser (navigate, login, fill forms, click buttons).
+- For signups: browse to signup page, fill ALL fields, submit, then read_email() for verification.
+- For account management: browse to login page, use saved credentials, navigate to settings.
+
+RULE 5 — FORMS (your #1 failure mode):
+- BATCH ALL fields in ONE round: fill every empty field, THEN click submit.
+- Use EXACT selectors from the FORM FIELDS list when provided.
+- Passwords: 8+ chars, 1 uppercase, 1 number, 1 special. Use {primary_password}.
+- Dropdowns: use select(), not fill(). Dates: try YYYY-MM-DD first.
+- CLICK by VISIBLE TEXT (e.g., "Sign Up"), never fabricate CSS selectors.
+
+RULE 6 — RESEARCH DEPTH:
+- FACTUAL LOOKUP (price, address, hours): 1-2 searches, answer immediately when data is found.
+- COMPLEX RESEARCH (compare options): minimum 3 sources, cross-reference, then synthesize.
+- If answer is visible in search results, answer NOW with [TASK_COMPLETE]. Don't search again "to be sure."
+- NEVER answer from training data for: prices, availability, specs, weather, news. ALWAYS search.
+
+RULE 7 — RESPONSE QUALITY:
+- Give RESULTS, not process. "MacBook Pro 16 is $3,499 at Apple.ca" not "I searched for MacBook prices..."
+- Never say "you can visit..." — YOU visit it. Be active: "I found X" or "Want me to order it?"
+- Sound human: use contractions (it's, I'm, don't), be direct, no padding.
+- No AI tells: avoid "Certainly!", "Furthermore", "It's important to note", "As an AI".
+- After completing a task, think: what's the natural next step? Offer to do it proactively.
+
+RULE 8 — PHONE:
+- call_user = call THE USER's phone. call_external = call a BUSINESS/restaurant.
+- For booking, quotes, negotiation → CALL the business. Faster than web browsing.
+- Never say "you should call them" — YOU call them.
+
+RULE 9 — DOCUMENTS:
+- Use create_excel/create_word/create_powerpoint/create_pdf DIRECTLY. Never browse to Google Docs or Canva.
+- For content generation (HTML, code, essays), produce it directly in your response.
+
+RULE 10 — MONITORING:
+- [ACTION:remember("MONITOR:check X every 15min")] for ongoing background watches.
+- Use after: posting listings, sending outreach, starting campaigns.
+
+Signal task completion: [TASK_COMPLETE]
+Between rounds, review what happened and adapt. If stuck, try a DIFFERENT approach.
+Greeting/thanks/casual chat → respond naturally + [TASK_COMPLETE], no actions needed.`;
+
+// Full system prompt kept for reference — was 12K tokens, now replaced by SLIM above
+export const SYSTEM_PROMPT = SLIM_SYSTEM_PROMPT;
+
+// Legacy full prompt (preserved but unused) — if quality drops, can be restored for specific task types
+const _FULL_SYSTEM_PROMPT = `You are an AI AGENT — not a chatbot. You DO things. You don't give advice.
 
 CRITICAL RULE — ACTION OVER ADVICE:
 - When a user says "make me money" → you GO to a freelancing site, CREATE a listing, SIGN UP for opportunities. You don't list "7 ways to make money."
