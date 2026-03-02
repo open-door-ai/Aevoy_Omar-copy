@@ -385,6 +385,33 @@ function getCircuitBreaker(provider: ModelProvider, model?: string): CircuitBrea
   return cb;
 }
 
+// ---- Per-model call pacer (prevents burst-induced 429s) ----
+// Groq free tier: big models = 1000 RPD (~0.7 RPM), 8B = 14400 RPD (~10 RPM)
+// Without pacing, rapid sequential calls (understand → complex → reason) all 429.
+const modelLastCall: Map<string, number> = new Map();
+const MODEL_MIN_INTERVAL: Record<string, number> = {
+  // Groq big models: 1000 RPD → space 8s between calls to same model
+  'meta-llama/llama-4-scout-17b-16e-instruct': 8000,
+  'moonshotai/kimi-k2-instruct-0905': 8000,
+  'qwen/qwen3-32b': 8000,
+  'llama-3.3-70b-versatile': 8000,
+  // Groq small: 14400 RPD → 3s between calls
+  'llama-3.1-8b-instant': 3000,
+  // Gemini: 10 RPM → 6s between calls
+  'gemini-2.5-flash': 6000,
+};
+
+async function paceModelCall(model: string): Promise<void> {
+  const minInterval = MODEL_MIN_INTERVAL[model] || 3000;
+  const lastCall = modelLastCall.get(model) || 0;
+  const elapsed = Date.now() - lastCall;
+  if (elapsed < minInterval) {
+    const waitMs = minInterval - elapsed;
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+  }
+  modelLastCall.set(model, Date.now());
+}
+
 // ---- Provider availability checks ----
 
 function isProviderAvailable(provider: ModelProvider, config?: ModelConfig): boolean {
@@ -1551,6 +1578,9 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
     }
 
     try {
+      // Pace calls to prevent burst-induced 429s (Groq free: 1000 RPD per big model)
+      await paceModelCall(config.model);
+
       const baseTimeout = MODEL_TIMEOUTS[config.provider] || 30000;
       const timeout = taskType === 'generate' ? Math.max(baseTimeout, 240000)
         : taskType === 'complex' ? Math.max(baseTimeout, 120000)
@@ -2001,6 +2031,7 @@ export async function generateVisionResponse(
         if (Date.now() < backoffUntil) continue;
 
         try {
+          await paceModelCall(fm.model); // Prevent burst-induced 429s
           const response = await withTimeout(getGroqClient().chat.completions.create({
             model: fm.model,
             max_tokens: 1024,
@@ -2036,6 +2067,7 @@ export async function generateVisionResponse(
     // Gemini 2.5 Flash as fallback — different rate limit pool, huge context, free
     if (process.env.GOOGLE_API_KEY) {
       try {
+        await paceModelCall("gemini-2.5-flash"); // Prevent burst-induced 429s
         const response = await withTimeout(getGeminiClient().chat.completions.create({
           model: "gemini-2.5-flash",
           max_tokens: 1024,
