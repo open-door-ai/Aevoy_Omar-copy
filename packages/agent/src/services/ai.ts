@@ -742,11 +742,14 @@ RULE 5 — FORMS (your #1 failure mode):
 - Dropdowns: use select(), not fill(). Dates: try YYYY-MM-DD first.
 - CLICK by VISIBLE TEXT (e.g., "Sign Up"), never fabricate CSS selectors.
 
-RULE 6 — RESEARCH DEPTH:
+RULE 6 — ALWAYS SEARCH FOR LIVE DATA:
+- MANDATORY SEARCH: If the user asks about ANYTHING that changes over time — prices, availability,
+  weather, news, top stories, rankings, trending, "right now", "current", "latest", "today",
+  scores, stock prices, events, hours, reviews — you MUST use [ACTION:search("query")] FIRST.
+  NEVER answer these from memory/training data. Your training data is months old.
 - FACTUAL LOOKUP (price, address, hours): 1-2 searches, answer immediately when data is found.
 - COMPLEX RESEARCH (compare options): minimum 3 sources, cross-reference, then synthesize.
 - If answer is visible in search results, answer NOW with [TASK_COMPLETE]. Don't search again "to be sure."
-- NEVER answer from training data for: prices, availability, specs, weather, news. ALWAYS search.
 
 RULE 7 — RESPONSE QUALITY:
 - Give RESULTS, not process. "MacBook Pro 16 is $3,499 at Apple.ca" not "I searched for MacBook prices..."
@@ -1465,7 +1468,9 @@ ${safeBody}
 
 ---
 
-Please process this request. You MUST include [ACTION:...] tags for EVERY action — including non-browser ones like schedule, remember, send_email, call_user, send_sms. Writing "I've scheduled it" or "I'll call you" without the [ACTION:...] tag means NOTHING happened. The action ONLY executes if you output the tag.`;
+Please process this request. You MUST include [ACTION:...] tags for EVERY action — including non-browser ones like schedule, remember, send_email, call_user, send_sms. Writing "I've scheduled it" or "I'll call you" without the [ACTION:...] tag means NOTHING happened. The action ONLY executes if you output the tag.
+
+CRITICAL: If this request asks about CURRENT/LIVE information (news, prices, weather, top stories, rankings, "right now", trending, today's events), you MUST start with [ACTION:search("relevant query")] or [ACTION:browse("relevant url")]. NEVER answer from memory — your training data is months old. Search FIRST, then answer from the results.`;
 }
 
 
