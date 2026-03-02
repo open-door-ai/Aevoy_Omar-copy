@@ -299,7 +299,9 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
 // ══════════════════════════════════════════════════════════════════
 
 async function executeAction(page: Page, action: PlaywrightAction, history: string[]): Promise<boolean> {
-  const timeout = 5000;
+  // Tight timeouts: if element exists, Playwright finds it in <500ms.
+  // Wasting 5s per failed locator × 10 attempts = 50s dead time per failed action.
+  const timeout = 1500;
 
   try {
     switch (action.type) {
@@ -312,19 +314,19 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.name) {
           // Try getByText first (most flexible)
           try {
-            await page.getByText(action.name, { exact: false }).first().click({ timeout: 3000 });
+            await page.getByText(action.name, { exact: false }).first().click({ timeout: 1500 });
             return true;
           } catch { /* try roles */ }
-          // Try common interactive roles
-          for (const role of ['button', 'link', 'menuitem', 'tab', 'option', 'checkbox', 'radio']) {
+          // Try common interactive roles (only most common 4, not 7)
+          for (const role of ['button', 'link', 'menuitem', 'tab']) {
             try {
-              await page.getByRole(role as any, { name: action.name, exact: false }).first().click({ timeout: 2000 });
+              await page.getByRole(role as any, { name: action.name, exact: false }).first().click({ timeout: 1000 });
               return true;
             } catch { continue; }
           }
-          // Last resort: try by label (some elements are labeled by adjacent text)
+          // Last resort: try by label
           try {
-            await page.getByLabel(action.name, { exact: false }).first().click({ timeout: 2000 });
+            await page.getByLabel(action.name, { exact: false }).first().click({ timeout: 1000 });
             return true;
           } catch { /* fall through */ }
           history.push(`⚠️ Could not find element "${action.name}" to click. Try a different name from the accessibility tree, or SCROLL down to reveal more elements.`);
@@ -340,12 +342,12 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         }
         if (action.name) {
           try {
-            await page.getByText(action.name, { exact: false }).first().hover({ timeout: 3000 });
+            await page.getByText(action.name, { exact: false }).first().hover({ timeout: 1500 });
             return true;
           } catch { /* try role */ }
           for (const role of ['button', 'link', 'menuitem']) {
             try {
-              await page.getByRole(role as any, { name: action.name, exact: false }).first().hover({ timeout: 2000 });
+              await page.getByRole(role as any, { name: action.name, exact: false }).first().hover({ timeout: 1000 });
               return true;
             } catch { continue; }
           }
@@ -356,7 +358,7 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
 
       case 'fill': {
         if (!action.name || !action.value) return false;
-        // Try getByLabel → getByPlaceholder → getByRole('textbox')
+        // Try getByLabel → getByPlaceholder → getByRole('textbox') — tight timeouts
         try {
           await page.getByLabel(action.name, { exact: false }).first().fill(action.value, { timeout });
           return true;
@@ -367,10 +369,6 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         } catch { /* next */ }
         try {
           await page.getByRole('textbox', { name: action.name, exact: false }).first().fill(action.value, { timeout });
-          return true;
-        } catch { /* next */ }
-        try {
-          await page.getByRole('searchbox', { name: action.name, exact: false }).first().fill(action.value, { timeout });
           return true;
         } catch { /* fail */ }
         history.push(`⚠️ Could not find field "${action.name}" to fill. Check the accessibility tree for the exact label text. Try TYPE instead of FILL if the field is a search box.`);
@@ -389,7 +387,7 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         ]) {
           try {
             const locator = finder();
-            await locator.click({ timeout: 3000 });
+            await locator.click({ timeout: 1500 });
             found = true;
             // Clear existing content
             await page.keyboard.press('Control+a');
