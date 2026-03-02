@@ -33,6 +33,8 @@ export interface VisionAgentResult {
   steps: number;
   cost: number;
   screenshots: string[];
+  /** Last page URL + text when agent fails — so processor can still extract useful data */
+  pageData?: string;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -149,6 +151,33 @@ async function getAccessibilitySnapshot(page: Page): Promise<string> {
 async function takeScreenshot(page: Page): Promise<string> {
   const buf = await page.screenshot({ type: 'jpeg', quality: 55 });
   return buf.toString('base64');
+}
+
+/**
+ * Capture page data for partial results when agent fails.
+ * Returns URL + page text (truncated) so processor can still summarize what was found.
+ */
+async function capturePageData(page: Page): Promise<string> {
+  try {
+    const url = page.url();
+    if (!url || url.startsWith('about:') || url.startsWith('chrome-error://')) return '';
+    const text = await Promise.race([
+      page.evaluate(() => {
+        // Extract structured data: headings, prices, ratings, links
+        const items: string[] = [];
+        document.querySelectorAll('h1, h2, h3, [data-test*="name"], [class*="restaurant"], [class*="listing"], [class*="result"]').forEach(el => {
+          const t = (el as HTMLElement).innerText?.trim();
+          if (t && t.length > 3 && t.length < 200) items.push(t);
+        });
+        if (items.length > 3) return items.slice(0, 20).join('\n');
+        // Fallback: full page text
+        return document.body?.innerText?.substring(0, 3000) || '';
+      }),
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+    ]);
+    if (!text) return '';
+    return `Page: ${url}\n${text.substring(0, 3000)}`;
+  } catch { return ''; }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -787,7 +816,8 @@ export async function runVisionAgent(
 
     for (steps = 0; steps < dynamicMaxSteps; steps++) {
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
-        return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots };
+        const pageData = await capturePageData(activePage);
+        return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots, pageData };
       }
 
       // Heartbeat every 10 steps
@@ -1058,7 +1088,8 @@ export async function runVisionAgent(
 
             const rejectCount = history.filter(h => h.includes('DONE rejected')).length;
             if (rejectCount >= 3) {
-              return { success: false, error: `Agent kept giving advice instead of acting. Last: "${doneResult.substring(0, 200)}"`, steps: steps + 1, cost: totalCost, screenshots };
+              const pageData = await capturePageData(activePage);
+              return { success: false, error: `Agent kept giving advice instead of acting. Last: "${doneResult.substring(0, 200)}"`, steps: steps + 1, cost: totalCost, screenshots, pageData };
             }
             break; // break action loop, continue main loop
           }
@@ -1228,6 +1259,7 @@ export async function runVisionAgent(
     }
 
     // ── Max steps reached ──
+    const endPageData = await capturePageData(activePage);
     if (isBookingTask) {
       let phone = '';
       try {
@@ -1236,10 +1268,10 @@ export async function runVisionAgent(
           return m ? m[0].trim() : '';
         }).catch(() => '');
       } catch { /* ok */ }
-      return { success: false, error: phone ? `CALL-GATE: Phone ${phone}. Call the business.` : `CALL-GATE: Too complex after ${steps} steps.`, steps, cost: totalCost, screenshots };
+      return { success: false, error: phone ? `CALL-GATE: Phone ${phone}. Call the business.` : `CALL-GATE: Too complex after ${steps} steps.`, steps, cost: totalCost, screenshots, pageData: endPageData };
     }
 
-    return { success: false, error: `Max steps (${dynamicMaxSteps}) reached`, steps, cost: totalCost, screenshots };
+    return { success: false, error: `Max steps (${dynamicMaxSteps}) reached`, steps, cost: totalCost, screenshots, pageData: endPageData };
 
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err), steps, cost: totalCost, screenshots };
