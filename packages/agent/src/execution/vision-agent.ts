@@ -108,8 +108,12 @@ function formatAccessibilityNode(node: any, lines: string[], depth: number, stat
 }
 
 async function getAccessibilitySnapshot(page: Page): Promise<string> {
+  const SNAPSHOT_TIMEOUT = 8000; // 8s max — prevent hanging on unresponsive pages
   try {
-    const snapshot = await (page as any).accessibility.snapshot({ interestingOnly: true });
+    const snapshot = await Promise.race([
+      (page as any).accessibility.snapshot({ interestingOnly: true }),
+      new Promise<null>((_, reject) => setTimeout(() => reject(new Error('snapshot timeout')), SNAPSHOT_TIMEOUT)),
+    ]);
     if (!snapshot) return '(empty page — no accessible elements found)';
     const lines: string[] = [];
     const state: SnapshotState = { lineCount: 0 };
@@ -117,14 +121,20 @@ async function getAccessibilitySnapshot(page: Page): Promise<string> {
     const result = lines.join('\n');
     if (result.length < 20) {
       // Accessibility tree too sparse — fallback to page text
-      const text = await page.textContent('body').catch(() => '');
+      const text = await Promise.race([
+        page.textContent('body').catch(() => ''),
+        new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+      ]);
       return `(sparse accessibility tree)\nPage text: ${(text || '').substring(0, 3000)}`;
     }
     return result.substring(0, 6000);
   } catch {
     // Fallback: extract visible text
     try {
-      const text = await page.textContent('body').catch(() => '');
+      const text = await Promise.race([
+        page.textContent('body').catch(() => ''),
+        new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+      ]);
       return `Page text: ${(text || '').substring(0, 3000)}`;
     } catch {
       return '(could not read page)';
@@ -461,11 +471,15 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
 }
 
 async function waitAfterAction(page: Page, actionType: string): Promise<void> {
-  await page.waitForLoadState('domcontentloaded').catch(() => {});
+  // 5s max for page load — prevents hanging on slow pages
+  await Promise.race([
+    page.waitForLoadState('domcontentloaded').catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+  ]);
   if (actionType === 'click' || actionType === 'navigate') {
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(300);
   } else {
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(100);
   }
 }
 
@@ -1142,8 +1156,8 @@ export async function runVisionAgent(
         // Update step log result
         if (stepEntry) stepEntry.result = ok ? 'ok' : 'fail';
 
-        // Write step log to DB every 3 steps for live monitoring
-        if (steps % 3 === 0) void writeStepLog();
+        // Write step log to DB every step for live monitoring
+        void writeStepLog();
 
         if (ok && action.type === 'fill' || action.type === 'type' || action.type === 'select') {
           hasFilledAnyField = true;

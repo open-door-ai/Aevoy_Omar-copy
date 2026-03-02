@@ -1780,10 +1780,11 @@ export async function generateBrowserStepResponse(
     ]);
 
   // ═══ 1. Groq — fastest text model (1-3s), free tier ═══
+  // Use llama-4-scout (proven working on Railway) — llama-3.3-70b-versatile fails on Railway
   if (process.env.GROQ_API_KEY) {
     try {
       const stream = await withTO(getGroqClient().chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: prompt },
@@ -1799,8 +1800,8 @@ export async function generateBrowserStepResponse(
       }
 
       if (content.length > 5) {
-        console.log(`[AI] BrowserStep (Groq 70b) | ~$0 | ${content.length} chars`);
-        if (userId) trackApiCall(userId, 'llama-3.3-70b-versatile', 0, 0, 0, 'groq', taskId, 'browser-step').catch(() => {});
+        console.log(`[AI] BrowserStep (Groq Scout) | ~$0 | ${content.length} chars`);
+        if (userId) trackApiCall(userId, 'meta-llama/llama-4-scout-17b-16e-instruct', 0, 0, 0, 'groq', taskId, 'browser-step').catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
