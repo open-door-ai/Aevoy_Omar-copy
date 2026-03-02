@@ -1473,7 +1473,7 @@ export async function generateResponse(
       // Claude/Gemini follow the system prompt's action format reliably — skip for them
       let effectiveUserPrompt = userPrompt;
       if (taskType !== 'generate' && taskType !== 'validate' &&
-          (config.provider === 'deepseek' || config.provider === 'groq' || config.provider === 'kimi')) {
+          (config.provider === 'deepseek' || config.provider === 'groq' || config.provider === 'kimi' || config.provider === 'openrouter')) {
         effectiveUserPrompt = userPrompt + `\n\n=== MANDATORY OUTPUT FORMAT ===
 YOUR RESPONSE **MUST** CONTAIN [ACTION:...] TAGS to execute anything.
 [ACTION:search("query")] — search the web
@@ -1622,7 +1622,13 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         }
       }
 
-      cb.recordFailure();
+      // Only count REAL failures toward circuit breaker — NOT rate limits.
+      // 429 is "slow down", not "broken". Free-tier rate limits are expected under load.
+      // Counting them trips breakers for minutes, blocking models that work fine individually.
+      const isRateLimit = errorMessage.includes('429') || errorMessage.toLowerCase().includes('rate limit');
+      if (!isRateLimit) {
+        cb.recordFailure();
+      }
     }
   }
 
@@ -1630,7 +1636,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
   console.error(`[AI] All models in chain failed for taskType=${taskType}. Errors: ${providerErrors.join(' | ')}`);
   // Log to Supabase for remote debugging
   if (userId) {
-    trackApiCall(userId, `ALL-FAILED:${taskType}:${providerErrors.map(e => e.substring(0, 40)).join('|')}`, 0, 0, 0, "groq", taskId, "all-models-failed").catch(() => {});
+    trackApiCall(userId, `ALL-FAILED:${taskType}:${providerErrors.map(e => e.substring(0, 80)).join('|')}`, 0, 0, 0, "groq", taskId, "all-models-failed").catch(() => {});
   }
   return {
     content: `I'm processing your request about "${taskSubject}". This is taking longer than expected — I'll follow up shortly with results.`,
