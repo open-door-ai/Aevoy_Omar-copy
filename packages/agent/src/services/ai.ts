@@ -1833,7 +1833,7 @@ export async function generateVisionResponse(
               ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
               { role: "user" as const, content: buildImageContent() }
             ],
-          }), 6000);
+          }), fm.model.includes('qwen') ? 10000 : 6000); // Qwen3 needs 7-8s for large prompts, Scout is 1-3s
           const content = response.choices[0]?.message?.content || '';
           if (content.length > 10) {
             const inTok = response.usage?.prompt_tokens || 0;
@@ -1848,6 +1848,10 @@ export async function generateVisionResponse(
           // Rate limit backoff: skip this model for 60s
           if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
             groqRateLimitBackoff.set(backoffKey, Date.now() + 60000);
+          }
+          // Timeout backoff: skip for 30s (model overloaded, try next)
+          if (errMsg.includes('timeout')) {
+            groqRateLimitBackoff.set(backoffKey, Date.now() + 30000);
           }
           if (userId) trackApiCall(userId, `ERR:groq-${fm.name}:${errMsg.substring(0, 60)}`, 0, 0, 0, "groq", taskId, "browser-step-error").catch(() => {});
         }

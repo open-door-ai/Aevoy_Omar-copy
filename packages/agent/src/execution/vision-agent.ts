@@ -23,7 +23,7 @@ import { getSupabaseClient } from '../utils/supabase.js';
 
 const MAX_STEPS = 150;
 const MAX_STEPS_BOOKING = 50;
-const STEP_TIMEOUT_MS = 15000;
+const STEP_TIMEOUT_MS = 20000; // Must exceed inner AI timeout (Qwen 10s + Scout 6s + buffer)
 const TOTAL_TIMEOUT_MS = 2700000; // 45 minutes
 
 export interface VisionAgentResult {
