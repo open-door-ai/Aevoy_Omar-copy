@@ -261,25 +261,29 @@ interface ModelConfig {
 // Task type → ordered list of models to try
 // ROUTING_TABLE — model chains per task type.
 // REMOVED: DeepSeek (402 no balance on Railway), Kimi (401 invalid key).
-// Each chain has 3+ models across separate rate limit buckets for resilience.
+// Each chain ends with OpenRouter free model as ULTIMATE fallback — different rate limit pool.
+// This prevents ALL-MODELS-FAILED when Groq+Gemini+Anthropic are all rate-limited.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   reason: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   vision: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
@@ -289,11 +293,13 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   respond: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
@@ -304,18 +310,21 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   generate: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
     { provider: 'sonnet', model: 'claude-sonnet-4-20250514', costPerMInput: 3.00, costPerMOutput: 15.00 },
     { provider: 'gemini', model: 'gemini-2.0-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-3-5-haiku-latest', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0.59, costPerMOutput: 0.79 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
 };
 
@@ -357,7 +366,7 @@ function isProviderAvailable(provider: ModelProvider, config?: ModelConfig): boo
     case 'sonnet':
     case 'haiku': return !!process.env.ANTHROPIC_API_KEY;
     case 'ollama': return !!process.env.OLLAMA_HOST;
-    case 'openrouter': return !!(config?.extra?.apiKey); // per-user, key in config
+    case 'openrouter': return !!(config?.extra?.apiKey || process.env.OPENROUTER_API_KEY); // per-user key OR platform key
     default: return false;
   }
 }
@@ -496,10 +505,9 @@ async function callProvider(
     }
 
     case 'openrouter': {
-      // config.extra.apiKey must be set before calling this case
+      // Use per-user key if available, else fall back to platform key
       const orApiKey = (config as ModelConfig & { extra?: { apiKey?: string } }).extra?.apiKey;
-      if (!orApiKey) throw new Error("OpenRouter API key not set");
-      const orClient = getOpenRouterClient(orApiKey);
+      const orClient = orApiKey ? getOpenRouterClient(orApiKey) : getPlatformOpenRouterClient();
       const response = await orClient.chat.completions.create({
         model: config.model,
         messages: [
