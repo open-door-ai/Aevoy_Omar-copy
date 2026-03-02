@@ -1263,7 +1263,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const senderName = task.senderName || (from.includes('@') ? from.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : undefined);
   let taskId = task.taskId || "";
   const startTime = Date.now();
-  const MASTER_TIMEOUT_MS = 2400000; // 40 minutes — complex autonomous tasks need room
+  const MASTER_TIMEOUT_MS = 900000; // 15 minutes — prevents zombie tasks; vision agent has 8-min sub-timeout
 
   // Master timeout: abort if the entire task exceeds 20 minutes
   const timeoutController = new AbortController();
@@ -5559,6 +5559,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const visionTask = `${subject} ${body}. ${_visionFormCtx}${_vBookingCtx}${visionLearnings}`;
 
           visionAgentInvocations++;
+          // Skip vision agent if master timeout already fired
+          if (timeoutController.signal.aborted) {
+            console.log(`[VISION-AGENT] Skipping — master timeout already fired`);
+            break;
+          }
           console.log(`[VISION-AGENT] Starting (invocation ${visionAgentInvocations}/2) on ${visionPageUrl.substring(0, 80)} for task: ${subject.substring(0, 60)}`);
           void getSupabaseClient().from('tasks').update({
             progress_message: `[VISION-AGENT] Running on ${visionPageUrl.substring(0, 60)}`
