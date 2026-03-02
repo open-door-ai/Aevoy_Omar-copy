@@ -701,6 +701,40 @@ export async function runVisionAgent(
     let lastBotWallUrl = '';
     let lastProgressCheck = 0;
 
+    // ── Step visibility log (written to checkpoint_data for live monitoring) ──
+    interface StepLog {
+      step: number;
+      url: string;
+      action: string;
+      result: 'ok' | 'fail' | 'skip';
+      snapshotPreview: string;
+      cost: number;
+      elapsedMs: number;
+      stuck: boolean;
+    }
+    const stepLogs: StepLog[] = [];
+
+    async function writeStepLog(): Promise<void> {
+      if (!taskId) return;
+      try {
+        const elapsed = Date.now() - startTime;
+        const recentSteps = stepLogs.slice(-20); // Keep last 20 for DB size
+        await getSupabaseClient().from('tasks').update({
+          checkpoint_data: {
+            visionAgent: true,
+            currentStep: steps,
+            maxSteps: effectiveMaxSteps,
+            currentUrl: activePage.url(),
+            elapsedMs: elapsed,
+            totalCost: totalCost,
+            stuckCount: sameUrlCount,
+            recentSteps,
+          },
+          progress_message: `Browser step ${steps + 1}/${effectiveMaxSteps} — ${activePage.url().substring(0, 60)}`,
+        }).eq('id', taskId);
+      } catch { /* non-critical */ }
+    }
+
     // ══════════════════════════════════════════════════════════════
     // MAIN LOOP
     // ══════════════════════════════════════════════════════════════
@@ -880,6 +914,19 @@ export async function runVisionAgent(
 
       console.log(`[BROWSER-AGENT] AI: ${aiResponse.substring(0, 120)}`);
       history.push(`Step ${steps + 1}: ${aiResponse.substring(0, 80)}`);
+
+      // ── Log step for visibility ──
+      const stepEntry: StepLog = {
+        step: steps + 1,
+        url: url.substring(0, 100),
+        action: aiResponse.substring(0, 80),
+        result: 'skip',
+        snapshotPreview: snapshot.substring(0, 200),
+        cost: stepCost,
+        elapsedMs: Date.now() - startTime,
+        stuck: sameUrlCount >= 3,
+      };
+      stepLogs.push(stepEntry);
 
       // ── Parse actions ──
       const actionLines = aiResponse.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -1085,6 +1132,12 @@ export async function runVisionAgent(
         const sig = actionSig(action, url);
         actionMemory.push({ sig, raw: action.raw, ok, step: steps + 1 });
         if (!ok) failedSigs.add(sig);
+
+        // Update step log result
+        if (stepEntry) stepEntry.result = ok ? 'ok' : 'fail';
+
+        // Write step log to DB every 3 steps for live monitoring
+        if (steps % 3 === 0) void writeStepLog();
 
         if (ok && action.type === 'fill' || action.type === 'type' || action.type === 'select') {
           hasFilledAnyField = true;

@@ -373,6 +373,76 @@ setInterval(async () => {
 
 // ---- Health Check (Enhanced) ----
 
+// GET /task/:taskId/status — Live vision agent step visibility
+app.get("/task/:taskId/status", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  try {
+    const { data } = await getSupabaseClient()
+      .from("tasks")
+      .select("id, status, input_text, email_subject, iteration_count, cost_usd, execution_time_ms, progress_message, checkpoint_data, created_at, completed_at, error_message, stuck_reason")
+      .eq("id", req.params.taskId)
+      .single();
+    if (!data) return res.status(404).json({ error: "not_found" });
+    const elapsed = data.completed_at
+      ? new Date(data.completed_at).getTime() - new Date(data.created_at).getTime()
+      : Date.now() - new Date(data.created_at).getTime();
+    res.json({
+      id: data.id,
+      status: data.status,
+      task: data.email_subject || data.input_text,
+      elapsedMs: elapsed,
+      elapsedFormatted: `${Math.floor(elapsed / 60000)}m ${Math.floor((elapsed % 60000) / 1000)}s`,
+      iterations: data.iteration_count,
+      cost: data.cost_usd,
+      progress: data.progress_message,
+      error: data.error_message || data.stuck_reason,
+      visionAgent: data.checkpoint_data?.visionAgent ? {
+        currentStep: data.checkpoint_data.currentStep,
+        maxSteps: data.checkpoint_data.maxSteps,
+        currentUrl: data.checkpoint_data.currentUrl,
+        totalCost: data.checkpoint_data.totalCost,
+        stuckCount: data.checkpoint_data.stuckCount,
+        recentSteps: data.checkpoint_data.recentSteps || [],
+      } : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "internal", message: String(err) });
+  }
+});
+
+// GET /tasks/active — List all currently processing tasks with step visibility
+app.get("/tasks/active", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  try {
+    const { data } = await getSupabaseClient()
+      .from("tasks")
+      .select("id, status, email_subject, progress_message, checkpoint_data, created_at, cost_usd")
+      .eq("status", "processing")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    const tasks = (data || []).map((t: any) => ({
+      id: t.id,
+      task: (t.email_subject || '').substring(0, 60),
+      elapsed: `${Math.floor((Date.now() - new Date(t.created_at).getTime()) / 60000)}m`,
+      cost: t.cost_usd,
+      progress: t.progress_message,
+      visionStep: t.checkpoint_data?.currentStep || null,
+      visionMaxSteps: t.checkpoint_data?.maxSteps || null,
+      currentUrl: t.checkpoint_data?.currentUrl?.substring(0, 80) || null,
+      stuck: t.checkpoint_data?.stuckCount >= 3 || false,
+    }));
+    res.json({ active: tasks, count: tasks.length });
+  } catch (err) {
+    res.status(500).json({ error: "internal", message: String(err) });
+  }
+});
+
 app.get("/health", async (_req, res) => {
   // SECURITY: Only check critical subsystems, don't leak API key configuration
   let supabaseStatus = "ok";
