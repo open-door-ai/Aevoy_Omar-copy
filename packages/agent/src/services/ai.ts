@@ -1777,6 +1777,34 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
     }
   }
 
+  // Third fallback: OpenRouter free models — separate rate limit pool from Groq/Gemini
+  if (process.env.OPENROUTER_API_KEY) {
+    try {
+      const orClient = getOpenRouterClient(process.env.OPENROUTER_API_KEY!);
+      const orSystem = `RESULTS REPORT: Answer factually in present tense. Start with concrete data (names, prices, URLs). NEVER say "I'll", "Let me", "I will", "I need to", or "available at". Max 3 sentences.`;
+      const res = await withTimeout(orClient.chat.completions.create({
+        model: 'mistralai/mistral-small-3.1-24b-instruct:free',
+        max_tokens: 300,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: orSystem },
+          { role: 'user', content: userContent }
+        ]
+      }), 15000);
+      const content = res.choices[0]?.message?.content || '';
+      const clean = stripNarration(content);
+      if (clean && clean.length > 20) {
+        const inTok = res.usage?.prompt_tokens || 0;
+        const outTok = res.usage?.completion_tokens || 0;
+        trackApiCall(userId, "mistral-small-3.1-24b-instruct:free", inTok, outTok, 0, "openrouter", taskId, "fallback_direct_answer").catch(() => {});
+        console.log(`[FALLBACK-OPENROUTER] Direct answer via OpenRouter (${clean.length} chars, $0)`);
+        return { content: clean, cost: 0, tokensUsed: inTok + outTok };
+      }
+    } catch (orErr) {
+      console.warn(`[FALLBACK-OPENROUTER] OpenRouter fallback failed: ${orErr instanceof Error ? orErr.message : String(orErr)}`);
+    }
+  }
+
   // Last resort: DeepSeek with ultra-strict prompt
   if (process.env.DEEPSEEK_API_KEY) {
     try {

@@ -3558,6 +3558,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // PROOF OF ACTION: Send the first concrete result as tactile proof (voice/SMS only).
     // This replaces generic "working on it" — users get real evidence the system acted.
     let sentFirstProof = false;
+    let consecutiveAllModelsFailed = 0;
 
     while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
       currentIteration++;
@@ -6374,6 +6375,24 @@ Use training knowledge for all content. Do NOT search for templates. Just output
       console.log(`[DEBUG-ITER] Response has ${nextResponse.actions?.length || 0} actions, content length: ${nextResponse.content?.length || 0}`);
       totalAiCost += nextResponse.cost || 0;
       totalTokens += nextResponse.tokensUsed || 0;
+
+      // ALL-MODELS-FAILED CIRCUIT BREAKER: Stop iterating when all AI models are exhausted.
+      // Without this, the loop spins 15 times (each failing in ~4s), wasting 120s on garbage.
+      // When all models fail, the fallback injects browse/search actions which "succeed" but
+      // produce no meaningful content — then the next iteration calls AI again (still rate limited).
+      if (nextResponse.model === 'fallback' || nextResponse.model === 'fallback-browse') {
+        consecutiveAllModelsFailed = (consecutiveAllModelsFailed || 0) + 1;
+        console.warn(`[ITERATE] ALL-MODELS-FAILED (${consecutiveAllModelsFailed} consecutive) — models exhausted`);
+        if (consecutiveAllModelsFailed >= 2) {
+          console.warn(`[ITERATE] Breaking iteration loop — ${consecutiveAllModelsFailed} consecutive ALL-MODELS-FAILED. Using best data available.`);
+          // Use whatever successful action results we have instead of spinning uselessly
+          isTaskComplete = true;
+          break;
+        }
+      } else {
+        consecutiveAllModelsFailed = 0;
+      }
+
       aiResponse = nextResponse;
 
       // IMAGE-STRIP (in-loop): If this is an image task, strip search/browse from new AI response
