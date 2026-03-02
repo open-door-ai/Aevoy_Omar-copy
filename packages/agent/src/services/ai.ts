@@ -269,34 +269,36 @@ interface ModelConfig {
 
 // Task type → ordered list of models to try
 // ROUTING_TABLE — model chains per task type.
-// STRATEGY: 100% FREE models. No Anthropic (expensive + no funds on Railway).
-// 7 separate rate-limit buckets totaling ~225 RPM:
-//   Groq Kimi K2: 60 RPM, 262K ctx, best tool calling (primary)
-//   Groq Qwen3-32B: 60 RPM, strong reasoning
-//   Groq Llama-3.3-70B: 30 RPM, 12K TPM
-//   Groq Scout: 30 RPM, 30K TPM (best for large prompts)
-//   Gemini 2.5 Flash: 10 RPM, 1M ctx, best quality (retiring 2.0 → 2.5)
-//   OpenRouter: 20 RPM shared (Mistral Small, Qwen3-coder, Gemma-3)
-// Quick tasks (classify/validate): Groq first (fastest) → Gemini → OpenRouter
-// Heavy tasks (reason/complex/generate): Gemini first (big context) → Groq → OpenRouter
+// STRATEGY: 100% FREE models. No Anthropic.
+// CRITICAL: Primary model is STAGGERED across chains to avoid rate limit cascade
+// when multiple tasks fire concurrently (6 tasks × 3 calls = 18 calls/min burst).
+// Each bucket only gets 2-4 first-choice calls instead of all 18 hitting Gemini.
+//
+// Rate limit buckets (separate counters):
+//   Groq Kimi K2: 60 RPM, 10K TPM, 262K ctx (understand, complex primary)
+//   Groq Qwen3-32B: 60 RPM, 6K TPM (plan, classify primary)
+//   Groq Scout: 30 RPM, 30K TPM (reason, validate primary — big TPM for large prompts)
+//   Groq Llama-3.3-70B: 30 RPM, 12K TPM (respond primary)
+//   Gemini 2.5 Flash: 10 RPM, 1M ctx (generate primary — highest quality for content)
+//   OpenRouter: 20 RPM shared across models (last resort)
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   reason: [
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   vision: [
@@ -305,14 +307,14 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'openrouter', model: 'nvidia/nemotron-nano-12b-v2-vl:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   validate: [
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   respond: [
-    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
@@ -323,7 +325,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
   classify: [
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
@@ -334,9 +336,10 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
 };

@@ -3187,16 +3187,23 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     const _taskText = `${subject} ${body || ''}`;
     const _hasExplicitDomainCheck = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_taskText) || /\bhttps?:\/\/\S+/i.test(_taskText);
     const _isBrowserRequiredTask = _hasExplicitDomainCheck || /\b(sign\s?up|signup|create\b.*\baccount|book\s+(a|my|the)\b|add\s+to\s+cart|order\s+(me\s+)?(?:an?\s+)?|buy\s+(a|me)|purchase|subscribe|register\s+(for|on|at)|use\s+(the\s+)?browser|go\s+on\s+(the\s+)?(web|internet|browser))\b/i.test(_taskText);
-    if (!needsBrowser && _isBrowserRequiredTask && aiResponse.actions.length === 0) {
-      // Extract domain from subject for direct navigation
+    const _hasBrowserAction = aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type));
+    if (!needsBrowser && _isBrowserRequiredTask && !_hasBrowserAction) {
+      // Browser-required task but AI only generated non-browser actions (search, etc.) or no actions.
+      // Force a browse action to the target domain.
       const _forceDomainMatch = subject.match(/\b(\S+\.(com|ca|org|net|io|co|app))\b/i);
+      // Also match brand names without explicit TLD (e.g. "on BestBuy", "for Swagbucks")
+      const _brandMatch = !_forceDomainMatch && subject.match(/\b(?:on|for|at|from|to)\s+([A-Z][a-zA-Z0-9]+)\b/);
       const _forceUrl = _forceDomainMatch
         ? `https://www.${_forceDomainMatch[1]}`
-        : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+        : _brandMatch
+          ? `https://www.google.com/search?q=${encodeURIComponent(_brandMatch[1])} official site`
+          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+      // Replace any search-only actions with a browse action
       aiResponse.actions = [{ type: 'browse' as any, params: { url: _forceUrl } }];
       aiResponse.content = `Starting browser task...`;
       needsBrowser = true;
-      console.log(`[FORCE-BROWSER] isDirectBrowserTask but AI generated 0 actions — injected browse(${_forceUrl})`);
+      console.log(`[FORCE-BROWSER] Browser-required task but AI generated no browser actions (had ${aiResponse.actions.length} non-browser) — injected browse(${_forceUrl})`);
     }
 
     // Track whether any action type produces data that needs AI synthesis in round 2
@@ -7201,6 +7208,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const _claimsBrowserAction = /\b(i (?:navigated|went|browsed|opened|visited|headed) to|i (?:started|began) the registration|i (?:searched|looked) (?:on|at|for)|i was unable to complete|i couldn'?t (?:complete|finish|access))\b/i.test(aiResponse.content || '');
     const _isDirectBrowserButNoActions = _isBrowserRequiredTask && noBrowserUsed && _claimsBrowserAction;
 
+    // REFUSAL DETECTION: "I cannot add items", "I'm unable to sign up", etc. for browser tasks
+    const _isRefusal = /\b(i (?:cannot|can'?t|am unable to|was unable to|couldn'?t|won'?t be able to)\s+(?:add|sign|book|register|create|order|buy|purchase|subscribe|browse|navigate|access|complete|open|visit))\b/i.test(aiResponse.content || '');
+    const _isBrowserRefusal = _isBrowserRequiredTask && noBrowserUsed && _isRefusal;
+
+    // BROWSER-REQUIRED BUT NO BROWSER: Task clearly needs browser (add to cart, sign up, etc.) but no browser was used
+    const _browserRequiredButMissing = _isBrowserRequiredTask && noBrowserUsed && !_awaitingCredentials;
+
     if (_isDirectBrowserButNoActions) {
       console.warn(`[VERIFY] REJECTED: AI claims browser action but no browser was actually used (0 actions) — FAKE`);
       verificationResult = {
@@ -7208,6 +7222,22 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         confidence: 5,
         method: 'quality_gate' as const,
         evidence: `AI generated fake browser response without actually using browser (action_count=0)`
+      };
+    } else if (_isBrowserRefusal) {
+      console.warn(`[VERIFY] REJECTED: AI refused browser task ("I cannot...") without attempting — REFUSAL`);
+      verificationResult = {
+        passed: false,
+        confidence: 5,
+        method: 'quality_gate' as const,
+        evidence: `AI refused to attempt browser task: ${(aiResponse.content || '').substring(0, 100)}`
+      };
+    } else if (_browserRequiredButMissing) {
+      console.warn(`[VERIFY] REJECTED: Browser-required task (${subject.substring(0, 50)}) completed without browser — FAIL`);
+      verificationResult = {
+        passed: false,
+        confidence: 10,
+        method: 'quality_gate' as const,
+        evidence: `Task requires browser interaction but completed without launching browser`
       };
     } else if (_domainTaskButNoBrowser) {
       console.warn(`[VERIFY] REJECTED: Task mentions website + needs browser action but no browser was used — FAIL`);
