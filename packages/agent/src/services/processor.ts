@@ -1265,9 +1265,26 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const startTime = Date.now();
   const MASTER_TIMEOUT_MS = 900000; // 15 minutes — prevents zombie tasks; vision agent has 8-min sub-timeout
 
-  // Master timeout: abort if the entire task exceeds 20 minutes
+  // Master timeout: abort if the entire task exceeds 15 minutes.
+  // The signal is checked between iterations AND we force-complete the task on timeout.
   const timeoutController = new AbortController();
-  const masterTimer = setTimeout(() => timeoutController.abort(), MASTER_TIMEOUT_MS);
+  let _masterTimedOut = false;
+  const masterTimer = setTimeout(async () => {
+    _masterTimedOut = true;
+    timeoutController.abort();
+    console.error(`[MASTER-TIMEOUT] Task ${task.taskId || 'unknown'} exceeded ${MASTER_TIMEOUT_MS / 60000} minutes — force-completing`);
+    // Force-complete the task in DB so it doesn't hang forever
+    if (task.taskId) {
+      try {
+        await getSupabaseClient().from('tasks').update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          execution_time_ms: MASTER_TIMEOUT_MS,
+          response_text: `Task timed out after ${MASTER_TIMEOUT_MS / 60000} minutes. The request may have been too complex or rate limits were hit. Please try again.`,
+        }).eq('id', task.taskId).eq('status', 'processing');
+      } catch { /* best effort */ }
+    }
+  }, MASTER_TIMEOUT_MS);
 
   // Declare outside try so catch block can clean up browser on error
   let executionEngine: ExecutionEngine | null = null;
@@ -3564,6 +3581,11 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     let consecutiveAllModelsFailed = 0;
 
     while (currentIteration < MAX_ITERATIONS && !isTaskComplete) {
+      // Check master timeout at the TOP of every iteration
+      if (_masterTimedOut || timeoutController.signal.aborted) {
+        console.log(`[ITERATE] Master timeout fired — breaking iteration loop`);
+        break;
+      }
       currentIteration++;
       const iterationStart = Date.now();
       const ITERATION_TIMEOUT_MS = 60000; // 60 seconds per iteration max
@@ -7339,7 +7361,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         method: 'quality_gate' as const,
         evidence: `All ${actionResults.length} actions failed — task did not complete successfully`
       };
-    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
+    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier && !_taskMentionsDomain) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
+      // NOTE: search-only auto-pass is BLOCKED when task mentions a specific domain ("Go to X.com")
+      // because those tasks require actual browser interaction, not just search results.
       const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : signupAutoCompleted ? 'signup-auto completed' : _awaitingCredentials ? 'awaiting user credentials' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
