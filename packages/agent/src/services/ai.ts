@@ -1705,7 +1705,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
   // This prevents the death spiral where 3 concurrent tasks exhaust all providers simultaneously.
   const allRateLimited = providerErrors.length >= 2 && providerErrors.every(e => e.includes('429') || e.toLowerCase().includes('rate limit') || e.includes('circuit breaker'));
   if (allRateLimited) {
-    const delayMs = 15000 + Math.random() * 15000; // 15-30s jitter
+    const delayMs = 45000 + Math.random() * 15000; // 45-60s — Groq rate limits are per-minute
     console.log(`[AI] All ${providerErrors.length} models rate-limited. Waiting ${Math.round(delayMs / 1000)}s before global retry...`);
     await new Promise(resolve => setTimeout(resolve, delayMs));
 
@@ -1986,11 +1986,12 @@ export async function generateVisionResponse(
   // CRITICAL: Llama-3.1-8B is first because it has a SEPARATE rate limit bucket from
   // all main pipeline models, preventing contention during concurrent task execution.
   if (!hasImage) {
+    // ONLY 2 models for browser steps — Scout and Llama-3.3 are RESERVED for main pipeline.
+    // Without this separation, browser steps (40 rapid-fire calls) starve the main pipeline
+    // of RPM, causing ALL-MODELS-FAILED on complex/understand calls.
     const fastModels: Array<{ model: string; name: string; timeoutMs: number }> = [
       { model: "llama-3.1-8b-instant", name: "Llama3.1-8B", timeoutMs: 5000 },
-      { model: "meta-llama/llama-4-scout-17b-16e-instruct", name: "Llama4-Scout", timeoutMs: 8000 },
       { model: "qwen/qwen3-32b", name: "Qwen3-32B", timeoutMs: 10000 },
-      { model: "llama-3.3-70b-versatile", name: "Llama3.3-70B", timeoutMs: 8000 },
     ];
     if (process.env.GROQ_API_KEY) {
       for (const fm of fastModels) {
