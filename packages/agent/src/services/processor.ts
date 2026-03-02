@@ -3621,7 +3621,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         // completion if the vision agent has never run. Search results alone can't interact.
         // DeepSeek/Groq hallucinate "added to cart" from search — this gate catches that.
         const _needsBrowserInteraction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|connect\b|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(`${subject} ${body}`);
-        if (_hasExplicitDomainForBrowse && _needsBrowserInteraction && visionAgentInvocations === 0 && currentIteration <= 3 && executionEngine) {
+        if (_hasExplicitDomainForBrowse && _needsBrowserInteraction && visionAgentInvocations === 0 && currentIteration <= 3) {
           const _domBrowseTarget = `${subject} ${body}`.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i)?.[1]
             || `${subject} ${body}`.match(/\bhttps?:\/\/(\S+)/i)?.[1];
           if (_domBrowseTarget) {
@@ -4796,17 +4796,33 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 .eq('id', taskId);
             }
           } catch (browserInitErr) {
-            console.error(`[BROWSER] Lazy-init failed:`, browserInitErr);
-            // CRITICAL: Decrement counter to prevent concurrency leak
-            const { decrementBrowserTasks } = await import("../utils/concurrency.js");
-            decrementBrowserTasks();
-            executionEngine = null;
-            iterationResults.push({
-              action,
-              success: false,
-              error: `Browser unavailable. Save your credentials in the Credential Vault to enable browser-based actions.`
-            });
-            continue;
+            const initErrMsg = browserInitErr instanceof Error ? browserInitErr.message : String(browserInitErr);
+            console.error(`[BROWSER] Lazy-init failed (attempt 1): ${initErrMsg}`);
+            // RETRY ONCE after 5s — Railway memory pressure is often transient
+            try {
+              console.log(`[BROWSER] Retrying browser init in 5s...`);
+              await new Promise(r => setTimeout(r, 5000));
+              executionEngine = new ExecutionEngine(lockedIntent);
+              await Promise.race([
+                executionEngine.initialize(userId, undefined, taskId),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error('Browser initialization timed out after 30s (retry)')), 30000)
+                ),
+              ]);
+              console.log(`[BROWSER] Retry succeeded — browser initialized`);
+            } catch (retryErr) {
+              console.error(`[BROWSER] Lazy-init retry also failed:`, retryErr);
+              // CRITICAL: Decrement counter to prevent concurrency leak
+              const { decrementBrowserTasks } = await import("../utils/concurrency.js");
+              decrementBrowserTasks();
+              executionEngine = null;
+              iterationResults.push({
+                action,
+                success: false,
+                error: `Browser initialization failed after 2 attempts (${initErrMsg}). The agent will use search instead.`
+              });
+              continue;
+            }
           }
         }
 
@@ -7171,7 +7187,34 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // If the agent is correctly waiting for user credentials (password), auto-pass — task did its job
     const _awaitingCredentials = /\b(i'?ll need (a|your) password|need (a|your) password to|what password (would|do) you|provide (a|your) password|password to (complete|create|finish|register|sign)|i need your password)\b/i.test(aiResponse.content || '');
 
-    if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
+    // QUALITY GATE: Never auto-pass if the task explicitly mentions a website/domain AND no browser was used.
+    // "Go to opentable.com and book a table" completing with "I'm processing..." is a FAILURE, not a pass.
+    const _taskMentionsDomain = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
+      /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`);
+    const _taskNeedsBrowserAction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe)\b/i.test(`${subject} ${body}`);
+    const _domainTaskButNoBrowser = _taskMentionsDomain && _taskNeedsBrowserAction && noBrowserUsed;
+
+    // PLACEHOLDER DETECTION: Reject "I'm processing..." / "taking longer than expected" as final responses.
+    // These are early notifications, never valid task completions.
+    const _isPlaceholderResponse = /\b(i'?m processing|taking longer than expected|i'?ll follow up|working on (it|this|your)|please (wait|hold)|still (working|processing))\b/i.test(aiResponse.content || '');
+
+    if (_domainTaskButNoBrowser) {
+      console.warn(`[VERIFY] REJECTED: Task mentions website + needs browser action but no browser was used — FAIL`);
+      verificationResult = {
+        passed: false,
+        confidence: 10,
+        method: 'quality_gate' as const,
+        evidence: `Task requires browser interaction at a specific website but no browser was used`
+      };
+    } else if (_isPlaceholderResponse && !_awaitingCredentials) {
+      console.warn(`[VERIFY] REJECTED: Response is a placeholder ("processing...") — not a real completion`);
+      verificationResult = {
+        passed: false,
+        confidence: 10,
+        method: 'quality_gate' as const,
+        evidence: `Response is a placeholder, not a real task completion`
+      };
+    } else if (((noBrowserUsed || hasNoActions || allActionsFailed) || (isSearchOnly && isResearchTier) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
       const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : allActionsFailed ? 'all actions failed' : signupAutoCompleted ? 'signup-auto completed' : _awaitingCredentials ? 'awaiting user credentials' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
