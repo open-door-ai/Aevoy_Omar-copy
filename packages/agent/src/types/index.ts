@@ -20,7 +20,9 @@ export type ModelProvider =
   | 'sonnet'
   | 'haiku'
   | 'ollama'
-  | 'openrouter';
+  | 'openrouter'
+  | 'cerebras'
+  | 'sambanova';
 
 // ---- Execution Plan ----
 

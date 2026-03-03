@@ -70,6 +70,8 @@ let kimiClient: OpenAI | null = null;
 let groqClient: OpenAI | null = null;
 let ollamaClient: OpenAI | null = null;
 let openRouterClient: OpenAI | null = null;
+let cerebrasClient: OpenAI | null = null;
+let sambaNovaClient: OpenAI | null = null;
 
 // ---- Rate limit backoff tracking ----
 // Skip models temporarily after 429/402 errors to avoid wasting time on doomed requests
@@ -257,6 +259,28 @@ function getPlatformOpenRouterClient(): OpenAI {
   return openRouterClient;
 }
 
+// Cerebras — ultra-fast inference, free tier: 30 RPM, 1M tokens/day
+function getCerebrasClient(): OpenAI {
+  if (!cerebrasClient) {
+    cerebrasClient = new OpenAI({
+      apiKey: process.env.CEREBRAS_API_KEY || "",
+      baseURL: "https://api.cerebras.ai/v1",
+    });
+  }
+  return cerebrasClient;
+}
+
+// SambaNova — free tier: 10-40 RPM, 40 RPD, 200K tokens/day (fallback only)
+function getSambaNovaClient(): OpenAI {
+  if (!sambaNovaClient) {
+    sambaNovaClient = new OpenAI({
+      apiKey: process.env.SAMBANOVA_API_KEY || "",
+      baseURL: "https://api.sambanova.ai/v1",
+    });
+  }
+  return sambaNovaClient;
+}
+
 // ---- Model Configuration ----
 
 interface ModelConfig {
@@ -368,6 +392,8 @@ const MODEL_TIMEOUTS: Record<ModelProvider, number> = {
   haiku: 20000,
   ollama: 60000,
   openrouter: 45000,
+  cerebras: 10000,
+  sambanova: 20000,
 };
 
 // ---- Circuit breakers per model (NOT per provider) ----
@@ -424,6 +450,8 @@ function isProviderAvailable(provider: ModelProvider, config?: ModelConfig): boo
     case 'haiku': return !!process.env.ANTHROPIC_API_KEY;
     case 'ollama': return !!process.env.OLLAMA_HOST;
     case 'openrouter': return !!(config?.extra?.apiKey || process.env.OPENROUTER_API_KEY); // per-user key OR platform key
+    case 'cerebras': return !!process.env.CEREBRAS_API_KEY;
+    case 'sambanova': return !!process.env.SAMBANOVA_API_KEY;
     default: return false;
   }
 }
@@ -566,6 +594,40 @@ async function callProvider(
       const orApiKey = (config as ModelConfig & { extra?: { apiKey?: string } }).extra?.apiKey;
       const orClient = orApiKey ? getOpenRouterClient(orApiKey) : getPlatformOpenRouterClient();
       const response = await orClient.chat.completions.create({
+        model: config.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+      });
+      return {
+        content: response.choices[0]?.message?.content || "",
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
+      };
+    }
+
+    case 'cerebras': {
+      const response = await getCerebrasClient().chat.completions.create({
+        model: config.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+      });
+      return {
+        content: response.choices[0]?.message?.content || "",
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0,
+      };
+    }
+
+    case 'sambanova': {
+      const response = await getSambaNovaClient().chat.completions.create({
         model: config.model,
         messages: [
           { role: "system", content: systemPrompt },
@@ -2064,6 +2126,40 @@ export async function generateVisionResponse(
         }
       }
     }
+    // Cerebras — separate rate limit pool (30 RPM, 1M tokens/day), ultra-fast
+    if (process.env.CEREBRAS_API_KEY) {
+      const cerebrasBackoffKey = 'cerebras:gpt-oss-120b';
+      const cerebrasBackoff = groqRateLimitBackoff.get(cerebrasBackoffKey) || 0;
+      if (Date.now() >= cerebrasBackoff) {
+        try {
+          const response = await withTimeout(getCerebrasClient().chat.completions.create({
+            model: 'gpt-oss-120b',
+            max_tokens: 1024,
+            messages: [
+              ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+              { role: "user" as const, content: buildImageContent() }
+            ],
+          }), 8000); // Cerebras is blazing fast, 8s is generous
+          const rawContent = response.choices[0]?.message?.content || '';
+          const content = stripThinkTags(rawContent);
+          if (content.length > 10) {
+            const inTok = response.usage?.prompt_tokens || 0;
+            const outTok = response.usage?.completion_tokens || 0;
+            console.log(`[AI] VisionText (Cerebras GPT-OSS-120B) | $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+            if (userId) trackApiCall(userId, "gpt-oss-120b", inTok, outTok, 0, "cerebras", taskId, "browser-step").catch(() => {});
+            return { content, cost: 0 };
+          }
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.warn(`[AI] VisionText (Cerebras) failed: ${errMsg}`);
+          if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
+            groqRateLimitBackoff.set(cerebrasBackoffKey, Date.now() + 60000);
+          }
+          if (userId) trackApiCall(userId, `ERR:cerebras:${errMsg.substring(0, 60)}`, 0, 0, 0, "cerebras", taskId, "browser-step-error").catch(() => {});
+        }
+      }
+    }
+
     // Gemini 2.5 Flash as fallback — different rate limit pool, huge context, free
     if (process.env.GOOGLE_API_KEY) {
       try {
@@ -2102,8 +2198,11 @@ export async function generateVisionResponse(
     const freeModels = [
       { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B" },
       { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL" },
+      { model: "nvidia/nemotron-3-nano-30b-a3b:free", name: "Nemotron-3-Nano-30B" },
       { model: "mistralai/mistral-small-3.1-24b-instruct:free", name: "Mistral-Small-3.1" },
+      { model: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama-3.3-70B" },
       { model: "qwen/qwen3-vl-30b-a3b-thinking", name: "Qwen3-VL-30B-Thinking" },
+      { model: "openai/gpt-oss-120b:free", name: "GPT-OSS-120B" },
     ];
 
     for (const fm of freeModels) {

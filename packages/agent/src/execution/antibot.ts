@@ -197,18 +197,47 @@ async function handleRateLimit(page: Page, retryAfterSec?: number): Promise<bool
 
 /**
  * Get proxy configuration from environment.
- * Reads PROXY_LIST env var (comma-separated list of proxy URLs).
+ * Supports two formats:
+ *   PROXY_URL=http://user:pass@proxy.example.com:port  (single residential proxy with auth)
+ *   PROXY_LIST=proxy1,proxy2,proxy3  (multiple proxies, rotated randomly)
+ *
+ * Residential proxy providers (BrightData, Oxylabs, SmartProxy, etc.) typically use
+ * authenticated proxies with username:password. This config passes credentials to Playwright.
  */
-export function getProxyConfig(): { server: string } | undefined {
+export function getProxyConfig(): { server: string; username?: string; password?: string } | undefined {
+  // Single authenticated proxy (preferred for residential)
+  const singleProxy = process.env.PROXY_URL;
+  if (singleProxy) {
+    try {
+      const parsed = new URL(singleProxy);
+      const server = `${parsed.protocol}//${parsed.hostname}${parsed.port ? ':' + parsed.port : ''}`;
+      if (parsed.username) {
+        return { server, username: decodeURIComponent(parsed.username), password: decodeURIComponent(parsed.password) };
+      }
+      return { server };
+    } catch {
+      return { server: singleProxy };
+    }
+  }
+
+  // Multiple proxy rotation
   const proxyList = process.env.PROXY_LIST;
   if (!proxyList) return undefined;
 
   const proxies = proxyList.split(',').map(p => p.trim()).filter(Boolean);
   if (proxies.length === 0) return undefined;
 
-  // Rotate through proxies
   const proxy = proxies[Math.floor(Math.random() * proxies.length)];
-  return { server: proxy };
+  try {
+    const parsed = new URL(proxy);
+    const server = `${parsed.protocol}//${parsed.hostname}${parsed.port ? ':' + parsed.port : ''}`;
+    if (parsed.username) {
+      return { server, username: decodeURIComponent(parsed.username), password: decodeURIComponent(parsed.password) };
+    }
+    return { server: proxy };
+  } catch {
+    return { server: proxy };
+  }
 }
 
 /**
