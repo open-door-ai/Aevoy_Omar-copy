@@ -1409,6 +1409,14 @@ export async function runVisionAgent(
             continue;
           }
 
+          // Accept DONE immediately if it contains factual data (numbers, dates, etc.)
+          // This prevents rejecting valid answers like "Population: 13,982,112"
+          const hasFactualData = /\d{3,}/.test(doneResult) && doneResult.length > 30;
+          const isInfoTask = /\b(tell me|what is|find|how much|how many|population|price|cost|address|rating|show me)\b/i.test(task);
+          if (hasFactualData && isInfoTask) {
+            // Skip all rejection — this has real data for an info task
+          } else {
+
           // Passive DONE rejection
           const isPassive = /want me to|i['']ll need|would you like|shall i|let me know|please provide|do you want|can i proceed|should i|ready to (start|begin)|i can (help|assist)/i.test(doneResult);
 
@@ -1444,6 +1452,7 @@ export async function runVisionAgent(
             }
             break; // break action loop, continue main loop
           }
+          } // close hasFactualData else
 
           // Strip garbled page content from result
           let cleanResult = doneResult;
