@@ -1493,7 +1493,7 @@ export async function runVisionAgent(
           // Accept DONE immediately if it contains factual data (numbers, dates, etc.)
           // This prevents rejecting valid answers like "Population: 13,982,112"
           const hasFactualData = /\d{3,}/.test(doneResult) && doneResult.length > 30;
-          const isInfoTask = /\b(tell me|what is|find|how much|how many|population|price|cost|address|rating|show me)\b/i.test(task);
+          const isInfoTask = /\b(tell me|what is|list|find|how much|how many|population|price|cost|address|rating|show me|what are|name the)\b/i.test(task);
           if (hasFactualData && isInfoTask) {
             // Skip all rejection — this has real data for an info task
           } else {
@@ -1516,10 +1516,14 @@ export async function runVisionAgent(
             !/\b(order(ed|.*confirm)|receipt|added to cart|in.*cart|placed|transaction)\b/i.test(doneResult)
           );
 
-          // Data-missing rejection
-          const wantsData = /\b(price|deal|listing|link|rating|cost|address|phone|find|show me|compare)\b/i.test(task);
-          const hasData = doneResult.length > 80 && /\$\d+|\d+\.\d{2}|\bhttps?:\/\/|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/i.test(doneResult);
-          const dataMissing = wantsData && !hasData && !isPassive && !isAdvice && doneResult.length < 200;
+          // Data-missing rejection — only for tasks explicitly asking for numeric/contact data
+          // "find" and "show me" are too generic — book titles, names, info are valid text answers
+          const wantsData = /\b(price|deal|phone\s*number|address|ratings?\s+of|cost\s+of|how\s+much)\b/i.test(task);
+          const hasData = doneResult.length > 50 && (
+            /\$\d+|\d+\.\d{2}|\bhttps?:\/\/|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/i.test(doneResult) || // price/URL/phone
+            doneResult.length > 80 // long text answer = has data (book titles, names, info)
+          );
+          const dataMissing = wantsData && !hasData && !isPassive && !isAdvice && doneResult.length < 100;
 
           if (isPassive || isAdvice || isOrderIncomplete || dataMissing) {
             const reason = isPassive ? 'PASSIVE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : 'ADVICE';
