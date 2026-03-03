@@ -10030,6 +10030,23 @@ async function executeAction(
       // Calculate next run time using user's timezone
       const nextRun = calculateNextRun(cron, schedTz);
 
+      // Dedup check: skip if identical recurring task already exists for this user
+      if (!isOneTime) {
+        try {
+          const { data: existing } = await getSupabaseClient()
+            .from('scheduled_tasks')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('is_active', true)
+            .ilike('description', `%${description.substring(0, 40)}%`)
+            .limit(1);
+          if (existing && existing.length > 0) {
+            console.log(`[SCHEDULE] Skipping duplicate recurring task: "${description.substring(0, 60)}"`);
+            return { action, success: true, result: `Already scheduled: ${description}` };
+          }
+        } catch { /* proceed with insert */ }
+      }
+
       const { error } = await getSupabaseClient()
         .from("scheduled_tasks")
         .insert({

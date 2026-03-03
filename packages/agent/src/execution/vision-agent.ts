@@ -1599,7 +1599,11 @@ export async function runVisionAgent(
           if (isPassive || isAdvice || isOrderIncomplete || dataMissing) {
             const reason = isPassive ? 'PASSIVE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : 'ADVICE';
             console.log(`[BROWSER-AGENT] Rejected ${reason} DONE: "${doneResult.substring(0, 80)}"`);
-            history.push(`⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". You described what you COULD do instead of DOING it. ACT — click, fill, submit. If impossible, output FAIL not DONE.`);
+            // Build a profile-aware forced action hint so the AI fills the form instead of asking
+            const profileHint = userProfile
+              ? ` Use FILL to enter: email="${userProfile.email || ''}" name="${userProfile.displayName || ''}" phone="${userProfile.phone || ''}". You have FULL PERMISSION — no need to ask.`
+              : '';
+            history.push(`⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${profileHint}`);
 
             const rejectCount = history.filter(h => h.includes('DONE rejected')).length;
             if (rejectCount >= 5) {
