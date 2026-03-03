@@ -1,13 +1,23 @@
 # Aevoy Agent Server — Railway Deployment
 FROM node:20-slim
 
-# System deps for Playwright chromium (optional, falls back to Browserbase)
+# System deps for Playwright chromium + Windows font fingerprint bypass
 RUN apt-get update && apt-get install -y \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
     wget ca-certificates \
+    fonts-liberation fonts-liberation2 fonts-noto-core \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/*
+
+# Install MS Core Fonts (Arial, Times New Roman, Verdana, Courier New, etc.)
+# Pre-accept EULA to avoid interactive prompt
+RUN echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula boolean true" | debconf-set-selections \
+    && apt-get update && apt-get install -y --no-install-recommends ttf-mscorefonts-installer \
+    && fc-cache -fv \
+    && rm -rf /var/lib/apt/lists/* \
+    || (echo "MS fonts failed - using Liberation fonts only" && fc-cache -fv)
 
 RUN npm install -g pnpm@10
 

@@ -1288,15 +1288,44 @@ export async function runVisionAgent(
               document.querySelector('.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"], .h-captcha, .cf-turnstile, iframe[src*="hcaptcha"], iframe[src*="turnstile"], [data-public-key], img[src*="captcha"], #px-captcha')
             );
 
-            // Cookie dismiss (first 5 steps only)
+            // Cookie/consent banner dismiss (first 15 steps)
             if (dismissCookies) {
-              for (const s of ['[id*="cookie"] button[class*="accept"]', '[class*="cookie"] button[class*="accept"]', '[id*="consent"] button[class*="accept"]', 'button[id*="accept-all"]', 'button[id*="acceptAll"]', '.cc-accept', '.cc-allow', '#accept-cookies']) {
-                const b = document.querySelector(s) as HTMLElement | null;
-                if (b && b.offsetParent !== null) { b.click(); break; }
+              const cookieSelectors = [
+                // Generic
+                'button[id*="accept-all"]', 'button[id*="acceptAll"]', 'button[id*="accept_all"]',
+                '[id*="cookie"] button[class*="accept"]', '[class*="cookie"] button[class*="accept"]',
+                '[id*="consent"] button[class*="accept"]', '[class*="consent"] button[class*="accept"]',
+                '.cc-accept', '.cc-allow', '#accept-cookies', '#acceptCookies',
+                // OneTrust
+                '#onetrust-accept-btn-handler', '.onetrust-accept-btn-handler',
+                // CookieBot
+                '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+                'a[id*="cookiebot"]',
+                // CookieYes
+                '.cookieyes-accept', '[data-cky-tag="accept-button"]',
+                // Cookiehub
+                '.ch2-allow-all-btn',
+                // Termly
+                '[id="termly-code-snippet-support"] button',
+                // Usercentrics
+                '[data-testid="uc-accept-all-button"]',
+                // GDPR cookie consent plugin (WordPress)
+                '.gdpr-accept-cookies',
+                // Common patterns
+                'button[class*="accept"][class*="cookie"]',
+                'button[class*="cookie"][class*="accept"]',
+                'button[class*="consent"][class*="accept"]',
+                '[aria-label*="Accept cookies"]', '[aria-label*="Accept all cookies"]',
+              ];
+              for (const s of cookieSelectors) {
+                try {
+                  const b = document.querySelector(s) as HTMLElement | null;
+                  if (b && b.offsetParent !== null) { b.click(); break; }
+                } catch { /* selector may be invalid */ }
               }
             }
             return { isBotWall, hasCaptcha };
-          }, steps < 5),
+          }, steps < 15),
           new Promise<{ isBotWall: false; hasCaptcha: false }>((resolve) => setTimeout(() => resolve({ isBotWall: false, hasCaptcha: false }), 3000)),
         ]);
 
