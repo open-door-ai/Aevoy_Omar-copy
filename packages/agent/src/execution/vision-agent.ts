@@ -697,6 +697,7 @@ export async function runVisionAgent(
   const history: string[] = [];
   let totalCost = 0;
   let steps = 0;
+  let consecutiveAiErrors = 0; // Tracks back-to-back AI failures for exponential backoff
 
   // ── Auto-dismiss dialogs (security: prevents alert-blocking) ──
   page.on('dialog', (dialog: any) => {
@@ -1049,11 +1050,21 @@ export async function runVisionAgent(
       } catch (err) {
         console.warn(`[BROWSER-AGENT] AI error at step ${steps + 1}: ${err}`);
         history.push(`Step ${steps + 1}: AI error (rate limit — not counted)`);
-        await activePage.waitForTimeout(2000);
+        consecutiveAiErrors++;
+        // Exponential backoff: 3s, 6s, 12s, 24s, 30s max — prevents hammering 429'd APIs
+        const backoffMs = Math.min(3000 * Math.pow(2, consecutiveAiErrors - 1), 30000);
+        console.warn(`[BROWSER-AGENT] Consecutive AI errors: ${consecutiveAiErrors}, backoff ${backoffMs / 1000}s`);
+        // Bail out after 10 consecutive AI errors — rate limits won't clear soon enough
+        if (consecutiveAiErrors >= 10) {
+          const endPageData = await capturePageData(activePage);
+          return { success: false, error: `AI rate limit: ${consecutiveAiErrors} consecutive errors`, steps, cost: totalCost, screenshots, pageData: endPageData };
+        }
+        await activePage.waitForTimeout(backoffMs);
         steps--; // Don't count AI failures as steps — for loop will increment back
         continue;
       }
 
+      consecutiveAiErrors = 0; // Reset on successful AI response
       console.log(`[BROWSER-AGENT] AI: ${aiResponse.substring(0, 120)}`);
       history.push(`Step ${steps + 1}: ${aiResponse.substring(0, 80)}`);
 
