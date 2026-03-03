@@ -480,6 +480,8 @@ app.get("/health", async (_req, res) => {
     googleApi: !!process.env.GOOGLE_API_KEY,
     anthropicApi: !!process.env.ANTHROPIC_API_KEY,
     openRouterApi: !!process.env.OPENROUTER_API_KEY,
+    cerebrasApi: !!process.env.CEREBRAS_API_KEY,
+    sambaNovaApi: !!process.env.SAMBANOVA_API_KEY,
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
     remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
   });
