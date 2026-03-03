@@ -5062,14 +5062,20 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           }
         }
 
-        // Execute action with failure memory integration
-        console.log(`[ACTION] Executing action ${actionIndex + 1}/${aiResponse.actions.length}: ${action.type}(${JSON.stringify(action.params).substring(0, 100)})`);
-        let result = await executeActionWithLearning(
-          action,
-          userId,
-          username,
-          executionEngine
-        );
+        // Execute action with failure memory integration + per-action timeout
+        // Search/browse can hang indefinitely if fetch never resolves — 90s hard ceiling prevents stuck tasks
+        const ACTION_TIMEOUT_MS: Record<string, number> = {
+          search: 90000, browse: 120000, screenshot: 30000, extract: 30000,
+          send_email: 15000, read_email: 30000, send_sms: 10000, call_user: 15000, call_external: 15000,
+        };
+        const actionTimeout = ACTION_TIMEOUT_MS[action.type] || 120000; // default 2 min
+        console.log(`[ACTION] Executing action ${actionIndex + 1}/${aiResponse.actions.length}: ${action.type}(${JSON.stringify(action.params).substring(0, 100)}) [timeout ${actionTimeout / 1000}s]`);
+        let result = await Promise.race([
+          executeActionWithLearning(action, userId, username, executionEngine),
+          new Promise<ActionResult>(resolve =>
+            setTimeout(() => resolve({ action, success: false, result: undefined, error: `Action timeout: ${action.type} exceeded ${actionTimeout / 1000}s` }), actionTimeout)
+          ),
+        ]);
         console.log(`[ACTION] Result: ${action.type} → success=${result.success}${result.error ? ` error=${result.error}` : ''}`);
 
         // Action-level retry: on failure, retry once after 3s delay
@@ -5079,12 +5085,12 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         if (!result.success && result.error && !isBotBlockedAction && !isBrowseTimeout && !result.error.startsWith('Security:') && !result.error.startsWith('Action not')) {
           console.log(`[RETRY] Action '${action.type}' failed (${result.error}), retrying in 3s...`);
           await new Promise(resolve => setTimeout(resolve, 3000));
-          const retryResult = await executeActionWithLearning(
-            action,
-            userId,
-            username,
-            executionEngine
-          );
+          const retryResult = await Promise.race([
+            executeActionWithLearning(action, userId, username, executionEngine),
+            new Promise<ActionResult>(resolve =>
+              setTimeout(() => resolve({ action, success: false, result: undefined, error: `Action timeout on retry: ${action.type} exceeded ${actionTimeout / 1000}s` }), actionTimeout)
+            ),
+          ]);
           if (retryResult.success) {
             console.log(`[RETRY] Action '${action.type}' succeeded on retry`);
             result = retryResult;
