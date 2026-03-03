@@ -348,7 +348,10 @@ setInterval(async () => {
     const dbProcessing = count || 0;
     const browserCount = getActiveBrowserTasks();
 
-    if (activeTasks > 0 && dbProcessing === 0) {
+    if (activeTasks < 0) {
+      console.log(`[COUNTER-HEAL] Fixing negative activeTasks: ${activeTasks} → 0`);
+      activeTasks = 0;
+    } else if (activeTasks > 0 && dbProcessing === 0) {
       console.log(`[COUNTER-HEAL] Resetting activeTasks from ${activeTasks} to 0 (DB shows 0 processing)`);
       activeTasks = 0;
     } else if (activeTasks > dbProcessing + 2) {
@@ -466,7 +469,7 @@ app.get("/health", async (_req, res) => {
     version: "2.0.0-agi-v22",
     gitSha: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local",
     timestamp: new Date().toISOString(),
-    activeTasks,
+    activeTasks: Math.max(0, activeTasks),
     activeBrowserTasks: getActiveBrowserTasks(),
     activeVoiceSessions: getActiveSessionCount(),
     queuedTasks: taskQueue.length,
