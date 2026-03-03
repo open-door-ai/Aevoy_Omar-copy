@@ -3605,28 +3605,48 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 console.log(`[BROWSER-FAST-PATH] SUCCESS — skipping iteration loop`);
               } else {
                 // Vision agent failed — try to extract partial data
-                const _bfpPageData = _bfpResult.pageData || '';
+                let _bfpPageData = _bfpResult.pageData || '';
+                // If vision agent didn't return page data, capture it ourselves from the live page
+                if (_bfpPageData.length < 50 && _bfpPage && !_bfpPage.isClosed()) {
+                  try {
+                    const _bfpLiveUrl = _bfpPage.url();
+                    if (_bfpLiveUrl && !_bfpLiveUrl.startsWith('chrome-error://') && _bfpLiveUrl !== 'about:blank') {
+                      const _bfpLiveText = await Promise.race([
+                        _bfpPage.evaluate(() => {
+                          const items: string[] = [];
+                          document.querySelectorAll('h1, h2, h3, [data-test*="name"], [class*="restaurant"], [class*="listing"], [class*="result"], [class*="card"], p').forEach(el => {
+                            const t = (el as HTMLElement).innerText?.trim();
+                            if (t && t.length > 3 && t.length < 300) items.push(t);
+                          });
+                          return items.length > 3 ? items.slice(0, 30).join('\n') : (document.body?.innerText?.substring(0, 4000) || '');
+                        }),
+                        new Promise<string>(r => setTimeout(() => r(''), 5000)),
+                      ]);
+                      if (_bfpLiveText && _bfpLiveText.length > 50) {
+                        _bfpPageData = `Page: ${_bfpLiveUrl}\n${_bfpLiveText.substring(0, 4000)}`;
+                        console.log(`[BROWSER-FAST-PATH] Captured page data directly (${_bfpPageData.length} chars)`);
+                      }
+                    }
+                  } catch { /* best effort */ }
+                }
                 if (_bfpPageData && _bfpPageData.length > 50) {
                   // Try to summarize the page data into a useful response
-                  const _bfpIsResearch = /\b(find|search|look|show|get me|compare|what|which|best|top|cheapest|rating|price|review)\b/i.test(taskTextLower);
-                  if (_bfpIsResearch) {
-                    try {
-                      const { generateForcedDirectAnswer } = await import("./ai.js");
-                      const _bfpSummary = await generateForcedDirectAnswer(
-                        _bfpTaskText,
-                        `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}\n\nExtract specific information that answers the user's request. Include names, prices, ratings, addresses — real data only.`,
-                        username
-                      );
-                      if (_bfpSummary.content && _bfpSummary.content.length > 30) {
-                        aiResponse.content = _bfpSummary.content;
-                        isTaskComplete = true;
-                        aiSignaledComplete = true;
-                        signupAutoCompleted = true;
-                        console.log(`[BROWSER-FAST-PATH] Partial data summarized — skipping iteration loop`);
-                      }
-                    } catch (e) {
-                      console.warn('[BROWSER-FAST-PATH] Summary failed:', e instanceof Error ? e.message : String(e));
+                  try {
+                    const { generateForcedDirectAnswer } = await import("./ai.js");
+                    const _bfpSummary = await generateForcedDirectAnswer(
+                      _bfpTaskText,
+                      `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}\n\nExtract specific information that answers the user's request. Include names, prices, ratings, addresses — real data only.`,
+                      username
+                    );
+                    if (_bfpSummary.content && _bfpSummary.content.length > 30) {
+                      aiResponse.content = _bfpSummary.content;
+                      isTaskComplete = true;
+                      aiSignaledComplete = true;
+                      signupAutoCompleted = true;
+                      console.log(`[BROWSER-FAST-PATH] Partial data summarized — skipping iteration loop`);
                     }
+                  } catch (e) {
+                    console.warn('[BROWSER-FAST-PATH] Summary failed:', e instanceof Error ? e.message : String(e));
                   }
                   if (!isTaskComplete) {
                     // Store page data for the iteration loop to use
@@ -7477,15 +7497,31 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         method: 'quality_gate' as const,
         evidence: `Response is a placeholder, not a real task completion`
       };
-    } else if (allActionsFailed && aiResponse.content) {
-      // ALL actions failed — this is NOT a pass. Mark for review.
-      console.warn(`[VERIFY] REJECTED: All ${actionResults.length} actions failed — task did not complete`);
-      verificationResult = {
-        passed: false,
-        confidence: 15,
-        method: 'quality_gate' as const,
-        evidence: `All ${actionResults.length} actions failed — task did not complete successfully`
-      };
+    } else if (allActionsFailed && aiResponse.content && !signupAutoCompleted) {
+      // ALL actions failed — check if the response still contains real data.
+      // The browser fast path or page-data recovery may have produced a genuine answer
+      // even though the formal action results all failed.
+      const _responseHasRealData = aiResponse.content.length > 100 &&
+        /\b(\$\d|USD|CAD|\d+\.\d{2}|\d{1,2}:\d{2}\s*(am|pm)|★|⭐|rating|rated|reviews?|located|address|\d{3}[-.)]\s*\d{3})\b/i.test(aiResponse.content) ||
+        // Response has specific names (proper nouns) and details — not generic advice
+        (aiResponse.content.length > 150 && /[A-Z][a-z]+\s+[A-Z][a-z]+/.test(aiResponse.content) && !/\b(you can|you should|here'?s how|steps to)\b/i.test(aiResponse.content));
+      if (_responseHasRealData) {
+        console.log(`[VERIFY] All ${actionResults.length} actions failed BUT response has real data — PASS`);
+        verificationResult = {
+          passed: true,
+          confidence: 70,
+          method: 'quality_gate' as const,
+          evidence: `Actions failed but response contains specific data extracted from page`
+        };
+      } else {
+        console.warn(`[VERIFY] REJECTED: All ${actionResults.length} actions failed — task did not complete`);
+        verificationResult = {
+          passed: false,
+          confidence: 15,
+          method: 'quality_gate' as const,
+          evidence: `All ${actionResults.length} actions failed — task did not complete successfully`
+        };
+      }
     } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier && !_taskMentionsDomain) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
       // NOTE: search-only auto-pass is BLOCKED when task mentions a specific domain ("Go to X.com")
       // because those tasks require actual browser interaction, not just search results.

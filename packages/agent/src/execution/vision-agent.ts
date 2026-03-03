@@ -855,7 +855,8 @@ export async function runVisionAgent(
           if (!retried) {
             captchaFailCount++;
             if (captchaFailCount >= 3) {
-              return { success: false, result: `Blocked by CAPTCHA at ${activePage.url()}`, error: 'captcha_blocked', steps, cost: totalCost, screenshots };
+              const pageData = await capturePageData(activePage);
+              return { success: false, result: `Blocked by CAPTCHA at ${activePage.url()}`, error: 'captcha_blocked', steps, cost: totalCost, screenshots, pageData };
             }
           } else { captchaFailCount = 0; }
         } else { captchaFailCount = 0; }
@@ -894,7 +895,8 @@ export async function runVisionAgent(
             await activePage.waitForTimeout(botWallCount === 1 ? 6000 : 4000);
             try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
           } else if (botWallCount >= BOT_WALL_MAX) {
-            return { success: false, error: `Bot wall: ${wallUrl} — site blocked after ${botWallCount} attempts`, steps, cost: totalCost, screenshots };
+            const pageData = await capturePageData(activePage);
+            return { success: false, error: `Bot wall: ${wallUrl} — site blocked after ${botWallCount} attempts`, steps, cost: totalCost, screenshots, pageData };
           }
         } else { botWallCount = 0; }
       } catch { /* non-critical */ }
@@ -925,7 +927,8 @@ export async function runVisionAgent(
       try {
         snapshot = await getAccessibilitySnapshot(activePage);
       } catch (err) {
-        return { success: false, error: `Page read failed: ${err}`, steps, cost: totalCost, screenshots };
+        const pageData = await capturePageData(activePage);
+        return { success: false, error: `Page read failed: ${err}`, steps, cost: totalCost, screenshots, pageData };
       }
       console.log(`[BROWSER-AGENT] Step ${steps + 1}: ${url.substring(0, 80)} — snapshot ${snapshot.length} chars`);
 
@@ -938,10 +941,12 @@ export async function runVisionAgent(
       if (url === lastUrl) {
         sameUrlCount++;
         if (sameUrlCount >= 3 && (url.startsWith('chrome-error://') || url.startsWith('about:') || url === '')) {
-          return { success: false, error: 'Stuck on error page', steps, cost: totalCost, screenshots };
+          const pageData = await capturePageData(activePage);
+          return { success: false, error: 'Stuck on error page', steps, cost: totalCost, screenshots, pageData };
         }
         if (sameUrlCount >= 20) {
-          return { success: false, error: `Stuck on ${url} for ${sameUrlCount} steps`, steps, cost: totalCost, screenshots };
+          const pageData = await capturePageData(activePage);
+          return { success: false, error: `Stuck on ${url} for ${sameUrlCount} steps`, steps, cost: totalCost, screenshots, pageData };
         }
         if (sameUrlCount === 4) { await activePage.mouse.wheel(0, 600); await activePage.waitForTimeout(400); }
         if (sameUrlCount === 7) { await activePage.mouse.wheel(0, -600); await activePage.waitForTimeout(400); }
@@ -1274,6 +1279,8 @@ export async function runVisionAgent(
     return { success: false, error: `Max steps (${dynamicMaxSteps}) reached`, steps, cost: totalCost, screenshots, pageData: endPageData };
 
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : String(err), steps, cost: totalCost, screenshots };
+    let pageData = '';
+    try { pageData = await capturePageData(activePage); } catch { /* best effort */ }
+    return { success: false, error: err instanceof Error ? err.message : String(err), steps, cost: totalCost, screenshots, pageData };
   }
 }
