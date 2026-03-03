@@ -1413,8 +1413,10 @@ export async function runVisionAgent(
         // After a vision step, reset sameUrlCount so normal text models are used next.
         // Without this, once sameUrlCount >= 3 it never drops back and the vision fallback
         // (DeepSeek text-only) loops forever on the same action (e.g. SCROLL down).
+        // Reset to 0: gives 3 normal steps before vision fires again (0→1→2→3=vision).
+        // Reset to 2 was wrong — URL unchanged → 2+1=3 → vision fires on very next step.
         if (hasScreenshot) {
-          sameUrlCount = 2; // Allow 3 normal steps before vision fires again
+          sameUrlCount = 0;
         }
       } catch (err) {
         console.warn(`[BROWSER-AGENT] AI error at step ${steps + 1}: ${err}`);
