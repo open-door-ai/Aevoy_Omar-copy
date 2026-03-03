@@ -1045,8 +1045,11 @@ export async function runVisionAgent(
     const isBlank = !currentUrl || currentUrl === 'about:blank' || currentUrl.startsWith('chrome-error://');
     if (isBlank) {
       const urlInTask = task.match(/https?:\/\/[^\s,)]+/)?.[0] ||
-        task.match(/\bon\s+([\w.-]+\.(com|org|net|io|co|app))/i)?.[1];
-      let startUrl = urlInTask?.startsWith('http') ? urlInTask : urlInTask ? `https://www.${urlInTask}` : null;
+        task.match(/\b(?:to|on|at|visit|open)\s+([\w-]+\.[\w.-]+\.(?:com|org|net|io|co|app)(?:\/[^\s,)]*)?)/i)?.[1] ||
+        task.match(/\b([\w-]+\.[\w.-]*(?:com|org|net|io|co|app)(?:\/[^\s,)]*)?)\b/i)?.[1];
+      let startUrl = urlInTask?.startsWith('http') ? urlInTask :
+        urlInTask?.includes('.') ? `https://${urlInTask}` : // domain with dots: don't add www
+        urlInTask ? `https://www.${urlInTask}` : null;
 
       // Infer URL from service name: "Sign up for Canva" → canva.com
       if (!startUrl) {
