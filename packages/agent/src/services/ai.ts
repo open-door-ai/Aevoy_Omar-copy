@@ -2129,28 +2129,29 @@ export async function generateBrowserStepResponse(
     { role: "user" as const, content: prompt }
   ];
 
-  // ═══ PRIMARY: OpenRouter paid — NO rate limits, 52/52 success rate ═══
-  // Qwen3-30B MoE (3B active) — fast, cheap, excellent at structured output.
-  // Cost: ~$0.20/$0.60 per M tokens → ~$0.0005/step → ~$0.02/task
+  // ═══ PRIMARY: OpenRouter Llama-3.3-70B — fast, no thinking tokens, cheap ═══
+  // No <think> tags = ~3x fewer output tokens than Qwen3 = 3x faster responses.
+  // Cost: ~$0.10/$0.13 per M tokens → ~$0.0002/step → ~$0.008/task
   if (process.env.OPENROUTER_API_KEY) {
     try {
       const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
-        model: "qwen/qwen3-30b-a3b",
-        max_tokens: 1024,
+        model: "meta-llama/llama-3.3-70b-instruct",
+        max_tokens: 300,
+        temperature: 0.1,
         messages,
-      }), 15000);
+      }), 10000);
       const rawContent = response.choices[0]?.message?.content || '';
       const content = stripThinkTags(rawContent);
       if (content.length > 10) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.20 + outTok * 0.60) / 1_000_000;
-        console.log(`[AI] BrowserStep (OpenRouter Qwen3-30B) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "qwen/qwen3-30b-a3b", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
+        const cost = (inTok * 0.10 + outTok * 0.13) / 1_000_000;
+        console.log(`[AI] BrowserStep (Llama-3.3-70B) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "meta-llama/llama-3.3-70b-instruct", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] BrowserStep (OpenRouter Qwen3-30B) failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[AI] BrowserStep (Llama-3.3-70B) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
