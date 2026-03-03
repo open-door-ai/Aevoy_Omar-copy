@@ -1166,81 +1166,64 @@ export async function runVisionAgent(
         popupPage = null;
       }
 
-      // Wait for page to settle
+      // Wait for page to settle (no fixed delay — just DOM ready)
       await activePage.waitForLoadState('domcontentloaded').catch(() => {});
-      await activePage.waitForTimeout(250);
 
-      // ── CAPTCHA check (every step) ──
+      // ── Single combined DOM check: CAPTCHA + bot wall + cookies ──
+      // One evaluate() call instead of 4+ separate ones → 4x faster
       try {
-        const solved = await handleCaptchaIfPresent(activePage, userId, taskId);
-        if (solved === false) {
-          await activePage.waitForTimeout(3000);
-          const retried = await handleCaptchaIfPresent(activePage, userId, taskId);
-          if (!retried) {
+        const pageCheck = await Promise.race([
+          activePage.evaluate((dismissCookies: boolean) => {
+            const bodyText = (document.body?.innerText || '').substring(0, 500).toLowerCase();
+            const title = document.title?.toLowerCase() || '';
+
+            // Bot wall check
+            const isBotWall = /just a moment|checking your browser|ddos protection|access denied|cloudflare|blocked|security check|verify you are human/.test(title + ' ' + bodyText) && bodyText.length < 1500;
+
+            // CAPTCHA check (quick — just element existence)
+            const hasCaptcha = !!(
+              document.querySelector('.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"], .h-captcha, .cf-turnstile, iframe[src*="hcaptcha"], iframe[src*="turnstile"], [data-public-key], img[src*="captcha"], #px-captcha')
+            );
+
+            // Cookie dismiss (first 5 steps only)
+            if (dismissCookies) {
+              for (const s of ['[id*="cookie"] button[class*="accept"]', '[class*="cookie"] button[class*="accept"]', '[id*="consent"] button[class*="accept"]', 'button[id*="accept-all"]', 'button[id*="acceptAll"]', '.cc-accept', '.cc-allow', '#accept-cookies']) {
+                const b = document.querySelector(s) as HTMLElement | null;
+                if (b && b.offsetParent !== null) { b.click(); break; }
+              }
+            }
+            return { isBotWall, hasCaptcha };
+          }, steps < 5),
+          new Promise<{ isBotWall: false; hasCaptcha: false }>((resolve) => setTimeout(() => resolve({ isBotWall: false, hasCaptcha: false }), 3000)),
+        ]);
+
+        // Handle bot wall
+        if (pageCheck.isBotWall) {
+          const wallUrl = activePage.url();
+          botWallCount = wallUrl === lastBotWallUrl ? botWallCount + 1 : 1;
+          lastBotWallUrl = wallUrl;
+          console.log(`[BROWSER-AGENT] Bot wall at ${wallUrl} (attempt ${botWallCount})`);
+          if (botWallCount <= 2) {
+            await activePage.waitForTimeout(botWallCount === 1 ? 5000 : 3000);
+            try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
+          } else if (botWallCount >= BOT_WALL_MAX) {
+            const pageData = await capturePageData(activePage);
+            return { success: false, error: `Bot wall: ${wallUrl}`, steps, cost: totalCost, screenshots, pageData };
+          }
+        } else { botWallCount = 0; }
+
+        // Handle CAPTCHA (only when detected — not every step)
+        if (pageCheck.hasCaptcha) {
+          const solved = await handleCaptchaIfPresent(activePage, userId, taskId);
+          if (!solved) {
             captchaFailCount++;
             if (captchaFailCount >= 3) {
               const pageData = await capturePageData(activePage);
               return { success: false, result: `Blocked by CAPTCHA at ${activePage.url()}`, error: 'captcha_blocked', steps, cost: totalCost, screenshots, pageData };
             }
           } else { captchaFailCount = 0; }
-        } else { captchaFailCount = 0; }
-      } catch { /* non-critical */ }
-
-      // ── Cookie/modal auto-dismiss (first 5 steps) ──
-      if (steps < 5) {
-        try {
-          await activePage.evaluate(() => {
-            const sels = [
-              '[id*="cookie"] button[class*="accept"]', '[class*="cookie"] button[class*="accept"]',
-              '[id*="consent"] button[class*="accept"]', '[id*="gdpr"] button[class*="accept"]',
-              'button[id*="accept-all"]', 'button[id*="acceptAll"]',
-              'button[data-testid*="accept"]', 'button[aria-label*="Accept all"]',
-              '.cc-accept', '.cc-allow', '#accept-cookies',
-            ];
-            for (const s of sels) {
-              const b = document.querySelector(s) as HTMLElement | null;
-              if (b && b.offsetParent !== null) { b.click(); break; }
-            }
-          }).catch(() => {});
-        } catch { /* non-critical */ }
-      }
-
-      // ── Bot wall detection ──
-      try {
-        const pageTitle = await activePage.title().catch(() => '');
-        const bodySnippet = await activePage.evaluate(() => document.body?.innerText?.substring(0, 300) || '').catch(() => '');
-        const isBotWall = /just a moment|checking your browser|ddos protection|access denied|cloudflare|blocked|security check|verify you are human/i.test(pageTitle + ' ' + bodySnippet);
-        if (isBotWall) {
-          const wallUrl = activePage.url();
-          botWallCount = wallUrl === lastBotWallUrl ? botWallCount + 1 : 1;
-          lastBotWallUrl = wallUrl;
-          console.log(`[BROWSER-AGENT] Bot wall at ${wallUrl} (attempt ${botWallCount})`);
-          if (botWallCount <= 2) {
-            await activePage.waitForTimeout(botWallCount === 1 ? 6000 : 4000);
-            try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
-          } else if (botWallCount >= BOT_WALL_MAX) {
-            const pageData = await capturePageData(activePage);
-            return { success: false, error: `Bot wall: ${wallUrl} — site blocked after ${botWallCount} attempts`, steps, cost: totalCost, screenshots, pageData };
-          }
-        } else { botWallCount = 0; }
-      } catch { /* non-critical */ }
-
-      // ── Smart bail-out for booking tasks ──
-      if (isBookingTask && steps > 0 && steps % 10 === 0 && steps > lastProgressCheck) {
-        lastProgressCheck = steps;
-        try {
-          const pageText = await activePage.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
-          const hasConfirmation = /\b(confirm|booked|reserved|success|thank you|your reservation|order placed)\b/i.test(pageText);
-          if (hasConfirmation) {
-            history.push(`✅ Confirmation detected on page! Output DONE with details.`);
-          } else if (steps >= 20 && !hasFilledAnyField) {
-            const phoneMatch = pageText.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-            if (phoneMatch) {
-              return { success: false, error: `CALL-GATE: Too complex after ${steps} steps. Phone: ${phoneMatch[0]}`, steps, cost: totalCost, screenshots };
-            }
-          }
-        } catch { /* non-critical */ }
-      }
+        }
+      } catch { /* non-critical — page may have navigated */ }
 
       // ══════════════════════════════════════════════════
       // GET PAGE STATE (accessibility snapshot, not screenshot)
