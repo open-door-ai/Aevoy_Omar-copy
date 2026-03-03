@@ -3522,7 +3522,132 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
       isTaskComplete = true;
       aiSignaledComplete = true;
     }
-    let totalAiCost = aiResponse.cost || 0;
+
+    // ════════════════════════════════════════════════════════════════════
+    // BROWSER FAST PATH: For "Go to X.com and do Y" tasks, skip the
+    // iteration loop entirely and go directly to the vision agent.
+    // ROOT CAUSE: The iteration loop wastes all 15 rounds on AI calls
+    // that generate failed browse/search actions. The vision agent — which
+    // is the correct tool — never launches because its gate requires
+    // hasBrowseEver (set by successful action execution in the loop).
+    // This fast path: navigate → vision agent → done. No wasted rounds.
+    // ════════════════════════════════════════════════════════════════════
+    let _bfpVisionCost = 0; // Track vision agent cost from browser fast path (added to totalAiCost below)
+    if (_hasExplicitDomainCheck && executionEngine && !isTaskComplete) {
+      // Extract target URL from task text
+      const _bfpTaskText = `${subject} ${body || ''}`;
+      const _bfpUrlMatch = _bfpTaskText.match(/\bhttps?:\/\/[^\s,)]+/) ||
+        _bfpTaskText.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on|via|through|from)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i);
+      const _bfpRawDomain = _bfpUrlMatch?.[1] || _bfpUrlMatch?.[0] || '';
+      const _bfpTargetUrl = _bfpRawDomain
+        ? (_bfpRawDomain.startsWith('http') ? _bfpRawDomain : `https://www.${_bfpRawDomain.replace(/[,;!?)\]]+$/, '')}`)
+        : '';
+
+      if (_bfpTargetUrl) {
+        console.log(`[BROWSER-FAST-PATH] Explicit domain task — navigating directly to ${_bfpTargetUrl} and launching vision agent`);
+        const _bfpPage = executionEngine.getPage?.();
+        if (_bfpPage && !_bfpPage.isClosed()) {
+          try {
+            // Navigate directly to the target URL
+            await _bfpPage.goto(_bfpTargetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await _bfpPage.waitForTimeout(2000); // Let JS/SPA render
+
+            const _bfpPageUrl = _bfpPage.url();
+            const _bfpIsError = _bfpPageUrl.startsWith('chrome-error://') || _bfpPageUrl.startsWith('about:');
+
+            if (!_bfpIsError) {
+              // Prepare vision agent context (same as the existing invocation in the iteration loop)
+              let _bfpPassword = '';
+              try {
+                const { getAgentPasswords } = await import("./agent-passwords.js");
+                const _bfpPw = await getAgentPasswords(userId);
+                _bfpPassword = _bfpPw?.primary || 'AevoyAgent2026!';
+              } catch { _bfpPassword = 'AevoyAgent2026!'; }
+              const _bfpEmail = `${username}@aevoy.com`;
+              const _bfpName = senderName || username;
+              const _bfpLearnings = learningsHint ? `\n\nHIVE MIND INTELLIGENCE (from past tasks on this site):\n${learningsHint.substring(0, 600)}` : '';
+              const _bfpIsSignup = /\b(sign\s?up|signup|register|create.*account|make.*account|enroll)\b/i.test(taskTextLower);
+              const _bfpPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';
+              const _bfpFormCtx = _bfpIsSignup
+                ? `FILL the signup form NOW: email=${_bfpEmail}, password=${_bfpPassword}, name=${_bfpName}, last_name=Aevoy${_bfpPhoneCtx}. Click the Sign Up/Create Account/Register button. DO NOT describe the page. ACTUALLY FILL THE FORM AND CLICK SUBMIT.`
+                : `If filling forms use: email=${_bfpEmail}, password=${_bfpPassword}, name=${_bfpName}, last_name=Aevoy${_bfpPhoneCtx}. Complete the task fully on the page.`;
+              // Booking context
+              const _bfpIsBooking = /\b(book|reserv|table for|reso\b|dinner)\b/i.test(taskTextLower);
+              const _bfpParty = _bfpTaskText.match(/(\d+)\s*(ppl|people|persons?|guests?|covers?)/i)?.[1] || '';
+              const _bfpTime = _bfpTaskText.match(/(?:at|for)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i)?.[1] || '';
+              const _bfpDate = /tonight|today/i.test(_bfpTaskText) ? 'today' : /tomorrow/i.test(_bfpTaskText) ? 'tomorrow' : '';
+              const _bfpBookingCtx = _bfpIsBooking ? `\n\n⚡ BOOKING DETAILS: Party size=${_bfpParty || '2'}, Date=${_bfpDate || 'today'}, Time=${_bfpTime || 'tonight'}. Complete the reservation form fully.` : '';
+              const _bfpVisionTask = `${subject} ${body || ''}. ${_bfpFormCtx}${_bfpBookingCtx}${_bfpLearnings}`;
+
+              console.log(`[BROWSER-FAST-PATH] Vision agent starting on ${_bfpPageUrl.substring(0, 80)}`);
+              void getSupabaseClient().from('tasks').update({
+                progress_message: `[BROWSER-FAST-PATH] Vision agent running on ${_bfpPageUrl.substring(0, 60)}`
+              }).eq('id', taskId).then(() => {});
+
+              // Run vision agent with 8-minute timeout
+              const VISION_TIMEOUT_MS = 480000;
+              const _bfpResult = await Promise.race([
+                runVisionAgent(_bfpPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error(`Vision agent timeout after ${VISION_TIMEOUT_MS / 60000} minutes`)), VISION_TIMEOUT_MS)
+                ),
+              ]);
+
+              _bfpVisionCost = _bfpResult.cost || 0;
+              console.log(`[BROWSER-FAST-PATH] Vision agent result: success=${_bfpResult.success}, steps=${_bfpResult.steps}, cost=$${_bfpResult.cost.toFixed(4)}`);
+
+              if (_bfpResult.success && _bfpResult.result && _bfpResult.result.length > 30) {
+                // Vision agent succeeded — use its result directly
+                aiResponse.content = _bfpResult.result;
+                isTaskComplete = true;
+                aiSignaledComplete = true;
+                signupAutoCompleted = true; // Protect from quality gate overwrite
+                console.log(`[BROWSER-FAST-PATH] SUCCESS — skipping iteration loop`);
+              } else {
+                // Vision agent failed — try to extract partial data
+                const _bfpPageData = _bfpResult.pageData || '';
+                if (_bfpPageData && _bfpPageData.length > 50) {
+                  // Try to summarize the page data into a useful response
+                  const _bfpIsResearch = /\b(find|search|look|show|get me|compare|what|which|best|top|cheapest|rating|price|review)\b/i.test(taskTextLower);
+                  if (_bfpIsResearch) {
+                    try {
+                      const { generateForcedDirectAnswer } = await import("./ai.js");
+                      const _bfpSummary = await generateForcedDirectAnswer(
+                        _bfpTaskText,
+                        `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}\n\nExtract specific information that answers the user's request. Include names, prices, ratings, addresses — real data only.`,
+                        username
+                      );
+                      if (_bfpSummary.content && _bfpSummary.content.length > 30) {
+                        aiResponse.content = _bfpSummary.content;
+                        isTaskComplete = true;
+                        aiSignaledComplete = true;
+                        signupAutoCompleted = true;
+                        console.log(`[BROWSER-FAST-PATH] Partial data summarized — skipping iteration loop`);
+                      }
+                    } catch (e) {
+                      console.warn('[BROWSER-FAST-PATH] Summary failed:', e instanceof Error ? e.message : String(e));
+                    }
+                  }
+                  if (!isTaskComplete) {
+                    // Store page data for the iteration loop to use
+                    console.log(`[BROWSER-FAST-PATH] Vision failed but page data captured (${_bfpPageData.length} chars) — falling through to iteration loop`);
+                  }
+                } else {
+                  console.log(`[BROWSER-FAST-PATH] Vision failed, no page data — falling through to iteration loop`);
+                }
+              }
+            } else {
+              console.warn(`[BROWSER-FAST-PATH] Navigation landed on error page — falling through to iteration loop`);
+            }
+          } catch (_bfpErr) {
+            console.warn(`[BROWSER-FAST-PATH] Navigation/vision failed:`, _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr));
+            // Fall through to iteration loop — the normal browse-inject + iteration can still try
+          }
+        }
+      }
+    }
+
+    let totalAiCost = (aiResponse.cost || 0) + _bfpVisionCost;
     let totalTokens = aiResponse.tokensUsed || 0;
     let globalActionIndex = 0;
 
