@@ -3161,7 +3161,8 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // 6e. BOOKING TASK DETAIL CHECK: Reservations need party size, date, time.
     // Ask the user when this critical info is missing — a human would ask before calling.
     const isRestBookingTask = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso)|table\s+(for|at))\b/i.test(taskTextLower) &&
-      !/\b(flight|hotel|airbnb|car|rental)\b/i.test(taskTextLower); // Restaurant bookings, not flights/hotels
+      !/\b(flight|hotel|airbnb|car|rental)\b/i.test(taskTextLower) && // Restaurant bookings, not flights/hotels
+      !/https?:\/\/|[\w-]+\.[\w-]+\.(com|org|net|io|co|app|ca|uk)\b/i.test(`${subject} ${body || ''}`); // Not if task has explicit URL/domain
     if (isRestBookingTask) {
       const fullInput = `${subject} ${body || ''}`;
       const hasPartySize = /\b(\d+)\s*(people|person|guests?|pax|of us)\b/i.test(fullInput) || /\bfor\s+(\d+)\b/i.test(fullInput);
