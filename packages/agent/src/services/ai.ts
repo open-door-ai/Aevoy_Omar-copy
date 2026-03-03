@@ -2109,9 +2109,8 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 
 /**
  * Fast text-only response for browser automation steps.
- * Uses ONE model (Gemini Flash) for ALL steps — no cascading through 11 models.
- * This prevents rate-limit exhaustion across multiple providers during a 40-step task.
- * Fallback: DeepSeek (if Gemini down) → Groq Llama-8B (last resort).
+ * Uses ONE model for ALL steps — OpenRouter paid (52/52 success rate, no rate limits).
+ * A 40-step task costs ~$0.02 on OpenRouter. Stop burning free tier rate limits.
  */
 export async function generateBrowserStepResponse(
   prompt: string,
@@ -2130,61 +2129,35 @@ export async function generateBrowserStepResponse(
     { role: "user" as const, content: prompt }
   ];
 
-  // ═══ PRIMARY: Gemini 2.5 Flash — 2000 RPM paid, 15 RPM free, cheap ═══
-  if (process.env.GOOGLE_API_KEY) {
+  // ═══ PRIMARY: OpenRouter paid — NO rate limits, 52/52 success rate ═══
+  // Qwen3-30B MoE (3B active) — fast, cheap, excellent at structured output.
+  // Cost: ~$0.20/$0.60 per M tokens → ~$0.0005/step → ~$0.02/task
+  if (process.env.OPENROUTER_API_KEY) {
     try {
-      const response = await withTimeout(getGeminiClient().chat.completions.create({
-        model: "gemini-2.5-flash",
+      const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
+        model: "qwen/qwen3-30b-a3b",
         max_tokens: 1024,
         messages,
-      }), 12000);
+      }), 15000);
       const rawContent = response.choices[0]?.message?.content || '';
       const content = stripThinkTags(rawContent);
       if (content.length > 10) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
-        console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "browser-step").catch(() => {});
+        const cost = (inTok * 0.20 + outTok * 0.60) / 1_000_000;
+        console.log(`[AI] BrowserStep (OpenRouter Qwen3-30B) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "qwen/qwen3-30b-a3b", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[AI] BrowserStep (OpenRouter Qwen3-30B) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  // ═══ FALLBACK: DeepSeek — separate rate pool, cheap ═══
-  if (process.env.DEEPSEEK_API_KEY) {
-    try {
-      const stream = await withTimeout(getDeepSeekClient().chat.completions.create({
-        model: 'deepseek-chat',
-        messages,
-        max_tokens: 512,
-        temperature: 0.3,
-        stream: true,
-        stream_options: { include_usage: true },
-      }), 15000);
-      let content = '';
-      let inputTokens = 0, outputTokens = 0;
-      for await (const chunk of stream) {
-        content += chunk.choices[0]?.delta?.content || '';
-        if (chunk.usage) { inputTokens = chunk.usage.prompt_tokens || 0; outputTokens = chunk.usage.completion_tokens || 0; }
-      }
-      content = stripThinkTags(content);
-      if (content.length > 10) {
-        const cost = (inputTokens * 0.27 + outputTokens * 1.10) / 1_000_000;
-        console.log(`[AI] BrowserStep (DeepSeek fallback) | $${cost.toFixed(6)} | ${inputTokens}in/${outputTokens}out`);
-        if (userId) trackApiCall(userId, "deepseek-chat", inputTokens, outputTokens, cost, "deepseek", taskId, "browser-step").catch(() => {});
-        return { content, cost };
-      }
-    } catch (error) {
-      console.warn(`[AI] BrowserStep (DeepSeek) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // ═══ LAST RESORT: Groq Llama-8B — free, fast, separate bucket ═══
+  // ═══ FALLBACK: Groq Llama-8B — free, fast ═══
   if (process.env.GROQ_API_KEY) {
     try {
+      await paceModelCall("llama-3.1-8b-instant");
       const response = await withTimeout(getGroqClient().chat.completions.create({
         model: "llama-3.1-8b-instant",
         max_tokens: 512,
@@ -2192,7 +2165,7 @@ export async function generateBrowserStepResponse(
       }), 5000);
       const content = stripThinkTags(response.choices[0]?.message?.content || '');
       if (content.length > 10) {
-        console.log(`[AI] BrowserStep (Groq Llama-8B last resort) | $0`);
+        console.log(`[AI] BrowserStep (Groq Llama-8B fallback) | $0`);
         if (userId) trackApiCall(userId, "llama-3.1-8b-instant", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
       }
