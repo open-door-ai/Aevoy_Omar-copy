@@ -1393,6 +1393,10 @@ export async function runVisionAgent(
         // Text-only steps (95%): use fast text models (Groq 1-3s, DeepSeek 2-5s)
         // Screenshot steps (stuck): use vision model cascade (slower but can analyze images)
         const useScreenshot = sameUrlCount >= 3;
+        // Take a fresh screenshot when stuck — stale screenshots (from 5 steps ago) mislead vision models
+        if (useScreenshot) {
+          try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
+        }
         const screenshotData = useScreenshot ? (screenshots[screenshots.length - 1] || '') : '';
         const hasScreenshot = screenshotData.length > 100;
 
@@ -1405,6 +1409,13 @@ export async function runVisionAgent(
         aiResponse = result.content;
         stepCost = result.cost;
         totalCost += stepCost;
+
+        // After a vision step, reset sameUrlCount so normal text models are used next.
+        // Without this, once sameUrlCount >= 3 it never drops back and the vision fallback
+        // (DeepSeek text-only) loops forever on the same action (e.g. SCROLL down).
+        if (hasScreenshot) {
+          sameUrlCount = 2; // Allow 3 normal steps before vision fires again
+        }
       } catch (err) {
         console.warn(`[BROWSER-AGENT] AI error at step ${steps + 1}: ${err}`);
         history.push(`Step ${steps + 1}: AI error (rate limit — not counted)`);
