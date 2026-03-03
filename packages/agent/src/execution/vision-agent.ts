@@ -16,6 +16,7 @@
  */
 
 import type { Page } from 'patchright';
+import { createCursor, type GhostCursor } from 'ghost-cursor-patchright-core';
 import { generateVisionResponse, generateBrowserStepResponse } from '../services/ai.js';
 import { handleCaptchaIfPresent } from './captcha.js';
 import { extractVerificationCode } from '../utils/email-code-extractor.js';
@@ -327,7 +328,7 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
 // ACTION EXECUTION — Native Playwright locators
 // ══════════════════════════════════════════════════════════════════
 
-async function executeAction(page: Page, action: PlaywrightAction, history: string[]): Promise<boolean> {
+async function executeAction(page: Page, action: PlaywrightAction, history: string[], cursor?: GhostCursor | null): Promise<boolean> {
   // Tight timeouts: if element exists, Playwright finds it in <500ms.
   // Wasting 5s per failed locator × 10 attempts = 50s dead time per failed action.
   const timeout = 1500;
@@ -335,27 +336,47 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
   try {
     switch (action.type) {
       case 'click': {
+        // Human-like click: find element → ghost cursor moves with bezier curve → click
+        const humanClick = async (el: any) => {
+          if (cursor) {
+            try {
+              // Ghost cursor: natural bezier-curve mouse movement, then click
+              await cursor.click(el, { paddingPercentage: 10 });
+              return;
+            } catch { /* fallback to standard click */ }
+          }
+          await el.click({ timeout });
+        };
+
         // Try role+name first, then text, then fallback to other roles
         if (action.role && action.name) {
-          await page.getByRole(action.role as any, { name: action.name, exact: false }).first().click({ timeout });
+          const el = page.getByRole(action.role as any, { name: action.name, exact: false }).first();
+          await el.waitFor({ state: 'visible', timeout });
+          await humanClick(el);
           return true;
         }
         if (action.name) {
           // Try getByText first (most flexible)
           try {
-            await page.getByText(action.name, { exact: false }).first().click({ timeout: 1500 });
+            const el = page.getByText(action.name, { exact: false }).first();
+            await el.waitFor({ state: 'visible', timeout: 1500 });
+            await humanClick(el);
             return true;
           } catch { /* try roles */ }
           // Try common interactive roles (only most common 4, not 7)
           for (const role of ['button', 'link', 'menuitem', 'tab']) {
             try {
-              await page.getByRole(role as any, { name: action.name, exact: false }).first().click({ timeout: 1000 });
+              const el = page.getByRole(role as any, { name: action.name, exact: false }).first();
+              await el.waitFor({ state: 'visible', timeout: 1000 });
+              await humanClick(el);
               return true;
             } catch { continue; }
           }
           // Last resort: try by label
           try {
-            await page.getByLabel(action.name, { exact: false }).first().click({ timeout: 1000 });
+            const el = page.getByLabel(action.name, { exact: false }).first();
+            await el.waitFor({ state: 'visible', timeout: 1000 });
+            await humanClick(el);
             return true;
           } catch { /* fall through */ }
           history.push(`⚠️ Could not find element "${action.name}" to click. Try a different name from the accessibility tree, or SCROLL down to reveal more elements.`);
@@ -692,6 +713,15 @@ export async function runVisionAgent(
     allPopups.push(popup as Page);
     console.log(`[BROWSER-AGENT] New popup/tab: ${(popup as Page).url() || '(loading)'}`);
   });
+
+  // ── Ghost cursor: human-like bezier curve mouse movements ──
+  let cursor: GhostCursor | null = null;
+  try {
+    cursor = createCursor(page);
+    console.log('[BROWSER-AGENT] Ghost cursor initialized (human-like mouse movements)');
+  } catch (e) {
+    console.warn('[BROWSER-AGENT] Ghost cursor init failed, using standard clicks:', e);
+  }
 
   let lastUrl = '';
   let sameUrlCount = 0;
@@ -1253,7 +1283,7 @@ export async function runVisionAgent(
         }
 
         // ── Execute the action using native Playwright ──
-        const ok = await executeAction(activePage, action, history);
+        const ok = await executeAction(activePage, action, history, cursor);
         await waitAfterAction(activePage, action.type);
 
         // Record in action memory
@@ -1283,6 +1313,9 @@ export async function runVisionAgent(
         }
 
         console.log(`[BROWSER-AGENT] ${action.raw.substring(0, 60)} → ${ok ? 'ok' : 'FAIL'}`);
+
+        // Human-like idle delay between actions (200-600ms random)
+        await activePage.waitForTimeout(200 + Math.floor(Math.random() * 400));
 
         // If a click/navigate failed, stop batch — the page state may have changed
         if (!ok && (action.type === 'click' || action.type === 'navigate')) {

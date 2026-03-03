@@ -12,17 +12,17 @@ import type { BrowserContext, Page } from 'patchright';
 // 1. USER-AGENT ROTATION — Current Chrome 131+ (Jan 2026)
 // ---------------------------------------------------------------------------
 const USER_AGENTS = [
-  // Chrome 131 (Dec 2025)
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  // Chrome 130 (Nov 2025)
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-  // Chrome 129 (Oct 2025)
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+  // Chrome 134 (Mar 2026 — current)
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+  // Chrome 133 (Feb 2026)
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+  // Chrome 132 (Jan 2026)
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
 ];
 
 export function getRealisticUserAgent(): string {
@@ -207,6 +207,18 @@ export async function applyStealthPatches(context: BrowserContext): Promise<void
       return origToBlob.call(this, cb, type, quality as number | undefined);
     };
 
+    // --- Canvas getImageData noise (some fingerprinters read raw pixel data) ---
+    const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+    CanvasRenderingContext2D.prototype.getImageData = function (sx: number, sy: number, sw: number, sh: number) {
+      const imageData = origGetImageData.call(this, sx, sy, sw, sh);
+      // Apply same ±1 noise to first 64 pixels (lightweight, hard to detect)
+      const noisePx = Math.min(imageData.data.length, 256);
+      for (let i = 0; i < noisePx; i += 4) {
+        imageData.data[i] = Math.max(0, Math.min(255, imageData.data[i] + (Math.random() > 0.5 ? 1 : -1)));
+      }
+      return imageData;
+    };
+
     // --- WebGL fingerprint spoofing (randomized per session) ---
     // Static "GTX 1650" every session is a fingerprinting signal — randomize from real GPU list
     const webglProfiles = [
@@ -316,6 +328,36 @@ export async function applyStealthPatches(context: BrowserContext): Promise<void
         }),
       });
     }
+
+    // --- CDP screenX/screenY fix (Cloudflare Turnstile detection vector) ---
+    // CDP-dispatched mouse events have screenX/screenY = 0 or relative to iframe.
+    // Real browsers set screenX = clientX + window.screenX (window position on screen).
+    // This patches MouseEvent constructor to fix these coordinates.
+    const OrigMouseEvent = MouseEvent;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).MouseEvent = function (type: string, init: MouseEventInit = {}) {
+      // If screenX/screenY not properly set (both 0 or same as clientX/Y), fix them
+      if (init.clientX !== undefined && (init.screenX === undefined || init.screenX === 0 || init.screenX === init.clientX)) {
+        init.screenX = (init.clientX || 0) + (window.screenX || 0);
+        init.screenY = (init.clientY || 0) + (window.screenY || 0) + 85; // 85px for title bar + toolbar
+      }
+      return new OrigMouseEvent(type, init);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).MouseEvent.prototype = OrigMouseEvent.prototype;
+    Object.defineProperty((window as any).MouseEvent, 'name', { value: 'MouseEvent' });
+
+    // --- window.screenX/Y (simulate window position on screen) ---
+    // Headless browsers always have 0,0 — real windows are offset
+    const fakeScreenX = 50 + Math.floor(Math.random() * 200);
+    const fakeScreenY = 30 + Math.floor(Math.random() * 100);
+    Object.defineProperty(window, 'screenX', { get: () => fakeScreenX });
+    Object.defineProperty(window, 'screenY', { get: () => fakeScreenY });
+    Object.defineProperty(window, 'screenLeft', { get: () => fakeScreenX });
+    Object.defineProperty(window, 'screenTop', { get: () => fakeScreenY });
+
+    // --- Disable window.print (prevents print dialog blocking) ---
+    window.print = () => {};
   }, profile);
 }
 

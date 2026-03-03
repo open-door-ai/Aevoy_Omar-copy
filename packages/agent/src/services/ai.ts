@@ -314,12 +314,14 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
@@ -327,6 +329,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
   reason: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
@@ -339,6 +342,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
   validate: [
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.1-8b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
@@ -347,6 +351,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   respond: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
@@ -358,6 +363,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
   classify: [
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.1-8b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
@@ -366,6 +372,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   generate: [
     // Generate uses GENERATE_SYSTEM_PROMPT (~200 tokens) — all models can handle it
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'qwen/qwen3-coder:free', costPerMInput: 0, costPerMOutput: 0 },
@@ -374,6 +381,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   complex: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },

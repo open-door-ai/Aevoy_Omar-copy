@@ -49,6 +49,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.0",
     "express-rate-limit": "^8.2.1",
+    "ghost-cursor-patchright-core": "^1.3.42",
     "helmet": "^8.1.0",
     "imapflow": "^1.2.8",
     "libphonenumber-js": "^1.12.36",
