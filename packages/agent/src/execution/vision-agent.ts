@@ -359,22 +359,41 @@ async function capturePageData(page: Page): Promise<string> {
 
 /**
  * Fetch user profile for context injection into every browser step.
- * Lets the agent know who it's working for — name, timezone, location.
+ * Lets the agent know who it's working for — name, email, phone, timezone, location.
+ * This enables automatic form-filling and sign-ups without needing credentials in the task.
  */
-async function fetchUserProfile(userId: string): Promise<{ displayName: string; timezone: string; location: string } | null> {
+async function fetchUserProfile(userId: string): Promise<{ displayName: string; email: string; phone: string; timezone: string; location: string } | null> {
   try {
     const { data } = await getSupabaseClient()
       .from('profiles')
-      .select('display_name, preferred_name, timezone, location')
+      .select('display_name, preferred_name, email, phone_number, timezone, location')
       .eq('id', userId)
       .single();
     if (!data) return null;
     return {
       displayName: data.preferred_name || data.display_name || '',
+      email: data.email || '',
+      phone: data.phone_number || '',
       timezone: data.timezone || 'UTC',
       location: (data as any).location || '',
     };
   } catch { return null; }
+}
+
+/**
+ * Human-like typing: fires real keydown/keypress/keyup events with random inter-key delays.
+ * Avoids .fill() which fires a single instantaneous input event — detectable by all bot systems.
+ * 40-110ms per char mimics real typing speed (~85-120 WPM).
+ */
+async function humanType(pg: Page, locator: { click: (o?: any) => Promise<void> }, text: string): Promise<void> {
+  await locator.click({ timeout: 3000 });
+  await pg.keyboard.press('Control+a');
+  await pg.keyboard.press('Backspace');
+  await pg.waitForTimeout(80 + Math.random() * 80);
+  for (const char of text) {
+    await pg.keyboard.type(char);
+    await pg.waitForTimeout(40 + Math.random() * 70); // 40–110ms per char
+  }
 }
 
 function extractTaskCredentials(task: string): { email: string; password: string; name: string; phone: string } {
@@ -689,12 +708,13 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
           const resolved = resolveByRef(action.ref);
           if (resolved) {
             try {
-              await resolved.locator.fill(action.value, { timeout });
+              await humanType(page, resolved.locator, action.value);
               return true;
             } catch {
               // Fallback: try inexact match
               try {
-                await page.getByRole(resolved.entry.role as any, { name: resolved.entry.name, exact: false }).first().fill(action.value, { timeout });
+                const fallbackLoc = page.getByRole(resolved.entry.role as any, { name: resolved.entry.name, exact: false }).first();
+                await humanType(page, fallbackLoc, action.value);
                 return true;
               } catch { /* fall through */ }
             }
@@ -708,15 +728,15 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (!action.name) return false;
         // Try getByLabel → getByPlaceholder → getByRole('textbox') → CSS selectors — tight timeouts
         try {
-          await page.getByLabel(action.name, { exact: false }).first().fill(action.value, { timeout });
+          await humanType(page, page.getByLabel(action.name, { exact: false }).first(), action.value);
           return true;
         } catch { /* next */ }
         try {
-          await page.getByPlaceholder(action.name, { exact: false }).first().fill(action.value, { timeout });
+          await humanType(page, page.getByPlaceholder(action.name, { exact: false }).first(), action.value);
           return true;
         } catch { /* next */ }
         try {
-          await page.getByRole('textbox', { name: action.name, exact: false }).first().fill(action.value, { timeout });
+          await humanType(page, page.getByRole('textbox', { name: action.name, exact: false }).first(), action.value);
           return true;
         } catch { /* next */ }
         // CSS selector fallback — for sites with non-standard form markup
@@ -738,7 +758,7 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
             try {
               const el = page.locator(sel).first();
               if (await el.isVisible({ timeout: 500 })) {
-                await el.fill(action.value!, { timeout });
+                await humanType(page, el, action.value!);
                 return true;
               }
             } catch { continue; }
@@ -971,14 +991,21 @@ function buildPrompt(
   snapshot: string, url: string, task: string, history: string[],
   creds: { email: string; password: string; name: string; phone: string },
   triedAndFailed: string, stuckHint: string,
-  userProfile?: { displayName: string; timezone: string; location: string } | null
+  userProfile?: { displayName: string; email: string; phone: string; timezone: string; location: string } | null
 ): string {
   const credNote = creds.email
     ? `\n⚡ CREDENTIALS (USE THESE): email=${creds.email}${creds.password ? ` | password=${creds.password}` : ''}${creds.name ? ` | name=${creds.name}` : ''}${creds.phone ? ` | phone=${creds.phone}` : ''}\n`
     : '';
 
-  const profileNote = userProfile?.displayName
-    ? `\n👤 USER: name=${userProfile.displayName}${userProfile.timezone ? ` | timezone=${userProfile.timezone}` : ''}${userProfile.location ? ` | location=${userProfile.location}` : ''}\n`
+  // Build user identity note — includes email + phone so agent can auto-fill signup/booking forms
+  const profileParts: string[] = [];
+  if (userProfile?.displayName) profileParts.push(`name=${userProfile.displayName}`);
+  if (userProfile?.email) profileParts.push(`email=${userProfile.email}`);
+  if (userProfile?.phone) profileParts.push(`phone=${userProfile.phone}`);
+  if (userProfile?.timezone) profileParts.push(`timezone=${userProfile.timezone}`);
+  if (userProfile?.location) profileParts.push(`location=${userProfile.location}`);
+  const profileNote = profileParts.length > 0
+    ? `\n👤 USER IDENTITY (use for signups/forms): ${profileParts.join(' | ')}\n`
     : '';
 
   const isErrorPage = url.startsWith('chrome-error://') || url.startsWith('about:') || url === '';
@@ -1089,8 +1116,8 @@ export async function runVisionAgent(
   }
 
   // ── Fetch user profile for context injection ──
-  // Every browser step now knows who it's working for: name, timezone, location.
-  let userProfile: { displayName: string; timezone: string; location: string } | null = null;
+  // Every browser step now knows who it's working for: name, email, phone, timezone, location.
+  let userProfile: { displayName: string; email: string; phone: string; timezone: string; location: string } | null = null;
   if (userId) {
     try {
       userProfile = await fetchUserProfile(userId);
