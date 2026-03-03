@@ -806,7 +806,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText) ||
       // Document/spreadsheet/card creation — these use create_excel/word/ppt/pdf actions directly, never browse online
       // SKIP: If user names a specific website ("go to canva.com and design" or "go to Canva"), route to browser instead
-      (!(/\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) || /\bhttps?:\/\/\S+/i.test(directBrowserTaskText) || /\b(go\s+to|visit|use|open)\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(directBrowserTaskText)) &&
+      (!(/\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) || /\bhttps?:\/\/\S+/i.test(directBrowserTaskText) || /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(directBrowserTaskText)) &&
       (/\b(create|make|build|generate|give me|design)\b.{0,50}\b(spreadsheet|excel|xlsx|word document|docx|powerpoint|pptx|presentation|pdf|csv|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(directBrowserTaskText) ||
       /\b(spreadsheet|excel file|word file|powerpoint|presentation|business cards?)\b.{0,40}\b(for|to track|to manage|template|tracker)\b/i.test(directBrowserTaskText)));
 
@@ -1436,7 +1436,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const _earlyBcText = `${subject} ${body || ''}`;
     const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_earlyBcText) ||
       /\bhttps?:\/\/\S+/i.test(_earlyBcText) ||
-      /\b(go\s+to|visit|use|open)\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(_earlyBcText);
+      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(_earlyBcText);
     const _earlyIsBc = !_earlyBcUsesWebsite && /\b(business cards?)\b/i.test(_earlyBcText);
     if (_earlyIsBc) {
       console.log(`[BUSINESS-CARD-FAST-PATH] Detected business card task — creating PDF directly`);
@@ -2627,7 +2627,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // BUT: If user names a specific website ("go to canva.com and create a business card"), this is a BROWSER task
     const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
-      /\b(go\s+to|visit|use|open)\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa|opentable|swagbucks|bestbuy|amazon|ebay|etsy|shopify|wix|squarespace|wordpress)\b/i.test(`${subject} ${body}`);
+      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa|opentable|swagbucks|bestbuy|amazon|ebay|etsy|shopify|wix|squarespace|wordpress)\b/i.test(`${subject} ${body}`);
     const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(`${subject} ${body}`);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
@@ -3533,12 +3533,18 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // This fast path: navigate → vision agent → done. No wasted rounds.
     // ════════════════════════════════════════════════════════════════════
     let _bfpVisionCost = 0; // Track vision agent cost from browser fast path (added to totalAiCost below)
-    if (_hasExplicitDomainCheck && executionEngine && !isTaskComplete) {
-      // Extract target URL from task text
+    // Browser fast path fires for:
+    // 1. Explicit domain tasks ("go to X.com") — _hasExplicitDomainCheck
+    // 2. Signup tasks where forced-browse injection already set a target URL
+    const _bfpHasBrowseAction = aiResponse.actions.some(a => a.type === 'browse');
+    const _bfpShouldFire = _hasExplicitDomainCheck || (_isBrowserRequiredTask && _bfpHasBrowseAction);
+    if (_bfpShouldFire && executionEngine && !isTaskComplete) {
+      // Extract target URL — from task text OR from the injected browse action
       const _bfpTaskText = `${subject} ${body || ''}`;
       const _bfpUrlMatch = _bfpTaskText.match(/\bhttps?:\/\/[^\s,)]+/) ||
         _bfpTaskText.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on|via|through|from)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i);
-      const _bfpRawDomain = _bfpUrlMatch?.[1] || _bfpUrlMatch?.[0] || '';
+      const _bfpFromAction = !_bfpUrlMatch ? aiResponse.actions.find(a => a.type === 'browse')?.params?.url : null;
+      const _bfpRawDomain = _bfpUrlMatch?.[1] || _bfpUrlMatch?.[0] || (_bfpFromAction as string) || '';
       const _bfpTargetUrl = _bfpRawDomain
         ? (_bfpRawDomain.startsWith('http') ? _bfpRawDomain : `https://www.${_bfpRawDomain.replace(/[,;!?)\]]+$/, '')}`)
         : '';
@@ -3604,8 +3610,13 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 signupAutoCompleted = true; // Protect from quality gate overwrite
                 console.log(`[BROWSER-FAST-PATH] SUCCESS — skipping iteration loop`);
               } else {
-                // Vision agent failed — try to extract partial data
+                // Vision agent failed — construct a meaningful response from what happened.
+                // NEVER fall through to generic "I worked on your request" — always explain the outcome.
+                const _bfpError = _bfpResult.error || '';
+                const _bfpSteps = _bfpResult.steps || 0;
+                const _bfpVisionResult = _bfpResult.result || '';
                 let _bfpPageData = _bfpResult.pageData || '';
+
                 // If vision agent didn't return page data, capture it ourselves from the live page
                 if (_bfpPageData.length < 50 && _bfpPage && !_bfpPage.isClosed()) {
                   try {
@@ -3614,7 +3625,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                       const _bfpLiveText = await Promise.race([
                         _bfpPage.evaluate(() => {
                           const items: string[] = [];
-                          document.querySelectorAll('h1, h2, h3, [data-test*="name"], [class*="restaurant"], [class*="listing"], [class*="result"], [class*="card"], p').forEach(el => {
+                          document.querySelectorAll('h1, h2, h3, p, [class*="result"], [class*="card"], [class*="listing"]').forEach(el => {
                             const t = (el as HTMLElement).innerText?.trim();
                             if (t && t.length > 3 && t.length < 300) items.push(t);
                           });
@@ -3624,18 +3635,19 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                       ]);
                       if (_bfpLiveText && _bfpLiveText.length > 50) {
                         _bfpPageData = `Page: ${_bfpLiveUrl}\n${_bfpLiveText.substring(0, 4000)}`;
-                        console.log(`[BROWSER-FAST-PATH] Captured page data directly (${_bfpPageData.length} chars)`);
                       }
                     }
                   } catch { /* best effort */ }
                 }
-                if (_bfpPageData && _bfpPageData.length > 50) {
-                  // Try to summarize the page data into a useful response
+
+                // Strategy 1: If we have page data for a research task, try AI summary
+                const _bfpIsResearch = /\b(find|search|look|show|get me|compare|what|which|best|top|cheapest|rating|price|review)\b/i.test(taskTextLower);
+                if (_bfpPageData.length > 50 && _bfpIsResearch && !isTaskComplete) {
                   try {
                     const { generateForcedDirectAnswer } = await import("./ai.js");
                     const _bfpSummary = await generateForcedDirectAnswer(
                       _bfpTaskText,
-                      `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}\n\nExtract specific information that answers the user's request. Include names, prices, ratings, addresses — real data only.`,
+                      `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}\n\nExtract specific information. Include names, prices, ratings, addresses — real data only.`,
                       username
                     );
                     if (_bfpSummary.content && _bfpSummary.content.length > 30) {
@@ -3643,17 +3655,48 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                       isTaskComplete = true;
                       aiSignaledComplete = true;
                       signupAutoCompleted = true;
-                      console.log(`[BROWSER-FAST-PATH] Partial data summarized — skipping iteration loop`);
+                      console.log(`[BROWSER-FAST-PATH] Research data summarized — skipping iteration loop`);
                     }
-                  } catch (e) {
-                    console.warn('[BROWSER-FAST-PATH] Summary failed:', e instanceof Error ? e.message : String(e));
+                  } catch { /* try next strategy */ }
+                }
+
+                // Strategy 2: For signup/action tasks that ran many steps, describe what happened
+                // This covers Notion signup (25 steps, stuck at verification), etc.
+                if (!isTaskComplete && _bfpSteps >= 3) {
+                  const _bfpCurrentUrl = _bfpPage && !_bfpPage.isClosed() ? _bfpPage.url() : _bfpPageUrl;
+                  const _bfpDomain = (() => { try { return new URL(_bfpCurrentUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
+                  // Construct a meaningful failure response from the error
+                  let _bfpFailMsg = '';
+                  if (/captcha/i.test(_bfpError)) {
+                    _bfpFailMsg = `I navigated to ${_bfpDomain} but was blocked by a CAPTCHA that I couldn't solve. The site has anti-bot protection.`;
+                  } else if (/bot.?wall|blocked|access denied/i.test(_bfpError)) {
+                    _bfpFailMsg = `I tried to access ${_bfpDomain} but was blocked by their anti-bot protection after ${_bfpSteps} attempts.`;
+                  } else if (/call.?gate|phone/i.test(_bfpError)) {
+                    const _bfpPhone = _bfpError.match(/\+?\d[\d\s()-]{8,}/)?.[0] || '';
+                    _bfpFailMsg = _bfpPhone
+                      ? `I tried on ${_bfpDomain} but the process is too complex for automated browser interaction. You can call them directly at ${_bfpPhone}.`
+                      : `I tried on ${_bfpDomain} but the process requires steps I can't automate. You may need to complete it manually.`;
+                  } else if (/verification|verify|code|otp/i.test(_bfpError) || /verification|verify/i.test(_bfpCurrentUrl)) {
+                    _bfpFailMsg = `I started signing up on ${_bfpDomain} and entered your email (${username}@aevoy.com), but the site requires email verification with a code I couldn't retrieve in time. Check your inbox for a verification email from ${_bfpDomain}.`;
+                  } else if (/timeout|max steps/i.test(_bfpError)) {
+                    _bfpFailMsg = `I spent ${_bfpSteps} steps on ${_bfpDomain} working on your request but couldn't fully complete it. The page may require manual interaction.`;
+                  } else if (/stuck/i.test(_bfpError)) {
+                    _bfpFailMsg = `I navigated to ${_bfpDomain} but got stuck after ${_bfpSteps} steps. The site may require a different approach.`;
+                  } else if (_bfpVisionResult && _bfpVisionResult.length > 30) {
+                    _bfpFailMsg = _bfpVisionResult;
+                  } else {
+                    _bfpFailMsg = `I navigated to ${_bfpDomain} and attempted your request over ${_bfpSteps} steps but couldn't complete it. Error: ${_bfpError.substring(0, 200)}`;
                   }
-                  if (!isTaskComplete) {
-                    // Store page data for the iteration loop to use
-                    console.log(`[BROWSER-FAST-PATH] Vision failed but page data captured (${_bfpPageData.length} chars) — falling through to iteration loop`);
-                  }
-                } else {
-                  console.log(`[BROWSER-FAST-PATH] Vision failed, no page data — falling through to iteration loop`);
+                  aiResponse.content = _bfpFailMsg;
+                  isTaskComplete = true;
+                  aiSignaledComplete = true;
+                  signupAutoCompleted = true;
+                  console.log(`[BROWSER-FAST-PATH] Constructed failure response (${_bfpSteps} steps, error: ${_bfpError.substring(0, 80)})`);
+                }
+
+                // Strategy 3: If very few steps (<3) and no useful data, fall through
+                if (!isTaskComplete) {
+                  console.log(`[BROWSER-FAST-PATH] Vision failed early (${_bfpSteps} steps) — falling through to iteration loop`);
                 }
               }
             } else {
