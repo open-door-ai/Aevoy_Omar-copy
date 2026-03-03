@@ -1491,8 +1491,9 @@ export async function runVisionAgent(
           }
 
           // Accept DONE immediately if it contains factual data (numbers, dates, etc.)
-          // This prevents rejecting valid answers like "Population: 13,982,112"
-          const hasFactualData = /\d{3,}/.test(doneResult) && doneResult.length > 30;
+          // This prevents rejecting valid answers like "£53.74, One star" or "Population: 13,982,112"
+          // Use \d{2,} not \d{3,} — prices like £53.74 only have 2 consecutive digits
+          const hasFactualData = /\d{2,}/.test(doneResult) && doneResult.length > 15;
           const isInfoTask = /\b(tell me|what is|list|find|how much|how many|population|price|cost|address|rating|show me|what are|name the)\b/i.test(task);
           if (hasFactualData && isInfoTask) {
             // Skip all rejection — this has real data for an info task
@@ -1519,10 +1520,11 @@ export async function runVisionAgent(
           // Data-missing rejection — only for tasks explicitly asking for numeric/contact data
           // "find" and "show me" are too generic — book titles, names, info are valid text answers
           const wantsData = /\b(price|deal|phone\s*number|address|ratings?\s+of|cost\s+of|how\s+much)\b/i.test(task);
-          const hasData = doneResult.length > 50 && (
-            /\$\d+|\d+\.\d{2}|\bhttps?:\/\/|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/i.test(doneResult) || // price/URL/phone
-            doneResult.length > 80 // long text answer = has data (book titles, names, info)
-          );
+          // No outer length gate — short answers like "£53.74, One star" are valid data
+          // Added £/€ patterns for non-USD prices
+          const hasData =
+            /\$\d+|£\d+|€\d+|\d+\.\d{2}|\bhttps?:\/\/|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/i.test(doneResult) || // price/URL/phone
+            doneResult.length > 80; // long text answer = has data (book titles, names, info)
           const dataMissing = wantsData && !hasData && !isPassive && !isAdvice && doneResult.length < 100;
 
           if (isPassive || isAdvice || isOrderIncomplete || dataMissing) {
