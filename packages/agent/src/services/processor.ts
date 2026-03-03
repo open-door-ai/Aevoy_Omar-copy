@@ -7385,8 +7385,23 @@ Extract the ACTUAL phone number from search results and call them:
             .map(r => typeof r.result === 'string' ? r.result.substring(0, 1000) : JSON.stringify(r.result).substring(0, 1000))
             .join('\n\n');
           if (successData && successData.length > 50) {
-            console.log(`[QUALITY] Response still bad — constructing from ${actionResults.filter(r => r.success).length} action results`);
-            aiResponse.content = `Here's what I found:\n\n${successData.substring(0, 3000)}`;
+            console.log(`[QUALITY] Response still bad — summarizing ${actionResults.filter(r => r.success).length} action results via AI`);
+            try {
+              const { generateForcedDirectAnswer } = await import("./ai.js");
+              const _qualSummary = await generateForcedDirectAnswer(
+                `${subject} ${body || ''}`,
+                `Search/action data:\n${successData.substring(0, 3000)}\n\nExtract specific information: names, prices, ratings, URLs, addresses. Present as a concise answer.`,
+                username, userId, taskId
+              );
+              if (_qualSummary.content && _qualSummary.content.length > 30) {
+                aiResponse.content = _qualSummary.content;
+                aiResponse.cost = (aiResponse.cost || 0) + (_qualSummary.cost || 0);
+              } else {
+                aiResponse.content = `Here's what I found:\n\n${successData.substring(0, 2000)}`;
+              }
+            } catch {
+              aiResponse.content = `Here's what I found:\n\n${successData.substring(0, 2000)}`;
+            }
           } else if (qualityGateHaikuFired) {
             // Haiku already ran and STILL returned plan-like text — use hard fallback (no infinite loop)
             console.log(`[QUALITY] Haiku also plan-like — hard fallback`);
@@ -7937,12 +7952,24 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         }
       }
     } else {
-      // Last resort: check if we have ANY partial data from action results
+      // Last resort: summarize partial action data via AI
       const _partialActionData = actionResults
         .filter(r => r.success && r.result && typeof r.result === 'string' && String(r.result).length > 20)
-        .map(r => String(r.result).substring(0, 300));
+        .map(r => String(r.result).substring(0, 500));
       if (_partialActionData.length > 0) {
-        cleanResponse = `Here's what I found:\n\n${_partialActionData.join('\n\n')}`;
+        try {
+          const { generateForcedDirectAnswer } = await import("./ai.js");
+          const _partialSummary = await generateForcedDirectAnswer(
+            `${subject} ${body || ''}`,
+            `Data from completed actions:\n${_partialActionData.join('\n\n').substring(0, 3000)}\n\nExtract and present the key information the user asked for.`,
+            username, userId, taskId
+          );
+          cleanResponse = _partialSummary.content && _partialSummary.content.length > 30
+            ? _partialSummary.content
+            : `Here's what I found:\n\n${_partialActionData.join('\n\n').substring(0, 1500)}`;
+        } catch {
+          cleanResponse = `Here's what I found:\n\n${_partialActionData.join('\n\n').substring(0, 1500)}`;
+        }
       } else {
         cleanResponse = `I wasn't able to retrieve the information for your request. Please try again or check the relevant site directly.`;
       }
@@ -8189,13 +8216,24 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             cleanResponse = _factual;
             console.log(`[QUALITY-GATE] Deterministic strip — removed advice sentences (${cleanResponse.length} chars remain)`);
           } else {
-            // Everything was advice — build from action results
+            // Everything was advice — summarize action results via AI
             const _actionFacts = actionResults.filter(r => r.success && r.result)
-              .map(r => String(r.result).substring(0, 300))
+              .map(r => String(r.result).substring(0, 500))
               .join('\n');
             if (_actionFacts.length > 30) {
-              cleanResponse = `Here's what I found:\n\n${_actionFacts}`;
-              console.log('[QUALITY-GATE] Built response from action results');
+              try {
+                const { generateForcedDirectAnswer } = await import("./ai.js");
+                const _aqSummary = await generateForcedDirectAnswer(
+                  `${subject} ${body || ''}`,
+                  `Action results:\n${_actionFacts.substring(0, 3000)}\n\nExtract key information the user asked for.`,
+                  username, userId, taskId
+                );
+                cleanResponse = _aqSummary.content && _aqSummary.content.length > 30
+                  ? _aqSummary.content : `Here's what I found:\n\n${_actionFacts.substring(0, 1500)}`;
+              } catch {
+                cleanResponse = `Here's what I found:\n\n${_actionFacts.substring(0, 1500)}`;
+              }
+              console.log('[QUALITY-GATE] Built response from action results via AI summary');
             }
           }
         }
