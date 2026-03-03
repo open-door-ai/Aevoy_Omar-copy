@@ -149,6 +149,69 @@ interface SnapshotResult {
   refs: ElementRefMap;
 }
 
+/**
+ * DOM-based element extraction fallback.
+ * When accessibility tree is sparse, scan the DOM directly for interactive elements.
+ * Returns element list with CSS selectors for precise targeting.
+ */
+async function extractDomElements(page: Page): Promise<{ text: string; refs: ElementRefMap }> {
+  const refs: ElementRefMap = new Map();
+  try {
+    const elements = await Promise.race([
+      page.evaluate(() => {
+        const items: { tag: string; role: string; name: string; type: string; nth: number }[] = [];
+        const tagCounts = new Map<string, number>();
+        const selectors = ['a', 'button', 'input', 'select', 'textarea',
+          '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="searchbox"]',
+          '[role="combobox"]', '[role="checkbox"]', '[role="radio"]', '[role="tab"]',
+          '[role="menuitem"]', '[role="option"]', '[role="switch"]'];
+        const seen = new Set<Element>();
+        for (const sel of selectors) {
+          document.querySelectorAll(sel).forEach(el => {
+            if (seen.has(el)) return;
+            seen.add(el);
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return; // hidden
+            const tag = el.tagName.toLowerCase();
+            const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
+              tag === 'input' ? (el.getAttribute('type') === 'checkbox' ? 'checkbox' :
+                el.getAttribute('type') === 'radio' ? 'radio' : 'textbox') :
+              tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' : tag);
+            const name = el.getAttribute('aria-label') ||
+              el.getAttribute('placeholder') ||
+              el.getAttribute('title') ||
+              (tag === 'input' || tag === 'textarea' ? '' : (el.textContent?.trim()?.substring(0, 60) || ''));
+            const nth = tagCounts.get(tag + role + name) || 0;
+            tagCounts.set(tag + role + name, nth + 1);
+            items.push({ tag, role, name, type: el.getAttribute('type') || '', nth });
+            if (items.length >= 100) return; // cap
+          });
+        }
+        return items;
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dom timeout')), 5000)),
+    ]);
+
+    if (!elements || elements.length === 0) return { text: '', refs };
+
+    const lines: string[] = [];
+    const roleNameCounts = new Map<string, number>();
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      const refId = i + 1;
+      const roleNameKey = `${el.role}:${el.name}`;
+      const nthOfKind = roleNameCounts.get(roleNameKey) || 0;
+      roleNameCounts.set(roleNameKey, nthOfKind + 1);
+      refs.set(refId, { role: el.role, name: el.name, nthOfKind });
+      const typeStr = el.type ? ` type="${el.type}"` : '';
+      lines.push(`[${refId}] ${el.role} "${sanitizeForPrompt(el.name)}"${typeStr}`);
+    }
+    return { text: lines.join('\n'), refs };
+  } catch {
+    return { text: '', refs };
+  }
+}
+
 async function getAccessibilitySnapshot(page: Page): Promise<SnapshotResult> {
   const SNAPSHOT_TIMEOUT = 8000; // 8s max — prevent hanging on unresponsive pages
   const emptyRefs: ElementRefMap = new Map();
@@ -157,22 +220,41 @@ async function getAccessibilitySnapshot(page: Page): Promise<SnapshotResult> {
       (page as any).accessibility.snapshot({ interestingOnly: true }),
       new Promise<null>((_, reject) => setTimeout(() => reject(new Error('snapshot timeout')), SNAPSHOT_TIMEOUT)),
     ]);
-    if (!snapshot) return { text: '(empty page — no accessible elements found)', refs: emptyRefs };
+    if (!snapshot) {
+      // Empty accessibility tree — try DOM extraction
+      const domResult = await extractDomElements(page);
+      if (domResult.refs.size > 0) {
+        return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}`, refs: domResult.refs };
+      }
+      return { text: '(empty page — no accessible elements found)', refs: emptyRefs };
+    }
     const lines: string[] = [];
     const state: SnapshotState = { lineCount: 0, refCounter: 1, refs: new Map(), roleNameCounts: new Map() };
     formatAccessibilityNode(snapshot, lines, 0, state);
     const result = lines.join('\n');
-    if (result.length < 20) {
-      // Accessibility tree too sparse — fallback to page text
+
+    // Use refs count, not text length, to determine if tree is useful
+    if (state.refs.size === 0) {
+      // No interactive elements in accessibility tree — try DOM extraction
+      const domResult = await extractDomElements(page);
+      if (domResult.refs.size > 0) {
+        const pageText = result.length > 20 ? `\n\nPAGE STRUCTURE:\n${result.substring(0, 2000)}` : '';
+        return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}${pageText}`, refs: domResult.refs };
+      }
+      // Neither tree nor DOM has interactive elements — return tree + page text
       const text = await Promise.race([
         page.textContent('body').catch(() => ''),
         new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
       ]);
-      return { text: `(sparse accessibility tree)\nPage text: ${(text || '').substring(0, 3000)}`, refs: emptyRefs };
+      return { text: `${result}\n\nPage text: ${(text || '').substring(0, 3000)}`, refs: emptyRefs };
     }
     return { text: result.substring(0, 8000), refs: state.refs };
   } catch {
-    // Fallback: extract visible text
+    // Fallback: DOM extraction first, then raw text
+    const domResult = await extractDomElements(page);
+    if (domResult.refs.size > 0) {
+      return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}`, refs: domResult.refs };
+    }
     try {
       const text = await Promise.race([
         page.textContent('body').catch(() => ''),
@@ -421,7 +503,14 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
     const entry = elementRefs.get(ref);
     if (!entry) return null;
     // Build exact locator: role + exact name + nth-of-kind for disambiguation
-    const locator = page.getByRole(entry.role as any, { name: entry.name, exact: true }).nth(entry.nthOfKind);
+    // Handle both real roles and HTML tag-based roles from DOM extraction
+    const validRoles = ['button', 'link', 'textbox', 'checkbox', 'radio', 'combobox',
+      'listbox', 'option', 'menuitem', 'tab', 'switch', 'slider', 'searchbox', 'spinbutton'];
+    const locator = validRoles.includes(entry.role)
+      ? page.getByRole(entry.role as any, { name: entry.name, exact: true }).nth(entry.nthOfKind)
+      : entry.name
+        ? page.getByText(entry.name, { exact: true }).nth(entry.nthOfKind)
+        : page.locator(entry.role).nth(entry.nthOfKind); // fallback: use as CSS tag
     return { locator, entry };
   };
 
