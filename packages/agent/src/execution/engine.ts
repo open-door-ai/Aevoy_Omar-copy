@@ -192,6 +192,7 @@ export class ExecutionEngine {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--no-zygote',
+      '--ignore-certificate-errors', // Don't crash on www. vs non-www cert mismatches
       '--disable-blink-features=AutomationControlled',
     ];
 

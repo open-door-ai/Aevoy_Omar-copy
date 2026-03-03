@@ -1074,21 +1074,25 @@ export async function runVisionAgent(
       }
     }
 
-    // ── Service mismatch check ──
-    const postNavUrl = activePage.url();
-    if (postNavUrl && !postNavUrl.startsWith('about:') && !postNavUrl.startsWith('chrome-error://')) {
-      const svcMatch = task.match(
-        /\b(?:sign\s*up|create\s+(?:a|an|my)\s+\w*\s*account|log\s*in|cancel|go\s+to|navigate|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+)/i
-      );
-      if (svcMatch) {
-        const expected = svcMatch[1].toLowerCase();
-        const currentDomain = (() => { try { return new URL(postNavUrl).hostname.toLowerCase(); } catch { return ''; } })();
-        const skip = new Set(['account', 'free', 'new', 'the', 'email', 'user', 'test']);
-        if (!skip.has(expected) && expected.length >= 3 && currentDomain && !currentDomain.includes(expected)) {
-          const correctUrl = `https://www.${expected}.com`;
-          console.log(`[BROWSER-AGENT] Service mismatch: expected "${expected}" but on "${currentDomain}" → ${correctUrl}`);
-          await activePage.goto(correctUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-          await activePage.waitForTimeout(300);
+    // ── Service mismatch check — only for simple service names, not explicit domains ──
+    // Skip if task already contains an explicit domain (e.g. "books.toscrape.com")
+    const hasExplicitDomain = /[\w-]+\.[\w-]+\.(com|org|net|io|co|app|ca|uk)\b/i.test(task);
+    if (!hasExplicitDomain) {
+      const postNavUrl = activePage.url();
+      if (postNavUrl && !postNavUrl.startsWith('about:') && !postNavUrl.startsWith('chrome-error://')) {
+        const svcMatch = task.match(
+          /\b(?:sign\s*up|create\s+(?:a|an|my)\s+\w*\s*account|log\s*in|cancel|go\s+to|navigate|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+)/i
+        );
+        if (svcMatch) {
+          const expected = svcMatch[1].toLowerCase();
+          const currentDomain = (() => { try { return new URL(postNavUrl).hostname.toLowerCase(); } catch { return ''; } })();
+          const skip = new Set(['account', 'free', 'new', 'the', 'email', 'user', 'test']);
+          if (!skip.has(expected) && expected.length >= 3 && currentDomain && !currentDomain.includes(expected)) {
+            const correctUrl = `https://www.${expected}.com`;
+            console.log(`[BROWSER-AGENT] Service mismatch: expected "${expected}" but on "${currentDomain}" → ${correctUrl}`);
+            await activePage.goto(correctUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+            await activePage.waitForTimeout(300);
+          }
         }
       }
     }
