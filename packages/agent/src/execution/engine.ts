@@ -185,10 +185,13 @@ export class ExecutionEngine {
     }
 
     // --no-sandbox required in Docker containers (Railway runs as root)
+    // --no-zygote: Railway containers have tight thread limits; zygote spawns many threads at startup
+    //   causing pthread_create EAGAIN (signal 6 crash). --no-zygote eliminates the zygote subprocess.
     const launchArgs = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--no-zygote',
       '--disable-blink-features=AutomationControlled',
     ];
 

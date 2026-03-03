@@ -24,11 +24,9 @@ export async function launchBrowser(): Promise<Browser> {
   const args = [
     "--disable-dev-shm-usage",
     "--disable-setuid-sandbox",
+    "--no-sandbox",
+    "--no-zygote", // Prevents pthread_create EAGAIN crash in Railway containers
   ];
-  // Only use --no-sandbox in development
-  if (!isProduction) {
-    args.push("--no-sandbox");
-  }
   return chromium.launch({
     headless: true,
     args,

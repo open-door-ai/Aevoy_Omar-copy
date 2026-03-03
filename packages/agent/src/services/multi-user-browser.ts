@@ -78,6 +78,7 @@ export class MultiUserBrowserService {
         "--disable-dev-shm-usage",
         "--disable-setuid-sandbox",
         "--no-sandbox",
+        "--no-zygote",
         "--disable-blink-features=AutomationControlled",
         "--window-size=1280,800",
         "--disable-gpu",
