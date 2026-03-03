@@ -2109,8 +2109,11 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 
 /**
  * Fast text-only response for browser automation steps.
- * Uses ONE model for ALL steps — OpenRouter paid (52/52 success rate, no rate limits).
- * A 40-step task costs ~$0.02 on OpenRouter. Stop burning free tier rate limits.
+ *
+ * Model priority:
+ *   1. DeepSeek V3 (primary — $0.27/M in, $1.10/M out → ~$0.013/task, best instruction following)
+ *   2. OpenRouter Llama-3.3-70B (fallback — $0.10/M, no <think> tags, fast)
+ *   3. Groq Llama-8B (free emergency fallback)
  */
 export async function generateBrowserStepResponse(
   prompt: string,
@@ -2129,9 +2132,44 @@ export async function generateBrowserStepResponse(
     { role: "user" as const, content: prompt }
   ];
 
-  // ═══ PRIMARY: OpenRouter Llama-3.3-70B — fast, no thinking tokens, cheap ═══
-  // No <think> tags = ~3x fewer output tokens than Qwen3 = 3x faster responses.
-  // Cost: ~$0.10/$0.13 per M tokens → ~$0.0002/step → ~$0.008/task
+  // ═══ PRIMARY: DeepSeek V3 — best instruction following, no <think> overhead ═══
+  // DeepSeek V3 follows structured action formats far better than smaller models.
+  // Consistently outputs CLICK [ref] / FILL [ref] without drifting to NAVIGATE.
+  // Cost: $0.27/$1.10 per M → ~$0.013/40-step task. Budget: $4.99 on account.
+  if (process.env.DEEPSEEK_API_KEY && Date.now() > deepseekBackoffUntil) {
+    try {
+      const response = await withTimeout(getDeepSeekClient().chat.completions.create({
+        model: "deepseek-chat",
+        max_tokens: 300,
+        temperature: 0.0, // deterministic — follow instructions exactly
+        messages,
+      }), 12000);
+      const rawContent = response.choices[0]?.message?.content || '';
+      const content = stripThinkTags(rawContent);
+      if (content.length > 10) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
+        console.log(`[AI] BrowserStep (DeepSeek-V3) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "deepseek-chat", inTok, outTok, cost, "deepseek", taskId, "browser-step").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn(`[AI] BrowserStep (DeepSeek-V3) failed: ${msg}`);
+      // Back off DeepSeek for 60s on rate limit, 10s on other errors
+      if (msg.includes('429') || msg.includes('rate')) {
+        deepseekBackoffUntil = Date.now() + 60000;
+      } else if (msg.includes('402')) {
+        deepseekBackoffUntil = Date.now() + 300000; // 5 min if out of funds
+        console.error('[AI] DeepSeek balance depleted — falling back');
+      } else {
+        deepseekBackoffUntil = Date.now() + 10000;
+      }
+    }
+  }
+
+  // ═══ FALLBACK: OpenRouter Llama-3.3-70B — fast, no thinking tokens ═══
   if (process.env.OPENROUTER_API_KEY) {
     try {
       const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
@@ -2146,7 +2184,7 @@ export async function generateBrowserStepResponse(
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.10 + outTok * 0.13) / 1_000_000;
-        console.log(`[AI] BrowserStep (Llama-3.3-70B) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        console.log(`[AI] BrowserStep (Llama-3.3-70B fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "meta-llama/llama-3.3-70b-instruct", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
@@ -2155,7 +2193,7 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  // ═══ FALLBACK: Groq Llama-8B — free, fast ═══
+  // ═══ EMERGENCY FALLBACK: Groq Llama-8B — free ═══
   if (process.env.GROQ_API_KEY) {
     try {
       await paceModelCall("llama-3.1-8b-instant");
@@ -2166,7 +2204,7 @@ export async function generateBrowserStepResponse(
       }), 5000);
       const content = stripThinkTags(response.choices[0]?.message?.content || '');
       if (content.length > 10) {
-        console.log(`[AI] BrowserStep (Groq Llama-8B fallback) | $0`);
+        console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0`);
         if (userId) trackApiCall(userId, "llama-3.1-8b-instant", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
       }
