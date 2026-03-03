@@ -2109,8 +2109,9 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
 
 /**
  * Fast text-only response for browser automation steps.
- * Delegates to generateVisionResponse with empty screenshot — the fast text shortcut
- * inside that function handles text-only prompts (Groq → DeepSeek → then vision cascade).
+ * Uses ONE model (Gemini Flash) for ALL steps — no cascading through 11 models.
+ * This prevents rate-limit exhaustion across multiple providers during a 40-step task.
+ * Fallback: DeepSeek (if Gemini down) → Groq Llama-8B (last resort).
  */
 export async function generateBrowserStepResponse(
   prompt: string,
@@ -2118,7 +2119,89 @@ export async function generateBrowserStepResponse(
   userId?: string,
   taskId?: string
 ): Promise<{ content: string; cost: number }> {
-  return generateVisionResponse(prompt, '', systemPrompt, userId, taskId);
+  const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Browser-step timeout after ${ms}ms`)), ms))
+    ]);
+
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+    { role: "user" as const, content: prompt }
+  ];
+
+  // ═══ PRIMARY: Gemini 2.5 Flash — 2000 RPM paid, 15 RPM free, cheap ═══
+  if (process.env.GOOGLE_API_KEY) {
+    try {
+      const response = await withTimeout(getGeminiClient().chat.completions.create({
+        model: "gemini-2.5-flash",
+        max_tokens: 1024,
+        messages,
+      }), 12000);
+      const rawContent = response.choices[0]?.message?.content || '';
+      const content = stripThinkTags(rawContent);
+      if (content.length > 10) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
+        console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "browser-step").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ FALLBACK: DeepSeek — separate rate pool, cheap ═══
+  if (process.env.DEEPSEEK_API_KEY) {
+    try {
+      const stream = await withTimeout(getDeepSeekClient().chat.completions.create({
+        model: 'deepseek-chat',
+        messages,
+        max_tokens: 512,
+        temperature: 0.3,
+        stream: true,
+        stream_options: { include_usage: true },
+      }), 15000);
+      let content = '';
+      let inputTokens = 0, outputTokens = 0;
+      for await (const chunk of stream) {
+        content += chunk.choices[0]?.delta?.content || '';
+        if (chunk.usage) { inputTokens = chunk.usage.prompt_tokens || 0; outputTokens = chunk.usage.completion_tokens || 0; }
+      }
+      content = stripThinkTags(content);
+      if (content.length > 10) {
+        const cost = (inputTokens * 0.27 + outputTokens * 1.10) / 1_000_000;
+        console.log(`[AI] BrowserStep (DeepSeek fallback) | $${cost.toFixed(6)} | ${inputTokens}in/${outputTokens}out`);
+        if (userId) trackApiCall(userId, "deepseek-chat", inputTokens, outputTokens, cost, "deepseek", taskId, "browser-step").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (DeepSeek) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ LAST RESORT: Groq Llama-8B — free, fast, separate bucket ═══
+  if (process.env.GROQ_API_KEY) {
+    try {
+      const response = await withTimeout(getGroqClient().chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        max_tokens: 512,
+        messages,
+      }), 5000);
+      const content = stripThinkTags(response.choices[0]?.message?.content || '');
+      if (content.length > 10) {
+        console.log(`[AI] BrowserStep (Groq Llama-8B last resort) | $0`);
+        if (userId) trackApiCall(userId, "llama-3.1-8b-instant", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
+        return { content, cost: 0 };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Groq Llama-8B) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return { content: "", cost: 0 };
 }
 
 /**
