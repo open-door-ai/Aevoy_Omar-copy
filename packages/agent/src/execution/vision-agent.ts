@@ -1260,21 +1260,26 @@ export async function runVisionAgent(
 
       // Add visible page text so AI can read content (not just click elements).
       // Critical for information extraction tasks (finding prices, populations, etc.)
+      // Keep it SHORT (800 chars max) to avoid blowing up token count.
       try {
         const pageText = await Promise.race([
           activePage.evaluate(() => {
-            // Get innerText from main content area (more relevant than full body)
+            // Get text from visible viewport area only
             const main = document.querySelector('main, article, [role="main"], #content, #mw-content-text, .content');
             const el = (main || document.body) as HTMLElement;
-            return (el.innerText || '').substring(0, 3000);
+            const text = el.innerText || '';
+            // Take first 800 chars — enough to find key facts without exploding tokens
+            return text.substring(0, 800);
           }),
-          new Promise<string>((resolve) => setTimeout(() => resolve(''), 3000)),
+          new Promise<string>((resolve) => setTimeout(() => resolve(''), 2000)),
         ]);
         if (pageText && pageText.length > 50) {
-          snapshot += `\n\nVISIBLE PAGE TEXT (first 3000 chars):\n${sanitizeForPrompt(pageText).substring(0, 3000)}`;
+          snapshot += `\n\nPAGE TEXT:\n${sanitizeForPrompt(pageText)}`;
         }
-      } catch { /* non-critical — page text is supplementary */ }
+      } catch { /* non-critical */ }
 
+      // Cap total snapshot to prevent token explosion (8000 chars ≈ 2000 tokens)
+      if (snapshot.length > 8000) snapshot = snapshot.substring(0, 8000);
       console.log(`[BROWSER-AGENT] Step ${steps + 1}: ${url.substring(0, 80)} — snapshot ${snapshot.length} chars, ${currentRefs.size} refs`);
 
       // Take screenshot only periodically (for evidence trail, not for AI reasoning)
