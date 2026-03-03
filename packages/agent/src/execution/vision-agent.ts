@@ -387,7 +387,7 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
 
       case 'fill': {
         if (!action.name || !action.value) return false;
-        // Try getByLabel → getByPlaceholder → getByRole('textbox') — tight timeouts
+        // Try getByLabel → getByPlaceholder → getByRole('textbox') → CSS selectors — tight timeouts
         try {
           await page.getByLabel(action.name, { exact: false }).first().fill(action.value, { timeout });
           return true;
@@ -399,7 +399,32 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         try {
           await page.getByRole('textbox', { name: action.name, exact: false }).first().fill(action.value, { timeout });
           return true;
-        } catch { /* fail */ }
+        } catch { /* next */ }
+        // CSS selector fallback — for sites with non-standard form markup
+        {
+          const nameL = action.name!.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const cssFallbacks: string[] = [];
+          if (nameL.includes('email')) {
+            cssFallbacks.push('input[type="email"]', 'input[name*="email"]', 'input[id*="email"]', 'input[placeholder*="email" i]');
+          } else if (nameL.includes('password')) {
+            cssFallbacks.push('input[type="password"]', 'input[name*="password"]', 'input[id*="password"]');
+          } else if (nameL.includes('user') || nameL.includes('name')) {
+            cssFallbacks.push('input[name*="user"]', 'input[name*="name"]', 'input[id*="user"]', 'input[id*="name"]');
+          } else if (nameL.includes('phone') || nameL.includes('tel')) {
+            cssFallbacks.push('input[type="tel"]', 'input[name*="phone"]', 'input[id*="phone"]');
+          }
+          // Generic: try any input matching the name text
+          cssFallbacks.push(`input[name*="${nameL.substring(0, 20)}"]`, `input[id*="${nameL.substring(0, 20)}"]`);
+          for (const sel of cssFallbacks) {
+            try {
+              const el = page.locator(sel).first();
+              if (await el.isVisible({ timeout: 500 })) {
+                await el.fill(action.value!, { timeout });
+                return true;
+              }
+            } catch { continue; }
+          }
+        }
         history.push(`⚠️ Could not find field "${action.name}" to fill. Check the accessibility tree for the exact label text. Try TYPE instead of FILL if the field is a search box.`);
         return false;
       }
@@ -993,8 +1018,9 @@ export async function runVisionAgent(
         totalCost += stepCost;
       } catch (err) {
         console.warn(`[BROWSER-AGENT] AI error at step ${steps + 1}: ${err}`);
-        history.push(`Step ${steps + 1}: AI error`);
+        history.push(`Step ${steps + 1}: AI error (rate limit — not counted)`);
         await activePage.waitForTimeout(2000);
+        steps--; // Don't count AI failures as steps — for loop will increment back
         continue;
       }
 
@@ -1026,6 +1052,7 @@ export async function runVisionAgent(
         // AI outputted ONLY thinking with no actions — force continue
         console.warn(`[BROWSER-AGENT] AI response was all <think> with no actions`);
         history.push(`Step ${steps + 1}: AI only outputted reasoning, no actions`);
+        steps--; // Don't count parse failures as steps
         continue;
       }
       const actionLines = cleanedResponse.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -1034,6 +1061,7 @@ export async function runVisionAgent(
       if (parsedActions.length === 0) {
         console.warn(`[BROWSER-AGENT] No parseable actions: "${aiResponse.substring(0, 80)}"`);
         history.push(`Step ${steps + 1}: parse failed — AI didn't output valid actions`);
+        steps--; // Don't count parse failures as steps
         continue;
       }
 
@@ -1092,7 +1120,7 @@ export async function runVisionAgent(
             history.push(`⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". You described what you COULD do instead of DOING it. ACT — click, fill, submit. If impossible, output FAIL not DONE.`);
 
             const rejectCount = history.filter(h => h.includes('DONE rejected')).length;
-            if (rejectCount >= 3) {
+            if (rejectCount >= 5) {
               const pageData = await capturePageData(activePage);
               return { success: false, error: `Agent kept giving advice instead of acting. Last: "${doneResult.substring(0, 200)}"`, steps: steps + 1, cost: totalCost, screenshots, pageData };
             }
