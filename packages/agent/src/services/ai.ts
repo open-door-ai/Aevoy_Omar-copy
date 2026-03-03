@@ -78,6 +78,35 @@ let sambaNovaClient: OpenAI | null = null;
 const groqRateLimitBackoff = new Map<string, number>(); // model → backoff-until timestamp
 let deepseekBackoffUntil = 0; // single timestamp for all DeepSeek calls
 
+// ---- Global AI concurrency limiter ----
+// Prevents 3+ concurrent tasks from slamming all model pools simultaneously.
+// Groq free tier: 30 RPM per model. 3 concurrent tasks × 5 AI calls each = 15 RPM instantly.
+// This semaphore serializes AI calls across tasks, with staggered release.
+const AI_CONCURRENCY_LIMIT = 4; // max parallel AI calls across all tasks
+let aiConcurrency = 0;
+const aiQueue: Array<{ resolve: () => void; priority: number }> = [];
+
+async function acquireAiSlot(priority: number = 0): Promise<void> {
+  if (aiConcurrency < AI_CONCURRENCY_LIMIT) {
+    aiConcurrency++;
+    return;
+  }
+  // Queue and wait — higher priority gets served first
+  return new Promise<void>(resolve => {
+    aiQueue.push({ resolve, priority });
+    aiQueue.sort((a, b) => b.priority - a.priority); // high priority first
+  });
+}
+
+function releaseAiSlot(): void {
+  if (aiQueue.length > 0) {
+    const next = aiQueue.shift()!;
+    next.resolve();
+  } else {
+    aiConcurrency = Math.max(0, aiConcurrency - 1);
+  }
+}
+
 // ---- OpenRouter per-user client cache ----
 // Keyed by decrypted API key (not userId) — shared across users with same key
 const openRouterClients = new Map<string, OpenAI>();
@@ -1556,6 +1585,26 @@ export async function generateResponse(
     return generateMockResponse(username, taskSubject, taskBody);
   }
 
+  // Global concurrency limiter — prevents 3+ concurrent tasks from exhausting all rate limit pools
+  const priority = taskType === 'classify' ? 2 : taskType === 'understand' ? 1 : 0;
+  await acquireAiSlot(priority);
+  try {
+    return await _generateResponseInner(memory, taskSubject, taskBody, username, taskType, userId, taskId, senderName);
+  } finally {
+    releaseAiSlot();
+  }
+}
+
+async function _generateResponseInner(
+  memory: Memory,
+  taskSubject: string,
+  taskBody: string,
+  username: string,
+  taskType: TaskType = "understand",
+  userId?: string,
+  taskId?: string,
+  senderName?: string
+): Promise<AIResponse> {
   // For generate tasks, use lightweight system prompt — avoids sending the 11k-token AGI
   // action prompt, which causes timeout on code/HTML generation with DeepSeek/Groq.
   let systemPromptWithUser: string;
