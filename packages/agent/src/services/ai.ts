@@ -74,9 +74,24 @@ let cerebrasClient: OpenAI | null = null;
 let sambaNovaClient: OpenAI | null = null;
 
 // ---- Rate limit backoff tracking ----
-// Skip models temporarily after 429/402 errors to avoid wasting time on doomed requests
-const groqRateLimitBackoff = new Map<string, number>(); // model → backoff-until timestamp
+// Skip models temporarily after 429/402 errors to avoid wasting time on doomed requests.
+// Used in BOTH vision fast text shortcut AND main routing cascade.
+const rateLimitBackoff = new Map<string, number>(); // "provider:model" → backoff-until timestamp
 let deepseekBackoffUntil = 0; // single timestamp for all DeepSeek calls
+
+/** Check if a model is currently in rate-limit backoff */
+function isModelBackedOff(provider: string, model: string): boolean {
+  const key = `${provider}:${model}`;
+  const until = rateLimitBackoff.get(key) || 0;
+  return Date.now() < until;
+}
+
+/** Mark a model as rate-limited for the given duration */
+function setModelBackoff(provider: string, model: string, durationMs: number): void {
+  const key = `${provider}:${model}`;
+  rateLimitBackoff.set(key, Date.now() + durationMs);
+  console.log(`[BACKOFF] ${key} backed off for ${Math.round(durationMs/1000)}s`);
+}
 
 // ---- Global AI concurrency limiter ----
 // Prevents 3+ concurrent tasks from slamming all model pools simultaneously.
@@ -324,66 +339,63 @@ interface ModelConfig {
 // ROUTING_TABLE — model chains per task type.
 // STRATEGY: 100% FREE models. No Anthropic.
 //
-// SLIM_SYSTEM_PROMPT (~750 tokens) unlocks ALL Groq models:
-//   Total input per call: ~750 (system) + ~1K (user) + ~200 (format) = ~2K tokens
-//   This fits within ALL Groq TPM limits (even Qwen3-32B at 6K TPM).
+// Priority order based on REAL production data (last 6 hours):
+//   1. Groq (53% success, fastest when available) — try first
+//   2. OpenRouter (100% success, ~20 RPM shared) — reliable fallback
+//   3. Cerebras (needs API key) — separate rate pool
+//   4. Gemini (2.6% success, heavily rate-limited) — last resort
 //
-// Rate limit buckets (all viable now):
-//   Scout: 30 RPM, 30K TPM — best quality on Groq
-//   Kimi K2: 60 RPM, 10K TPM — good quality, highest RPM
-//   Llama-3.3-70B: 30 RPM, 12K TPM — strong reasoning
-//   Qwen3-32B: 60 RPM, 6K TPM — good fallback
-//   Llama-3.1-8B: 30 RPM, 6K TPM — fastest, least capable
-//   Gemini 2.5 Flash: 10 RPM — highest quality
-//   OpenRouter: ~20 RPM shared — multiple free models
-//   Total: ~240 RPM (4x improvement from 60 RPM)
-//
-// Stagger primary model across chains to distribute load:
+// Rate limit backoff (NEW): 429 → skip model for 60-120s instead of retrying
+// This eliminates the 152-Gemini-429-failures-per-6-hours problem.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   reason: [
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   vision: [
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'nvidia/nemotron-nano-12b-v2-vl:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   validate: [
-    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'llama-3.1-8b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.1-8b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   respond: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
@@ -392,30 +404,30 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
   classify: [
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'llama-3.1-8b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'cerebras', model: 'llama-3.1-8b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
   ],
   generate: [
-    // Generate uses GENERATE_SYSTEM_PROMPT (~200 tokens) — all models can handle it
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'qwen/qwen3-coder:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'qwen/qwen3-coder:free', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
 };
 
@@ -461,7 +473,7 @@ const MODEL_MIN_INTERVAL: Record<string, number> = {
   'qwen/qwen3-32b': 30000,                            // 6K TPM — tightest, 2 calls/min max
   'llama-3.3-70b-versatile': 20000,                    // 12K TPM
   'llama-3.1-8b-instant': 8000,                        // 6K TPM but ~2K per call, browser workhorse
-  'gemini-2.5-flash': 8000,                            // separate pool, generous
+  'gemini-2.5-flash': 15000,                            // free tier 10 RPM — needs spacing
 };
 
 async function paceModelCall(model: string): Promise<void> {
@@ -1688,6 +1700,12 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
       continue;
     }
 
+    // Check rate limit backoff (skip models that recently 429'd)
+    if (isModelBackedOff(config.provider, config.model)) {
+      providerErrors.push(`${config.provider}/${config.model}: rate-limit backoff`);
+      continue;
+    }
+
     // Check circuit breaker (per-model, not per-provider)
     const cb = getCircuitBreaker(config.provider, config.model);
     if (!cb.canExecute()) {
@@ -1840,25 +1858,40 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         }
       }
 
-      // Only count REAL failures toward circuit breaker — NOT rate limits.
-      // 429 is "slow down", not "broken". Free-tier rate limits are expected under load.
-      // Counting them trips breakers for minutes, blocking models that work fine individually.
+      // Rate limit backoff: skip this model for 60-120s after 429
       const isRateLimit = errorMessage.includes('429') || errorMessage.toLowerCase().includes('rate limit');
-      if (!isRateLimit) {
+      if (isRateLimit) {
+        // Longer backoff for models that are consistently rate-limited (Gemini free tier)
+        const backoffMs = config.provider === 'gemini' ? 120000 : 60000;
+        setModelBackoff(config.provider, config.model, backoffMs);
+      } else {
+        // Only count NON-rate-limit failures toward circuit breaker
         cb.recordFailure();
+      }
+
+      // Track 429 errors in cost log for visibility
+      if (isRateLimit) {
+        trackApiCall(userId, `ERR:${config.model}:${errorMessage.substring(0, 60)}`, 0, 0, 0, config.provider, taskId, `${taskType}-error`).catch(() => {});
       }
     }
   }
 
-  // RATE-LIMIT GLOBAL RETRY: If ALL errors were 429/rate-limit, wait 15-30s with jitter and retry top 3 models.
-  // This prevents the death spiral where 3 concurrent tasks exhaust all providers simultaneously.
-  const allRateLimited = providerErrors.length >= 2 && providerErrors.every(e => e.includes('429') || e.toLowerCase().includes('rate limit') || e.includes('circuit breaker'));
+  // RATE-LIMIT GLOBAL RETRY: If ALL errors were 429/rate-limit/backoff, wait and retry top 3 models.
+  // Clear backoff timers before retry (we've already waited).
+  const allRateLimited = providerErrors.length >= 2 && providerErrors.every(e =>
+    e.includes('429') || e.toLowerCase().includes('rate limit') || e.includes('circuit breaker') || e.includes('backoff')
+  );
   if (allRateLimited) {
     const delayMs = 45000 + Math.random() * 15000; // 45-60s — Groq rate limits are per-minute
-    console.log(`[AI] All ${providerErrors.length} models rate-limited. Waiting ${Math.round(delayMs / 1000)}s before global retry...`);
+    console.log(`[AI] All ${providerErrors.length} models rate-limited/backed-off. Waiting ${Math.round(delayMs / 1000)}s before global retry...`);
     await new Promise(resolve => setTimeout(resolve, delayMs));
 
-    for (const config of chain.slice(0, 3)) {
+    // Clear backoff for retry candidates (we've waited long enough)
+    for (const config of chain.slice(0, 5)) {
+      rateLimitBackoff.delete(`${config.provider}:${config.model}`);
+    }
+
+    for (const config of chain.slice(0, 5)) {
       if (!isProviderAvailable(config.provider, config)) continue;
       try {
         const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
@@ -1961,39 +1994,39 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
     return clean; // Return empty string if ALL lines were narration
   };
 
-  // Try Gemini 2.5 Flash first (best free quality, great instruction following)
-  if (process.env.GOOGLE_API_KEY) {
+  // Try OpenRouter first — 100% success rate in production, most reliable
+  if (process.env.OPENROUTER_API_KEY && !isModelBackedOff('openrouter', 'mistralai/mistral-small-3.1-24b-instruct:free')) {
     try {
-      const response = await getGeminiClient().chat.completions.create({
-        model: "gemini-2.5-flash",
-        max_tokens: 300,
+      const orClient = getOpenRouterClient(process.env.OPENROUTER_API_KEY!);
+      const res = await withTimeout(orClient.chat.completions.create({
+        model: 'mistralai/mistral-small-3.1-24b-instruct:free',
+        max_tokens: 500,
+        temperature: 0.1,
         messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent }
         ]
-      });
-      const content = response.choices[0]?.message?.content || "";
+      }), 15000);
+      const content = res.choices[0]?.message?.content || '';
       const clean = stripNarration(content);
       if (clean && clean.length > 20) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "fallback_direct_answer").catch(() => {});
-        console.log(`[FALLBACK-GEMINI] Direct answer via Gemini (${clean.length} chars, $0)`);
-        return { content: clean, cost: 0, tokensUsed: inTok + outTok };
+        trackApiCall(userId, "mistralai/mistral-small-3.1-24b-instruct:free", 0, 0, 0, "openrouter", taskId, "fallback_direct_answer").catch(() => {});
+        console.log(`[FALLBACK-OR] Direct answer via OpenRouter (${clean.length} chars, $0)`);
+        return { content: clean, cost: 0, tokensUsed: 0 };
       }
-    } catch (gemErr) {
-      console.warn(`[FALLBACK-GEMINI] Gemini fallback failed: ${gemErr instanceof Error ? gemErr.message : String(gemErr)}`);
+    } catch (orErr) {
+      console.warn(`[FALLBACK-OR] OpenRouter fallback failed: ${orErr instanceof Error ? orErr.message : String(orErr)}`);
     }
   }
 
-  // Second fallback: Groq (Kimi K2) — best tool calling, eloquent
-  if (process.env.GROQ_API_KEY) {
+  // Second fallback: Groq — fast when not rate-limited
+  if (process.env.GROQ_API_KEY && !isModelBackedOff('groq', 'llama-3.3-70b-versatile')) {
     try {
       const groqClient = getGroqClient();
       const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. If search results only contain article links without real data, use your training knowledge to name specific restaurants/products/services. NEVER say "available at", "not directly retrieved", "can be found at", or redirect to a URL. Max 2-3 sentences.`;
       const res = await groqClient.chat.completions.create({
         model: 'llama-3.3-70b-versatile',
-        max_tokens: 200,
+        max_tokens: 300,
         temperature: 0.1,
         messages: [
           { role: 'system', content: groqSystem },
@@ -2015,31 +2048,30 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
     }
   }
 
-  // Third fallback: OpenRouter free models — separate rate limit pool from Groq/Gemini
-  if (process.env.OPENROUTER_API_KEY) {
+  // Third fallback: Gemini — only if not backed off
+  if (process.env.GOOGLE_API_KEY && !isModelBackedOff('gemini', 'gemini-2.5-flash')) {
     try {
-      const orClient = getOpenRouterClient(process.env.OPENROUTER_API_KEY!);
-      const orSystem = `RESULTS REPORT: Answer factually in present tense. Start with concrete data (names, prices, URLs). NEVER say "I'll", "Let me", "I will", "I need to", or "available at". Max 3 sentences.`;
-      const res = await withTimeout(orClient.chat.completions.create({
-        model: 'mistralai/mistral-small-3.1-24b-instruct:free',
-        max_tokens: 300,
-        temperature: 0.1,
+      const response = await withTimeout(getGeminiClient().chat.completions.create({
+        model: "gemini-2.5-flash",
+        max_tokens: 500,
         messages: [
-          { role: 'system', content: orSystem },
-          { role: 'user', content: userContent }
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent }
         ]
       }), 15000);
-      const content = res.choices[0]?.message?.content || '';
+      const content = response.choices[0]?.message?.content || "";
       const clean = stripNarration(content);
       if (clean && clean.length > 20) {
-        const inTok = res.usage?.prompt_tokens || 0;
-        const outTok = res.usage?.completion_tokens || 0;
-        trackApiCall(userId, "mistral-small-3.1-24b-instruct:free", inTok, outTok, 0, "openrouter", taskId, "fallback_direct_answer").catch(() => {});
-        console.log(`[FALLBACK-OPENROUTER] Direct answer via OpenRouter (${clean.length} chars, $0)`);
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "fallback_direct_answer").catch(() => {});
+        console.log(`[FALLBACK-GEMINI] Direct answer via Gemini (${clean.length} chars, $0)`);
         return { content: clean, cost: 0, tokensUsed: inTok + outTok };
       }
-    } catch (orErr) {
-      console.warn(`[FALLBACK-OPENROUTER] OpenRouter fallback failed: ${orErr instanceof Error ? orErr.message : String(orErr)}`);
+    } catch (gemErr) {
+      const errMsg = gemErr instanceof Error ? gemErr.message : String(gemErr);
+      if (errMsg.includes('429')) setModelBackoff('gemini', 'gemini-2.5-flash', 120000);
+      console.warn(`[FALLBACK-GEMINI] Gemini fallback failed: ${errMsg}`);
     }
   }
 
@@ -2146,7 +2178,7 @@ export async function generateVisionResponse(
       for (const fm of fastModels) {
         // Skip if rate-limited recently
         const backoffKey = `groq:${fm.model}`;
-        const backoffUntil = groqRateLimitBackoff.get(backoffKey) || 0;
+        const backoffUntil = rateLimitBackoff.get(backoffKey) || 0;
         if (Date.now() < backoffUntil) continue;
 
         try {
@@ -2173,11 +2205,11 @@ export async function generateVisionResponse(
           console.warn(`[AI] VisionText (Groq ${fm.name}) failed: ${errMsg}`);
           // Rate limit backoff: skip this model for 60s
           if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
-            groqRateLimitBackoff.set(backoffKey, Date.now() + 60000);
+            rateLimitBackoff.set(backoffKey, Date.now() + 60000);
           }
           // Timeout backoff: skip for 30s (model overloaded, try next)
           if (errMsg.includes('timeout')) {
-            groqRateLimitBackoff.set(backoffKey, Date.now() + 30000);
+            rateLimitBackoff.set(backoffKey, Date.now() + 30000);
           }
           if (userId) trackApiCall(userId, `ERR:groq-${fm.name}:${errMsg.substring(0, 60)}`, 0, 0, 0, "groq", taskId, "browser-step-error").catch(() => {});
         }
@@ -2186,7 +2218,7 @@ export async function generateVisionResponse(
     // Cerebras — separate rate limit pool (30 RPM, 1M tokens/day), ultra-fast
     if (process.env.CEREBRAS_API_KEY) {
       const cerebrasBackoffKey = 'cerebras:gpt-oss-120b';
-      const cerebrasBackoff = groqRateLimitBackoff.get(cerebrasBackoffKey) || 0;
+      const cerebrasBackoff = rateLimitBackoff.get(cerebrasBackoffKey) || 0;
       if (Date.now() >= cerebrasBackoff) {
         try {
           const response = await withTimeout(getCerebrasClient().chat.completions.create({
@@ -2210,7 +2242,7 @@ export async function generateVisionResponse(
           const errMsg = error instanceof Error ? error.message : String(error);
           console.warn(`[AI] VisionText (Cerebras) failed: ${errMsg}`);
           if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
-            groqRateLimitBackoff.set(cerebrasBackoffKey, Date.now() + 60000);
+            rateLimitBackoff.set(cerebrasBackoffKey, Date.now() + 60000);
           }
           if (userId) trackApiCall(userId, `ERR:cerebras:${errMsg.substring(0, 60)}`, 0, 0, 0, "cerebras", taskId, "browser-step-error").catch(() => {});
         }
@@ -2293,7 +2325,7 @@ export async function generateVisionResponse(
   // $0.11/$0.34 per M tokens. 30 RPM, 1K RPD free tier.
   // Shares rate limit bucket with fast text shortcut — check backoff map.
   const scoutBackoffKey = "groq:meta-llama/llama-4-scout-17b-16e-instruct";
-  if (process.env.GROQ_API_KEY && Date.now() >= (groqRateLimitBackoff.get(scoutBackoffKey) || 0)) {
+  if (process.env.GROQ_API_KEY && Date.now() >= (rateLimitBackoff.get(scoutBackoffKey) || 0)) {
     try {
       const response = await withTimeout(getGroqClient().chat.completions.create({
         model: "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -2318,7 +2350,7 @@ export async function generateVisionResponse(
       console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${errMsg}`);
       // Update shared backoff map so fast text shortcut also skips Scout
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
-        groqRateLimitBackoff.set(scoutBackoffKey, Date.now() + 60000);
+        rateLimitBackoff.set(scoutBackoffKey, Date.now() + 60000);
       }
     }
   }
