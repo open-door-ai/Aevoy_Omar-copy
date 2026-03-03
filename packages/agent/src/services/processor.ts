@@ -3700,11 +3700,23 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 }
               }
             } else {
-              console.warn(`[BROWSER-FAST-PATH] Navigation landed on error page — falling through to iteration loop`);
+              // Navigation failed (chrome-error, DNS failure, SSL error, etc.)
+              // Construct a meaningful failure response — NEVER fall through to generic text
+              const _bfpDomainForError = (() => { try { return new URL(_bfpTargetUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
+              aiResponse.content = `I couldn't access ${_bfpDomainForError} — the site appears to be blocking automated browser access or is temporarily unavailable. You may need to visit ${_bfpTargetUrl} directly to complete this task.`;
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              signupAutoCompleted = true;
+              console.warn(`[BROWSER-FAST-PATH] Navigation landed on error page — constructed failure response`);
             }
           } catch (_bfpErr) {
-            console.warn(`[BROWSER-FAST-PATH] Navigation/vision failed:`, _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr));
-            // Fall through to iteration loop — the normal browse-inject + iteration can still try
+            const _bfpErrMsg = _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr);
+            const _bfpDomainForErr = (() => { try { return new URL(_bfpTargetUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
+            aiResponse.content = `I tried to navigate to ${_bfpDomainForErr} but encountered an error: ${_bfpErrMsg.substring(0, 150)}. The site may be blocking automated access.`;
+            isTaskComplete = true;
+            aiSignaledComplete = true;
+            signupAutoCompleted = true;
+            console.warn(`[BROWSER-FAST-PATH] Navigation/vision failed:`, _bfpErrMsg);
           }
         }
       }
@@ -7867,12 +7879,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           );
           cleanResponse = summary.content || (lastVisionPageData
             ? `Here's what I found:\n\n${lastVisionPageData.substring(0, 1000)}`
-            : `I worked on your request. ${successActions.length} actions completed.`);
+            : `I attempted "${subject.substring(0, 60)}" but couldn't fully complete it. The site may have blocked automated access or the task requires manual steps.`);
         } catch {
           // Rate-limit-proof fallback: use raw page data when ALL AI providers fail
           cleanResponse = lastVisionPageData
             ? `Here's what I found:\n\n${lastVisionPageData.substring(0, 1000)}`
-            : `I worked on your request "${subject}". ${successActions.length} actions completed successfully.`;
+            : `I attempted "${subject.substring(0, 60)}" but couldn't extract the results. The site may require manual access.`;
         }
       } else {
         // Check if there are search results that need AI summarization
