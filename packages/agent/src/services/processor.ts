@@ -5809,6 +5809,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             ]);
             totalAiCost += visionResult.cost || 0; // Track vision agent costs for billing
             console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
+            // Always capture page data from vision agent (success or failure)
+            if (visionResult.pageData && visionResult.pageData.length > 50) {
+              lastVisionPageData = visionResult.pageData;
+            }
+
             if (visionResult.success) {
               const rawVisionResult = visionResult.result || 'Task completed successfully.';
 

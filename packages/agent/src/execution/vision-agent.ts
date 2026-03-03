@@ -164,20 +164,37 @@ async function capturePageData(page: Page): Promise<string> {
     if (!url || url.startsWith('about:') || url.startsWith('chrome-error://')) return '';
     const text = await Promise.race([
       page.evaluate(() => {
-        // Extract structured data: headings, prices, ratings, links
+        // Extract structured data: headings, prices, ratings, product info, links
         const items: string[] = [];
-        document.querySelectorAll('h1, h2, h3, [data-test*="name"], [class*="restaurant"], [class*="listing"], [class*="result"]').forEach(el => {
-          const t = (el as HTMLElement).innerText?.trim();
-          if (t && t.length > 3 && t.length < 200) items.push(t);
-        });
-        if (items.length > 3) return items.slice(0, 20).join('\n');
+        const seen = new Set<string>();
+        const add = (t: string) => { t = t.trim(); if (t.length > 3 && t.length < 300 && !seen.has(t)) { seen.add(t); items.push(t); } };
+
+        // Product/listing elements (broad selectors)
+        document.querySelectorAll(
+          'h1, h2, h3, ' +
+          '[data-test*="name"], [data-test*="price"], [data-test*="title"], ' +
+          '[class*="price"], [class*="cost"], [class*="amount"], ' +
+          '[class*="product"], [class*="listing"], [class*="result"], ' +
+          '[class*="restaurant"], [class*="rating"], [class*="review"], ' +
+          '[class*="flight"], [class*="fare"], [class*="deal"], ' +
+          '[aria-label*="price"], [aria-label*="rating"]'
+        ).forEach(el => add((el as HTMLElement).innerText || ''));
+
+        // Also capture any text that looks like prices ($, USD, CAD, etc.)
+        if (items.length < 10) {
+          const allText = document.body?.innerText || '';
+          const priceMatches = allText.match(/\$[\d,]+\.?\d{0,2}|\b\d+[\.,]\d{2}\s*(USD|CAD|EUR|GBP)\b/g);
+          if (priceMatches) items.push('Prices found: ' + priceMatches.slice(0, 10).join(', '));
+        }
+
+        if (items.length > 3) return items.slice(0, 30).join('\n');
         // Fallback: full page text
-        return document.body?.innerText?.substring(0, 3000) || '';
+        return document.body?.innerText?.substring(0, 4000) || '';
       }),
       new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
     ]);
     if (!text) return '';
-    return `Page: ${url}\n${text.substring(0, 3000)}`;
+    return `Page: ${url}\n${text.substring(0, 4000)}`;
   } catch { return ''; }
 }
 
