@@ -347,32 +347,32 @@ interface ModelConfig {
 //
 // Rate limit backoff (NEW): 429 → skip model for 60-120s instead of retrying
 // This eliminates the 152-Gemini-429-failures-per-6-hours problem.
+// ROUTING_TABLE — model chains per task type.
+// STRATEGY: Claude Haiku 4.5 first for reasoning (genuinely handles unexpected situations).
+// Free models as fallbacks. Haiku costs ~$0.001/call — worthwhile for quality.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   plan: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   reason: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   vision: [
@@ -419,14 +419,12 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
 };
