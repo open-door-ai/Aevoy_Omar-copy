@@ -5946,7 +5946,18 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       // Guard: max 2 invocations to prevent 8min × N iterations = multi-hour lock-up.
       // Broad detection: any task that requires interacting with a web page UI
       // Covers "sign me up", "make an account", "make a design", "complete the form", etc.
-      const isBrowserInteractionTask = (
+
+      // Bug 4 fix: Pure price-research tasks (no buy/cart/order actions) should use the
+      // fast fetch/search path, NOT the 16-minute vision agent.
+      // "Find the cheapest Sony TV at Best Buy Canada, Amazon.ca, Costco" → search, not browser UI.
+      // Exclude if task is ONLY price research with no transaction intent.
+      const _isPriceResearchOnly = (
+        /\b(price|cheapest|how much|find the price|compare prices?|price check|price comparison|best price|lowest price|what does.*cost|how much does|find.*cheapest|cheapest.*price|price.*in Canada|price.*on amazon|price.*at best buy)\b/i.test(taskTextLower) &&
+        // No transaction verbs — if they want to BUY, vision agent is needed
+        !/\b(buy|purchase|add to cart|order|checkout|place.*order|get me one|i want to buy|pick.*up|get.*delivered)\b/i.test(taskTextLower)
+      );
+
+      const isBrowserInteractionTask = !_isPriceResearchOnly && (
         /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|connect\b|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(taskTextLower)
         // Also trigger if the AI already browsed and is clearly doing UI work (has form fills or clicks)
         || (hasBrowseEver && actionResults.some(r => ['fill', 'fill_form', 'click', 'submit'].includes(r.action?.type || '') && !r.success))
@@ -5955,6 +5966,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         || (hasBrowseEver && /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
         // If we've browsed to a site AND the task mentions a domain, ALWAYS need vision to see the page
         // Catches "find X on bestbuy.ca", "search for Y at amazon.com", "get prices from walmart.ca"
+        // But NOT price research tasks (already excluded above by _isPriceResearchOnly)
         || (hasBrowseEver && /\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
       );
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {

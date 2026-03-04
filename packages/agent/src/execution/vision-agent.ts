@@ -920,6 +920,7 @@ IDENTITY & SIGNUPS:
 - You ARE the agent. Use YOUR credentials from ⚡ CREDENTIALS for signups.
 - Try "Continue with Google" first. Fall back to email form.
 - "verify your email/phone" → WAIT (codes auto-read from your inbox/phone).
+- For Figma signups: navigate to figma.com (homepage), then click "Get started for free" or "Sign up" button. Do NOT navigate to figma.com/signup as it redirects to Figma Make instead of account creation.
 
 SHOPPING: Search → product → Add to Cart → DONE with exact price.
 BOOKING: Party/date/time → Search → Pick slot → Contact → Confirm.
@@ -1060,6 +1061,7 @@ export async function runVisionAgent(
   // ── Task classification ──
   const isBookingTask = /\b(order|reserve|book|pickup|delivery|reservation|get.*food|get.*pizza|get.*coffee)\b/i.test(task);
   const isComplexTask = /\b(sign\s*up|register|create.*account|book|reserve|order|purchase|checkout|apply|subscribe)\b/i.test(task);
+  const isFormFillTask = /\b(sign\s*up|signup|register|create.*account|apply|fill.*form|submit.*form|probate|intake|legal.*form|contact.*form)\b/i.test(task);
   const effectiveMaxSteps = isBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS;
   let dynamicMaxSteps = effectiveMaxSteps;
   let milestonesHit = 0;
@@ -1139,7 +1141,8 @@ export async function runVisionAgent(
       if (startUrl && isSafeUrl(startUrl)) {
         // Known signup URL overrides for platforms whose /signup redirects to homepage
         const SIGNUP_URL_MAP: Record<string, string> = {
-          'figma.com': 'https://www.figma.com/signup',
+          // Figma /signup redirects to Figma Make — use homepage and click "Get started for free"
+          'figma.com': 'https://www.figma.com',
           'canva.com': 'https://www.canva.com/signup',
           'prolific.com': 'https://app.prolific.com/register',
           'resy.com': 'https://resy.com/cities/van/venues', // search page, not homepage
@@ -1490,6 +1493,51 @@ export async function runVisionAgent(
         stuckHint = `🚨 CRITICALLY STUCK (${sameUrlCount} steps). Try: PRESS Tab to cycle elements, NAVIGATE to a sub-page, or SCROLL to find hidden content.`;
       }
 
+      // ── AUTO EMAIL VERIFICATION DETECTION ──
+      // Automatically detect "check your email" walls and fetch the code/link without waiting for AI
+      const EMAIL_WALL_PHRASES = /check your email|verify your email|confirmation email|verification link|click the link in|we sent you an email|confirm your email|verify your account.*email|email.*verification sent|we['']ve sent.*email|check.*inbox.*verif|open the email/i;
+      if (EMAIL_WALL_PHRASES.test(snapshot) && emailUsername && !history.some(h => h.includes('auto-email-check:') && h.includes(url.substring(0, 40)))) {
+        console.log(`[BROWSER-AGENT] Email verification wall detected at ${url} — auto-checking inbox`);
+        let autoVerifFound = false;
+        try {
+          const { fetchRecentEmails } = await import('../services/inbox-poller.js');
+          const autoEmails = await fetchRecentEmails(`${emailUsername}@aevoy.com`, 3, 10);
+          for (const email of autoEmails) {
+            const extracted = extractVerificationCode(email.body || email.subject || '');
+            if (extracted.verifyLink) {
+              console.log(`[BROWSER-AGENT] Auto-nav to verification link: ${extracted.verifyLink}`);
+              await activePage.goto(extracted.verifyLink, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+              history.push(`auto-email-check: ${url.substring(0, 40)} — navigated to verification link ${extracted.verifyLink}`);
+              autoVerifFound = true;
+              break;
+            } else if (extracted.code) {
+              console.log(`[BROWSER-AGENT] Auto-filling verification code: ${extracted.code}`);
+              const filled = await (async () => {
+                for (const finder of [
+                  () => activePage.getByRole('textbox', { name: /code|otp|token|verify/i }).first(),
+                  () => activePage.locator('input[name*="code"], input[name*="otp"], input[type="number"], input[inputmode="numeric"]').first(),
+                ]) {
+                  try { await finder().fill(extracted.code!, { timeout: 3000 }); return true; } catch { continue; }
+                }
+                return false;
+              })();
+              history.push(`auto-email-check: ${url.substring(0, 40)} — ${filled ? `filled code "${extracted.code}"` : `found code "${extracted.code}" but couldn't fill field`}`);
+              autoVerifFound = true;
+              break;
+            }
+          }
+          if (!autoVerifFound) {
+            history.push(`auto-email-check: ${url.substring(0, 40)} — no code/link found yet in inbox (${autoEmails.length} emails checked)`);
+            console.log(`[BROWSER-AGENT] No verification email found yet — inbox had ${autoEmails.length} emails`);
+          }
+        } catch (e) { console.warn(`[BROWSER-AGENT] Auto email-wall check failed: ${e}`); }
+        // If we navigated away, skip AI for this step and continue the loop
+        if (autoVerifFound && activePage.url() !== url) {
+          steps++;
+          continue;
+        }
+      }
+
       // ── Ask AI ──
       const prompt = buildPrompt(snapshot, url, task, history, taskCreds, triedText, stuckHint, userProfile);
 
@@ -1680,6 +1728,28 @@ export async function runVisionAgent(
             // "The [site] [verb]s [what's on it]" — page description pattern
             /\bthe\s+\w+\s+(?:website|homepage|page|site|platform)\s+(?:has|offers?|provides?|allows?|shows?|features?|lets)\b/i.test(doneResult)
           );
+
+          // Bug 3 fix: If passive/advisory DONE on a form-fill task AND a submit button is visible,
+          // force-click the submit button immediately instead of rejecting and re-prompting.
+          // This handles cases like Probatedesk where DeepSeek ignores the "just submit" rule.
+          if (isFormFillTask && (isPassive || isAdvice) && hasFilledAnyField) {
+            const snapHasSubmit = /\bsubmit\b|\bcontinue\b|\bnext\s+step\b|\bsend\b/i.test(snapshot);
+            if (snapHasSubmit) {
+              console.log(`[BROWSER-AGENT] PASSIVE DONE on form-fill task with submit visible — force-clicking submit`);
+              try {
+                const submitBtn = activePage.getByRole('button', { name: /submit|continue|next|send|proceed/i }).first();
+                const btnCount = await submitBtn.count();
+                if (btnCount > 0 && await submitBtn.isVisible({ timeout: 2000 })) {
+                  await submitBtn.click({ timeout: 5000 });
+                  console.log(`[BROWSER-AGENT] Force-clicked submit button`);
+                  history.push(`Force-submitted form (agent was passive, submit button was visible and form was filled).`);
+                  steps++;
+                  await activePage.waitForTimeout(2000);
+                  break; // break action loop, next iteration will check result
+                }
+              } catch (e) { console.warn(`[BROWSER-AGENT] Force-submit failed: ${e}`); }
+            }
+          }
 
           if (isPassive || isAdvice || isOrderIncomplete || dataMissing || isPageDescription) {
             const reason = isPassive ? 'PASSIVE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : isPageDescription ? 'PAGE-DESCRIPTION' : 'ADVICE';
