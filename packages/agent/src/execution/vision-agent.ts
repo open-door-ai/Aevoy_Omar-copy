@@ -1116,9 +1116,11 @@ export async function runVisionAgent(
     const currentUrl = activePage.url();
     const isBlank = !currentUrl || currentUrl === 'about:blank' || currentUrl.startsWith('chrome-error://');
     if (isBlank) {
-      const urlInTask = task.match(/https?:\/\/[^\s,)]+/)?.[0] ||
-        task.match(/\b(?:to|on|at|visit|open)\s+([\w-]+\.[\w.-]+\.(?:com|org|net|io|co|app)(?:\/[^\s,)]*)?)/i)?.[1] ||
-        task.match(/\b([\w-]+\.[\w.-]*(?:com|org|net|io|co|app)(?:\/[^\s,)]*)?)\b/i)?.[1];
+      // Strip email addresses before URL extraction to prevent "@aevoy.com" from being mistaken as nav target
+      const taskWithoutEmails = task.replace(/\S+@\S+\.\w+/g, '');
+      const urlInTask = taskWithoutEmails.match(/https?:\/\/[^\s,)]+/)?.[0] ||
+        taskWithoutEmails.match(/\b(?:to|on|at|visit|open)\s+([\w-]+\.[\w.-]+\.(?:com|org|net|io|co|app)(?:\/[^\s,)]*)?)/i)?.[1] ||
+        taskWithoutEmails.match(/\b([\w-]+\.[\w.-]*(?:com|org|net|io|co|app)(?:\/[^\s,)]*)?)\b/i)?.[1];
       let startUrl = urlInTask?.startsWith('http') ? urlInTask :
         urlInTask?.includes('.') ? `https://${urlInTask}` : // domain with dots: don't add www
         urlInTask ? `https://www.${urlInTask}` : null;
@@ -1126,7 +1128,11 @@ export async function runVisionAgent(
       // Infer URL from service name: "Sign up for Canva" → canva.com
       if (!startUrl) {
         const serviceMatch = task.match(
-          /\b(?:sign\s*up|create\s+(?:a|an|my)\s+(?:\w+\s+)?account|log\s*in|cancel|go\s+to|navigate\s+to|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+(?:\s*[A-Z][a-zA-Z]*)?)/i
+          // "Create a free Typeform account" — allow 0-3 words before "account" to catch service names
+          /\b(?:sign\s*up|create\s+(?:a|an|my)\s+(?:free\s+)?(?:(?:\w+)\s+){0,2}account|log\s*in|cancel|go\s+to|navigate\s+to|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+(?:\s*[A-Z][a-zA-Z]*)?)/i
+        ) || task.match(
+          // "Create a free Typeform account" — extract service name directly from "for [ServiceName]" OR "[ServiceName] account"
+          /\b(?:free\s+)?([A-Z][a-zA-Z]{2,})\s+account\b/i
         );
         if (serviceMatch) {
           const name = serviceMatch[1].trim().toLowerCase().replace(/\s+/g, '');

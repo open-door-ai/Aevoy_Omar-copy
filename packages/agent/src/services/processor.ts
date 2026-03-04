@@ -4477,6 +4477,8 @@ DO NOT give me the URL again. CREATE THE ACCOUNT NOW.`;
             (
               /\b(prices? (fluctuate|vary|change)|check the (website|site|page)|visit .*(website|page|link)|for (current|up.to.date|latest) (price|pricing))\b/i.test(lowerContent) ||
               /\b(check (their|the) (official |)websites? directly|you (should|can|may) check|for the most (current|accurate|up.to.date)|retailer promotions frequently change|pricing at .*(may|can) vary)\b/i.test(lowerContent) ||
+              // "not present in these search results" / "not listed in the provided snippets" — searched but gave up
+              /\b(not (present|listed|available|found) in (the(se)? )?search results?|not (present|listed|found) in the provided snippets?|no (specific |new |current )?(price|pricing|cost) (is |are )?(listed|available|shown|present))\b/i.test(lowerContent) ||
               (/\b(available at|listed on)\b/i.test(lowerContent) && !/\$\d/.test(lowerContent))
             )
           ) {
@@ -8550,7 +8552,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // "to stop/manage/cancel their/your subscription/membership" — how-to framing
         /\bto (stop|manage|cancel|pause|end|terminate) (their|your|the) (subscription|membership|account|plan|billing)\b/i.test(cleanResponse) ||
         // Fabricated phone numbers: 555-xxxx is the Hollywood fake number range
-        /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(cleanResponse)
+        /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(cleanResponse) ||
+        // "forms are available, including templates from DocHub, JotForm" — lists services instead of acting
+        /\b(are available,?\s+including\s+(templates?|forms?|options?|tools?|services?)\s+(from|on|at|via|through)\b)/i.test(cleanResponse) ||
+        // "[X, Y, and Z] are available" with no action taken — typical research cop-out
+        /\b(forms?|templates?|tools?|services?|platforms?|options?)\s+(are|were)\s+available\b.{0,100}\b(DocHub|JotForm|eState|Willful|Epilogue|LegalZoom|LawDepot|Rocket Lawyer)\b/i.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
       // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
       const _gaveUp = _isTask && (
