@@ -6119,7 +6119,11 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 /\b(accepts\s+(reservations|bookings|orders)|may be available|for availability)\b/i.test(rawVisionResult) ||
                 /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(rawVisionResult) // fabricated 555-xxxx phone
               );
-              const _isCompletionResult = /\b(confirmed|booked|reserved|signed up|created|registered|cancelled|submitted|completed|purchased|ordered|found|price|cost|\$\d|logged in|account created|successfully)\b/i.test(rawVisionResult);
+              // Only TRUE task-completion words set signupAutoCompleted=true.
+              // "found", "price", "cost", "$X" are research-only — they indicate the agent found
+              // info but didn't complete the task. Including them caused quality gate bypass for
+              // signup/booking tasks where vision result said "found restaurants" or "found signup page".
+              const _isCompletionResult = /\b(confirmed|booked|reserved|signed up|created|registered|cancelled|submitted|completed|purchased|ordered|logged in|account created|successfully)\b/i.test(rawVisionResult);
 
               if (_isAdviceResult && !_isCompletionResult) {
                 // Vision agent gave advice, not completion — treat as failure
@@ -8347,7 +8351,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // AI loop takes over but asks permission instead of acting.
     // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
     // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
-    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|ready to submit\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)?\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter|click|sign|try|proceed)\b|you must (select|choose|visit|go to|navigate|pick|enter|complete|provide|verify|confirm)\b|you need to (select|choose|visit|go to|navigate|pick)\b|you will need to\b|you should (select|visit|go to|navigate|pick)\b|to book.{0,30}you (must|need|have to|should)\b|to complete.{0,30}you (must|need|have to|should)\b)/i;
+    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|ready to submit\b|ready to go\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)?\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter|click|sign|try|proceed)\b|you must (select|choose|visit|go to|navigate|pick|enter|complete|provide|verify|confirm)\b|you need to (select|choose|visit|go to|navigate|pick)\b|you will need to\b|you should (select|visit|go to|navigate|pick)\b|to book.{0,30}you (must|need|have to|should)\b|to complete.{0,30}you (must|need|have to|should)\b)/i;
 
     // FORM-FILL PASSIVE GUARD: "Want me to fill in [field]?" is always passive when user provided data.
     // If the task description contains the data AND the response asks to fill it in, that's passive —
@@ -8402,7 +8406,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       if (_isTrailingProactive) {
         // Strip just the trailing passive sentence — the rest of the response is good
         // Handles both inline ("Found X. Want me to...") and newline-separated ("\n\nWant me to...")
-        const _trailingStrip = cleanResponse.replace(/\n{1,2}[^\n]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^\n]*[.!?]?\s*$/i, '').replace(/[^\n.!?]*\b(want me to|shall i|would you like me to|do you want me to|let me know if)[^.!?]*[.!?]?\s*$/i, '').trim();
+        const _trailingStrip = cleanResponse.replace(/\n{1,2}[^\n]*\b(want me to|shall i|would you like me to|do you want me to|let me know if|ready to go|ready to proceed|ready to submit)[^\n]*[.!?]?\s*$/i, '').replace(/[^\n.!?]*\b(want me to|shall i|would you like me to|do you want me to|let me know if|ready to go|ready to proceed|ready to submit)[^.!?]*[.!?]?\s*$/i, '').trim();
         if (_trailingStrip.length > 50) {
           cleanResponse = _trailingStrip;
           console.log('[PASSIVE-GUARD] Stripped trailing proactive question — substantive content preserved');
@@ -8689,7 +8693,10 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // "Go to express.adobe.com and select 'Sign up for free'" — agent gives URL instructions instead of acting
         || /\bgo to\b.{0,80}(https?:\/\/|[\w\-]+\.(com|ca|org|io|co|net|app))\b.{0,100}\b(and\s+)?(select|click|sign\s*up|create|register|complete|fill)\b/i.test(cleanResponse)
         // "Visit https://... to create an account" — navigate instruction pattern
-        || /\b(visit|navigate to|head to|open)\b.{0,20}(https?:\/\/|[\w\-]+\.(com|ca|org|io|co|net|app)[\w\-\/]*)\b/i.test(cleanResponse);
+        || /\b(visit|navigate to|head to|open)\b.{0,20}(https?:\/\/|[\w\-]+\.(com|ca|org|io|co|net|app)[\w\-\/]*)\b/i.test(cleanResponse)
+        // "Reply with your email" / "What's your email?" — agent asking for info it already has
+        // (email is always in identity injection: "⚡ YOUR IDENTITY: email=..."). Should ask for PASSWORD only.
+        || /\b(reply with your email|what'?s your email|what email (should|would|do)|send me your email|your email (address|for the))\b/i.test(cleanResponse);
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
         const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom|adobe|usertesting|trymyui|willful|epilogue|resy|opentable|legalzoom|grammarly|typeform|hootsuite|mailchimp|buffer|semrush|ahrefs|moz)\b/i);
         const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
