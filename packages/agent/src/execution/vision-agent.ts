@@ -218,6 +218,21 @@ async function takeScreenshot(page: Page): Promise<string> {
 }
 
 /**
+ * Fix 1: Compact screenshot for every-step AI context.
+ * Clipped to 800px wide viewport width, JPEG quality 40 (smaller tokens).
+ */
+async function takeStepScreenshot(page: Page): Promise<string> {
+  try {
+    const buf = await page.screenshot({ type: 'jpeg', quality: 40, clip: { x: 0, y: 0, width: 800, height: 600 } });
+    return buf.toString('base64');
+  } catch {
+    // Fallback: full screenshot
+    const buf = await page.screenshot({ type: 'jpeg', quality: 40 });
+    return buf.toString('base64');
+  }
+}
+
+/**
  * Capture page data for partial results when agent fails.
  * Returns URL + page text (truncated) so processor can still summarize what was found.
  */
@@ -1021,6 +1036,15 @@ export async function runVisionAgent(
   let sameUrlCount = 0;
   let captchaFailCount = 0;
 
+  // Fix 2: track whether we have written a response — for the finally fallback
+  let agentResult: VisionAgentResult | null = null;
+  // Fix 3: track the original/last-known-good URL for chrome-error recovery
+  let lastGoodUrl = '';
+  // Fix 4: silent bot detection — consecutive no-change action counter
+  let noChangeCount = 0;
+  let lastSnapshotHash = '';
+  let lastCheckedUrl = '';
+
   // ── Action memory: don't try the same thing more than twice ──
   interface ActionRecord { sig: string; raw: string; ok: boolean; step: number; }
   const actionMemory: ActionRecord[] = [];
@@ -1082,6 +1106,8 @@ export async function runVisionAgent(
     } catch { /* planning is optional */ }
   }
 
+  // Fix 2: inner async IIFE so we can wrap with try/finally for guaranteed response
+  const runInner = async (): Promise<VisionAgentResult> => {
   try {
     // ── PRE-NAVIGATION: If page is blank, navigate to target URL ──
     const currentUrl = activePage.url();
@@ -1195,6 +1221,21 @@ export async function runVisionAgent(
         const elapsed = ((Date.now() - startTime) / 60000).toFixed(1);
         console.log(`[BROWSER-AGENT] Heartbeat: step ${steps}/${effectiveMaxSteps} (${elapsed}min)`);
         void (async () => { try { await getSupabaseClient().from('tasks').update({ progress_message: `Browser agent step ${steps}/${effectiveMaxSteps}` }).eq('id', taskId); } catch { /* ok */ } })();
+      }
+
+      // Fix 3: chrome-error:// / chromewebdata:// / unexpected about:blank recovery
+      {
+        const stepUrl = (() => { try { return activePage.url(); } catch { return ''; } })();
+        const isErrorPage = stepUrl.startsWith('chrome-error://') || stepUrl.startsWith('chromewebdata://') ||
+          (stepUrl === 'about:blank' && steps > 0 && lastGoodUrl);
+        if (isErrorPage && lastGoodUrl) {
+          console.warn(`[BROWSER-AGENT] Step ${steps + 1}: error page detected (${stepUrl}) — recovering to ${lastGoodUrl}`);
+          history.push(`⚠️ Browser crashed to error page. Recovering to ${lastGoodUrl.substring(0, 60)}...`);
+          await activePage.goto(lastGoodUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          await activePage.waitForTimeout(500);
+        } else if (stepUrl && !isErrorPage && !stepUrl.startsWith('about:')) {
+          lastGoodUrl = stepUrl;
+        }
       }
 
       // Popup notification
@@ -1345,7 +1386,15 @@ export async function runVisionAgent(
       if (snapshot.length > 8000) snapshot = snapshot.substring(0, 8000);
       console.log(`[BROWSER-AGENT] Step ${steps + 1}: ${url.substring(0, 80)} — snapshot ${snapshot.length} chars, ${currentRefs.size} refs`);
 
-      // Take screenshot only periodically (for evidence trail, not for AI reasoning)
+      // Fix 1: Take a screenshot at the START of every step for AI visual context.
+      // Resize to 800px wide (via clip) and JPEG quality 40 to keep token count low.
+      // Full-quality screenshots are still appended to `screenshots` periodically for the evidence trail.
+      let stepScreenshotData = '';
+      try {
+        stepScreenshotData = await takeStepScreenshot(activePage);
+      } catch { /* non-critical */ }
+
+      // Evidence trail: full-quality screenshot every 5 steps
       if (steps === 0 || steps % 5 === 0) {
         try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
       }
@@ -1375,9 +1424,23 @@ export async function runVisionAgent(
         ? failedEntries.slice(-10).map(f => `- Step ${f.step}: ${f.raw} → FAILED`).join('\n')
         : '';
 
+      // Fix 4: Silent bot detection — track consecutive no-change actions
+      // Compare current URL + snapshot hash to previous. If 3 consecutive steps produce zero change,
+      // inject a bot-detection warning into the next AI prompt.
+      const snapshotHash = snapshot.length + ':' + snapshot.substring(0, 100);
+      if (url === lastCheckedUrl && snapshotHash === lastSnapshotHash) {
+        noChangeCount++;
+      } else {
+        noChangeCount = 0;
+        lastCheckedUrl = url;
+        lastSnapshotHash = snapshotHash;
+      }
+
       // Stuck hint
       let stuckHint = '';
-      if (sameUrlCount >= 3 && sameUrlCount < 7) {
+      if (noChangeCount >= 3) {
+        stuckHint = `⚠️ POSSIBLE BOT DETECTION: ${noChangeCount} actions with no page change. Try: (1) a completely different element, (2) SCROLL first, (3) WAIT 3 seconds, (4) try a different URL or approach.`;
+      } else if (sameUrlCount >= 3 && sameUrlCount < 7) {
         stuckHint = `⚡ STUCK ${sameUrlCount} steps on same page. Try a completely different approach. SCROLL down, use a search bar, or NAVIGATE to a different URL.`;
       } else if (sameUrlCount >= 7) {
         stuckHint = `🚨 CRITICALLY STUCK (${sameUrlCount} steps). Try: PRESS Tab to cycle elements, NAVIGATE to a sub-page, or SCROLL to find hidden content.`;
@@ -1389,14 +1452,20 @@ export async function runVisionAgent(
       let aiResponse: string;
       let stepCost = 0;
       try {
-        // Text-only steps (95%): use fast text models (Groq 1-3s, DeepSeek 2-5s)
-        // Screenshot steps (stuck): use vision model cascade (slower but can analyze images)
-        const useScreenshot = sameUrlCount >= 3;
-        // Take a fresh screenshot when stuck — stale screenshots (from 5 steps ago) mislead vision models
-        if (useScreenshot) {
+        // Fix 1: Always send screenshot to AI for visual context.
+        // Every step now includes a 800px-wide JPEG screenshot so the AI can see what's on screen.
+        // Vision model is used when: (a) stuck (sameUrlCount >= 3), OR (b) always (Fix 1).
+        // To keep costs low, use vision model only when stuck or at step 0, text model otherwise.
+        // The stepScreenshotData is available always but passed to vision AI only when beneficial.
+        const useVisionModel = sameUrlCount >= 3;
+        // When stuck, take a fresh full screenshot for the vision model cascade
+        if (useVisionModel) {
           try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
         }
-        const screenshotData = useScreenshot ? (screenshots[screenshots.length - 1] || '') : '';
+        // Fix 1: always use the per-step screenshot for AI context
+        const screenshotData = useVisionModel
+          ? (screenshots[screenshots.length - 1] || stepScreenshotData)
+          : stepScreenshotData;
         const hasScreenshot = screenshotData.length > 100;
 
         const result = await Promise.race([
@@ -1409,12 +1478,12 @@ export async function runVisionAgent(
         stepCost = result.cost;
         totalCost += stepCost;
 
-        // After a vision step, reset sameUrlCount so normal text models are used next.
+        // After a STUCK vision step (useVisionModel=true), reset sameUrlCount so normal text models are used next.
         // Without this, once sameUrlCount >= 3 it never drops back and the vision fallback
         // (DeepSeek text-only) loops forever on the same action (e.g. SCROLL down).
         // Reset to 0: gives 3 normal steps before vision fires again (0→1→2→3=vision).
-        // Reset to 2 was wrong — URL unchanged → 2+1=3 → vision fires on very next step.
-        if (hasScreenshot) {
+        // Note: do NOT reset on Fix 1's every-step screenshot — only reset when we used the vision model for stuck detection.
+        if (useVisionModel) {
           sameUrlCount = 0;
         }
       } catch (err) {
@@ -1773,4 +1842,30 @@ export async function runVisionAgent(
     try { pageData = await capturePageData(activePage); } catch { /* best effort */ }
     return { success: false, error: err instanceof Error ? err.message : String(err), steps, cost: totalCost, screenshots, pageData };
   }
+  }; // end runInner
+
+  // Fix 2: NEVER write null — catch any unhandled error from runInner and return a fallback
+  try {
+    agentResult = await runInner();
+  } catch (outerErr) {
+    const fallbackUrl = (() => { try { return activePage.url(); } catch { return lastGoodUrl || 'unknown'; } })();
+    console.warn(`[BROWSER-AGENT] Outer catch: unhandled error after ${steps} steps: ${outerErr}`);
+    agentResult = {
+      success: false,
+      error: `Browser agent crashed: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`,
+      result: `I worked through ${steps} step(s) on ${fallbackUrl.substring(0, 80)} and encountered an error. Please retry.`,
+      steps,
+      cost: totalCost,
+      screenshots,
+    };
+  }
+  // Guaranteed non-null result
+  return agentResult ?? {
+    success: false,
+    error: `Browser agent returned no result after ${steps} step(s).`,
+    result: `I worked through ${steps} step(s) and encountered an unexpected error. Please retry.`,
+    steps,
+    cost: totalCost,
+    screenshots,
+  };
 }
