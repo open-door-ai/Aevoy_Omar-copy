@@ -8344,18 +8344,22 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // AI loop takes over but asks permission instead of acting.
     // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
     // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
-    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|ready to submit\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter|click|sign|try|proceed)\b)/i;
+    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|ready to submit\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)?\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter|click|sign|try|proceed)\b|you must (select|choose|visit|go to|navigate|pick|enter|complete|provide|verify|confirm)\b|you need to (select|choose|visit|go to|navigate|pick)\b|you will need to\b|you should (select|visit|go to|navigate|pick)\b|to book.{0,30}you (must|need|have to|should)\b|to complete.{0,30}you (must|need|have to|should)\b)/i;
 
     // FORM-FILL PASSIVE GUARD: "Want me to fill in [field]?" is always passive when user provided data.
     // If the task description contains the data AND the response asks to fill it in, that's passive —
     // the agent should already be filling it in, not asking.
+    // FIX 2a: Also fires for signup/browser tasks even without explicit form data in the task text,
+    // so "Want me to fill out the signup form for you?" is ALWAYS caught (e.g. Figma signup).
     const _taskHasFormData = /\b(name|email|phone|address|password|username|first name|last name|date of birth|dob|zip|postal)\b/i.test(`${subject} ${body}`);
     const _responseAsksToFill = /\b(want me to fill|shall i fill|would you like me to fill|do you want me to fill|ready to fill|want me to (enter|submit|complete))\b/i.test(cleanResponse);
-    if (_taskHasFormData && _responseAsksToFill) {
-      console.log(`[PASSIVE-GUARD] Form-fill passive detected — user provided data in task but agent asks to fill`);
-      // Force the agent to just do it — strip the passive question and replace with action statement
+    const _isBrowserSignupTask = /\b(sign\s?up|signup|register|create.*account|figma|canva|adobe)\b/i.test(subject + ' ' + (body || ''));
+    if ((_taskHasFormData || _isBrowserSignupTask) && _responseAsksToFill) {
+      console.log(`[PASSIVE-GUARD] Form-fill passive detected — agent asks to fill instead of doing it (hasFormData=${_taskHasFormData}, isSignup=${_isBrowserSignupTask})`);
+      // Strip the "want me to fill" phrase wherever it appears in the response
       cleanResponse = cleanResponse
-        .replace(/\n*[^\n.!?]*\b(want me to fill|shall i fill|would you like me to fill|do you want me to fill|ready to fill|want me to (enter|submit|complete))\b[^\n.!?]*[.!?]?\s*$/i, '')
+        .replace(/[^\n.!?]*\b(want me to fill|shall i fill|would you like me to fill|do you want me to fill|ready to fill|want me to (enter|submit|complete))\b[^\n.!?]*[.!?]?\s*/gi, '')
+        .replace(/\n{2,}/g, '\n')
         .trim();
       if (!cleanResponse || cleanResponse.length < 10) {
         cleanResponse = `I'll fill in the form with the details you provided and submit it now.`;
@@ -8580,8 +8584,17 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         console.log(`[QUALITY-GATE] Response is ${gateType} — upgrading to action-oriented`);
         try {
           const { quickValidate } = await import("./ai.js");
+          // FIX 1: Booking-specific re-prompt — when task is book/reserve and response lists
+          // restaurants/venues but has no booking confirmation, force action instead of summary.
+          const _isBookingTask = /\b(book|reserv(?:ation|e)|dining|restaurant|table|resy|opentable)\b/i.test(subject + ' ' + (body || ''));
+          const _hasVenueNames = /\b[A-Z][a-z]{2,}\s+(?:Restaurant|Bistro|Kitchen|Bar|Grill|Brasserie|Café|Cafe|Lane|Street|House)\b/.test(cleanResponse)
+            || /\b(brick lane|tavern|eatery|steakhouse|pizzeria)\b/i.test(cleanResponse);
+          const _noBookingConfirm = !/\b(booked|reserved|reservation confirmed|table confirmed|confirmation number)\b/i.test(cleanResponse);
+          const _bookingFoundButNotBooked = _isBookingTask && _hasVenueNames && _noBookingConfirm;
           const _upgradePrompt = _passiveWithProgress
             ? `Task: "${subject.substring(0, 200)}"\nCurrent response (INCOMPLETE — made progress then asked permission): "${cleanResponse.substring(0, 400)}"\n\nThe agent made progress but stopped to ask instead of completing. Rewrite to:\n1. Confirm what was actually accomplished (logged in, found the page, filled the form, etc.)\n2. Be honest — if you couldn't complete the final step (bot protection, extra verification), say so\n3. NEVER end with "would you like", "shall I", "want me to" — state what happened as facts\n4. If blocked at the last step: "I [action taken] but hit [obstacle]. Reply '[clear instruction]' to continue."\n5. 2-3 sentences max, past tense, first person`
+            : _bookingFoundButNotBooked
+            ? `Task: "${subject.substring(0, 200)}"\nCurrent response (FOUND VENUES BUT DID NOT BOOK): "${cleanResponse.substring(0, 400)}"\n\nYou found restaurants but haven't booked. Pick the FIRST available option (e.g., Brick Lane) and either attempt the Resy/OpenTable booking directly OR search for their phone number and call to make the reservation. DO NOT give a summary — take ACTION NOW.\n\nRewrite as: "I attempted to book at [venue] via [method]. [Result: what happened — either confirmed, or what obstacle was hit and what info is needed to proceed.]"`
             : `Task: "${subject.substring(0, 200)}"\nCurrent response (WRONG): "${cleanResponse.substring(0, 400)}"\nActions taken: ${actionResults.filter(r=>r.success).slice(0,5).map(r=>r.action.type).join(', ') || 'none'}\n\nRewrite as a FIRST-PERSON PAST-TENSE action statement. Follow these EXACT rules:\n1. Start with "I navigated to..." / "I searched for..." / "I found..." / "I attempted..." — report what the agent DID\n2. If failed: state the exact obstacle (bot protection, login required, email verification, captcha)\n3. If credentials needed to continue: end with "Reply with [your X] and I'll complete it."\n4. BANNED — NEVER write these: "You can create", "You can sign up", "You can access", "The page is at", "available at", any URLs, "you'll need to", "visit the site", "here's how"\n5. 2-3 sentences max. Past tense. First person only.\n\nGOOD examples:\n- "I navigated to Notion's signup page and started the registration. I got stuck at email verification — share the code from your inbox and I'll finish."\n- "I searched flights Vancouver→Tokyo and found the cheapest option at $322 on Google Flights for March 14th."\n- "I opened Canva's business card creator but hit a login wall. I need your Canva credentials to proceed — reply with email and password."`;
           const _upgraded = await quickValidate(
             _upgradePrompt,
@@ -8645,14 +8658,28 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     {
       const _isSignupTask = /\b(sign\s?me?\s?up|signup|register\s+(for|on|with|at)|create\s+(an?\s+)?account|make\s+(an?\s+)?account)\b/i.test(subject + ' ' + (body || ''));
       const _sfCompletionWords = /\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created)\b/i;
-      const _sfGivesInstructions = /\byou can (create|sign up|register|access|make|build|set up)\b/i.test(cleanResponse)
+      const _sfGivesInstructions = /\byou can (create|sign up|register|access|make|build|set up|now)\b/i.test(cleanResponse)
         || /\b(?:page|site|form)\b.{0,30}https?:\/\//i.test(cleanResponse)
-        || /\bavailable at https?:\/\//i.test(cleanResponse);
+        || /\bavailable at https?:\/\//i.test(cleanResponse)
+        || /\byou can now\b/i.test(cleanResponse)
+        || /\bloaded successfully\b/i.test(cleanResponse)
+        || /\byou can now manually (complete|fill|finish|submit|continue)\b/i.test(cleanResponse)
+        || /\bmanually complete\b/i.test(cleanResponse);
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
         const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom)\b/i);
         const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
         cleanResponse = `I reached the ${_svcName} signup page. To complete your account, reply with the password you'd like to use and I'll finish the registration immediately.`;
         console.log(`[SIGNUP-FALLBACK] Converted instructional response to credential request for ${_svcName}`);
+        // FIX 3: Immediately persist the credential request to DB so the user can see what was asked.
+        // Without this, response_text stays as the old instructional text until the final DB update
+        // (which may be minutes later), leaving the user with a null or stale response_text.
+        if (taskId) {
+          await getSupabaseClient().from('tasks').update({
+            response_text: cleanResponse,
+            status: 'awaiting_user_input',
+          }).eq('id', taskId);
+          console.log(`[SIGNUP-FALLBACK] DB updated — status=awaiting_user_input, response_text set for task ${taskId.slice(0, 8)}`);
+        }
       }
     }
     // ── HALLUCINATION GUARD ──────────────────────────────────────────────────
