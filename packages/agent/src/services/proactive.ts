@@ -121,11 +121,22 @@ export class ProactiveEngine {
     let findingsCount = 0;
 
     try {
-      // Get all users with proactive enabled
+      // Get all users with proactive enabled — read from user_settings (v31+), fall back to profiles legacy column
+      // user_settings.proactive_enabled is the canonical source; profiles.proactive_enabled is legacy (v3 era)
+      const { data: enabledSettings } = await getSupabaseClient()
+        .from("user_settings")
+        .select("user_id")
+        .eq("proactive_enabled", true);
+
+      const enabledUserIds = (enabledSettings || []).map((s: { user_id: string }) => s.user_id);
+      if (enabledUserIds.length === 0) {
+        return 0;
+      }
+
       const { data: users, error } = await getSupabaseClient()
         .from("profiles")
         .select("id, username, email, twilio_number, timezone, telegram_chat_id, whatsapp_phone")
-        .eq("proactive_enabled", true);
+        .in("id", enabledUserIds);
 
       if (error || !users || users.length === 0) {
         return 0;

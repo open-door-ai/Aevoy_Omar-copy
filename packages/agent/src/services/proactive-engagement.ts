@@ -447,11 +447,19 @@ export class ProactiveEngagementEngine {
     let sentCount = 0;
 
     try {
-      // Get users with proactive enabled
+      // Get users with proactive enabled — read from user_settings (v31+)
+      const { data: enabledSettings } = await getSupabaseClient()
+        .from("user_settings")
+        .select("user_id")
+        .eq("proactive_enabled", true);
+
+      const enabledUserIds = (enabledSettings || []).map((s: { user_id: string }) => s.user_id);
+      if (enabledUserIds.length === 0) return 0;
+
       const { data: users } = await getSupabaseClient()
         .from("profiles")
         .select("id, username, email, timezone")
-        .eq("proactive_enabled", true);
+        .in("id", enabledUserIds);
 
       if (!users || users.length === 0) return 0;
 
@@ -501,10 +509,19 @@ export class ProactiveEngagementEngine {
     let sentCount = 0;
 
     try {
+      // Get users with proactive enabled — read from user_settings (v31+)
+      const { data: enabledSettings2 } = await getSupabaseClient()
+        .from("user_settings")
+        .select("user_id")
+        .eq("proactive_enabled", true);
+
+      const enabledUserIds2 = (enabledSettings2 || []).map((s: { user_id: string }) => s.user_id);
+      if (enabledUserIds2.length === 0) return 0;
+
       const { data: users } = await getSupabaseClient()
         .from("profiles")
         .select("id, username, email, timezone")
-        .eq("proactive_enabled", true);
+        .in("id", enabledUserIds2);
 
       if (!users || users.length === 0) return 0;
 

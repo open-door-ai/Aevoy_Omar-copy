@@ -51,6 +51,8 @@ interface UserSettings {
   full_send_mode?: boolean;
   full_send_auto_reply?: boolean;
   full_send_draft_threshold?: "all" | "medium" | "high";
+  // Voice greeting style
+  greeting_style?: "casual" | "jarvis";
 }
 
 interface AgentCard {
@@ -431,6 +433,7 @@ export default function SettingsPage() {
         body: JSON.stringify({
           ...settings,
           proactive_daily_limit: proactiveLimit,
+          proactive_enabled: proactiveLimit > 0, // sync boolean with slider (0 = disabled)
           proactive_channel: proactiveChannel,
           report_frequency: reportFrequency,
           full_send_mode: fullSendMode,
@@ -2150,6 +2153,46 @@ export default function SettingsPage() {
               All voices powered by ElevenLabs — natural, human-like speech on every call.
             </p>
           </div>
+
+          {/* Greeting Style */}
+          {settings && (
+            <div className="border-t pt-6">
+              <Label className="mb-2 block">Greeting Style</Label>
+              <p className="text-xs text-muted-foreground mb-3">
+                How should your AI greet you when you call?
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { value: "casual", label: "Casual", desc: "\"Hey! What can I help with?\"" },
+                  { value: "jarvis", label: "Jarvis", desc: "\"Good morning. How may I assist you?\"" },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={async () => {
+                      const updated = { ...settings, greeting_style: opt.value as "casual" | "jarvis" };
+                      setSettings(updated);
+                      try {
+                        await fetch("/api/settings", {
+                          method: "PUT",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ greeting_style: opt.value }),
+                        });
+                      } catch {}
+                    }}
+                    className={`p-3 rounded-lg border text-left transition-colors ${
+                      (settings.greeting_style || "casual") === opt.value
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:bg-muted/50"
+                    }`}
+                  >
+                    <p className="font-medium text-sm">{opt.label}</p>
+                    <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Voicemail */}
           <div className="border-t pt-6">

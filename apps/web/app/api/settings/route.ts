@@ -48,6 +48,7 @@ export async function GET() {
     full_send_mode: false,
     full_send_auto_reply: true,
     full_send_draft_threshold: "medium",
+    greeting_style: "casual",
   };
 
   return NextResponse.json(response);
@@ -145,6 +146,13 @@ export async function PUT(request: Request) {
       updatePayload.proactive_channel = body.proactive_channel;
     }
     if (body.proactive_enabled !== undefined) updatePayload.proactive_enabled = body.proactive_enabled;
+    if (body.greeting_style !== undefined) {
+      const validStyles = ["casual", "jarvis"];
+      if (!validStyles.includes(body.greeting_style)) {
+        return NextResponse.json({ error: "Invalid greeting_style" }, { status: 400 });
+      }
+      updatePayload.greeting_style = body.greeting_style;
+    }
 
     // Full Send Mode
     if (body.full_send_mode !== undefined) updatePayload.full_send_mode = !!body.full_send_mode;

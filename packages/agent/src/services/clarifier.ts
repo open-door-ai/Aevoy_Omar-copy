@@ -26,6 +26,11 @@ export interface UserSettings {
   fullSendMode: boolean;
   fullSendAutoReply: boolean;
   fullSendDraftThreshold: 'all' | 'medium' | 'high';
+  // Autonomous features (user-controlled)
+  autoSignupFreeTrial: boolean;  // AI can sign up for free services
+  autoAcquireOauth: boolean;     // AI can navigate OAuth flows autonomously
+  parallelExecution: boolean;    // AI can open multiple browser sessions
+  greetingStyle: 'casual' | 'jarvis'; // Voice greeting style
 }
 
 export interface StructuredIntent {
@@ -58,6 +63,11 @@ const DEFAULT_SETTINGS: UserSettings = {
   fullSendMode: false,
   fullSendAutoReply: true,
   fullSendDraftThreshold: 'medium',
+  // Autonomous features — on by default
+  autoSignupFreeTrial: true,
+  autoAcquireOauth: true,
+  parallelExecution: true,
+  greetingStyle: 'casual',
 };
 
 /**
@@ -90,6 +100,11 @@ export async function getUserSettings(userId: string): Promise<UserSettings> {
       fullSendMode: data.full_send_mode || false,
       fullSendAutoReply: data.full_send_auto_reply !== false, // default true
       fullSendDraftThreshold: (data.full_send_draft_threshold as 'all' | 'medium' | 'high') || 'medium',
+      // Autonomous features
+      autoSignupFreeTrial: data.auto_signup_free_trial !== false, // default true
+      autoAcquireOauth: data.auto_acquire_oauth !== false,         // default true
+      parallelExecution: data.parallel_execution !== false,        // default true
+      greetingStyle: (data.greeting_style as 'casual' | 'jarvis') || 'casual',
     };
   } catch {
     return DEFAULT_SETTINGS;

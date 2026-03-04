@@ -2708,9 +2708,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // AUTO-CREDENTIAL INJECTION for signup/account-creation tasks:
     // The agent uses its OWN email (username@aevoy.com) — this is NOT fake, it's the agent's identity.
     // Auto-generate credentials so the agent never needs to ask the user for a password.
+    // Gated by user setting: auto_signup_free_trial (default true).
     const _fullSendTaskText = `${subject} ${body}`.toLowerCase();
     const _isSignupContext = /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|create\b.*\bprofile|register|enroll|open\b.*\baccount|make\b.*\baccount|make\s+me\s+an?\s+account)\b/i.test(_fullSendTaskText);
+
+    // Check auto_signup_free_trial setting (lazy-load — only when signup context detected)
+    let _autoSignupEnabled = true; // default on
     if (_isSignupContext) {
+      try {
+        const _signupSettings = await getUserSettings(userId);
+        _autoSignupEnabled = _signupSettings.autoSignupFreeTrial;
+      } catch { /* default to enabled */ }
+    }
+
+    if (_isSignupContext && _autoSignupEnabled) {
       try {
           // Fetch user's email address for the signup
           const { data: _fsProfile } = await getSupabaseClient()
@@ -3443,10 +3454,12 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // Execute actions → observe results → re-prompt AI → repeat
     // until task is done, budget exceeded, or timeout hit.
     // ============================================================
-    // CRITICAL: Reduced from 30 to 5 to prevent resource hogging
-    // With 10 concurrent tasks, 30 iterations = 300 total, causing deadlock
-    // 5 iterations = 50 total, more manageable for concurrency
-    const MAX_ITERATIONS = 15;
+    // Use user's configured max_task_iterations (default 15). Capped at 30 to prevent resource hogging.
+    let MAX_ITERATIONS = 15;
+    try {
+      const _iterSettings = await getUserSettings(userId);
+      MAX_ITERATIONS = Math.min(Math.max(_iterSettings.maxTaskIterations || 15, 5), 30);
+    } catch { /* use default 15 */ }
     let currentIteration = 0;
     let isTaskComplete = false;
     let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
