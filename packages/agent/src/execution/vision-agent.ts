@@ -1556,8 +1556,20 @@ export async function runVisionAgent(
             doneResult.length > 80; // long text answer = has data (book titles, names, info)
           const dataMissing = wantsData && !hasData && !isPassive && !isAdvice && doneResult.length < 100;
 
-          if (isPassive || isAdvice || isOrderIncomplete || dataMissing) {
-            const reason = isPassive ? 'PASSIVE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : 'ADVICE';
+          // Page-description rejection: DONE describes WHAT IS ON the page, not WHAT WAS ACCOMPLISHED
+          // Only for action tasks (signup/book/order) — not for research/info tasks
+          const isActionTask = /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|form|fill|submit|apply)\b/i.test(task);
+          const completionWords = /\b(created|signed up|registered|confirmed|completed|submitted|booked|reserved|filled|cancelled|purchased|ordered|set up|setup)\b/i;
+          const isPageDescription = isActionTask && !isInfoTask && !completionWords.test(doneResult) && (
+            /\b(?:homepage|landing page|page|website|site)\s+(?:showcases?|features?|displays?|shows?|includes?|offers?|highlights?|presents?|has|contains?)\b/i.test(doneResult) ||
+            /\bno specific (?:prices?|ratings?|details?|information|data)\s+(?:are|is)\s+(?:displayed|shown|available)/i.test(doneResult) ||
+            /\bthe (?:free|starter|basic|pro|premium)\s+plan is available\b/i.test(doneResult) ||
+            // "The [site] [verb]s [what's on it]" — page description pattern
+            /\bthe\s+\w+\s+(?:website|homepage|page|site|platform)\s+(?:has|offers?|provides?|allows?|shows?|features?|lets)\b/i.test(doneResult)
+          );
+
+          if (isPassive || isAdvice || isOrderIncomplete || dataMissing || isPageDescription) {
+            const reason = isPassive ? 'PASSIVE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : isPageDescription ? 'PAGE-DESCRIPTION' : 'ADVICE';
             console.log(`[BROWSER-AGENT] Rejected ${reason} DONE: "${doneResult.substring(0, 80)}"`);
             // Build a profile-aware forced action hint so the AI fills the form instead of asking
             const profileHint = userProfile

@@ -8277,8 +8277,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const _completionWords = /\b(completed|signed up|created|booked|cancelled|confirmed|done|submitted|registered|logged in|account created|reservation made|subscription cancelled|reserved|called|emailed|sent|purchased|ordered)\b/i;
       // Pattern 1: "the page is open/accessible" — describes state without acting
       // Catches: "the signup page is accessible", "Etsy's sign-up page is accessible", "the site is available"
-      const _pageDescribeOnly = /\b((?:the|[a-z']+s) (?:page|site|website|signup\s*page|sign-up\s*page|registration\s*(?:page|site)|login\s*page|form|portal) (?:is|are) (?:also )?(?:open|accessible|available|loaded|visible|now showing|currently showing|found (?:at|on))|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button)|(?:page|site|form) (?:is )?accessible at https?:)\b/i.test(cleanResponse)
-        && !_completionWords.test(cleanResponse);
+      const _pageDescribeOnly = (
+        /\b((?:the|[a-z']+s) (?:page|site|website|signup\s*page|sign-up\s*page|registration\s*(?:page|site)|login\s*page|form|portal) (?:is|are) (?:also )?(?:open|accessible|available|loaded|visible|now showing|currently showing|found (?:at|on))|i (?:can see|found the|see the) (?:signup|login|registration|sign.up) (?:page|form|button)|(?:page|site|form) (?:is )?accessible at https?:)\b/i.test(cleanResponse) ||
+        // Also catch: "[Site] homepage/landing page showcases/features/displays/includes" — page description instead of task completion
+        /\b(?:homepage|landing page|website|page) (?:showcases?|features?|displays?|shows?|includes?|offers?|highlights?|presents?)\b/i.test(cleanResponse) ||
+        // "The [site] page/site [includes/features/offers]" without any completion words
+        /\b(?:the\s+\w+\s+)?(?:site|page|website)\s+(?:also\s+)?(?:includes?|features?|offers?|shows?|displays?|lists?|presents?)\s+(?:a\s+)?(?:free|starter|basic|pro|premium|templates?|options?|plans?|use\s+cases?)\b/i.test(cleanResponse)
+      ) && !_completionWords.test(cleanResponse);
       // Pattern 2: "here are the findings/steps" — gives instructions instead of doing it
       // Catches: "here are the findings", "here's how to", "you can book at", "direct links:",
       // and "page available at URL where you can create account" (giving link, not doing task)
@@ -8664,6 +8669,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // (Sanitization already done above, before response sending)
 
+    // FINAL PASSIVE SAFETY NET: Strip any trailing "Want me to X?" that leaked through
+    // (e.g. reintroduced by proactive follow-up generator before we added the success check)
+    if (cleanResponse) {
+      const _finalStrip = cleanResponse
+        .replace(/\n+[^\n]*\b(want me to|shall i|would you like me to|do you want me to)\b[^\n]*[?!.]?\s*$/i, '')
+        .trim();
+      if (_finalStrip.length > 50) cleanResponse = _finalStrip;
+    }
+
     await getSupabaseClient()
       .from("tasks")
       .update({
@@ -8917,9 +8931,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const hasFollowup = /\?/.test(cleanResponse.slice(-400)); // Already ends with a question
       // Skip follow-up for call/call_external actions — calling IS the terminal action
       const _hasCallAction = actionResults.some(r => r.success && ['call_user', 'call_external'].includes(r.action.type));
+      // Skip proactive follow-up when the task clearly failed/was incomplete — don't pile "Want me to?" on a failed result
+      const _taskAppearsSuccessful = !(/\b(incomplete|could not|couldn't|unable|failed|not found|no item|no specific|didn't successfully|could not successfully|error|blocked|couldn't fully complete|page not found|was not found|search results are incomplete|no results|could not be identified|couldn't be identified|not successfully|unsuccessfully)\b/i.test(cleanResponse));
       // NOTE: suppressEmail means "don't send email" not "don't add follow-up to response"
       // Always add follow-up to cleanResponse regardless of suppressEmail flag
-      if (!hasFollowup && cleanResponse.length > 20 && !_hasCallAction) {
+      if (!hasFollowup && cleanResponse.length > 20 && !_hasCallAction && _taskAppearsSuccessful) {
         const followupPrompt = `User asked: "${(subject || '').substring(0, 150)}"
 Agent response: "${cleanResponse.substring(0, 300)}"
 
@@ -8942,10 +8958,13 @@ RULES:
         const followupResult = await quickValidate(followupPrompt, 'You suggest the ONE natural next action after task completion. Never repeat what was just done. Be specific and brief.').catch(() => null);
         if (followupResult?.result?.startsWith('YES:')) {
           const followupQ = followupResult.result.replace(/^YES:"?/, '').replace(/"$/, '').trim();
-          // Reject truly passive follow-ups that imply the task hasn't started.
-          // "Want me to book it?" is INTENTIONAL (system prompt tells model to use this wording) — ALLOW.
-          // Block only: "Would you like me to" / "Shall I" / "Do you want me to" / generic "I can help"
-          const _isPassiveFollowup = /^(would you like|shall i|do you want me to|i can help you|i could help|is there anything else)/i.test(followupQ);
+          // Reject follow-ups that are passive or mirror what was already in the main response.
+          // "Want me to check other retailers?" after a failed search = passive (the task IS the check).
+          // "Want me to book it?" after FINDING a restaurant = valid next step — allow.
+          const _mainResponseAlreadyHadPassive = /\b(want me to|shall i|would you like me to)\b/i.test(cleanResponse);
+          const _isPassiveFollowup = /^(would you like|shall i|do you want me to|i can help you|i could help|is there anything else)/i.test(followupQ) ||
+            // If the follow-up asks to do the SAME thing the main task failed at, block it
+            (_mainResponseAlreadyHadPassive && /^want me to\b/i.test(followupQ));
           // Reject follow-ups that offer to do the SAME action the user already asked for.
           // If user said "order me pizza" and follow-up is "Want me to place the order?" — that's not a NEXT step, it's the SAME step.
           const _subjectLower = (subject || '').toLowerCase();

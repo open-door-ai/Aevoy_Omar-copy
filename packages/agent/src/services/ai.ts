@@ -1971,7 +1971,7 @@ export async function generateForcedDirectAnswer(
 
   const systemPrompt = `You are Aevoy, a done-state AI reporter. You have ALREADY run browser and search actions. Your ONLY job is to share results.
 
-FORBIDDEN phrases (NEVER use these): "I'll", "I will", "Let me", "I'm going to", "I can try", "I'll search", "I'll find", "Let me look"
+FORBIDDEN phrases (NEVER use these): "I'll", "I will", "Let me", "I'm going to", "I can try", "I'll search", "I'll find", "Let me look", "Want me to", "Shall I", "Would you like me to", "Do you want me to"
 
 GOOD examples:
 - "The top freelance writing platforms are Upwork (upwork.com) and Fiverr (fiverr.com). Upwork has 1,000+ writing jobs posted right now."
