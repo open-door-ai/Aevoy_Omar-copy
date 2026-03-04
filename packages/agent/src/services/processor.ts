@@ -2480,7 +2480,13 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 5c. TEACH & REPEAT: Check for matching template before AI generation
     let templateMatch: Awaited<ReturnType<typeof findTemplate>> = null;
     let usedTemplateId: string | null = null;
-    if (primaryDomain && classification.needsBrowser) {
+    // Don't use template cache for price/cost queries — prices change constantly, templates get stale
+    const _isPriceTask = /\b(price|cost|how much|cheapest|how much is|what does.*cost)\b.{0,80}\b(best buy|amazon\.ca|amazon canada|costco|walmart|shop|store)\b/i.test(`${subject} ${body}`);
+    // Don't use template cache for signup tasks — cached failures replay bad advisor responses
+    const _isSignupCacheBypass = /\b(sign\s*me?\s*up|signup|create\s+(an?\s+)?account|register\s+(for|on|with|at))\b/i.test(`${subject} ${body}`);
+    if (_isPriceTask || _isSignupCacheBypass) {
+      console.log(`[TEMPLATE] Bypassing cache for ${_isPriceTask ? 'price research' : 'signup'} task — live execution required`);
+    } else if (primaryDomain && classification.needsBrowser) {
       try {
         templateMatch = await findTemplate(userId, primaryDomain, `${subject} ${body}`);
         // Require at least 2 successful uses before trusting a template (avoids replaying
@@ -6301,7 +6307,37 @@ YOU must complete the task using a DIFFERENT approach:
               const isOrderOrBookingTask = /\b(order|reserve|book|buy|pickup|delivery from|make.*reservation|get.*food|get.*pizza|get.*burger|get.*sushi)\b/i.test(taskTextLower);
               // Also escalate booking tasks that failed (form too complex) — not just bot walls
               const isBookingFormFail = /\b(book|reserv|table for|reso\b)\b/i.test(taskTextLower) && /\b(too complex|form|booking form|couldn't|could not|failed|unable)\b/i.test(errMsg);
-              if ((isBotWallError && isOrderOrBookingTask) || isBookingFormFail) {
+              // Special case: Resy / restaurant booking sites blocked by Cloudflare — search for restaurant + call
+              const _isRestaurantBooking = /\b(resy|restaurant|table|reserv|dinner|book.*dinner|book.*table)\b/i.test(`${subject} ${body}`);
+              if (_isRestaurantBooking && isBotWallError) {
+                const _areaMatch = `${subject} ${body}`.match(/\b(Vancouver|Toronto|Montreal|Calgary|Ottawa|Edmonton|Victoria|Burnaby|Richmond|Surrey|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z]{2})?)\b/);
+                const _area = _areaMatch ? _areaMatch[1] : 'the requested area';
+                const _partyMatch = `${subject} ${body}`.match(/\b(\d+)\s*(ppl|people|persons?|guests?)\b/i);
+                const _party = _partyMatch ? _partyMatch[1] : '2';
+                const _timeMatch = `${subject} ${body}`.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/i);
+                const _time = _timeMatch ? _timeMatch[1] : '7pm';
+                const _dateMatch = `${subject} ${body}`.match(/\b(tonight|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+                const _date = _dateMatch ? _dateMatch[1] : 'tonight';
+                visionFailureNote = `[RESY BLOCKED by Cloudflare security check] Cannot access Resy.com or other booking sites directly. DO NOT give up or report failure. Use this fallback strategy NOW:\n` +
+                  `1. SEARCH for restaurant names: [ACTION:search("top restaurants ${_area} ${_date} available reservations")]\n` +
+                  `2. SEARCH for phone number: [ACTION:search("RESTAURANT_NAME ${_area} phone number reservation")]\n` +
+                  `3. CALL with real phone number found in search: [ACTION:call_external("+1XXXXXXXXXX", "Hi, I'd like to book a table for ${_party} people ${_date} at ${_time}. The name is ${senderName || username}.")]\n` +
+                  `4. Report the REAL booking confirmation to the user.\n` +
+                  `CRITICAL: NEVER fabricate phone numbers. Use ONLY phone numbers found in your search results. NEVER use placeholder numbers like 555-xxxx, 123-xxxx, or sequential digits. If a number looks fake, search again.`;
+                console.log(`[BOT-WALL-RESTAURANT] Resy/restaurant booking blocked — pivoting to search+call strategy`);
+              } else if (isBotWallError && /\b(sign\s*me?\s*up|signup|create\s+(an?\s+)?account|register\s+(for|on|with|at))\b/i.test(`${subject} ${body}`)) {
+                // Signup tasks blocked by Cloudflare — inject credentials and try Google OAuth fallback
+                const _signupService = (`${subject} ${body}`).match(/\b(prolific|figma|canva|notion|slack|discord|github|twitter|linkedin|reddit|shopify|dropbox|stripe|hubspot|salesforce|intercom)\b/i)?.[1] || 'the service';
+                const _signupEmail = `${username}@aevoy.com`;
+                const _signupPassword = `${username}@aevoy2026`;
+                visionFailureNote = `[SIGNUP BLOCKED by Cloudflare] Bot-wall detected on ${_signupService} registration page. Do NOT give up or describe the service. Execute this strategy NOW:\n` +
+                  `1. NAVIGATE to the service's Google OAuth login button (look for "Continue with Google" on the login/signup page)\n` +
+                  `2. If Google OAuth unavailable, try DIRECT API: search for "${_signupService} API create account" or "${_signupService} REST API signup"\n` +
+                  `3. Fill email field with ${_signupEmail} and password field with ${_signupPassword}\n` +
+                  `4. If still blocked, report: "I hit Cloudflare bot protection on ${_signupService}. Please visit [signup URL] to complete registration."\n` +
+                  `NEVER just say "you can sign up at [URL]" — you must actually attempt the registration.`;
+                console.log(`[BOT-WALL-SIGNUP] ${_signupService} signup blocked by Cloudflare — injecting OAuth+credential fallback`);
+              } else if ((isBotWallError && isOrderOrBookingTask) || isBookingFormFail) {
                 const cleanTaskForSearch = `${subject} ${body}`.replace(/\b(go to|navigate to|check|find|order from|can you|please)\b/gi, '').replace(/['"]/g, '').trim().substring(0, 60);
                 visionFailureNote = `[BOT WALL — PHONE ESCALATION REQUIRED] The website blocked automated access. DO NOT retry the browser. CALL THE BUSINESS DIRECTLY — this is faster and more reliable than fighting their bot detection.
 
@@ -8613,7 +8649,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         || /\b(?:page|site|form)\b.{0,30}https?:\/\//i.test(cleanResponse)
         || /\bavailable at https?:\/\//i.test(cleanResponse);
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
-        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay)\b/i);
+        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom)\b/i);
         const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
         cleanResponse = `I reached the ${_svcName} signup page. To complete your account, reply with the password you'd like to use and I'll finish the registration immediately.`;
         console.log(`[SIGNUP-FALLBACK] Converted instructional response to credential request for ${_svcName}`);
@@ -9172,9 +9208,21 @@ RULES:
             (/\b(book|reserv)\b/.test(_subjectLower) && /\b(book|reserv|make.*(booking|reservation))\b/.test(_followLower)) ||
             (/\b(sign\s*up|register|create.*account)\b/.test(_subjectLower) && /\b(sign\s*up|register|create.*account|start.*profile)\b/.test(_followLower)) ||
             (/\b(cancel|unsubscribe)\b/.test(_subjectLower) && /\b(cancel|unsubscribe)\b/.test(_followLower)) ||
-            (/\b(apply|submit.*application)\b/.test(_subjectLower) && /\b(apply|submit)\b/.test(_followLower))
+            (/\b(apply|submit.*application)\b/.test(_subjectLower) && /\b(apply|submit)\b/.test(_followLower)) ||
+            // Submit/fill tasks: "submit the form" or "fill the form" → don't ask "Want me to submit?"
+            (/\b(submit|fill\s+(in|out|the))\b/.test(_subjectLower) && /\b(submit|fill)\b/.test(_followLower)) ||
+            // Complete/finalize tasks: "complete the intake" → don't ask "Want me to complete?"
+            (/\b(complete|finish|finalize)\b/.test(_subjectLower) && /\b(complete|finish|finalize|send|submit)\b/.test(_followLower))
           );
-          if (!_isPassiveFollowup && !_isRepeatAction && followupQ.length > 5) {
+          // Don't add proactive follow-up if it proposes the same action the task already requested
+          const _taskAlreadyRequestedAction = followupQ.length > 0 && (
+            /\bsubmit\b/i.test(followupQ) && /\bsubmit\b/i.test(subject) ||
+            /\bbook\b/i.test(followupQ) && /\bbook\b/i.test(subject) ||
+            /\bsign.?up\b/i.test(followupQ) && /\bsign.?up\b/i.test(subject) ||
+            /\bfill\b/i.test(followupQ) && /\bfill\b/i.test(subject) ||
+            /\bregister\b/i.test(followupQ) && /\bregister\b/i.test(subject)
+          );
+          if (!_isPassiveFollowup && !_isRepeatAction && !_taskAlreadyRequestedAction && followupQ.length > 5) {
             cleanResponse = cleanResponse + '\n\n' + followupQ;
             console.log(`[PROACTIVE] Added follow-up: "${followupQ}"`);
             // Update the DB response with the follow-up included
@@ -9183,11 +9231,45 @@ RULES:
             console.log(`[PROACTIVE] Rejected passive follow-up: "${followupQ}"`);
           } else if (_isRepeatAction) {
             console.log(`[PROACTIVE] Rejected repeat-action follow-up: "${followupQ}" (user already asked for this)`);
+          } else if (_taskAlreadyRequestedAction) {
+            console.log(`[PROACTIVE] Suppressed follow-up — it proposes same action user already requested: "${followupQ}"`);
           }
         }
       }
     } catch {
       // Non-critical — proactive follow-up is bonus
+    }
+
+    // 16b. LATE PASSIVE GUARD: If the final response (after proactive follow-up was potentially appended)
+    // ends with "Want me to [verb]" where that verb matches what the user already asked for in the task,
+    // strip that trailing passive sentence. This catches the probatedesk case: user said "submit the intake
+    // form" and agent appended "Want me to submit the intake form?" — that's the same action, not a next step.
+    try {
+      const _endsWithPassive = /\n+\s*want me to\s+\w+/i.test(cleanResponse);
+      if (_endsWithPassive) {
+        const _passiveVerbMatch = cleanResponse.match(/want me to\s+(\w+)/i);
+        const _passiveVerb = (_passiveVerbMatch?.[1] || '').toLowerCase();
+        const _subjectForLateGuard = (subject || '').toLowerCase();
+        const _verbMatchesTask = _passiveVerb && (
+          (_passiveVerb === 'submit' && /\bsubmit\b/.test(_subjectForLateGuard)) ||
+          (_passiveVerb === 'fill' && /\bfill\b/.test(_subjectForLateGuard)) ||
+          (_passiveVerb === 'book' && /\bbook\b/.test(_subjectForLateGuard)) ||
+          (_passiveVerb === 'register' && /\bregister\b/.test(_subjectForLateGuard)) ||
+          (_passiveVerb === 'complete' && /\bcomplete\b/.test(_subjectForLateGuard)) ||
+          (_passiveVerb === 'sign' && /\bsign\s*(up)?\b/.test(_subjectForLateGuard)) ||
+          (_passiveVerb === 'apply' && /\bapply\b/.test(_subjectForLateGuard))
+        );
+        if (_verbMatchesTask) {
+          const _strippedLate = cleanResponse.replace(/\n+\s*want me to\s+[^\n]+\??$/gi, '').trim();
+          if (_strippedLate.length > 20) {
+            console.warn(`[PASSIVE-LATE] Response ends with passive action ("want me to ${_passiveVerb}") matching task verb — stripping`);
+            cleanResponse = _strippedLate;
+            await getSupabaseClient().from('tasks').update({ response_text: cleanResponse }).eq('id', taskId);
+          }
+        }
+      }
+    } catch {
+      // Non-critical
     }
 
     // 17. PROACTIVE EXTRA-MILE: Go above and beyond — automatically do things the user didn't ask for
@@ -11173,6 +11255,12 @@ async function executeAction(
         // 4. Block fabricated 555-xxxx numbers
         if (/555\d{4}$/.test(_extNormalized) && !/5551212$/.test(_extNormalized)) {
           return { action, success: false, error: "That looks like a fabricated 555-xxxx number. Search for the real phone number first." };
+        }
+
+        // 4b. Block sequential/obviously-fake phone numbers (e.g. 604-123-4567, 1-234-567-8901)
+        const _isSequential = /^1?(123|234|345|456|567)(4567|5678|6789)/.test(_extNormalized);
+        if (_isSequential) {
+          return { action, success: false, error: `Rejected sequential/fake phone number: ${extNumber}. Search for the real business phone number first and use ONLY the number found in search results.` };
         }
 
         // 5. Rate limit: max 5 outbound calls per task
