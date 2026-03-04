@@ -796,19 +796,17 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const _hasExplicitDomain = /\b(go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(directBrowserTaskText) ||
       /\b(at|on|via|through|from)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) ||
       /\bhttps?:\/\/\S+/i.test(directBrowserTaskText);
-    const isDirectBrowserTask = _hasExplicitDomain || /\b(sign\s?up|signup|sign\s+me\s+up|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|register\s+(for|on|with|at|me)|cancel\s+(my|the|a)?\s+\w+|unsubscribe\s+(from|me)?|book\s+(a|my|the|me)?\s+\w+|reserve\s+(a|my|me)?\s+\w+|purchase|buy\s+(a|me|my|this|that)?|subscribe\s+(to|for|me)?|log\s?(in|into)|sign\s?(in|into)|get\s+(me\s+)?(a|an)?\s*(netflix|hulu|spotify|disney|amazon|apple|youtube)\s*(subscription|account|plan)?|set\s+up\s+(my|a|an)?|make\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|post|graphic|image|banner|presentation|icon|artwork|illustration|business\s*card)|create\s+(me\s+)?(a\s+)?(professional\s+)?(design|logo|graphic|image|banner|icon|artwork|business\s*card)|generate\s+(me\s+)?(a\s+)?(design|logo|image|graphic|icon)|design\s+(me\s+)?(a\s+|professional\s+|some\s+)?|use\s+(canva|figma|adobe|visme|vistacreate|vista\s+create|crello|snappa|photoshop|illustrator)\s+(to|and)|business\s*cards?\s+(for|with|using)|make\s+(a\s+)?(canva|figma|adobe)\s+(design|account)|go\s+to\s+(canva|figma|adobe|visme)|apply\s+(for|to)\s+\w|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip|skip\s*the\s*dishes)|order\s+(me\s+)?(a|some|food|pizza|burger|coffee|sushi|lunch|dinner|breakfast|groceries|delivery)|order\s+from\b|place\s+an?\s+order|add\s+to\s+cart|checkout\s+(at|on|from)|get\s+(me\s+)?(food|pizza|delivery|groceries)\s+from|use\s+(the\s+)?browser|open\s+(the\s+)?browser|launch\s+(the\s+)?browser|browse\s+(to|for|the)|check\s+(the\s+)?browser|go\s+on\s+(the\s+)?(web|internet|browser))\b/i.test(directBrowserTaskText);
+    // Generic browser-action signals — no hardcoded service names.
+    // The AI loop handles everything; this only skips autonomous planning pre-processing.
+    const _hasBrowserActionVerb = /\b(sign\s?up|signup|register|create\s+\w*\s*account|make\s+\w*\s*account|book|reserve|order|purchase|buy|subscribe|cancel|unsubscribe|log\s?in|sign\s?in|fill\s+.*form|submit\s+.*form|add\s+to\s+cart|apply\s+for|make\s+money|earn\s+money|find\s+.*price|place\s+.*order|check\s+out\s+at|use\s+the\s+browser|open\s+the\s+browser|browse\s+the\s+web)\b/i.test(directBrowserTaskText);
+    const isDirectBrowserTask = _hasExplicitDomain || _hasBrowserActionVerb;
 
-    // GENERATION BYPASS: Writing/coding/generation tasks must also skip autonomous planning.
-    // Autonomous planning decomposes "write me HTML" into research sub-tasks which never generate code.
-    // These tasks should go straight to the main AI pipeline with the 'generate' model chain.
-    const isDirectGenerationTask = /\b(write me|create me|make me|build me|generate me|give me|show me|produce|draft me|compose me)\b.{0,60}\b(html|css|javascript|python|code|script|function|poem|essay|story|email template|letter|website|webpage|portfolio|landing page|api|program|app)\b/i.test(directBrowserTaskText) ||
-      /\b(write (a|an|the|me a|me an|me the)|create (a|an|the)|draft (a|an|the)|generate (a|an|the)|code (a|an|the)|build (a|an|the))\b.{0,40}\b(website|webpage|html|css|javascript|python|function|script|program|poem|story|email|letter|essay|app|api|portfolio)\b/i.test(directBrowserTaskText) ||
-      /\b(html code|full html|complete html|source code|return the code|return the html|the full code|entire code|complete code|write code|generate code|write script|write function|write program)\b/i.test(directBrowserTaskText) ||
-      // Document/spreadsheet/card creation — these use create_excel/word/ppt/pdf actions directly, never browse online
-      // SKIP: If user names a specific website ("go to canva.com and design" or "go to Canva"), route to browser instead
-      (!(/\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(directBrowserTaskText) || /\bhttps?:\/\/\S+/i.test(directBrowserTaskText) || /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(directBrowserTaskText)) &&
-      (/\b(create|make|build|generate|give me|design)\b.{0,50}\b(spreadsheet|excel|xlsx|word document|docx|powerpoint|pptx|presentation|pdf|csv|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(directBrowserTaskText) ||
-      /\b(spreadsheet|excel file|word file|powerpoint|presentation|business cards?)\b.{0,40}\b(for|to track|to manage|template|tracker)\b/i.test(directBrowserTaskText)));
+    // GENERATION BYPASS: Writing/coding/generation tasks skip autonomous planning.
+    // Rule: if task asks for a text/code artifact AND doesn't reference an external URL, generate directly.
+    const isDirectGenerationTask = !_hasExplicitDomain && (
+      /\b(write|draft|create|generate|produce|compose|code|build)\b.{0,60}\b(html|css|javascript|python|code|script|function|poem|essay|story|email\s+template|letter|webpage|portfolio|landing\s+page|api|program|spreadsheet|excel|word\s+document|powerpoint|presentation|pdf|resume|cv|business\s+card)\b/i.test(directBrowserTaskText) ||
+      /\b(html code|full html|complete html|source code|the full code|entire code|write code|write script|write function|write program)\b/i.test(directBrowserTaskText)
+    );
 
     if (isDirectBrowserTask || isDirectGenerationTask) {
       console.log(`[BYPASS] ${isDirectGenerationTask ? 'Generation' : 'Browser'} task — skipping autonomous planning`);
