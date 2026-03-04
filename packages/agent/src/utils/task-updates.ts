@@ -72,11 +72,18 @@ export function classifyUpdateRelevance(
     return quickOverlap >= 1 ? 'obvious_update' : 'new_task';
   }
 
-  // Shares key nouns with the active task
-  const taskWords = new Set(subject.replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 4));
-  const msgWords = msg.replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 4);
+  // Shares key nouns with the active task — but exclude user identity tokens
+  // (email addresses, platform name "aevoy", usernames, passwords) which appear in every task
+  const stripIdentity = (s: string) => s
+    .replace(/\S+@\S+\.\S+/g, '') // strip email addresses
+    .replace(/\baevoy\b/gi, '')     // strip company name
+    .replace(/\bpassword\b/gi, '') // strip password label
+    .replace(/\bemail\b/gi, '')    // strip email label
+    .replace(/[^a-z\s]/g, '');
+  const taskWords = new Set(stripIdentity(subject).split(/\s+/).filter(w => w.length > 4));
+  const msgWords = stripIdentity(msg).split(/\s+/).filter(w => w.length > 4);
   const overlap = msgWords.filter(w => taskWords.has(w)).length;
-  if (overlap >= 2) return 'likely_update';
+  if (overlap >= 3) return 'likely_update'; // require 3 substantive shared words (was 2)
 
   return 'new_task';
 }

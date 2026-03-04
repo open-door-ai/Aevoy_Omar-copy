@@ -1145,6 +1145,7 @@ export async function runVisionAgent(
           'figma.com': 'https://www.figma.com',
           'canva.com': 'https://www.canva.com/signup',
           'prolific.com': 'https://app.prolific.com/register',
+          'prolific.co': 'https://app.prolific.com/register', // prolific uses .co TLD
           'resy.com': 'https://resy.com/cities/van/venues', // search page, not homepage
         };
         const isSignupTask = /\b(sign\s?up|create.*account|register)\b/i.test(task);
@@ -1514,6 +1515,7 @@ export async function runVisionAgent(
         const currentDomain = (() => { try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; } })();
         const SPA_ESCAPE_MAP: Record<string, string> = {
           'prolific.com': 'https://app.prolific.com/register',
+          'prolific.co': 'https://app.prolific.com/register', // prolific's actual TLD
           'app.prolific.com': 'https://app.prolific.com/register',
           'figma.com': 'https://www.figma.com',
           'canva.com': 'https://www.canva.com/signup',
@@ -1993,8 +1995,18 @@ export async function runVisionAgent(
       let phone = '';
       try {
         phone = await activePage.evaluate(() => {
-          const m = (document.body?.innerText || '').match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
-          return m ? m[0].trim() : '';
+          // Find ALL phone numbers on the page, pick the first real-looking one
+          const allMatches = [...(document.body?.innerText || '').matchAll(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g)];
+          for (const m of allMatches) {
+            const raw = m[0].trim();
+            // Skip obviously fake/test numbers (sequential digits like 123-4567, 000-0000, etc.)
+            const digits = raw.replace(/\D/g, '');
+            const isSequential = /^1?(123|234|345|456|567|678|789|890|012)(4567|5678|6789|7890|0123)/.test(digits);
+            const isAllSame = /^(.)\1{6,}/.test(digits);
+            const isTollFree = /^1?(800|888|877|866|855|844|833)/.test(digits);
+            if (!isSequential && !isAllSame && !isTollFree && digits.length >= 10) return raw;
+          }
+          return '';
         }).catch(() => '');
       } catch { /* ok */ }
       return { success: false, error: phone ? `CALL-GATE: Phone ${phone}. Call the business.` : `CALL-GATE: Too complex after ${steps} steps.`, steps, cost: totalCost, screenshots, pageData: endPageData };
