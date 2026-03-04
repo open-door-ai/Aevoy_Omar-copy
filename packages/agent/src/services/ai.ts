@@ -348,8 +348,8 @@ interface ModelConfig {
 // Rate limit backoff (NEW): 429 → skip model for 60-120s instead of retrying
 // This eliminates the 152-Gemini-429-failures-per-6-hours problem.
 // ROUTING_TABLE — model chains per task type.
-// STRATEGY: Claude Haiku 4.5 first for reasoning (genuinely handles unexpected situations).
-// Free models as fallbacks. Haiku costs ~$0.001/call — worthwhile for quality.
+// STRATEGY: Claude Haiku 4.5 first — best reasoning for unexpected situations.
+// Free models as fallbacks when Haiku is unavailable/rate-limited.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   understand: [
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
@@ -419,8 +419,8 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
   ],
   complex: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.25, costPerMOutput: 1.25 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
@@ -1376,14 +1376,19 @@ RULES — THINK LIKE APPLE, NOT LIKE A SEARCH ENGINE:
    - Found a product that can be ordered? Try to order it (or confirm user wants you to).
    - Wrote a tweet? Post it directly using post_tweet action, then report "Posted!"
    - Found a flight? Go through the booking flow until you hit payment, then stop and ask for card details.
-2. When you NEED info from the user to proceed: End your response with ONE direct question.
-   - "Found Hawksworth Restaurant (4.8⭐, $$$$, 801 W Georgia St — perfect for a power dinner). Want me to call and make a reservation? I just need the date, time, and party size."
-   - "MacBook Pro 16 M4 Pro is $2,499 on Amazon. Want me to order it? I'll need your shipping address."
-   - "I've drafted the tweet. Should I post it now? [tweet text here]"
-3. NEVER end a response without either:
+2. When you NEED info from the user to proceed: Send them the options via SMS/email AND schedule an auto-follow-up.
+   BOOKING PATTERN (most important):
+   - Step A: Send options immediately → [ACTION:send_sms("+1...", "Found 3 options on Resy for tonight 7:30pm:\n1. Brick Lane ✓\n2. La Crêperie ✓\n3. Zither Garden ✓\nReply with your choice (1/2/3) — I'll auto-book #1 in 20 min if no reply.")]
+   - Step B: Schedule the auto-book → [ACTION:schedule("Book restaurant option 1 if user hasn't replied", "in 20 minutes")]
+   - On full_send mode (user trusts full automation): Skip asking entirely. Just book the top-rated option and confirm.
+3. SIGNUP RULES — confirmation_mode aware:
+   - full_send mode: Sign up automatically using email from task + password auto-generated. Confirm after: "Done — signed up for [Service] with [email]."
+   - medium/conservative: Tell the user what you found and ask once with a timeout: "Ready to create your [Service] account with [email]. Reply YES to proceed, or I'll proceed automatically in 10 minutes."
+   - NEVER just say "you can sign up at [URL]" — that's a search engine response, not an agent response.
+4. NEVER end a response without either:
    (a) Having already taken the obvious next step, OR
-   (b) Asking the user the ONE question that unlocks it
-4. You are not a search engine. You are an agent. Search engines return links. You return RESULTS and ACTIONS.
+   (b) Sending the user the options AND scheduling an auto-follow-up
+5. You are not a search engine. You are an agent. Search engines return links. You return RESULTS and ACTIONS.
 
 GOING THE EXTRA MILE — EVERY TIME:
 After completing any task, think: "What would a genius executive assistant do next without being asked?"
