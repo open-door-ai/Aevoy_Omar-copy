@@ -101,20 +101,6 @@ function sanitizePageContent(text: string, maxLen = 800): string {
 // PAGE STATE: Accessibility Snapshot
 // ══════════════════════════════════════════════════════════════════
 
-const MEANINGFUL_ROLES = new Set([
-  'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox',
-  'listbox', 'option', 'menuitem', 'tab', 'switch', 'slider',
-  'searchbox', 'heading', 'img', 'navigation', 'dialog', 'alert',
-  'menu', 'banner', 'main', 'form', 'list', 'progressbar',
-  'spinbutton', 'table', 'row', 'cell', 'columnheader',
-]);
-
-// Interactive roles get ref IDs — these are elements the AI can click/fill/interact with
-const INTERACTIVE_ROLES = new Set([
-  'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox',
-  'listbox', 'option', 'menuitem', 'tab', 'switch', 'slider',
-  'searchbox', 'spinbutton',
-]);
 
 interface ElementRef {
   role: string;
@@ -124,58 +110,6 @@ interface ElementRef {
 
 type ElementRefMap = Map<number, ElementRef>;
 
-interface SnapshotState {
-  lineCount: number;
-  refCounter: number;
-  refs: ElementRefMap;
-  roleNameCounts: Map<string, number>; // "role:name" → count seen so far
-}
-
-function formatAccessibilityNode(node: any, lines: string[], depth: number, state: SnapshotState): void {
-  if (state.lineCount >= 250) return; // cap tree size
-  if (depth > 8) return;
-
-  const role: string = node.role || '';
-  const name: string = node.name || '';
-  const value: string = node.value || '';
-
-  const isMeaningful = MEANINGFUL_ROLES.has(role);
-  const hasContent = name.length > 0;
-
-  if (isMeaningful && (hasContent || ['main', 'navigation', 'banner', 'form', 'dialog', 'alert'].includes(role))) {
-    const indent = '  '.repeat(Math.min(depth, 6));
-    const isInteractive = INTERACTIVE_ROLES.has(role) && hasContent && !node.disabled;
-
-    // Assign ref ID to interactive elements
-    let refTag = '';
-    if (isInteractive) {
-      const refId = state.refCounter++;
-      const sanitizedName = sanitizeElementName(name);
-      const roleNameKey = `${role}:${sanitizedName}`;
-      const nthOfKind = state.roleNameCounts.get(roleNameKey) || 0;
-      state.roleNameCounts.set(roleNameKey, nthOfKind + 1);
-      state.refs.set(refId, { role, name: sanitizedName, nthOfKind });
-      refTag = `[${refId}] `;
-    }
-
-    const parts = [`${indent}${refTag}${role}`];
-    if (name) parts.push(`"${sanitizeElementName(name)}"`);
-    if (value) parts.push(`value="${sanitizeElementName(value)}"`);
-    if (node.checked !== undefined) parts.push(node.checked ? '[checked]' : '[unchecked]');
-    if (node.disabled) parts.push('[disabled]');
-    if (node.required) parts.push('[required]');
-    if (node.expanded !== undefined) parts.push(node.expanded ? '[expanded]' : '[collapsed]');
-    lines.push(parts.join(' '));
-    state.lineCount++;
-  }
-
-  if (node.children) {
-    const nextDepth = isMeaningful ? depth + 1 : depth;
-    for (const child of node.children) {
-      formatAccessibilityNode(child, lines, nextDepth, state);
-    }
-  }
-}
 
 interface SnapshotResult {
   text: string;
@@ -210,10 +144,16 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
               tag === 'input' ? (el.getAttribute('type') === 'checkbox' ? 'checkbox' :
                 el.getAttribute('type') === 'radio' ? 'radio' : 'textbox') :
               tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' : tag);
+            // Name priority:
+            // - Inputs/textareas: aria-label > placeholder > title (no visible text to use)
+            // - Links/buttons:    aria-label > visible textContent > title (title is tooltip, not label)
+            const isInput = tag === 'input' || tag === 'textarea';
+            const visibleText = isInput ? '' : (el.textContent?.trim()?.substring(0, 60) || '');
             const name = el.getAttribute('aria-label') ||
-              el.getAttribute('placeholder') ||
+              (isInput ? el.getAttribute('placeholder') : null) ||
+              visibleText ||
               el.getAttribute('title') ||
-              (tag === 'input' || tag === 'textarea' ? '' : (el.textContent?.trim()?.substring(0, 60) || ''));
+              el.getAttribute('placeholder') || '';
             const nth = tagCounts.get(tag + role + name) || 0;
             tagCounts.set(tag + role + name, nth + 1);
             items.push({ tag, role, name, type: el.getAttribute('type') || '', nth });
@@ -246,57 +186,21 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
 }
 
 async function getAccessibilitySnapshot(page: Page): Promise<SnapshotResult> {
-  const SNAPSHOT_TIMEOUT = 8000; // 8s max — prevent hanging on unresponsive pages
   const emptyRefs: ElementRefMap = new Map();
+  // page.accessibility was removed in Playwright 1.47+ / patchright 1.47+.
+  // Go straight to DOM extraction — it's faster and more reliable anyway.
   try {
-    const snapshot = await Promise.race([
-      (page as any).accessibility.snapshot({ interestingOnly: true }),
-      new Promise<null>((_, reject) => setTimeout(() => reject(new Error('snapshot timeout')), SNAPSHOT_TIMEOUT)),
-    ]);
-    if (!snapshot) {
-      // Empty accessibility tree — try DOM extraction
-      const domResult = await extractDomElements(page);
-      if (domResult.refs.size > 0) {
-        return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}`, refs: domResult.refs };
-      }
-      return { text: '(empty page — no accessible elements found)', refs: emptyRefs };
-    }
-    const lines: string[] = [];
-    const state: SnapshotState = { lineCount: 0, refCounter: 1, refs: new Map(), roleNameCounts: new Map() };
-    formatAccessibilityNode(snapshot, lines, 0, state);
-    const result = lines.join('\n');
-
-    // Use refs count, not text length, to determine if tree is useful
-    if (state.refs.size === 0) {
-      // No interactive elements in accessibility tree — try DOM extraction
-      const domResult = await extractDomElements(page);
-      if (domResult.refs.size > 0) {
-        const pageText = result.length > 20 ? `\n\nPAGE STRUCTURE:\n${result.substring(0, 2000)}` : '';
-        return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}${pageText}`, refs: domResult.refs };
-      }
-      // Neither tree nor DOM has interactive elements — return tree + page text
-      const text = await Promise.race([
-        page.textContent('body').catch(() => ''),
-        new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
-      ]);
-      return { text: `${result}\n\nPage text: ${(text || '').substring(0, 3000)}`, refs: emptyRefs };
-    }
-    return { text: result.substring(0, 8000), refs: state.refs };
-  } catch {
-    // Fallback: DOM extraction first, then raw text
     const domResult = await extractDomElements(page);
     if (domResult.refs.size > 0) {
       return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}`, refs: domResult.refs };
     }
-    try {
-      const text = await Promise.race([
-        page.textContent('body').catch(() => ''),
-        new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
-      ]);
-      return { text: `Page text: ${(text || '').substring(0, 3000)}`, refs: emptyRefs };
-    } catch {
-      return { text: '(could not read page)', refs: emptyRefs };
-    }
+    const text = await Promise.race([
+      page.textContent('body').catch(() => ''),
+      new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000)),
+    ]);
+    return { text: `Page text: ${(text || '').substring(0, 3000)}`, refs: emptyRefs };
+  } catch {
+    return { text: '(could not read page)', refs: emptyRefs };
   }
 }
 
@@ -866,10 +770,20 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
           history.push(`⚠️ BLOCKED: URL "${url}" is not allowed (security).`);
           return false;
         }
-        const navErr = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
-          .then(() => null).catch((e: Error) => e.message);
+        // Try domcontentloaded first (10s), fall back to commit (just first bytes, 10s)
+        const navErr = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 })
+          .then(() => null)
+          .catch(async () => {
+            // Second attempt: waitUntil='commit' — just wait for first bytes received
+            return page.goto(url, { waitUntil: 'commit', timeout: 10000 })
+              .then(() => null)
+              .catch((e: Error) => e.message);
+          });
         if (navErr) {
-          history.push(`⚠️ NAVIGATE to ${url} failed: ${navErr}`);
+          const domain = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+          history.push(`⚠️ NAVIGATE to ${url} blocked/unreachable (${navErr.substring(0, 60)}). ` +
+            `The site "${domain}" is blocking automated access. ` +
+            `PIVOT: NAVIGATE to DuckDuckGo and search for this info instead, OR try the site's mobile URL, OR FAIL if truly unreachable.`);
           return false;
         }
         return true;

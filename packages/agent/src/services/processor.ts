@@ -3799,6 +3799,18 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
           .eq('id', taskId).then(() => {});
       }
 
+      // Mid-task user updates: check if user sent new info while this task is running
+      try {
+        const { consumeTaskUpdates } = await import('../utils/task-updates.js');
+        const updates = consumeTaskUpdates(userId);
+        if (updates.length > 0) {
+          const updateText = updates.map(u => `[USER UPDATE WHILE RUNNING]: ${u}`).join('\n');
+          console.log(`[ITERATE] Injecting ${updates.length} mid-task update(s) from user`);
+          // Prepend to next AI prompt so AI knows user changed the requirements
+          aiResponse.content = updateText + '\n\n' + aiResponse.content;
+        }
+      } catch { /* non-critical */ }
+
       // Strip [THINKING]...[/THINKING] blocks from AI response (internal reasoning, not for user)
       aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
 

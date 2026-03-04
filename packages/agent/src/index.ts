@@ -106,6 +106,7 @@ import { trackBackgroundJob } from "./utils/job-tracker.js";
 import { maskPhone, maskEmail, maskUserId, maskPin } from "./utils/logging.js";
 import { hashPin, verifyPinHash, isBcryptHash } from "./utils/hashing.js";
 import { globalLimiter, taskLimiter, twilioLimiter } from "./middleware/rate-limit.js";
+import { registerActiveTask, unregisterActiveTask, getActiveTaskInfo, injectTaskUpdate, classifyUpdateRelevance } from "./utils/task-updates.js";
 import { sanitizeTaskInput } from "./security/validator.js";
 
 import crypto from "crypto";
@@ -794,9 +795,35 @@ app.post("/task", taskLimiter, async (req, res) => {
     return;
   }
 
+  // ── Mid-task update detection ──
+  // If user already has an active task running, check if this new message is an update to it.
+  const activeTask = getActiveTaskInfo(task.userId);
+  if (activeTask) {
+    const newMsg = (task.subject || '') + ' ' + (task.body || '');
+    const relevance = classifyUpdateRelevance(newMsg, activeTask.subject);
+
+    if (relevance === 'obvious_update') {
+      // Inject silently — short message, clearly a clarification
+      injectTaskUpdate(task.userId, newMsg.trim());
+      console.log(`[MID-TASK] Injected obvious update for user ${task.userId.substring(0, 8)}`);
+      res.json({ status: "update_injected", message: `Got it — I'll incorporate that into the task I'm working on.` });
+      return;
+    }
+
+    if (relevance === 'likely_update') {
+      // Inject and tell the user we're treating it as an update
+      injectTaskUpdate(task.userId, newMsg.trim());
+      console.log(`[MID-TASK] Injected likely update for user ${task.userId.substring(0, 8)}`);
+      res.json({ status: "update_injected", message: `Got it — I'll factor that into "${activeTask.subject.substring(0, 60)}". Let me know if you meant to start a different task instead.` });
+      return;
+    }
+    // relevance === 'new_task' → fall through, process normally in parallel
+  }
+
   res.json({ status: "queued", message: "Task received and processing" });
 
   activeTasks++;
+  registerActiveTask(task.userId, task.taskId || '', task.subject || '');
   processTask(task)
     .then((result) => {
       console.log(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
@@ -820,7 +847,7 @@ app.post("/task", taskLimiter, async (req, res) => {
         } catch { /* last resort — watchdog will clean up */ }
       }
     })
-    .finally(() => { activeTasks--; processQueuedTasks(); });
+    .finally(() => { unregisterActiveTask(task.userId); activeTasks--; processQueuedTasks(); });
 });
 
 app.post("/task/incoming", taskLimiter, async (req, res) => {
