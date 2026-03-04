@@ -67,22 +67,28 @@ export class ExecutionEngine {
   private domain?: string;
   private isMultiUser = false;
   private isRemoteCDP = false; // Whether using remote CDP browser
+  private useBrightData = false;
   private taskId?: string;
 
   constructor(intent: LockedIntent) {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
 
-    // Priority: Remote CDP > VPS Multi-User > Local Playwright
+    // Priority: Bright Data > Remote CDP > VPS Multi-User > Local Playwright
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
-    // PRIORITY 0: Remote CDP browser (connects to VPS Chrome via WebSocket)
-    this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
+    // PRIORITY 0: Bright Data Scraping Browser (real managed Chrome, bypasses DataDome/Akamai)
+    this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
 
-    // PRIORITY 1: VPS Multi-User Browser (shared Chrome on this process)
-    this.useMultiUser = !forceLocal && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
+    // PRIORITY 1: Remote CDP browser (connects to VPS Chrome via WebSocket)
+    this.useRemoteCDP = !forceLocal && !this.useBrightData && !!(process.env.REMOTE_BROWSER_CDP);
 
-    if (this.useRemoteCDP) {
+    // PRIORITY 2: VPS Multi-User Browser (shared Chrome on this process)
+    this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
+
+    if (this.useBrightData) {
+      console.log('[ENGINE] Will use Bright Data Scraping Browser');
+    } else if (this.useRemoteCDP) {
       console.log('[ENGINE] Will use Remote CDP Browser (VPS)');
     } else if (this.useMultiUser) {
       console.log('[ENGINE] Will use VPS Multi-User Browser');
@@ -96,7 +102,37 @@ export class ExecutionEngine {
     this.domain = domain;
     this.taskId = taskId;
 
-    // PRIORITY 0: Remote CDP Browser — connect to Chrome running on VPS via WebSocket
+    // PRIORITY 0: Bright Data Scraping Browser — managed real Chrome, bypasses DataDome/Akamai
+    if (this.useBrightData) {
+      try {
+        const wsUrl = process.env.BRIGHT_DATA_BROWSER_WS!;
+        console.log(`[ENGINE] Connecting to Bright Data Scraping Browser...`);
+
+        const cdpTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+          Promise.race([promise, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timeout after ${ms}ms`)), ms))]);
+
+        // Bright Data provides a direct WSS endpoint — no /json/version step needed
+        this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 15000, 'brightdata-connect');
+        this.isRemoteCDP = true;
+
+        this.context = await cdpTimeout(this.browser.newContext({
+          viewport: { width: 1280, height: 800 },
+          locale: 'en-US',
+          timezoneId: 'America/New_York',
+        }), 10000, 'brightdata-newContext');
+
+        this.page = await cdpTimeout(this.context.newPage(), 10000, 'brightdata-newPage');
+        await cdpTimeout(this.page.evaluate(() => document.readyState), 5000, 'brightdata-readyState');
+        console.log(`[ENGINE] Connected to Bright Data Scraping Browser`);
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[ENGINE] Bright Data connection failed: ${errorMsg} — falling back`);
+        this.browser = null; this.context = null; this.page = null; this.isRemoteCDP = false;
+      }
+    }
+
+    // PRIORITY 1: Remote CDP Browser — connect to Chrome running on VPS via WebSocket
     if (this.useRemoteCDP) {
       try {
         const cdpEndpoint = process.env.REMOTE_BROWSER_CDP!; // e.g. http://77.42.31.185:9223
@@ -194,6 +230,9 @@ export class ExecutionEngine {
       '--no-zygote',
       '--ignore-certificate-errors', // Don't crash on www. vs non-www cert mismatches
       '--disable-blink-features=AutomationControlled',
+      // Disable HTTP/2 when using a proxy — Geonode (and most residential proxies) don't
+      // properly tunnel HTTP/2 CONNECT, causing ERR_HTTP2_PROTOCOL_ERROR. HTTP/1.1 works fine.
+      ...(process.env.PROXY_URL || process.env.PROXY_LIST ? ['--disable-http2'] : []),
     ];
 
     // Wire proxy config if available (for anti-bot bypass)
