@@ -2040,6 +2040,35 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Non-critical — continue with empty memory
     }
 
+    // 5.1. Load user settings early so confirmation_mode can be enforced throughout the task.
+    // confirmationMode values (DB): 'never' | 'unclear' | 'risky' | 'always'
+    // full_send_mode: true → skip all confirmation regardless of confirmationMode
+    // Effective autonomy tiers:
+    //   full_send  (full_send_mode=true OR confirmationMode='never')  → act on everything
+    //   medium     (confirmationMode='risky' or 'unclear')            → ask for purchases >$20, send_email, cancel/delete
+    //   conservative (confirmationMode='always')                      → ask before any risky action
+    let _taskUserSettings: Awaited<ReturnType<typeof getUserSettings>> | null = null;
+    let _effectiveConfirmMode: 'full_send' | 'medium' | 'conservative' = 'full_send'; // default: full autonomy
+    try {
+      _taskUserSettings = await Promise.race([
+        getUserSettings(userId),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+      ]);
+      if (_taskUserSettings) {
+        if (_taskUserSettings.fullSendMode || _taskUserSettings.confirmationMode === 'never') {
+          _effectiveConfirmMode = 'full_send';
+        } else if (_taskUserSettings.confirmationMode === 'always') {
+          _effectiveConfirmMode = 'conservative';
+        } else {
+          // 'risky', 'unclear', or default → medium
+          _effectiveConfirmMode = 'medium';
+        }
+      }
+    } catch {
+      // Non-critical — default to full_send (most capable)
+    }
+    console.log(`[CONFIRM-MODE] User=${userId.slice(0, 8)} effectiveMode=${_effectiveConfirmMode}`);
+
     // 5a. SELF-LEARNING: Predict difficulty + load intelligence BEFORE execution
     const primaryDomain = classification.domains[0] || "";
     let difficultyPrediction: Awaited<ReturnType<typeof predictDifficulty>> | null = null;
@@ -3857,6 +3886,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
     let bookingGateRejectCount = 0; // Track booking gate rejections — after 2, force phone call
     let visionAgentInvocations = 0; // Guard: max 2 vision agent runs per task (prevents 8min × 15 iteration waste)
     let lastVisionFailed = false; // Tracks if last vision agent run failed (used in passive response guard)
+    let _confirmationPauseSent = false; // Guard: only send confirmation request once per task
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -5024,6 +5054,62 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         }
 
         const action = aiResponse.actions[actionIndex];
+
+        // CONFIRMATION MODE GUARD: Enforce user's autonomy setting before executing risky actions.
+        // Conservative: ask before form submissions, account creation, email sending, purchases, cancellations.
+        // Medium: ask only for purchases (send_email), cancellations (submit on cancel tasks), irreversible deletes.
+        // Full Send: skip all confirmation — maximum autonomy.
+        if (_effectiveConfirmMode !== 'full_send' && !task.suppressEmail) {
+          const _taskSubjectLower = subject.toLowerCase();
+          const _isCancelTask = /\b(cancel|unsubscribe|delete|deactivate|close account)\b/i.test(_taskSubjectLower);
+          const _isPurchaseTask = /\b(buy|order|purchase|checkout|pay|subscribe)\b/i.test(_taskSubjectLower);
+          const _isEmailSendTask = action.type === 'send_email';
+          const _isAccountCreation = action.type === 'submit' && /\b(sign\s?up|signup|register|create.*account)\b/i.test(_taskSubjectLower);
+
+          let _needsConfirmation = false;
+          let _confirmReason = '';
+
+          if (_effectiveConfirmMode === 'conservative') {
+            // Ask before ANY form submission, email send, account creation, or purchase/cancel
+            if (['submit', 'send_email'].includes(action.type as string) || _isCancelTask || _isPurchaseTask) {
+              _needsConfirmation = true;
+              _confirmReason = action.type === 'send_email'
+                ? `About to send an email on your behalf`
+                : _isCancelTask ? `About to submit a cancellation/deletion action`
+                : _isPurchaseTask ? `About to submit a purchase`
+                : `About to submit a form`;
+            }
+          } else if (_effectiveConfirmMode === 'medium') {
+            // Only ask for: email sends, purchases, cancellations (not routine signups or research)
+            if (_isEmailSendTask && !task.suppressEmail) {
+              _needsConfirmation = true;
+              _confirmReason = `About to send an email on your behalf. Reply YES to send, NO to cancel.`;
+            } else if (_isCancelTask && action.type === 'submit') {
+              _needsConfirmation = true;
+              _confirmReason = `About to submit a cancellation or deletion. Reply YES to proceed, NO to cancel.`;
+            } else if (_isPurchaseTask && ['submit', 'click'].includes(action.type as string)) {
+              _needsConfirmation = true;
+              _confirmReason = `About to proceed with a purchase. Reply YES to confirm, NO to cancel.`;
+            }
+          }
+
+          if (_needsConfirmation && !actionResults.some(r => r.success)) {
+            // Only pause for first confirmation per task (don't interrupt every action)
+            if (!_confirmationPauseSent) {
+              _confirmationPauseSent = true;
+              console.log(`[CONFIRM-MODE] Pausing for user confirmation (mode=${_effectiveConfirmMode}): ${_confirmReason}`);
+              const _confirmMsg = `${_confirmReason}\n\nTask: "${subject.substring(0, 200)}"\n\nReply YES to proceed, NO to cancel.`;
+              try {
+                await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Confirm: ${subject.substring(0, 80)}`, _confirmMsg);
+                await getSupabaseClient().from('tasks').update({ status: 'awaiting_confirmation' }).eq('id', taskId);
+              } catch { /* non-critical — continue anyway */ }
+              // Mark task as needing confirmation and break out — user must re-trigger
+              isTaskComplete = true;
+              aiResponse.content = `I've paused before taking this action and sent you a confirmation request. Reply YES to proceed.`;
+              break;
+            }
+          }
+        }
 
         // SELF-DOMAIN BLOCKER: AI sometimes navigates to aevoy.com (its own platform)
         // instead of real target websites. This is always wrong during task execution.
@@ -6706,27 +6792,31 @@ CRITICAL RULES:
         } catch { /* non-critical */ }
       }
 
-      // CONTEXT SUMMARIZATION: After round 5, compress old rounds to prevent context bloat
-      // This cuts context by ~60%, keeping AI focused on current state not old noise
+      // CONTEXT SUMMARIZATION: After round 5, compress old rounds to prevent context bloat.
+      // This cuts context by ~60%, keeping AI focused on current state not old noise.
+      // Refreshes the summary every 5 rounds so it stays current (not stale after round 5).
       roundHistory.push({ round: currentIteration, summary: `Round ${currentIteration}: ${resultsSummary.substring(0, 200)}` });
 
       let historySection = '';
       if (currentIteration > 5 && roundHistory.length > 3) {
-        // Compress old rounds into a 2-sentence summary (if not already done)
-        if (!compressedHistory) {
+        // Refresh compressed history every 5 rounds (not just once at round 6).
+        // Round 6 → first compression; round 11 → refresh; round 16 → refresh.
+        const _shouldRefreshSummary = !compressedHistory || (currentIteration % 5 === 1 && currentIteration > 5);
+        if (_shouldRefreshSummary) {
           try {
             const oldRounds = roundHistory.slice(0, -2).map(r => r.summary).join('\n');
             const compressionResult = await quickValidate(
-              `Summarize these browser automation rounds in 2 sentences. Focus on: what was attempted, what worked, what failed, current progress.\n\n${oldRounds}`,
-              'Summarize browser automation history. 2 sentences max. Focus on progress and failures.'
+              `Summarize these browser automation rounds in 2-3 sentences. Focus on: what was attempted, what worked, what failed, and current progress toward the goal.\n\n${oldRounds}`,
+              'Summarize browser automation history concisely. 2-3 sentences max. Focus on progress and what has been tried.'
             );
             if (compressionResult?.result) {
-              compressedHistory = compressionResult.result.substring(0, 300);
+              compressedHistory = compressionResult.result.substring(0, 400);
+              console.log(`[CONTEXT-SUMMARY] Compressed ${roundHistory.length - 2} rounds into ${compressedHistory.length} chars at round ${currentIteration}`);
             }
           } catch { /* compression is optional */ }
         }
         if (compressedHistory) {
-          historySection = `\nPRIOR ROUNDS SUMMARY: ${compressedHistory}\n`;
+          historySection = `\nPRIOR ROUNDS SUMMARY (rounds 1-${Math.max(currentIteration - 2, 1)}): ${compressedHistory}\n`;
         }
       }
 
@@ -8141,7 +8231,24 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // AI loop takes over but asks permission instead of acting.
     // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
     // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
-    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b)/i;
+    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter)\b)/i;
+
+    // FORM-FILL PASSIVE GUARD: "Want me to fill in [field]?" is always passive when user provided data.
+    // If the task description contains the data AND the response asks to fill it in, that's passive —
+    // the agent should already be filling it in, not asking.
+    const _taskHasFormData = /\b(name|email|phone|address|password|username|first name|last name|date of birth|dob|zip|postal)\b/i.test(`${subject} ${body}`);
+    const _responseAsksToFill = /\b(want me to fill|shall i fill|would you like me to fill|do you want me to fill|ready to fill|want me to (enter|submit|complete))\b/i.test(cleanResponse);
+    if (_taskHasFormData && _responseAsksToFill) {
+      console.log(`[PASSIVE-GUARD] Form-fill passive detected — user provided data in task but agent asks to fill`);
+      // Force the agent to just do it — strip the passive question and replace with action statement
+      cleanResponse = cleanResponse
+        .replace(/\n*[^\n.!?]*\b(want me to fill|shall i fill|would you like me to fill|do you want me to fill|ready to fill|want me to (enter|submit|complete))\b[^\n.!?]*[.!?]?\s*$/i, '')
+        .trim();
+      if (!cleanResponse || cleanResponse.length < 10) {
+        cleanResponse = `I'll fill in the form with the details you provided and submit it now.`;
+      }
+    }
+
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
@@ -9012,8 +9119,15 @@ RULES:
     //           found cheap flight → saved search to memory + queued visa-requirements search
     //           signed up for service → saved account details to memory + scheduled follow-up reminder
     // Runs in a 30s time-boxed window — never blocks or affects the main response.
+    // GATE: Only fire extra-mile when the task appears to have succeeded — no point doing bonus work
+    //       on a failed task (the user is already disappointed and extra noise makes it worse).
+    const _extraMileTaskSuccessful = !(/\b(incomplete|could not|couldn't|unable|failed|not found|no item|no specific|didn't successfully|could not successfully|error|blocked|couldn't fully complete|page not found|was not found|search results are incomplete|no results|could not be identified|couldn't be identified|not successfully|unsuccessfully|timed out)\b/i.test(cleanResponse));
+    if (!_extraMileTaskSuccessful) {
+      console.log(`[EXTRA-MILE] Skipped — task appears unsuccessful (response contains failure language)`);
+    }
     try {
       const completedActionTypes = actionResults.filter(r => r.success).map(r => r.action.type);
+      if (!_extraMileTaskSuccessful) throw new Error('Task unsuccessful — skipping extra-mile');
       const { executeExtraMile } = await import("./extra-mile.js");
       const extraMileSummary = await Promise.race([
         executeExtraMile(
