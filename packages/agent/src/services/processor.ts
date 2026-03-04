@@ -8575,27 +8575,30 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // blocked it). Example: "I logged in to Netflix. Would you like me to cancel?" — just cancel!
       // Unlike patterns 1-3, this fires EVEN WHEN completion words exist.
       const _passiveWithProgress = _completionWords.test(cleanResponse) && _passivePatterns.test(cleanResponse);
+      // Booking-specific: found restaurants but didn't book — must be evaluated before the if condition
+      const _isBookingTask = /\b(book|reserv(?:ation|e)|dining|restaurant|table|resy|opentable)\b/i.test(subject + ' ' + (body || ''));
+      const _hasVenueNames = /[A-Za-z'][a-zA-Z']{1,}\s+(?:Restaurant|Bistro|Kitchen|Bar|Grill|Brasserie|Café|Cafe|Lane|Street|House)\b/i.test(cleanResponse)
+        || /\b(brick lane|tavern|eatery|steakhouse|pizzeria)\b/i.test(cleanResponse)
+        // Broad fallback: any restaurant-type word in a booking task response = venue was found
+        || (_isBookingTask && /\b(restaurant|bistro|bar|grill|café|cafe|brasserie|eatery|dining)\b/i.test(cleanResponse));
+      const _noBookingConfirm = !/\b(booked|reserved|reservation confirmed|table confirmed|confirmation number)\b/i.test(cleanResponse);
+      const _bookingFoundButNotBooked = _isBookingTask && _hasVenueNames && _noBookingConfirm;
 
-      if (_pageDescribeOnly || _givesInstructions || _gaveUp || _passiveWithProgress || _describesService) {
+      if (_pageDescribeOnly || _givesInstructions || _gaveUp || _passiveWithProgress || _describesService || _bookingFoundButNotBooked) {
         const gateType = _pageDescribeOnly ? 'page-description only'
           : _gaveUp ? 'gave-up mid-task'
           : _passiveWithProgress ? 'passive-after-progress'
+          : _bookingFoundButNotBooked ? 'found-venues-not-booked'
           : _describesService ? 'describes-service instead of agent-actions'
           : 'gives-instructions instead of acting';
         console.log(`[QUALITY-GATE] Response is ${gateType} — upgrading to action-oriented`);
         try {
           const { quickValidate } = await import("./ai.js");
-          // FIX 1: Booking-specific re-prompt — when task is book/reserve and response lists
-          // restaurants/venues but has no booking confirmation, force action instead of summary.
-          const _isBookingTask = /\b(book|reserv(?:ation|e)|dining|restaurant|table|resy|opentable)\b/i.test(subject + ' ' + (body || ''));
-          const _hasVenueNames = /\b[A-Z][a-z]{2,}\s+(?:Restaurant|Bistro|Kitchen|Bar|Grill|Brasserie|Café|Cafe|Lane|Street|House)\b/.test(cleanResponse)
-            || /\b(brick lane|tavern|eatery|steakhouse|pizzeria)\b/i.test(cleanResponse);
-          const _noBookingConfirm = !/\b(booked|reserved|reservation confirmed|table confirmed|confirmation number)\b/i.test(cleanResponse);
-          const _bookingFoundButNotBooked = _isBookingTask && _hasVenueNames && _noBookingConfirm;
-          const _upgradePrompt = _passiveWithProgress
+          // Booking prompt takes priority over passive-with-progress when both are true
+          const _upgradePrompt = _bookingFoundButNotBooked
+            ? `Task: "${subject.substring(0, 200)}"\nCurrent response (FOUND VENUES BUT DID NOT BOOK): "${cleanResponse.substring(0, 400)}"\n\nYou found restaurants but haven't booked. Pick the FIRST available option and either attempt the Resy/OpenTable booking directly OR search for their phone number and call to make the reservation. DO NOT give a summary — take ACTION NOW.\n\nRewrite as: "I attempted to book at [venue] via [method]. [Result: what happened — either confirmed, or what obstacle was hit and what info is needed to proceed.]"`
+            : _passiveWithProgress
             ? `Task: "${subject.substring(0, 200)}"\nCurrent response (INCOMPLETE — made progress then asked permission): "${cleanResponse.substring(0, 400)}"\n\nThe agent made progress but stopped to ask instead of completing. Rewrite to:\n1. Confirm what was actually accomplished (logged in, found the page, filled the form, etc.)\n2. Be honest — if you couldn't complete the final step (bot protection, extra verification), say so\n3. NEVER end with "would you like", "shall I", "want me to" — state what happened as facts\n4. If blocked at the last step: "I [action taken] but hit [obstacle]. Reply '[clear instruction]' to continue."\n5. 2-3 sentences max, past tense, first person`
-            : _bookingFoundButNotBooked
-            ? `Task: "${subject.substring(0, 200)}"\nCurrent response (FOUND VENUES BUT DID NOT BOOK): "${cleanResponse.substring(0, 400)}"\n\nYou found restaurants but haven't booked. Pick the FIRST available option (e.g., Brick Lane) and either attempt the Resy/OpenTable booking directly OR search for their phone number and call to make the reservation. DO NOT give a summary — take ACTION NOW.\n\nRewrite as: "I attempted to book at [venue] via [method]. [Result: what happened — either confirmed, or what obstacle was hit and what info is needed to proceed.]"`
             : `Task: "${subject.substring(0, 200)}"\nCurrent response (WRONG): "${cleanResponse.substring(0, 400)}"\nActions taken: ${actionResults.filter(r=>r.success).slice(0,5).map(r=>r.action.type).join(', ') || 'none'}\n\nRewrite as a FIRST-PERSON PAST-TENSE action statement. Follow these EXACT rules:\n1. Start with "I navigated to..." / "I searched for..." / "I found..." / "I attempted..." — report what the agent DID\n2. If failed: state the exact obstacle (bot protection, login required, email verification, captcha)\n3. If credentials needed to continue: end with "Reply with [your X] and I'll complete it."\n4. BANNED — NEVER write these: "You can create", "You can sign up", "You can access", "The page is at", "available at", any URLs, "you'll need to", "visit the site", "here's how"\n5. 2-3 sentences max. Past tense. First person only.\n\nGOOD examples:\n- "I navigated to Notion's signup page and started the registration. I got stuck at email verification — share the code from your inbox and I'll finish."\n- "I searched flights Vancouver→Tokyo and found the cheapest option at $322 on Google Flights for March 14th."\n- "I opened Canva's business card creator but hit a login wall. I need your Canva credentials to proceed — reply with email and password."`;
           const _upgraded = await quickValidate(
             _upgradePrompt,
@@ -8665,9 +8668,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         || /\byou can now\b/i.test(cleanResponse)
         || /\bloaded successfully\b/i.test(cleanResponse)
         || /\byou can now manually (complete|fill|finish|submit|continue)\b/i.test(cleanResponse)
-        || /\bmanually complete\b/i.test(cleanResponse);
+        || /\bmanually complete\b/i.test(cleanResponse)
+        // "Go to express.adobe.com and select 'Sign up for free'" — agent gives URL instructions instead of acting
+        || /\bgo to\b.{0,80}(https?:\/\/|[\w\-]+\.(com|ca|org|io|co|net|app))\b.{0,100}\b(and\s+)?(select|click|sign\s*up|create|register|complete|fill)\b/i.test(cleanResponse)
+        // "Visit https://... to create an account" — navigate instruction pattern
+        || /\b(visit|navigate to|head to|open)\b.{0,20}(https?:\/\/|[\w\-]+\.(com|ca|org|io|co|net|app)[\w\-\/]*)\b/i.test(cleanResponse);
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
-        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom)\b/i);
+        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom|adobe|usertesting|trymyui|willful|epilogue|resy|opentable|legalzoom)\b/i);
         const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
         cleanResponse = `I reached the ${_svcName} signup page. To complete your account, reply with the password you'd like to use and I'll finish the registration immediately.`;
         console.log(`[SIGNUP-FALLBACK] Converted instructional response to credential request for ${_svcName}`);
