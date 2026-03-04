@@ -8332,16 +8332,30 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         /\b(check the page|password not found|field not found|could not find (the )?(password|field|button|form|element)|unable to (find|locate|complete)|check for (any )?errors|next steps|please (check|verify|try|visit))\b/i.test(cleanResponse) ||
         /\b(email filled|form filled|navigated to)\b.{0,100}\b(not found|could not|unable|check|next step)/is.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
+      // Pattern 5: "service description" — response describes what the SERVICE does, not what the AGENT did
+      // e.g. "ProbateDesk offers BC probate document preparation starting at $799. The site's intake process begins..."
+      // e.g. "Prolific typically pays £9.00/hr. The participant registration page allows..."
+      // These are 3rd-person descriptions, not 1st-person agent actions. Agent gave up and reported the service instead.
+      const _isFormFillOrSignup = /\b(sign\s?up|signup|register|create.*account|fill.*form|submit.*form|apply|book|reserve)\b/i.test(subject + ' ' + (body || ''));
+      const _describesService = _isFormFillOrSignup && !_completionWords.test(cleanResponse) && (
+        // "[Site] offers/provides/allows/requires" — 3rd-person service description
+        /^(?:the\s+)?\w[\w\s]*\s+(?:offers?|provides?|allows?|requires?|starts?|begins?|accepts?|features?|includes?)\s/i.test(cleanResponse.trim()) ||
+        // "The site's intake/form/registration begins by requesting..."
+        /\b\w+'?s\s+(?:intake|process|registration|signup|onboarding|form|system)\s+(?:begins?|starts?|asks?|requires?|allows?)\b/i.test(cleanResponse) ||
+        // "[Service] typically pays/charges/costs" — describing the service economics, not completing the task
+        /\b(?:typically|usually|generally)\s+(?:pays?|charges?|costs?|requires?|asks?)\b/i.test(cleanResponse)
+      );
       // Pattern 4: Made progress (completion words present) but stopped to ask permission.
       // Safety net for cases where the passive-guard was bypassed (e.g. _isLegitCredentialRequest
       // blocked it). Example: "I logged in to Netflix. Would you like me to cancel?" — just cancel!
       // Unlike patterns 1-3, this fires EVEN WHEN completion words exist.
       const _passiveWithProgress = _completionWords.test(cleanResponse) && _passivePatterns.test(cleanResponse);
 
-      if (_pageDescribeOnly || _givesInstructions || _gaveUp || _passiveWithProgress) {
+      if (_pageDescribeOnly || _givesInstructions || _gaveUp || _passiveWithProgress || _describesService) {
         const gateType = _pageDescribeOnly ? 'page-description only'
           : _gaveUp ? 'gave-up mid-task'
           : _passiveWithProgress ? 'passive-after-progress'
+          : _describesService ? 'describes-service instead of agent-actions'
           : 'gives-instructions instead of acting';
         console.log(`[QUALITY-GATE] Response is ${gateType} — upgrading to action-oriented`);
         try {
