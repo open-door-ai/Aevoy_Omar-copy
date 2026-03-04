@@ -6395,6 +6395,29 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         }
       }
 
+      // RESEARCH DEAD-END FALLBACK: If the action result says data is not available/out of window,
+      // inject alternative source suggestions into the next iteration instead of giving up.
+      const _researchDeadEnd = /\b(not available|not yet available|doesn't show|can't find|no results for|booking window|try again later|outside.*booking|too far in advance|dates? not available|no flights? (found|available|shown)|no results? (found|available)|sold out)\b/i.test(
+        successfulActions.map(r => String(r.result || '')).join(' ')
+      );
+      const _isResearchTask = /\b(find|search|look up|compare|check|price|flight|cost|rate|flights?|hotel|travel|cheapest|best)\b/i.test(subject);
+      if (_researchDeadEnd && _isResearchTask && currentIteration < MAX_ITERATIONS - 2 && !isTaskComplete) {
+        console.log(`[RESEARCH-FALLBACK] Source had no data for "${subject.substring(0, 60)}" — injecting alternative sources`);
+        const _flightTask = /\b(flight|fly|airline|airport)\b/i.test(subject);
+        const _hotelTask = /\b(hotel|motel|accommodation|stay|hostel)\b/i.test(subject);
+        const _priceTask = /\b(price|buy|purchase|cost|cheapest|deal)\b/i.test(subject);
+        const _alternativeSources = _flightTask
+          ? 'Try completely different flight sources: Kayak (kayak.com), Skyscanner (skyscanner.com), Google Flights (google.com/flights), ITA Matrix (matrix.itasoftware.com), or the airline direct (e.g. aircanada.com, westjet.com, united.com).'
+          : _hotelTask
+            ? 'Try alternative hotel sources: Hotels.com, Booking.com, Expedia, Airbnb, or Google Hotels (google.com/travel/hotels).'
+            : _priceTask
+              ? 'Try alternative price sources: Amazon, Walmart, eBay, Google Shopping, or the retailer\'s official website directly.'
+              : 'Try a completely different source or search query. Rephrase the search with different keywords or a different website.';
+        visionFailureNote = `[RESEARCH DEAD-END] Previous source had no data for this request. ${_alternativeSources} DO NOT repeat the same source. Try at least 2 new sources before giving up.`;
+        isTaskComplete = false;
+        aiSignaledComplete = false;
+      }
+
       // EARLY EXIT: If ALL actions failed for 2 consecutive rounds on a research/general task,
       // go to Haiku fallback. But give at least 2 rounds — round 1 search failures are common
       // (search engine blocks, rate limits) and round 2 re-prompt with action format reminder
@@ -8244,7 +8267,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // AI loop takes over but asks permission instead of acting.
     // EXCEPTION: Do NOT rewrite responses that LEGITIMATELY need the user's
     // external credentials (Netflix, Hulu, bank, etc.) — those are valid requests.
-    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter)\b)/i;
+    const _passivePatterns = /\b(want me to\b|shall i\b|would you like me to|i'll need\s+(your|a |more|some|to )|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make)\b|let me know if (you|that|this)\b|i need your\s+(email|password|name|permission|approval|confirmation)\b|please provide\s+(your|the|me|a)\b|please tell me (your|the|what|how|which)\b|would you (prefer|like)\b|ready to proceed\b|ready to submit\b|i'm ready to\b|i'm able to\b|can i proceed\b|reply with (the |a |your )(password|code|credentials?|email|pin)\b|want me to fill\s+(in|out|the)\b|shall i fill\s+(in|out|the)\b|would you like me to fill\s+(in|out|the)\b|do you want me to fill\s+(in|out|the)\b|want me to (go ahead and |proceed to )?(fill|submit|complete|enter|click|sign|try|proceed)\b)/i;
 
     // FORM-FILL PASSIVE GUARD: "Want me to fill in [field]?" is always passive when user provided data.
     // If the task description contains the data AND the response asks to fill it in, that's passive —
