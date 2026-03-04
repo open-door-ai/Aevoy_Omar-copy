@@ -1329,8 +1329,10 @@ export async function runVisionAgent(
             const bodyText = (document.body?.innerText || '').substring(0, 500).toLowerCase();
             const title = document.title?.toLowerCase() || '';
 
-            // Bot wall check
-            const isBotWall = /just a moment|checking your browser|ddos protection|access denied|cloudflare|blocked|security check|verify you are human/.test(title + ' ' + bodyText) && bodyText.length < 1500;
+            // Bot wall check (includes .cf-browser-verification and #challenge-running DOM elements)
+            const isBotWall = (
+              /just a moment|checking your browser|ddos protection|access denied|cloudflare|blocked|security check|verify you are human/.test(title + ' ' + bodyText) && bodyText.length < 1500
+            ) || !!(document.querySelector('.cf-browser-verification, #challenge-running, #challenge-form'));
 
             // CAPTCHA check (quick — just element existence)
             const hasCaptcha = !!(
@@ -1375,7 +1377,7 @@ export async function runVisionAgent(
             }
             return { isBotWall, hasCaptcha };
           }, steps < 15),
-          new Promise<{ isBotWall: false; hasCaptcha: false }>((resolve) => setTimeout(() => resolve({ isBotWall: false, hasCaptcha: false }), 3000)),
+          new Promise<{ isBotWall: false; hasCaptcha: false }>((resolve) => setTimeout(() => resolve({ isBotWall: false, hasCaptcha: false }), 5000)),
         ]);
 
         // Handle bot wall
@@ -1385,7 +1387,13 @@ export async function runVisionAgent(
           lastBotWallUrl = wallUrl;
           console.log(`[BROWSER-AGENT] Bot wall at ${wallUrl} (attempt ${botWallCount})`);
           if (botWallCount <= 2) {
-            await activePage.waitForTimeout(botWallCount === 1 ? 5000 : 3000);
+            // Longer wait for JS challenges (Cloudflare executes JS, then loads Turnstile)
+            await activePage.waitForTimeout(botWallCount === 1 ? 8000 : 5000);
+            // Reload after wait — Cloudflare often presents Turnstile after first reload
+            if (botWallCount === 1) {
+              await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+              await activePage.waitForTimeout(3000);
+            }
             try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
           } else if (botWallCount >= BOT_WALL_MAX) {
             const pageData = await capturePageData(activePage);
