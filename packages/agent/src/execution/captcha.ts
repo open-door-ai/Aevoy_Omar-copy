@@ -774,9 +774,11 @@ async function trackCaptchaCost(
       user_id: userId,
       task_id: taskId,
       model: `captcha_${service}`,
-      tokens_used: 0,
+      input_tokens: 0,
+      output_tokens: 0,
       cost_usd: billedCost,
-      task_type: `captcha_${captchaType}`,
+      purpose: `captcha_${captchaType}`,
+      provider: service,
       created_at: new Date().toISOString(),
     });
 

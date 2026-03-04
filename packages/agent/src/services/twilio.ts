@@ -208,6 +208,8 @@ export async function callUser(request: VoiceCallRequest): Promise<{
 
     // Track usage
     await trackVoiceUsage(request.userId, 1);
+    // Track dollar cost: ~3 min domestic estimate × $0.0525/min
+    trackServiceCost(request.userId, "twilio", "voice_call_outbound", 0.16, "voice_outbound").catch(() => {});
 
     console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
     return { success: true, callSid: data.sid };
@@ -264,6 +266,8 @@ export async function callExternal(
 
     const data = await response.json() as { sid: string };
     await trackVoiceUsage(userId, 1);
+    // Track dollar cost: ~3 min domestic estimate × $0.0525/min
+    trackServiceCost(userId, "twilio", "voice_call_outbound", 0.16, "voice_outbound").catch(() => {});
 
     console.log(`[CALL-EXTERNAL] ConversationRelay call placed: to=${to}, from=${fromNumber || config.phoneNumber}, sid=${data.sid}, business=${businessName || 'unknown'}`);
     return { success: true, callSid: data.sid };
@@ -443,6 +447,11 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
     }
 
     const userId = profile.id;
+
+    // Track inbound SMS cost ($0.0083/message Twilio inbound)
+    if (userId) {
+      trackServiceCost(userId, "twilio", "sms_inbound", 0.0083, "sms_inbound").catch(() => {});
+    }
 
     // Check if there's a task waiting for verification code
     const { data: pendingTask } = await getSupabaseClient()
