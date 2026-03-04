@@ -5958,7 +5958,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       );
 
       const isBrowserInteractionTask = !_isPriceResearchOnly && (
-        /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|connect\b|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(taskTextLower)
+        /\b(sign.?up|signup|sign\s+me\s+up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|make\s+me\s+an?\s+account|book|reserv(ation)?|cancel|unsubscribe|dispute|purchase|buy|order|apply|fill\b.*\bform|submit\b.*\bform|online\b.*\bform|intake\b.*\bform|legal\b.*\bform|estate\b.*\bform|probate|subscribe|log.?in|sign.?in|developer.*portal|api.*key|access.*token|extract.*key|generate.*token|create.*app|new.*app|connect.*account|make\s+(a|an)\s+(design|logo|post|graphic|image|banner|presentation)|make\b.*\bdesign|create\b.*\bdesign|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|connect\b|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(taskTextLower)
         // Also trigger if the AI already browsed and is clearly doing UI work (has form fills or clicks)
         || (hasBrowseEver && actionResults.some(r => ['fill', 'fill_form', 'click', 'submit'].includes(r.action?.type || '') && !r.success))
         // ALWAYS invoke vision agent when user explicitly asked to visit a site ("Go to X.com and do Y")
@@ -6338,10 +6338,16 @@ DO NOT attempt another browser action. Use search → call_external now.`;
           console.log(`[ITERATE] Direct result injection for ${dataAction.action.type} (success) — skipping re-prompt`);
           aiResponse.content = dataAction.result as string;
         } else {
-          // FAILURE: override AI narration with clear user-facing error
-          const errorMsg = dataAction.error || `Could not complete ${dataAction.action.type} right now.`;
-          console.log(`[ITERATE] Direct error injection for ${dataAction.action.type} — "${errorMsg}"`);
-          aiResponse.content = errorMsg;
+          // FAILURE: only override if we don't already have good content from browser/vision
+          const hasExistingContent = aiResponse.content && aiResponse.content.length > 30;
+          if (dataAction.action.type === 'send_email' && hasExistingContent) {
+            // send_email failed but vision/browser already gave us the result — keep it
+            console.log(`[ITERATE] send_email failed but existing response preserved (${aiResponse.content.length} chars)`);
+          } else {
+            const errorMsg = dataAction.error || `Could not complete ${dataAction.action.type} right now.`;
+            console.log(`[ITERATE] Direct error injection for ${dataAction.action.type} — "${errorMsg}"`);
+            aiResponse.content = errorMsg;
+          }
         }
         isTaskComplete = true;
         aiSignaledComplete = true;
@@ -8100,6 +8106,17 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Strip thinking blocks one final time before cleaning for email — the iteration loop
     // strips them at the top, but the last iteration's response may still have them
     aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
+
+    // SELF-REFUSAL DETECTION: If the AI claims it cannot access websites despite having done browser
+    // work, the model is hallucinating limitations. Ignore the refusal and use page data as fallback.
+    const _isSelfRefusal = /\b(i cannot|i can't|i am unable|i'm unable|as an ai|i don't have (the ability|access)|cannot access external|cannot visit websites|cannot browse the internet|don't have access to (the internet|external|websites))\b/i.test(aiResponse.content || '');
+    if (_isSelfRefusal && (visionAgentInvocations > 0 || lastVisionPageData)) {
+      console.warn(`[SELF-REFUSAL] AI claimed it cannot access websites despite having done browser work (${visionAgentInvocations} vision run(s)). Using page data fallback.`);
+      aiResponse.content = lastVisionPageData && lastVisionPageData.length > 100
+        ? `Based on the website I browsed: ${lastVisionPageData.substring(0, 500)}`
+        : `I encountered issues completing this task on the website. The browser automation attempted ${visionAgentInvocations} session(s). Please try again or provide alternative instructions.`;
+    }
+
     const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
 
     // Narration prefix stripper: DeepSeek sometimes outputs thinking + answer in same message.

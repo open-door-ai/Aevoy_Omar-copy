@@ -1150,9 +1150,27 @@ export async function runVisionAgent(
         const isSignupTask = /\b(sign\s?up|create.*account|register)\b/i.test(task);
         if (isSignupTask) {
           for (const [domain, knownSignupUrl] of Object.entries(SIGNUP_URL_MAP)) {
-            if (task.toLowerCase().includes(domain)) {
+            const baseName = domain.split('.')[0]; // 'prolific' from 'prolific.com'
+            if (task.toLowerCase().includes(domain) || task.toLowerCase().includes(baseName)) {
               console.log(`[BROWSER-AGENT] Known signup URL override: ${domain} → ${knownSignupUrl}`);
               startUrl = knownSignupUrl;
+              break;
+            }
+          }
+        }
+
+        // BOOKING_URL_MAP: for reservation/booking tasks on platforms with non-obvious entry points.
+        // Resy's default homepage doesn't show Vancouver venues — go directly to the search page.
+        const BOOKING_URL_MAP: Record<string, string> = {
+          'resy.com': 'https://resy.com/cities/van/venues', // Vancouver venue search
+        };
+        const isBookingTaskForMap = /\b(book|reserv|restaurant|dining|dinner|table|resy)\b/i.test(task);
+        if (isBookingTaskForMap && !isSignupTask) {
+          for (const [domain, knownBookingUrl] of Object.entries(BOOKING_URL_MAP)) {
+            const baseName = domain.split('.')[0];
+            if (task.toLowerCase().includes(domain) || task.toLowerCase().includes(baseName)) {
+              console.log(`[BROWSER-AGENT] Known booking URL override: ${domain} → ${knownBookingUrl}`);
+              startUrl = knownBookingUrl;
               break;
             }
           }
@@ -1483,6 +1501,25 @@ export async function runVisionAgent(
         lastSnapshotHash = snapshotHash;
       }
 
+      // SPA LOOP ESCAPE: If stuck 5 steps with no page change, force-navigate to a known URL for this domain
+      if (noChangeCount === 5) {
+        const currentDomain = (() => { try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; } })();
+        const SPA_ESCAPE_MAP: Record<string, string> = {
+          'prolific.com': 'https://app.prolific.com/register',
+          'app.prolific.com': 'https://app.prolific.com/register',
+          'figma.com': 'https://www.figma.com',
+          'canva.com': 'https://www.canva.com/signup',
+        };
+        const escapeUrl = SPA_ESCAPE_MAP[currentDomain];
+        if (escapeUrl && escapeUrl !== url && isSafeUrl(escapeUrl)) {
+          console.log(`[BROWSER-AGENT] SPA loop on ${currentDomain} — force-navigating to ${escapeUrl}`);
+          history.push(`⚡ SPA navigation stuck (${noChangeCount} steps no change). Force-navigating to known URL: ${escapeUrl}`);
+          await activePage.goto(escapeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          noChangeCount = 0;
+          sameUrlCount = 0;
+        }
+      }
+
       // Stuck hint
       let stuckHint = '';
       if (noChangeCount >= 3) {
@@ -1758,7 +1795,13 @@ export async function runVisionAgent(
             const profileHint = userProfile
               ? ` Use FILL to enter: email="${userProfile.email || ''}" name="${userProfile.displayName || ''}" phone="${userProfile.phone || ''}". You have FULL PERMISSION — no need to ask.`
               : '';
-            history.push(`⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${profileHint}`);
+            // If agent reports no results and mentions an alternative location, force-retry without asking
+            const altLocationMatch = doneResult.match(/\b(Vancouver(?!\s+Island)(?!\s+International)|BC|British Columbia|downtown|the city|nearby|city center|metro)\b/i);
+            const hasNoResults = /\b(no results|nothing found|no listings|not available|couldn't find|no availability|no venues|no restaurants|0 results)\b/i.test(doneResult);
+            const forceRetryHint = (hasNoResults && altLocationMatch)
+              ? ` The previous search had NO RESULTS. IMMEDIATELY search again — change the location to "${altLocationMatch[0]}" or remove location filters entirely. Do NOT ask, just DO IT NOW.`
+              : '';
+            history.push(`⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${forceRetryHint}${profileHint}`);
 
             const rejectCount = history.filter(h => h.includes('DONE rejected')).length;
             if (rejectCount >= 5) {
