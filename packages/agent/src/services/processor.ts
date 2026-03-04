@@ -4476,6 +4476,7 @@ DO NOT give me the URL again. CREATE THE ACCOUNT NOW.`;
             /\b(price|cost|how much|cheapest|best deal|compare)\b/i.test(subject) &&
             (
               /\b(prices? (fluctuate|vary|change)|check the (website|site|page)|visit .*(website|page|link)|for (current|up.to.date|latest) (price|pricing))\b/i.test(lowerContent) ||
+              /\b(check (their|the) (official |)websites? directly|you (should|can|may) check|for the most (current|accurate|up.to.date)|retailer promotions frequently change|pricing at .*(may|can) vary)\b/i.test(lowerContent) ||
               (/\b(available at|listed on)\b/i.test(lowerContent) && !/\$\d/.test(lowerContent))
             )
           ) {
@@ -8553,7 +8554,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       ) && !_completionWords.test(cleanResponse);
       // Pattern 3: "gave up" — agent stopped mid-task and told user to check/continue
       const _gaveUp = _isTask && (
-        /\b(check the page|password not found|field not found|could not find (the )?(password|field|button|form|element)|unable to (find|locate|complete)|check for (any )?errors|next steps|please (check|verify|try|visit))\b/i.test(cleanResponse) ||
+        /\b(check the page|password not found|field not found|could not find (the )?(password|field|button|form|element|free consultation)|unable to (find|locate|complete)|check for (any )?errors|next steps|please (check|verify|try|visit)|form was not found|no (free )?consultation form (was )?found|form not found on this)\b/i.test(cleanResponse) ||
         /\b(email filled|form filled|navigated to)\b.{0,100}\b(not found|could not|unable|check|next step)/is.test(cleanResponse)
       ) && !_completionWords.test(cleanResponse);
       // Pattern 5: "service description" — response describes what the SERVICE does, not what the AGENT did
