@@ -106,6 +106,8 @@ interface ElementRef {
   role: string;
   name: string;
   nthOfKind: number; // 0-based index among elements with same role+name on page
+  cx?: number;       // center X coordinate (for fallback coordinate click)
+  cy?: number;       // center Y coordinate (for fallback coordinate click)
 }
 
 type ElementRefMap = Map<number, ElementRef>;
@@ -126,7 +128,7 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
   try {
     const elements = await Promise.race([
       page.evaluate(() => {
-        const items: { tag: string; role: string; name: string; type: string; nth: number }[] = [];
+        const items: { tag: string; role: string; name: string; type: string; nth: number; cx: number; cy: number }[] = [];
         const tagCounts = new Map<string, number>();
         const selectors = ['a', 'button', 'input', 'select', 'textarea',
           '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="searchbox"]',
@@ -156,7 +158,9 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
               el.getAttribute('placeholder') || '';
             const nth = tagCounts.get(tag + role + name) || 0;
             tagCounts.set(tag + role + name, nth + 1);
-            items.push({ tag, role, name, type: el.getAttribute('type') || '', nth });
+            const cx = Math.round(rect.left + rect.width / 2);
+            const cy = Math.round(rect.top + rect.height / 2);
+            items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy });
             if (items.length >= 100) return; // cap
           });
         }
@@ -175,7 +179,7 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
       const roleNameKey = `${el.role}:${el.name}`;
       const nthOfKind = roleNameCounts.get(roleNameKey) || 0;
       roleNameCounts.set(roleNameKey, nthOfKind + 1);
-      refs.set(refId, { role: el.role, name: el.name, nthOfKind });
+      refs.set(refId, { role: el.role, name: el.name, nthOfKind, cx: el.cx, cy: el.cy });
       const typeStr = el.type ? ` type="${el.type}"` : '';
       lines.push(`[${refId}] ${el.role} "${sanitizeElementName(el.name)}"${typeStr}`);
     }
@@ -509,27 +513,40 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.ref !== undefined) {
           const resolved = resolveByRef(action.ref);
           if (resolved) {
+            // Strategy 1: Playwright role+name locator (exact)
             try {
-              await resolved.locator.waitFor({ state: 'visible', timeout });
+              await resolved.locator.waitFor({ state: 'visible', timeout: 2000 });
               await humanClick(resolved.locator);
               return true;
-            } catch {
-              // Exact match failed — try inexact as fallback
+            } catch { /* try inexact */ }
+            // Strategy 2: Inexact role+name match
+            if (resolved.entry.name) {
               try {
                 const fallback = page.getByRole(resolved.entry.role as any, { name: resolved.entry.name, exact: false }).first();
-                await fallback.waitFor({ state: 'visible', timeout });
+                await fallback.waitFor({ state: 'visible', timeout: 1500 });
                 await humanClick(fallback);
                 return true;
-              } catch { /* fall through to text search */ }
-              // Last try: getByText with the stored name
+              } catch { /* fall through */ }
+              // Strategy 3: getByText
               try {
                 const textFallback = page.getByText(resolved.entry.name, { exact: false }).first();
-                await textFallback.waitFor({ state: 'visible', timeout });
+                await textFallback.waitFor({ state: 'visible', timeout: 1000 });
                 await humanClick(textFallback);
                 return true;
               } catch { /* fall through */ }
             }
-            history.push(`⚠️ Ref [${action.ref}] (${resolved.entry.role} "${resolved.entry.name}") not found — page may have changed. Use a ref from the current tree.`);
+            // Strategy 4: Coordinate click (most reliable — direct mouse event)
+            if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
+              try {
+                if (cursor) {
+                  await cursor.moveTo({ x: resolved.entry.cx, y: resolved.entry.cy });
+                }
+                await page.mouse.click(resolved.entry.cx, resolved.entry.cy);
+                console.log(`[BROWSER-AGENT] Coordinate fallback click at (${resolved.entry.cx},${resolved.entry.cy}) for ref [${action.ref}]`);
+                return true;
+              } catch { /* fall through */ }
+            }
+            history.push(`⚠️ Ref [${action.ref}] (${resolved.entry.role} "${resolved.entry.name}") not clickable — try a different ref.`);
             return false;
           }
           history.push(`⚠️ Ref [${action.ref}] not found in snapshot. Use refs from the CURRENT accessibility tree.`);
@@ -615,12 +632,22 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
               await humanType(page, resolved.locator, action.value);
               return true;
             } catch {
-              // Fallback: try inexact match
+              // Fallback 1: inexact role+name match
               try {
                 const fallbackLoc = page.getByRole(resolved.entry.role as any, { name: resolved.entry.name, exact: false }).first();
                 await humanType(page, fallbackLoc, action.value);
                 return true;
               } catch { /* fall through */ }
+              // Fallback 2: coordinate click to focus, then type
+              if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
+                try {
+                  await page.mouse.click(resolved.entry.cx, resolved.entry.cy);
+                  await page.waitForTimeout(200);
+                  await page.keyboard.type(action.value || '', { delay: 30 });
+                  console.log(`[BROWSER-AGENT] Coordinate fill at (${resolved.entry.cx},${resolved.entry.cy}) for ref [${action.ref}]`);
+                  return true;
+                } catch { /* fall through */ }
+              }
             }
             history.push(`⚠️ Ref [${action.ref}] (${resolved.entry.role} "${resolved.entry.name}") not fillable. Page may have changed.`);
             return false;
@@ -1000,7 +1027,9 @@ export async function runVisionAgent(
   const failedSigs = new Set<string>();
   function actionSig(action: PlaywrightAction, url: string): string {
     const domain = (() => { try { return new URL(url).hostname.replace('www.', ''); } catch { return url; } })();
-    return `${action.type}|${action.name || action.value || action.url || ''}|${domain}`.toLowerCase();
+    // Include ref number so CLICK [1] and CLICK [2] have different sigs (don't false-block each other)
+    const refPart = action.ref !== undefined ? `[${action.ref}]` : '';
+    return `${action.type}${refPart}|${action.name || action.value || action.url || ''}|${domain}`.toLowerCase();
   }
 
   // ── Task classification ──
