@@ -5076,7 +5076,13 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const _taskSubjectLower = `${subject} ${body || ''}`.toLowerCase();
           const _isCancelTask = /\b(cancel\b|unsubscribe|delete.*account|deactivate|close\s+account)\b/i.test(_taskSubjectLower);
           const _isPurchaseTask = /\b(buy|purchase|order|checkout|pay(?:ment)?)\b/i.test(_taskSubjectLower);
-          const _isEmailSendTask = action.type === 'send_email';
+          // send_email delivering research results to own inbox (web channel) is NOT high-risk
+          // High-risk send_email = composing to external recipient from email/SMS/voice channel
+          const _emailTo = (action.params as {to?: string})?.to || '';
+          const _isEmailToSelf = _emailTo.endsWith('@aevoy.com') || _emailTo === from;
+          const _isEmailSendTask = action.type === 'send_email'
+            && task.inputChannel !== 'web'  // web users see result in UI — no confirmation needed
+            && !_isEmailToSelf;             // emails to self (delivering results) are never high-risk
           // High-risk = purchases, cancellations, or sending emails/messages — NOT free signups or form fills
           const _isHighRiskAction = _isCancelTask || _isPurchaseTask || _isEmailSendTask;
 
