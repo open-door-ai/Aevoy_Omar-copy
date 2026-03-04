@@ -3713,11 +3713,55 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
           } catch (_bfpErr) {
             const _bfpErrMsg = _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr);
             const _bfpDomainForErr = (() => { try { return new URL(_bfpTargetUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
-            aiResponse.content = `I tried to navigate to ${_bfpDomainForErr} but encountered an error: ${_bfpErrMsg.substring(0, 150)}. The site may be blocking automated access.`;
-            isTaskComplete = true;
-            aiSignaledComplete = true;
-            signupAutoCompleted = true;
             console.warn(`[BROWSER-FAST-PATH] Navigation/vision failed:`, _bfpErrMsg);
+
+            // For timeout errors: try to capture live page data and summarize before giving up
+            if (/timeout/i.test(_bfpErrMsg) && _bfpPage && !_bfpPage.isClosed()) {
+              try {
+                const _bfpLiveUrl2 = _bfpPage.url();
+                if (_bfpLiveUrl2 && !_bfpLiveUrl2.startsWith('chrome-error://') && _bfpLiveUrl2 !== 'about:blank') {
+                  const _bfpLiveText2 = await Promise.race([
+                    _bfpPage.evaluate(() => {
+                      const items: string[] = [];
+                      document.querySelectorAll('h1, h2, h3, [class*="result"], [class*="card"], [class*="listing"], [class*="restaurant"]').forEach(el => {
+                        const t = (el as HTMLElement).innerText?.trim();
+                        if (t && t.length > 3 && t.length < 300) items.push(t);
+                      });
+                      return items.length > 3 ? items.slice(0, 30).join('\n') : (document.body?.innerText?.substring(0, 4000) || '');
+                    }),
+                    new Promise<string>(r => setTimeout(() => r(''), 5000)),
+                  ]).catch(() => '');
+                  if (_bfpLiveText2 && _bfpLiveText2.length > 50) {
+                    const { generateForcedDirectAnswer } = await import("./ai.js");
+                    const _bfpTimeoutSummary = await generateForcedDirectAnswer(
+                      _bfpTaskText,
+                      `BROWSER DATA (from ${_bfpLiveUrl2} — partial, timed out after working on page):\n${_bfpLiveText2.substring(0, 3000)}\n\nExtract what was found. Include names, prices, ratings, addresses.`,
+                      username
+                    ).catch(() => null);
+                    if (_bfpTimeoutSummary?.content && _bfpTimeoutSummary.content.length > 30) {
+                      aiResponse.content = _bfpTimeoutSummary.content;
+                      isTaskComplete = true;
+                      aiSignaledComplete = true;
+                      signupAutoCompleted = true;
+                      console.log(`[BROWSER-FAST-PATH] Timeout data summarized from live page`);
+                    }
+                  }
+                }
+              } catch { /* fall through */ }
+            }
+
+            if (!isTaskComplete) {
+              const isBlocked = /bot|blocked|access denied|CAPTCHA|Cloudflare/i.test(_bfpErrMsg);
+              const isTimeout = /timeout/i.test(_bfpErrMsg);
+              aiResponse.content = isTimeout
+                ? `I browsed ${_bfpDomainForErr} for ${_bfpErrMsg.match(/(\d+) minutes?/)?.[1] || '8'} minutes but couldn't fully complete the task. The site requires more interaction steps than my current limit allows.`
+                : isBlocked
+                  ? `I couldn't access ${_bfpDomainForErr} — the site is blocking automated browser access.`
+                  : `I tried to navigate to ${_bfpDomainForErr} but encountered an error: ${_bfpErrMsg.substring(0, 150)}.`;
+              isTaskComplete = true;
+              aiSignaledComplete = true;
+              signupAutoCompleted = true;
+            }
           }
         }
       }
