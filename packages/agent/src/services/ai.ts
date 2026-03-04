@@ -1,16 +1,17 @@
 /**
- * AI Service — V2 Model Routing
+ * AI Service — Model Routing
  *
- * Routes to the appropriate AI model based on task type and cost.
- * Fallback chain ensures tasks always complete.
+ * STRATEGY: Haiku for all browser/vision tasks. Free models (Groq) for everything else.
+ * NO Sonnet — too expensive ($3/$15 per M, can burn $20 in one night of testing).
  *
  * Model Hierarchy:
- * - DeepSeek V3.2: $0.25/M input, $0.38/M output (default)
- * - Kimi K2: $0.60/M input, $2.50/M output (75% cache savings)
- * - Gemini 2.0 Flash: Free tier (validation, fallback)
- * - Claude Sonnet 4: $3/M input, $15/M output (complex, vision)
- * - Claude Haiku: $0.25/M input, $1.25/M output (fast fallback)
+ * - Claude Haiku 4.5: $0.80/$4 per M — PRIMARY for all browser + vision tasks
+ *   Vision-capable, fast, instruction-following, ~6¢ per 40-step browser session
+ * - DeepSeek chat: $0.27/$1.10 per M — fallback when Haiku unavailable
+ * - Groq (Kimi K2, Scout, Llama): FREE — for classification, validation, simple queries
+ * - Gemini 2.5 Flash: ~$0.15/$0.60 per M — fallback when quota available
  * - Ollama (local): Free (privacy mode, offline)
+ * - Claude Sonnet: DO NOT USE — only for 1% edge cases with explicit opt-in
  */
 
 import crypto from "crypto";
@@ -351,34 +352,32 @@ interface ModelConfig {
 // STRATEGY: Claude Haiku 4.5 first — best reasoning for unexpected situations.
 // Free models as fallbacks when Haiku is unavailable/rate-limited.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
+  // Haiku first for all reasoning tasks — reliable, vision-capable, ~6¢/browser session
   understand: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'mistralai/mistral-small-3.1-24b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 }, // paid fallback
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   plan: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 }, // paid fallback
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   reason: [
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 }, // paid fallback
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   vision: [
-    { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'openrouter', model: 'nvidia/nemotron-nano-12b-v2-vl:free', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0.11, costPerMOutput: 0.34 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60 },
   ],
   validate: [
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
@@ -2136,10 +2135,31 @@ export async function generateBrowserStepResponse(
     { role: "user" as const, content: prompt }
   ];
 
-  // ═══ PRIMARY: DeepSeek V3 — best instruction following, no <think> overhead ═══
-  // DeepSeek V3 follows structured action formats far better than smaller models.
-  // Consistently outputs CLICK [ref] / FILL [ref] without drifting to NAVIGATE.
-  // Cost: $0.27/$1.10 per M → ~$0.013/40-step task. Budget: $4.99 on account.
+  // ═══ PRIMARY: Haiku 4.5 — vision-capable, best instruction following for browser actions ═══
+  // $0.80/$4 per M → ~$0.032/40-step task. Reliable, fast, no rate limit cascade issues.
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const response = await withTimeout(getAnthropicClient().messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      }), 12000);
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      if (content.length > 10) {
+        const inTok = response.usage?.input_tokens || 0;
+        const outTok = response.usage?.output_tokens || 0;
+        const cost = (inTok * 0.80 + outTok * 4.00) / 1_000_000;
+        console.log(`[AI] BrowserStep (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ FALLBACK: DeepSeek V3 ═══
   if (process.env.DEEPSEEK_API_KEY && Date.now() > deepseekBackoffUntil) {
     try {
       const response = await withTimeout(getDeepSeekClient().chat.completions.create({
@@ -2221,13 +2241,12 @@ export async function generateBrowserStepResponse(
 }
 
 /**
- * Generate response for vision tasks.
- * Order: OpenRouter FREE (Qwen3-VL, best GUI agent) → Groq (near-free) → Gemini → Haiku → Sonnet (LAST RESORT)
- * All calls have 15s timeout to prevent iteration loop hangs.
+ * Generate response for vision tasks (screenshot analysis).
+ * Order: Haiku (PRIMARY, vision-capable) → Groq Scout → OpenRouter free → Gemini → DeepSeek text
+ * NO Sonnet — too expensive.
  *
  * Cost per 40-step task:
- *   OpenRouter free: $0.000  |  Groq: $0.012  |  Gemini: $0.012
- *   Haiku: $0.032  |  Sonnet: $0.384 (30x more expensive — emergency only)
+ *   Haiku: ~$0.032  |  Groq Scout: $0.012  |  OpenRouter free: $0.000  |  Gemini: $0.012
  */
 export async function generateVisionResponse(
   prompt: string,
@@ -2255,6 +2274,35 @@ export async function generateVisionResponse(
           { type: "text", text: prompt }
         ]
       : [{ type: "text", text: prompt }];
+
+  // ═══ PRIMARY: Haiku 4.5 — handles both screenshots and text, best instruction following ═══
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const haikusContent: Anthropic.MessageParam["content"] = hasImage
+        ? [
+            { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } },
+            { type: "text", text: prompt }
+          ]
+        : prompt;
+      const response = await withTimeout(getAnthropicClient().messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        messages: [{ role: "user", content: haikusContent }],
+      }), 15000);
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      if (content.length > 10) {
+        const inTok = response.usage?.input_tokens || 0;
+        const outTok = response.usage?.output_tokens || 0;
+        const cost = (inTok * 0.80 + outTok * 4.00) / 1_000_000;
+        console.log(`[AI] Vision (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${hasImage ? 'with screenshot' : 'text-only'}`);
+        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "vision").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] Vision (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
   // 4 Groq models on separate rate-limit buckets → effective 150 RPM combined:
