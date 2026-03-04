@@ -3583,7 +3583,11 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
               const _bfpParty = _bfpTaskText.match(/(\d+)\s*(ppl|people|persons?|guests?|covers?)/i)?.[1] || '';
               const _bfpTime = _bfpTaskText.match(/(?:at|for)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i)?.[1] || '';
               const _bfpDate = /tonight|today/i.test(_bfpTaskText) ? 'today' : /tomorrow/i.test(_bfpTaskText) ? 'tomorrow' : '';
-              const _bfpBookingCtx = _bfpIsBooking ? `\n\n⚡ BOOKING DETAILS: Party size=${_bfpParty || '2'}, Date=${_bfpDate || 'today'}, Time=${_bfpTime || 'tonight'}. Complete the reservation form fully.` : '';
+              const _bfpRestaurantName = _bfpTaskText.match(/(?:at|for)\s+([A-Z][A-Za-z\s&'-]{2,40}?)(?:\s+(?:in|at|on|for|\d)|\.|,|$)/)?.[1]?.trim() || '';
+              const _bfpBookingCtx = _bfpIsBooking ? `\n\n⚡ BOOKING STRATEGY: Party size=${_bfpParty || '2'}, Date=${_bfpDate || 'today'}, Time=${_bfpTime || 'tonight'}.
+STEP 1 — If you're on a generic homepage/search page: TYPE the restaurant name "${_bfpRestaurantName || 'the restaurant'}" in the search box and SELECT it from autocomplete.
+STEP 2 — On the restaurant page: SELECT party size=${_bfpParty || '2'}, date=${_bfpDate || 'today'}, time=${_bfpTime || 'evening'}, then CLICK "Find a time" or similar.
+STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use your identity info). STEP 5 — CLICK "Complete reservation". You have 12 minutes — use every step to make forward progress.` : '';
               const _bfpVisionTask = `${subject} ${body || ''}. ${_bfpFormCtx}${_bfpBookingCtx}${_bfpLearnings}`;
 
               console.log(`[BROWSER-FAST-PATH] Vision agent starting on ${_bfpPageUrl.substring(0, 80)}`);
@@ -3591,8 +3595,9 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 progress_message: `[BROWSER-FAST-PATH] Vision agent running on ${_bfpPageUrl.substring(0, 60)}`
               }).eq('id', taskId).then(() => {});
 
-              // Run vision agent with 8-minute timeout
-              const VISION_TIMEOUT_MS = 480000;
+              // Run vision agent — booking/signup tasks get 12 min, others get 8 min
+              const _bfpIsComplex = _bfpIsBooking || _bfpIsSignup;
+              const VISION_TIMEOUT_MS = _bfpIsComplex ? 720000 : 480000;
               const _bfpResult = await Promise.race([
                 runVisionAgent(_bfpPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
                 new Promise<never>((_, reject) =>
@@ -5856,8 +5861,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           }).eq('id', taskId).then(() => {});
 
           try {
-            // Wrap vision agent with 8-minute hard timeout to prevent infinite loops
-            const VISION_TIMEOUT_MS = 480000; // 8 minutes
+            // Wrap vision agent — booking/signup get 12 min, others 8 min
+            const _vaIsComplex = /\b(book|reserv|table|sign\s?up|signup|register|create.*account)\b/i.test(taskTextLower);
+            const VISION_TIMEOUT_MS = _vaIsComplex ? 720000 : 480000;
             const visionResult = await Promise.race([
               runVisionAgent(visionPage, visionTask, userId, taskId, username, userTwilioPhone),
               new Promise<never>((_, reject) =>

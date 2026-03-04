@@ -23,9 +23,9 @@ import { extractVerificationCode } from '../utils/email-code-extractor.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 
 const MAX_STEPS = 150;
-const MAX_STEPS_BOOKING = 50;
+const MAX_STEPS_BOOKING = 80; // Booking flows need more steps; processor gives them 12 min
 const STEP_TIMEOUT_MS = 20000; // Must exceed inner AI timeout (Qwen 10s + Scout 6s + buffer)
-const TOTAL_TIMEOUT_MS = 600000; // 10 minutes (safety net — processor wraps with 8-min timeout)
+const TOTAL_TIMEOUT_MS = 780000; // 13 minutes (safety net — processor wraps with 12-min timeout)
 
 export interface VisionAgentResult {
   success: boolean;
