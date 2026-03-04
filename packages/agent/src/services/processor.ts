@@ -1255,6 +1255,11 @@ async function handleCardCommand(
   }
 }
 
+/** Pick a random variant from an array — ensures error messages never feel copy-pasted. */
+function _pickVariant(variants: string[]): string {
+  return variants[Math.floor(Math.random() * variants.length)];
+}
+
 export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const { userId, username, from, subject, body } = task;
   // Extract sender's display name: prefer explicit senderName, otherwise derive from email local part
@@ -1278,7 +1283,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           status: 'completed',
           completed_at: new Date().toISOString(),
           execution_time_ms: MASTER_TIMEOUT_MS,
-          response_text: `Task timed out after ${MASTER_TIMEOUT_MS / 60000} minutes. The request may have been too complex or rate limits were hit. Please try again.`,
+          response_text: _pickVariant([
+            "That one took longer than expected and I had to wrap up. Send it again and I'll jump right back in.",
+            "I was still working on this when I ran out of time. Feel free to resend and I'll pick it up.",
+            "This took a bit longer than I can handle in one go. Resend it and I'll tackle it fresh.",
+          ]),
         }).eq('id', task.taskId).eq('status', 'processing');
       } catch { /* best effort */ }
     }
@@ -3676,24 +3685,42 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                   // Construct a meaningful failure response from the error
                   let _bfpFailMsg = '';
                   if (/captcha/i.test(_bfpError)) {
-                    _bfpFailMsg = `I navigated to ${_bfpDomain} but was blocked by a CAPTCHA that I couldn't solve. The site has anti-bot protection.`;
+                    _bfpFailMsg = _pickVariant([
+                      `I made it to ${_bfpDomain} but ran into a CAPTCHA puzzle I couldn't crack. Their anti-bot protection blocked the way. Want me to try a different approach?`,
+                      `${_bfpDomain} threw a CAPTCHA at me — I got pretty far but it stopped me in my tracks. I'll note that for next time.`,
+                      `I had some trouble with ${_bfpDomain} — they put up a CAPTCHA that tripped me up. Resend the task and I'll try another route.`,
+                    ]);
                   } else if (/bot.?wall|blocked|access denied/i.test(_bfpError)) {
-                    _bfpFailMsg = `I tried to access ${_bfpDomain} but was blocked by their anti-bot protection after ${_bfpSteps} attempts.`;
+                    _bfpFailMsg = _pickVariant([
+                      `I ran into some resistance from ${_bfpDomain} — they weren't thrilled about my visit. I'll note that and try a different way next time.`,
+                      `${_bfpDomain} was a bit guarded today and blocked my access after a few tries. These things happen! Resend and I'll find another path.`,
+                      `That page on ${_bfpDomain} wasn't cooperating. I'll try coming at it differently if you send the task again.`,
+                    ]);
                   } else if (/call.?gate|phone/i.test(_bfpError)) {
                     const _bfpPhone = _bfpError.match(/\+?\d[\d\s()-]{8,}/)?.[0] || '';
                     _bfpFailMsg = _bfpPhone
-                      ? `I tried on ${_bfpDomain} but the process is too complex for automated browser interaction. You can call them directly at ${_bfpPhone}.`
-                      : `I tried on ${_bfpDomain} but the process requires steps I can't automate. You may need to complete it manually.`;
+                      ? `I worked through ${_bfpDomain} but the final step needs a phone call — I can't dial in from the browser. You can call them directly at ${_bfpPhone} to finish up.`
+                      : `I got pretty far on ${_bfpDomain} but hit a step that needs a real person. You may need to pop in and complete the last part yourself.`;
                   } else if (/verification|verify|code|otp/i.test(_bfpError) || /verification|verify/i.test(_bfpCurrentUrl)) {
-                    _bfpFailMsg = `I started signing up on ${_bfpDomain} and entered your email (${username}@aevoy.com), but the site requires email verification with a code I couldn't retrieve in time. Check your inbox for a verification email from ${_bfpDomain}.`;
+                    _bfpFailMsg = `I started the signup on ${_bfpDomain} and used your email (${username}@aevoy.com), but they want a verification code from your inbox before I can continue. Check for an email from ${_bfpDomain} and reply with the code — I'll finish it up.`;
                   } else if (/timeout|max steps/i.test(_bfpError)) {
-                    _bfpFailMsg = `I spent ${_bfpSteps} steps on ${_bfpDomain} working on your request but couldn't fully complete it. The page may require manual interaction.`;
+                    _bfpFailMsg = _pickVariant([
+                      `I spent ${_bfpSteps} steps on ${_bfpDomain} and made good progress, but ran out of time before finishing. Resend it and I'll pick a faster route.`,
+                      `I kept at it on ${_bfpDomain} for ${_bfpSteps} steps but needed more time than I had. Send it again and I'll take a more direct path.`,
+                      `${_bfpDomain} took more back-and-forth than expected — ${_bfpSteps} steps in and I had to wrap up. Resend and I'll try a shortcut.`,
+                    ]);
                   } else if (/stuck/i.test(_bfpError)) {
-                    _bfpFailMsg = `I navigated to ${_bfpDomain} but got stuck after ${_bfpSteps} steps. The site may require a different approach.`;
+                    _bfpFailMsg = _pickVariant([
+                      `I got to ${_bfpDomain} and made it ${_bfpSteps} steps in, but then hit a wall. Send it again and I'll try a different angle.`,
+                      `I navigated to ${_bfpDomain} and worked through ${_bfpSteps} steps, then got stuck. Resend and I'll approach it differently.`,
+                    ]);
                   } else if (_bfpVisionResult && _bfpVisionResult.length > 30) {
                     _bfpFailMsg = _bfpVisionResult;
                   } else {
-                    _bfpFailMsg = `I navigated to ${_bfpDomain} and attempted your request over ${_bfpSteps} steps but couldn't complete it. Error: ${_bfpError.substring(0, 200)}`;
+                    _bfpFailMsg = _pickVariant([
+                      `I got to ${_bfpDomain} and worked through ${_bfpSteps} steps, but couldn't quite finish. Send the task again and I'll try a different approach.`,
+                      `I spent ${_bfpSteps} steps on ${_bfpDomain} — made some progress but hit a snag at the end. Resend it and I'll take a fresh look.`,
+                    ]);
                   }
                   aiResponse.content = _bfpFailMsg;
                   isTaskComplete = true;
@@ -3711,7 +3738,11 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               // Navigation failed (chrome-error, DNS failure, SSL error, etc.)
               // Construct a meaningful failure response — NEVER fall through to generic text
               const _bfpDomainForError = (() => { try { return new URL(_bfpTargetUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
-              aiResponse.content = `I couldn't access ${_bfpDomainForError} — the site appears to be blocking automated browser access or is temporarily unavailable. You may need to visit ${_bfpTargetUrl} directly to complete this task.`;
+              aiResponse.content = _pickVariant([
+                `I had some trouble getting into ${_bfpDomainForError} — it wasn't cooperating today. You could try visiting ${_bfpTargetUrl} directly, or send the task again and I'll try a different approach.`,
+                `${_bfpDomainForError} was a bit tricky to reach. These things happen! Try visiting ${_bfpTargetUrl} directly, or resend and I'll find another way in.`,
+                `I ran into some resistance from ${_bfpDomainForError} this time around. Feel free to try ${_bfpTargetUrl} yourself, or send it again and I'll take a different route.`,
+              ]);
               isTaskComplete = true;
               aiSignaledComplete = true;
               signupAutoCompleted = true;
@@ -3761,10 +3792,22 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               const isBlocked = /bot|blocked|access denied|CAPTCHA|Cloudflare/i.test(_bfpErrMsg);
               const isTimeout = /timeout/i.test(_bfpErrMsg);
               aiResponse.content = isTimeout
-                ? `I browsed ${_bfpDomainForErr} for ${_bfpErrMsg.match(/(\d+) minutes?/)?.[1] || '8'} minutes but couldn't fully complete the task. The site requires more interaction steps than my current limit allows.`
+                ? _pickVariant([
+                    `I spent a while on ${_bfpDomainForErr} but the site needed more back-and-forth than I could handle in one session. Send it again and I'll pick a faster path.`,
+                    `${_bfpDomainForErr} took longer than expected and I had to wrap up. Resend the task and I'll jump right back in with a different approach.`,
+                    `I kept at it on ${_bfpDomainForErr} but ran out of time. Feel free to resend — I'll try a more direct route next time.`,
+                  ])
                 : isBlocked
-                  ? `I couldn't access ${_bfpDomainForErr} — the site is blocking automated browser access.`
-                  : `I tried to navigate to ${_bfpDomainForErr} but encountered an error: ${_bfpErrMsg.substring(0, 150)}.`;
+                  ? _pickVariant([
+                      `I had some trouble with ${_bfpDomainForErr} — that site was a bit guarded today. I'll note it for next time. Want me to try a different approach?`,
+                      `${_bfpDomainForErr} wasn't very welcoming — I hit a wall trying to access it. Resend the task and I'll find another way.`,
+                      `That page on ${_bfpDomainForErr} wasn't cooperating. These things happen! Send it again and I'll try a different route.`,
+                    ])
+                  : _pickVariant([
+                      `I ran into a snag on ${_bfpDomainForErr} this time. Send the task again and I'll take a fresh approach.`,
+                      `Something went sideways on ${_bfpDomainForErr}. I'll try a different path if you resend the task.`,
+                      `${_bfpDomainForErr} gave me a bit of trouble. Resend it and I'll come at it from a different angle.`,
+                    ]);
               isTaskComplete = true;
               aiSignaledComplete = true;
               signupAutoCompleted = true;
@@ -8430,10 +8473,18 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           );
           cleanResponse = fallbackSummary.content || `I attempted "${subject}" but couldn't complete it fully. Here's what I found: ${actionLog.substring(0, 300)}`;
         } else {
-          cleanResponse = `I attempted "${subject}" but wasn't able to complete the task. The browser may have encountered a block or the site didn't load properly. Would you like me to try a different approach?`;
+          cleanResponse = _pickVariant([
+            `I gave "${subject}" my best shot, but hit a snag partway through. Send it again and I'll try a different approach.`,
+            `I ran into some trouble with "${subject}" — the site didn't load the way I expected. Resend it and I'll come at it differently.`,
+            `Things got a bit tricky with "${subject}". Want me to try again? I'll take a different route this time.`,
+          ]);
         }
       } catch {
-        cleanResponse = `I attempted "${subject}" but ran into issues completing it. Would you like me to try again with a different approach?`;
+        cleanResponse = _pickVariant([
+          `I ran into a snag with "${subject}". Send it again and I'll take a fresh approach.`,
+          `Something got in the way with "${subject}" — feel free to resend it and I'll try again with a different strategy.`,
+          `I had some trouble with "${subject}" this time around. Resend it and I'll tackle it from a new angle.`,
+        ]);
       }
     }
 
@@ -9014,8 +9065,16 @@ NONE`;
     // Update task as needs_review (never "failed" — users should always see a usable response)
     // Only update if task is still "processing" — SIGTERM handler may have already set needs_review
     const gracefulErrorMsg = isTimeout
-      ? "This task took longer than expected. I've saved my progress — send it again and I'll pick up where I left off."
-      : "I ran into a snag while working on your request. I'm going to try a different approach — feel free to send it again and I'll get right on it.";
+      ? _pickVariant([
+          "That one took a bit longer than I had time for. Send it again and I'll jump right back in.",
+          "I ran out of runway on this one — feel free to resend and I'll tackle it fresh.",
+          "This took a little longer than expected. Resend it and I'll find a faster path.",
+        ])
+      : _pickVariant([
+          "I hit a snag while working on this — I'll try a different approach if you send it again.",
+          "Something got in my way on that one. Resend it and I'll come at it from a new angle.",
+          "I ran into a bit of trouble there. Feel free to send it again and I'll sort it out.",
+        ]);
     if (taskId) {
       await getSupabaseClient()
         .from("tasks")
@@ -9038,6 +9097,45 @@ NONE`;
         subject,
         body: gracefulErrorMsg,
       });
+    }
+
+    // Cross-channel failure notification: if the task came in via a non-email channel,
+    // also notify via email AND SMS so the user always hears back.
+    if (!task.suppressEmail) {
+      try {
+        const _errProfile = await getSupabaseClient()
+          .from('profiles')
+          .select('phone_number, email, display_name')
+          .eq('id', userId)
+          .single();
+        const _errPhone = _errProfile.data?.phone_number;
+        const _errEmail = _errProfile.data?.email;
+        const _errName = _errProfile.data?.display_name || senderName || username;
+        const _taskSummary = (subject || body || 'your task').substring(0, 60);
+
+        // SMS — send if user has a phone number AND the original channel wasn't SMS
+        if (_errPhone && task.inputChannel !== 'sms' && task.inputChannel !== 'voice') {
+          const _smsMsg = _pickVariant([
+            `Hey ${_errName}, I hit a snag with "${_taskSummary}". Want me to try a different approach? Just reply to let me know.`,
+            `Hi ${_errName} — I ran into some trouble with "${_taskSummary}". Resend it any time and I'll take a fresh run at it.`,
+            `${_errName}, I couldn't quite finish "${_taskSummary}" this time. Reply and I'll give it another go with a different strategy.`,
+          ]);
+          sendSms({ userId, to: _errPhone, body: _smsMsg }).catch(() => {});
+        }
+
+        // Email — send if user has a personal email AND the original channel wasn't email
+        if (_errEmail && _errEmail !== `${username}@aevoy.com` && task.inputChannel !== 'email') {
+          const _emailBody = `Hey ${_errName},\n\nI ran into a snag while working on "${_taskSummary}". ${gracefulErrorMsg}\n\nJust reply here or send me a new message whenever you're ready and I'll jump right back in.\n\n— Aevoy`;
+          sendResponse({
+            to: _errEmail,
+            from: `${username}@aevoy.com`,
+            subject: `Update on "${_taskSummary}"`,
+            body: _emailBody,
+          }).catch(() => {});
+        }
+      } catch {
+        // Best-effort — never let notification failure propagate
+      }
     }
 
     return {

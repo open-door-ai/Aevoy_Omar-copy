@@ -808,8 +808,8 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
           });
         if (navErr) {
           const domain = (() => { try { return new URL(url).hostname; } catch { return url; } })();
-          history.push(`⚠️ NAVIGATE to ${url} blocked/unreachable (${navErr.substring(0, 60)}). ` +
-            `The site "${domain}" is blocking automated access. ` +
+          history.push(`⚠️ NAVIGATE to ${url} failed (${navErr.substring(0, 60)}). ` +
+            `The site "${domain}" could not be reached — it may be guarded or temporarily unavailable. ` +
             `PIVOT: NAVIGATE to DuckDuckGo and search for this info instead, OR try the site's mobile URL, OR FAIL if truly unreachable.`);
           return false;
         }
