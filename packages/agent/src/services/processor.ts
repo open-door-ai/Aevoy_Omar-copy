@@ -8680,7 +8680,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // "Visit https://... to create an account" — navigate instruction pattern
         || /\b(visit|navigate to|head to|open)\b.{0,20}(https?:\/\/|[\w\-]+\.(com|ca|org|io|co|net|app)[\w\-\/]*)\b/i.test(cleanResponse);
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
-        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom|adobe|usertesting|trymyui|willful|epilogue|resy|opentable|legalzoom)\b/i);
+        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom|adobe|usertesting|trymyui|willful|epilogue|resy|opentable|legalzoom|grammarly|typeform|hootsuite|mailchimp|buffer|semrush|ahrefs|moz)\b/i);
         const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
         cleanResponse = `I reached the ${_svcName} signup page. To complete your account, reply with the password you'd like to use and I'll finish the registration immediately.`;
         console.log(`[SIGNUP-FALLBACK] Converted instructional response to credential request for ${_svcName}`);
