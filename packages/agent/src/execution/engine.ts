@@ -17,7 +17,7 @@ import { createWordDocument, createSimpleDocument, type WordDocumentParams } fro
 import { createPDF, createSimplePDF, type PDFParams } from './actions/create-pdf.js';
 import { screenshotWithOCR, type ScreenshotOCRParams, type OCRResult } from './actions/screenshot-ocr.js';
 import { getFailureMemory, recordFailure, learnSolution } from '../memory/failure-db.js';
-import { quickValidate, generateVisionResponse } from '../services/ai.js';
+import { quickValidate, generateVisionResponse, trackServiceCost } from '../services/ai.js';
 import { getCredential } from '../services/credential-vault.js';
 import { MultiUserBrowserService, createMultiUserBrowser } from '../services/multi-user-browser.js';
 import { withTimeout, delay } from '../utils/timeout.js';
@@ -68,6 +68,8 @@ export class ExecutionEngine {
   private isMultiUser = false;
   private isRemoteCDP = false; // Whether using remote CDP browser
   private useBrightData = false;
+  private brightDataSessionStart: number = 0;
+  private brightDataPageCount: number = 0;
   private taskId?: string;
 
   constructor(intent: LockedIntent) {
@@ -123,6 +125,7 @@ export class ExecutionEngine {
 
         this.page = await cdpTimeout(this.context.newPage(), 10000, 'brightdata-newPage');
         await cdpTimeout(this.page.evaluate(() => document.readyState), 5000, 'brightdata-readyState');
+        this.brightDataSessionStart = Date.now();
         console.log(`[ENGINE] Connected to Bright Data Scraping Browser`);
         return;
       } catch (error) {
@@ -307,6 +310,22 @@ export class ExecutionEngine {
     this.page = null;
     this.context = null;
     this.browser = null;
+
+    // Log Bright Data Scraping Browser bandwidth cost.
+    // Estimate: ~2MB per page × $8/GB = $0.016/page; floor at $0.02 per session.
+    if (this.useBrightData && this.brightDataSessionStart > 0 && this.userId) {
+      const pages = Math.max(this.brightDataPageCount, 1);
+      const estimatedCost = Math.max(pages * 0.016, 0.02);
+      trackServiceCost(
+        this.userId,
+        'brightdata',
+        'scraping_browser',
+        estimatedCost,
+        'browser_session',
+        this.taskId
+      ).catch(() => {});
+      console.log(`[ENGINE] Logged Bright Data cost: $${estimatedCost.toFixed(4)} (${pages} page(s))`);
+    }
   }
 
   getPage(): Page | null {
@@ -1176,6 +1195,7 @@ export class ExecutionEngine {
       await handleCaptchaIfPresent(this.page!, this.userId, this.taskId);
 
       console.log(`[ENGINE] Navigation successful: ${url}`);
+      if (this.useBrightData) this.brightDataPageCount++;
       return { success: true, action: 'navigate', data: { url } };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown navigation error';
