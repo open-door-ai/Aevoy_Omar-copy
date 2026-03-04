@@ -1418,8 +1418,25 @@ export async function runVisionAgent(
           sameUrlCount = 0;
         }
       } catch (err) {
-        console.warn(`[BROWSER-AGENT] AI error at step ${steps + 1}: ${err}`);
-        history.push(`Step ${steps + 1}: AI error (rate limit — not counted)`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRateLimit = errMsg.includes('429') || /rate.?limit/i.test(errMsg) || errMsg.includes('Too Many Requests');
+
+        if (isRateLimit) {
+          // ── Instant failover on rate-limit ──────────────────────────────────
+          // The ai.ts cascade already sets a per-model backoff timer on 429, so
+          // the very next call to generateBrowserStepResponse / generateVisionResponse
+          // will automatically skip the rate-limited model and use the next one.
+          // Do NOT wait, do NOT count this as a step failure.
+          console.log(`[RATE-LIMIT-FAILOVER] Step ${steps + 1}: rate-limit detected — retrying immediately with next model in cascade`);
+          history.push(`Step ${steps + 1}: rate-limit failover (not counted)`);
+          // Don't increment consecutiveAiErrors — a rate-limit is not the agent's fault.
+          steps--; // loop will increment back; step slot is preserved
+          continue;
+        }
+
+        // Non-rate-limit AI error — apply exponential backoff as before.
+        console.warn(`[BROWSER-AGENT] AI error at step ${steps + 1}: ${errMsg}`);
+        history.push(`Step ${steps + 1}: AI error (not counted)`);
         consecutiveAiErrors++;
         // Exponential backoff: 3s, 6s, 12s, 24s, 30s max — prevents hammering 429'd APIs
         const backoffMs = Math.min(3000 * Math.pow(2, consecutiveAiErrors - 1), 30000);
@@ -1427,7 +1444,7 @@ export async function runVisionAgent(
         // Bail out after 10 consecutive AI errors — rate limits won't clear soon enough
         if (consecutiveAiErrors >= 10) {
           const endPageData = await capturePageData(activePage);
-          return { success: false, error: `AI rate limit: ${consecutiveAiErrors} consecutive errors`, steps, cost: totalCost, screenshots, pageData: endPageData };
+          return { success: false, error: `AI errors: ${consecutiveAiErrors} consecutive`, steps, cost: totalCost, screenshots, pageData: endPageData };
         }
         await activePage.waitForTimeout(backoffMs);
         steps--; // Don't count AI failures as steps — for loop will increment back

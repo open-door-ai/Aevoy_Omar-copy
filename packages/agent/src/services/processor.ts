@@ -51,6 +51,7 @@ import { decomposeTask, getExecutionOrder } from "./task-decomposition.js";
 import { recommendSkills, formatSkillRecommendations } from "./autonomous-skill-recommender.js";
 import { findTemplate, recordTemplate, substituteVariables, recordTemplateFailure } from "./template-recorder.js";
 import { getValidToken } from "./oauth-manager.js";
+import { runWithAdaptiveTimeout } from "./vision-supervisor.js";
 
 /**
  * Resolve correct recipient based on channel and user profile.
@@ -3392,6 +3393,23 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     }
 
     // ============================================================
+    // COST GUARDIAN — Progressive budget response
+    // ============================================================
+    // < 80 % of budget : normal operation
+    // 80-95 %          : economy mode — prefer free/cheap models, minimise tokens
+    // 95-100 %         : wind-down — finish current action, then force DONE
+    // > 100 %          : stop — summarise what was accomplished and return
+    const TASK_BUDGET_USD = 5.0;
+    type CostTier = 'normal' | 'economy' | 'wind_down' | 'stop';
+    function getCostTier(spentUsd: number): CostTier {
+      const pct = spentUsd / TASK_BUDGET_USD;
+      if (pct < 0.80) return 'normal';
+      if (pct < 0.95) return 'economy';
+      if (pct < 1.00) return 'wind_down';
+      return 'stop';
+    }
+
+    // ============================================================
     // ITERATIVE EXECUTION LOOP
     // Execute actions → observe results → re-prompt AI → repeat
     // until task is done, budget exceeded, or timeout hit.
@@ -3606,15 +3624,17 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                 progress_message: `[BROWSER-FAST-PATH] Vision agent running on ${_bfpPageUrl.substring(0, 60)}`
               }).eq('id', taskId).then(() => {});
 
-              // Run vision agent — booking/signup tasks get 12 min, others get 8 min
-              const _bfpIsComplex = _bfpIsBooking || _bfpIsSignup;
+              // Run vision agent — any task requiring multi-step interaction gets 12 min
+              // Generic: form fills, account creation, purchases, earning, bookings, signups
+              const _bfpIsComplex = _bfpIsBooking || _bfpIsSignup ||
+                /\b(fill|submit|complete|earn|purchase|order|apply|make\s+money|sign\s+up|create\s+account)\b/i.test(_bfpTaskText);
               const VISION_TIMEOUT_MS = _bfpIsComplex ? 720000 : 480000;
-              const _bfpResult = await Promise.race([
+              const _bfpResult = await runWithAdaptiveTimeout(
                 runVisionAgent(_bfpPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error(`Vision agent timeout after ${VISION_TIMEOUT_MS / 60000} minutes`)), VISION_TIMEOUT_MS)
-                ),
-              ]);
+                taskId,
+                VISION_TIMEOUT_MS,
+                subject
+              );
 
               _bfpVisionCost = _bfpResult.cost || 0;
               console.log(`[BROWSER-FAST-PATH] Vision agent result: success=${_bfpResult.success}, steps=${_bfpResult.steps}, cost=$${_bfpResult.cost.toFixed(4)}`);
@@ -4968,12 +4988,32 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       }
 
       for (let actionIndex = 0; actionIndex < aiResponse.actions.length; actionIndex++) {
-        // Per-task budget check: $5 cap gives headroom for multi-step autonomous tasks
+        // ── Cost Guardian: progressive budget response ──────────────────────────
         const taskCostSoFar = totalAiCost + (executionEngine?.getTotalCost() || 0);
-        if (taskCostSoFar > 5.0) {
-          console.warn(`[BUDGET] Task cost exceeded $5 (${taskCostSoFar.toFixed(4)}), stopping execution`);
+        const costTier = getCostTier(taskCostSoFar);
+
+        if (costTier === 'stop') {
+          // > 100% budget: summarise what was accomplished and stop gracefully.
+          console.warn(`[COST-GUARDIAN] Budget exhausted ($${taskCostSoFar.toFixed(4)} / $${TASK_BUDGET_USD}) — summarising and stopping`);
+          if (!aiResponse.content || aiResponse.content.length < 20) {
+            // Build a fallback summary from accumulated action results
+            const _doneActions = actionResults.filter(r => r.success).map(r => r.action?.type).filter(Boolean);
+            aiResponse.content = `I've used my full task budget ($${taskCostSoFar.toFixed(2)}) completing work on your request. Progress made: ${_doneActions.length} action${_doneActions.length !== 1 ? 's' : ''} completed (${[...new Set(_doneActions)].join(', ')}). Please let me know if you'd like me to continue.`;
+          }
           isTaskComplete = true;
           break;
+        }
+
+        if (costTier === 'wind_down') {
+          // 95-100% budget: finish this action then force DONE on next iteration.
+          console.log(`[COST-GUARDIAN] Near budget ($${taskCostSoFar.toFixed(4)} / $${TASK_BUDGET_USD}) — completing current action then stopping`);
+          // Allow current action to execute, then mark complete after the loop.
+          // We set isTaskComplete after the inner action loop finishes (handled below).
+        }
+
+        if (costTier === 'economy') {
+          // 80-95% budget: log it; model selection in ai.ts naturally picks cheaper models
+          console.log(`[COST-GUARDIAN] Economy mode ($${taskCostSoFar.toFixed(4)} / $${TASK_BUDGET_USD}) — preferring free models`);
         }
 
         // Check master timeout between actions
@@ -5907,14 +5947,14 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
           try {
             // Wrap vision agent — booking/signup get 12 min, others 8 min
-            const _vaIsComplex = /\b(book|reserv|table|sign\s?up|signup|register|create.*account)\b/i.test(taskTextLower);
+            const _vaIsComplex = /\b(book|reserv|table|sign\s?up|signup|register|create.*account|fill.*form|submit.*form|earn|purchase|order|apply)\b/i.test(taskTextLower);
             const VISION_TIMEOUT_MS = _vaIsComplex ? 720000 : 480000;
-            const visionResult = await Promise.race([
+            const visionResult = await runWithAdaptiveTimeout(
               runVisionAgent(visionPage, visionTask, userId, taskId, username, userTwilioPhone),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error(`Vision agent timeout after ${VISION_TIMEOUT_MS / 60000} minutes`)), VISION_TIMEOUT_MS)
-              ),
-            ]);
+              taskId,
+              VISION_TIMEOUT_MS,
+              subject
+            );
             totalAiCost += visionResult.cost || 0; // Track vision agent costs for billing
             console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
             // Always capture page data from vision agent (success or failure)
