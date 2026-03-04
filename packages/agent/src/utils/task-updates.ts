@@ -57,12 +57,19 @@ export function classifyUpdateRelevance(
   const msg = newMessage.toLowerCase().trim();
   const subject = activeSubject.toLowerCase();
 
-  // Very short messages are almost always clarifications/updates
-  if (msg.length < 80) return 'obvious_update';
-
-  // References to "it", "that", "the task", "instead" suggest update
-  if (/\b(instead|actually|change it|update it|make it|nevermind|wait|hold on|cancel|stop)\b/.test(msg)) {
+  // Explicit update signals always mean update (regardless of length)
+  if (/\b(instead|actually|change it|update it|make it|nevermind|wait|hold on|cancel|stop|forget it|ignore that|scratch that)\b/.test(msg)) {
     return 'obvious_update';
+  }
+
+  // Very short messages WITHOUT explicit update signals: check topic overlap before classifying
+  // "What is the weather?" is short but a completely different task — don't inject it
+  // Only treat short messages as obvious_update if they share topic words with the active task
+  if (msg.length < 40) {
+    const taskWords = new Set(activeSubject.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3));
+    const msgWords = msg.replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+    const quickOverlap = msgWords.filter(w => taskWords.has(w)).length;
+    return quickOverlap >= 1 ? 'obvious_update' : 'new_task';
   }
 
   // Shares key nouns with the active task
