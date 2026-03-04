@@ -81,6 +81,11 @@ export class ExecutionEngine {
 
     // PRIORITY 0: Bright Data Scraping Browser (real managed Chrome, bypasses DataDome/Akamai)
     this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    if (process.env.BRIGHT_DATA_BROWSER_WS) {
+      console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
+    } else {
+      console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: NOT SET');
+    }
 
     // PRIORITY 1: Remote CDP browser (connects to VPS Chrome via WebSocket)
     this.useRemoteCDP = !forceLocal && !this.useBrightData && !!(process.env.REMOTE_BROWSER_CDP);
@@ -89,7 +94,7 @@ export class ExecutionEngine {
     this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
 
     if (this.useBrightData) {
-      console.log('[ENGINE] Will use Bright Data Scraping Browser');
+      console.log('[ENGINE] Will use Bright Data Scraping Browser ✓');
     } else if (this.useRemoteCDP) {
       console.log('[ENGINE] Will use Remote CDP Browser (VPS)');
     } else if (this.useMultiUser) {

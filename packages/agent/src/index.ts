@@ -488,6 +488,7 @@ app.get("/health", async (_req, res) => {
     sambaNovaApi: !!process.env.SAMBANOVA_API_KEY,
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
     remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
+    brightData: process.env.BRIGHT_DATA_BROWSER_WS ? "configured" : "not configured",
   });
 });
 
