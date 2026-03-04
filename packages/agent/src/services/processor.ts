@@ -799,7 +799,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
       /\bhttps?:\/\/\S+/i.test(directBrowserTaskText);
     // Generic browser-action signals — no hardcoded service names.
     // The AI loop handles everything; this only skips autonomous planning pre-processing.
-    const _hasBrowserActionVerb = /\b(sign\s?up|signup|register|create\s+\w*\s*account|make\s+\w*\s*account|book|reserve|order|purchase|buy|subscribe|cancel|unsubscribe|log\s?in|sign\s?in|fill\s+.*form|submit\s+.*form|add\s+to\s+cart|apply\s+for|make\s+money|earn\s+money|find\s+.*price|place\s+.*order|check\s+out\s+at|use\s+the\s+browser|open\s+the\s+browser|browse\s+the\s+web)\b/i.test(directBrowserTaskText);
+    const _hasBrowserActionVerb = /\b(sign\s?up|signup|register|create\s+\w*\s*account|make\s+\w*\s*account|book|reserve|order|purchase|buy|subscribe|cancel|unsubscribe|log\s?in|sign\s?in|fill\s+.*form|submit\s+.*form|complete\s+.*form|intake\s+form|estate\s+form|application\s+form|legal\s+form|court\s+form|beta\s*code|access\s+code|enter\s+.*code|probate|add\s+to\s+cart|apply\s+for|make\s+money|earn\s+money|find\s+.*price|place\s+.*order|check\s+out\s+at|use\s+the\s+browser|open\s+the\s+browser|browse\s+the\s+web)\b/i.test(directBrowserTaskText);
     const isDirectBrowserTask = _hasExplicitDomain || _hasBrowserActionVerb;
 
     // GENERATION BYPASS: Writing/coding/generation tasks skip autonomous planning.
@@ -5073,27 +5073,28 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         // Medium: ask only for purchases (send_email), cancellations (submit on cancel tasks), irreversible deletes.
         // Full Send: skip all confirmation — maximum autonomy.
         if (_effectiveConfirmMode !== 'full_send' && !task.suppressEmail) {
-          const _taskSubjectLower = subject.toLowerCase();
-          const _isCancelTask = /\b(cancel|unsubscribe|delete|deactivate|close account)\b/i.test(_taskSubjectLower);
-          const _isPurchaseTask = /\b(buy|order|purchase|checkout|pay|subscribe)\b/i.test(_taskSubjectLower);
+          const _taskSubjectLower = `${subject} ${body || ''}`.toLowerCase();
+          const _isCancelTask = /\b(cancel\b|unsubscribe|delete.*account|deactivate|close\s+account)\b/i.test(_taskSubjectLower);
+          const _isPurchaseTask = /\b(buy|purchase|order|checkout|pay(?:ment)?)\b/i.test(_taskSubjectLower);
           const _isEmailSendTask = action.type === 'send_email';
-          const _isAccountCreation = action.type === 'submit' && /\b(sign\s?up|signup|register|create.*account)\b/i.test(_taskSubjectLower);
+          // High-risk = purchases, cancellations, or sending emails/messages — NOT free signups or form fills
+          const _isHighRiskAction = _isCancelTask || _isPurchaseTask || _isEmailSendTask;
 
           let _needsConfirmation = false;
           let _confirmReason = '';
 
           if (_effectiveConfirmMode === 'conservative') {
-            // Ask before ANY form submission, email send, account creation, or purchase/cancel
-            if (['submit', 'send_email'].includes(action.type as string) || _isCancelTask || _isPurchaseTask) {
+            // Conservative: only pause on genuinely high-risk actions (purchases, cancellations, email sends)
+            // Free signups, account creation, form fills → NEVER paused (user explicitly initiated them)
+            if (_isHighRiskAction) {
               _needsConfirmation = true;
-              _confirmReason = action.type === 'send_email'
+              _confirmReason = _isEmailSendTask
                 ? `About to send an email on your behalf`
                 : _isCancelTask ? `About to submit a cancellation/deletion action`
-                : _isPurchaseTask ? `About to submit a purchase`
-                : `About to submit a form`;
+                : `About to submit a purchase`;
             }
           } else if (_effectiveConfirmMode === 'medium') {
-            // Only ask for: email sends, purchases, cancellations (not routine signups or research)
+            // Medium: only ask for email sends, purchases, cancellations (not routine signups or research)
             if (_isEmailSendTask && !task.suppressEmail) {
               _needsConfirmation = true;
               _confirmReason = `About to send an email on your behalf. Reply YES to send, NO to cancel.`;
@@ -5112,13 +5113,18 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               _confirmationPauseSent = true;
               console.log(`[CONFIRM-MODE] Pausing for user confirmation (mode=${_effectiveConfirmMode}): ${_confirmReason}`);
               const _confirmMsg = `${_confirmReason}\n\nTask: "${subject.substring(0, 200)}"\n\nReply YES to proceed, NO to cancel.`;
+              // Always set response_text BEFORE updating status so UI always shows a message
+              const _confirmResponseText = `${_confirmReason} — please reply YES to proceed or NO to cancel.`;
               try {
+                await getSupabaseClient().from('tasks').update({
+                  status: 'awaiting_confirmation',
+                  response_text: _confirmResponseText,
+                }).eq('id', taskId);
                 await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Confirm: ${subject.substring(0, 80)}`, _confirmMsg);
-                await getSupabaseClient().from('tasks').update({ status: 'awaiting_confirmation' }).eq('id', taskId);
               } catch { /* non-critical — continue anyway */ }
               // Mark task as needing confirmation and break out — user must re-trigger
               isTaskComplete = true;
-              aiResponse.content = `I've paused before taking this action and sent you a confirmation request. Reply YES to proceed.`;
+              aiResponse.content = _confirmResponseText;
               break;
             }
           }

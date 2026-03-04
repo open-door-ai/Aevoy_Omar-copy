@@ -1137,8 +1137,25 @@ export async function runVisionAgent(
       }
 
       if (startUrl && isSafeUrl(startUrl)) {
-        // For signup tasks, try /signup or /register first (direct navigation avoids homepages)
+        // Known signup URL overrides for platforms whose /signup redirects to homepage
+        const SIGNUP_URL_MAP: Record<string, string> = {
+          'figma.com': 'https://www.figma.com/signup',
+          'canva.com': 'https://www.canva.com/signup',
+          'prolific.com': 'https://app.prolific.com/register',
+          'resy.com': 'https://resy.com/cities/van/venues', // search page, not homepage
+        };
         const isSignupTask = /\b(sign\s?up|create.*account|register)\b/i.test(task);
+        if (isSignupTask) {
+          for (const [domain, knownSignupUrl] of Object.entries(SIGNUP_URL_MAP)) {
+            if (task.toLowerCase().includes(domain)) {
+              console.log(`[BROWSER-AGENT] Known signup URL override: ${domain} → ${knownSignupUrl}`);
+              startUrl = knownSignupUrl;
+              break;
+            }
+          }
+        }
+
+        // For signup tasks, try /signup or /register first (direct navigation avoids homepages)
         const hasExplicitPath = startUrl.replace(/^https?:\/\/[^/]+/, '').length > 1; // has path beyond /
         if (isSignupTask && !hasExplicitPath) {
           const signupUrl = startUrl.replace(/\/$/, '') + '/signup';
