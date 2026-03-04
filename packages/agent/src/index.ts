@@ -314,7 +314,7 @@ import { getActiveBrowserTasks, canAcceptBrowserTask } from "./utils/concurrency
 
 let activeTasks = 0;
 const MAX_CONCURRENT_TASKS = 10;
-const MAX_CONCURRENT_BROWSER_TASKS = 3; // Railway ~512MB-2GB — each Chrome ~300MB
+const MAX_CONCURRENT_BROWSER_TASKS = 6; // Temporarily raised for parallel AGI testing (was 3)
 const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
 
 function canProcessTask(needsBrowser: boolean): boolean {
