@@ -2482,8 +2482,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Don't fast-path compound email tasks that need AI analysis/action
     // e.g., "check emails AND draft replies", "see if anything urgent", "respond to important ones"
     const isCompoundEmailTask = /\b(draft|reply|respond|answer|write back|forward|summarize|prioritize|urgent|important|action|attention|flag|organize|categorize|sort)\b/i.test(taskTextForFastPath);
+    // Generic guard: if the task involves a website/URL or account creation, don't misclassify as email-read.
+    // "Create a Figma account... use your email" — mentions "any email" but is clearly a browser task.
+    const hasBrowserIntent = /\bhttps?:\/\/|\b\w+\.(com|ca|org|io|net|co|app|dev|ai)\b/.test(taskTextForFastPath) ||
+      /\b(go to|navigate|visit|open|sign\s?up|register|create.*account|make.*account|fill.*form|submit.*form|book.*table|book.*reservation|reserve|probate|estate)\b/i.test(taskTextForFastPath);
 
-    if (isEmailReadTask && !isActuallySchedule && !isCompoundEmailTask) {
+    if (isEmailReadTask && !isActuallySchedule && !isCompoundEmailTask && !hasBrowserIntent) {
       const userQuery = `${subject} ${body}`.trim();
       const isSpecificQuery = /regarding|about|from\s+\w|subject|mention|related to|contain|saying|with\s+\w|where|which|tks|cnbc/i.test(userQuery);
 
