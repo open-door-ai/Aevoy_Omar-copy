@@ -2783,7 +2783,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
     if (_isScheduledTrigger) {
       const _scheduledTask = subject.replace(/^\[Scheduled\]\s*/i, '').trim();
-      effectiveBody = `${body || _scheduledTask}\n\n[EXECUTION CONTEXT: This task was previously scheduled and is NOW FIRING. Execute "${_scheduledTask}" immediately. Do NOT use schedule/remind actions — the task is already triggered. Complete it and report the outcome to the user.]`;
+      effectiveBody = `${body || _scheduledTask}\n\n[EXECUTION CONTEXT: This task was previously scheduled and is NOW FIRING. Execute "${_scheduledTask}" immediately. Do NOT use schedule/remind actions — the task is already triggered. Do NOT use send_email actions — results are stored internally, not emailed. Complete it silently and report the outcome in your response text only.]`;
     }
 
     // AUTO-CREDENTIAL INJECTION for signup/account-creation tasks:
@@ -5413,7 +5413,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         const actionTimeout = ACTION_TIMEOUT_MS[action.type] || 120000; // default 2 min
         console.log(`[ACTION] Executing action ${actionIndex + 1}/${aiResponse.actions.length}: ${action.type}(${JSON.stringify(action.params).substring(0, 100)}) [timeout ${actionTimeout / 1000}s]`);
         let result = await Promise.race([
-          executeActionWithLearning(action, userId, username, executionEngine),
+          executeActionWithLearning(action, userId, username, executionEngine, task.suppressEmail),
           new Promise<ActionResult>(resolve =>
             setTimeout(() => resolve({ action, success: false, result: undefined, error: `Action timeout: ${action.type} exceeded ${actionTimeout / 1000}s` }), actionTimeout)
           ),
@@ -5428,7 +5428,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           console.log(`[RETRY] Action '${action.type}' failed (${result.error}), retrying in 3s...`);
           await new Promise(resolve => setTimeout(resolve, 3000));
           const retryResult = await Promise.race([
-            executeActionWithLearning(action, userId, username, executionEngine),
+            executeActionWithLearning(action, userId, username, executionEngine, task.suppressEmail),
             new Promise<ActionResult>(resolve =>
               setTimeout(() => resolve({ action, success: false, result: undefined, error: `Action timeout on retry: ${action.type} exceeded ${actionTimeout / 1000}s` }), actionTimeout)
             ),
@@ -9609,10 +9609,11 @@ RULES:
  * - Record successful workarounds
  */
 async function executeActionWithLearning(
-  action: Action, 
-  userId: string, 
+  action: Action,
+  userId: string,
   username: string,
-  executionEngine: ExecutionEngine | null
+  executionEngine: ExecutionEngine | null,
+  suppressEmail?: boolean
 ): Promise<ActionResult> {
   console.log(`[ACTION] Executing: ${action.type}`);
 
@@ -9634,7 +9635,7 @@ async function executeActionWithLearning(
 
   try {
     const actionStart = Date.now();
-    const result = await executeAction(action, userId, username, executionEngine);
+    const result = await executeAction(action, userId, username, executionEngine, suppressEmail);
     const actionDuration = Date.now() - actionStart;
 
     // If we used a learned solution and it worked, record success
@@ -9693,7 +9694,7 @@ async function executeActionWithLearning(
       if (debugResult.fixed && debugResult.appliedFix) {
         console.log(`[DEBUG] Auto-fixed via ${debugResult.appliedFix.type} after ${debugResult.attempts} attempts`);
         // Retry action with fix applied
-        const retryResult = await executeAction(action, userId, username, executionEngine);
+        const retryResult = await executeAction(action, userId, username, executionEngine, suppressEmail);
         if (retryResult.success) {
           console.log(`[DEBUG] Retry succeeded after auto-fix`);
           return retryResult;
@@ -9730,10 +9731,11 @@ async function executeActionWithLearning(
 }
 
 async function executeAction(
-  action: Action, 
-  userId: string, 
+  action: Action,
+  userId: string,
   username: string,
-  executionEngine: ExecutionEngine | null
+  executionEngine: ExecutionEngine | null,
+  suppressEmail?: boolean
 ): Promise<ActionResult> {
   switch (action.type) {
     case "remember": {
@@ -10495,6 +10497,12 @@ async function executeAction(
       if (!to || !emailRegex.test(to)) {
         return { action, success: false, error: "Invalid email address" };
       }
+      // Block AI-generated send_email actions for background/scheduled tasks.
+      // suppressEmail means "this is a silent background run — don't send user notifications."
+      if (suppressEmail) {
+        console.log(`[SEND-EMAIL] Skipped — suppressEmail=true (scheduled/background task). Recipient: ${to}`);
+        return { action, success: true, result: "Email skipped (background task — suppressEmail)" };
+      }
       // Try sending from user's personal connected email first
       try {
         const { isEmailConnected, sendViaUserEmail } = await import("./inbox.js");
@@ -10646,19 +10654,34 @@ async function executeAction(
       // Calculate next run time using user's timezone
       const nextRun = calculateNextRun(cron, schedTz);
 
-      // Dedup check: skip if identical recurring task already exists for this user
+      // Dedup + hard cap check for recurring tasks
       if (!isOneTime) {
         try {
-          const { data: existing } = await getSupabaseClient()
+          const { data: existingTasks } = await getSupabaseClient()
             .from('scheduled_tasks')
-            .select('id')
+            .select('id, description, cron_expression')
             .eq('user_id', userId)
             .eq('is_active', true)
-            .ilike('description', `%${description.substring(0, 40)}%`)
-            .limit(1);
-          if (existing && existing.length > 0) {
-            console.log(`[SCHEDULE] Skipping duplicate recurring task: "${description.substring(0, 60)}"`);
-            return { action, success: true, result: `Already scheduled: ${description}` };
+            .neq('cron_expression', 'once')
+            .limit(20);
+
+          if (existingTasks) {
+            // Hard cap: max 10 active recurring tasks per user
+            if (existingTasks.length >= 10) {
+              console.log(`[SCHEDULE] Hard cap reached (${existingTasks.length} recurring tasks) for user ${userId.slice(0, 8)}`);
+              return { action, success: false, error: `You already have ${existingTasks.length} active recurring tasks. Please deactivate some before adding more.` };
+            }
+
+            // Dedup: same cron AND first 12 chars of description match (catches "Check Notion*" variants)
+            const descPrefix = description.substring(0, 12).toLowerCase();
+            const isDuplicate = existingTasks.some(t =>
+              t.cron_expression === (isOneTime ? 'once' : cron) &&
+              t.description.toLowerCase().startsWith(descPrefix)
+            );
+            if (isDuplicate) {
+              console.log(`[SCHEDULE] Skipping duplicate recurring task: "${description.substring(0, 60)}" (cron=${cron})`);
+              return { action, success: true, result: `Already scheduled: ${description}` };
+            }
           }
         } catch { /* proceed with insert */ }
       }
