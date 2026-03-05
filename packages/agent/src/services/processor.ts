@@ -2251,6 +2251,38 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       learningsHint += formatCorrectionsForPrompt(knownCorrections);
     }
 
+    // 5d-ii. SELF-MODEL: Inject capability self-awareness into AI context (3s timeout, non-critical)
+    try {
+      const { readSelfModel, readIdentityDocument, extractDomain: extractSMDomain } = await import("./self-model.js");
+      const _selfModelResult = await Promise.race([
+        (async () => {
+          const [selfModel, identityDoc] = await Promise.all([
+            readSelfModel(userId),
+            readIdentityDocument(userId),
+          ]);
+          if (selfModel.formattedPrompt) {
+            learningsHint += `\n\n${selfModel.formattedPrompt}`;
+            console.log(`[SELF-MODEL] Injected: ${selfModel.strengths.length} strengths, ${selfModel.weaknesses.length} weaknesses`);
+          }
+          if (identityDoc) {
+            learningsHint += `\n\nAGENT IDENTITY:\n${identityDoc.substring(0, 800)}`;
+          }
+          // Extract domain for later use in capability scoring
+          return extractSMDomain(`${subject} ${body.substring(0, 100)}`);
+        })(),
+        new Promise<string>((resolve) => setTimeout(() => {
+          console.warn('[SELF-MODEL] 3s timeout — skipping self-model injection');
+          resolve('');
+        }, 3000)),
+      ]);
+      // Store extracted domain for completion recording (may differ from classification.domains[0])
+      if (_selfModelResult) {
+        (processTask as any)._lastExtractedDomain = _selfModelResult;
+      }
+    } catch {
+      // Non-critical — self-model is bonus intelligence
+    }
+
     // 5e. TASK DECOMPOSITION: Check if task is complex enough to benefit from decomposition
     // NEVER decompose browser tasks — they're one continuous session, decomposition loses browser state
     const _taskMentionsSite = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
@@ -9244,6 +9276,25 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // Non-critical
     }
 
+    // 14c. SELF-MODEL: Update capability score after task completion (fire-and-forget)
+    void (async () => {
+      try {
+        const { updateCapabilityScore, extractDomain: smExtractDomain } = await import("./self-model.js");
+        const smDomain = primaryDomain || smExtractDomain(`${subject} ${body.substring(0, 100)}`);
+        await updateCapabilityScore({
+          userId,
+          domain: smDomain,
+          taskType: classification.taskType || taskType,
+          success: finalSuccessCount > 0 && (dbVerificationPassed !== false),
+          steps: finalActionCount,
+          costUsd: totalCost,
+        });
+        console.log(`[SELF-MODEL] Capability score updated: ${smDomain}/${classification.taskType} success=${finalSuccessCount > 0}`);
+      } catch {
+        // Non-critical — self-model update never blocks task pipeline
+      }
+    })();
+
     console.log(`[TASK] Completed in ${elapsedMs}ms: taskId=${taskId}`);
     clearTimeout(masterTimer);
 
@@ -11453,6 +11504,109 @@ async function executeAction(
       } catch (docErr) {
         console.error(`[ACTION:${action.type}] Failed:`, docErr);
         return { action, success: false, error: `Could not complete ${action.type} right now` };
+      }
+    }
+
+    case "write_file": {
+      const filename = action.params.filename as string;
+      const content = action.params.content as string;
+      if (!filename || content === undefined) {
+        return { action, success: false, error: 'write_file requires filename and content params' };
+      }
+      try {
+        const { getUserWorkspace } = await import('../execution/workspace.js');
+        const ws = getUserWorkspace(userId);
+        const result = await ws.writeFile(filename, content);
+        return { action, success: result.ok, result: result.ok ? result.message : undefined, error: result.ok ? undefined : result.message };
+      } catch (wsErr) {
+        console.error('[ACTION:write_file] Failed:', wsErr);
+        return { action, success: false, error: `Could not write file: ${wsErr instanceof Error ? wsErr.message : wsErr}` };
+      }
+    }
+
+    case "read_file": {
+      const filename = action.params.filename as string;
+      if (!filename) {
+        return { action, success: false, error: 'read_file requires filename param' };
+      }
+      try {
+        const { getUserWorkspace } = await import('../execution/workspace.js');
+        const ws = getUserWorkspace(userId);
+        const result = await ws.readFile(filename);
+        return { action, success: result.ok, result: result.ok ? result.content : undefined, error: result.ok ? undefined : result.message };
+      } catch (wsErr) {
+        console.error('[ACTION:read_file] Failed:', wsErr);
+        return { action, success: false, error: `Could not read file: ${wsErr instanceof Error ? wsErr.message : wsErr}` };
+      }
+    }
+
+    case "list_files": {
+      try {
+        const { getUserWorkspace } = await import('../execution/workspace.js');
+        const ws = getUserWorkspace(userId);
+        const result = await ws.listFiles();
+        return { action, success: true, result: result.content };
+      } catch (wsErr) {
+        console.error('[ACTION:list_files] Failed:', wsErr);
+        return { action, success: false, error: `Could not list files: ${wsErr instanceof Error ? wsErr.message : wsErr}` };
+      }
+    }
+
+    case "append_file": {
+      const filename = action.params.filename as string;
+      const content = action.params.content as string;
+      if (!filename || content === undefined) {
+        return { action, success: false, error: 'append_file requires filename and content params' };
+      }
+      try {
+        const { getUserWorkspace } = await import('../execution/workspace.js');
+        const ws = getUserWorkspace(userId);
+        const result = await ws.appendFile(filename, content);
+        return { action, success: result.ok, result: result.ok ? result.message : undefined, error: result.ok ? undefined : result.message };
+      } catch (wsErr) {
+        console.error('[ACTION:append_file] Failed:', wsErr);
+        return { action, success: false, error: `Could not append to file: ${wsErr instanceof Error ? wsErr.message : wsErr}` };
+      }
+    }
+
+    case "delete_file": {
+      const filename = action.params.filename as string;
+      if (!filename) {
+        return { action, success: false, error: 'delete_file requires filename param' };
+      }
+      try {
+        const { getUserWorkspace } = await import('../execution/workspace.js');
+        const ws = getUserWorkspace(userId);
+        const result = await ws.deleteFile(filename);
+        return { action, success: result.ok, result: result.ok ? result.message : undefined, error: result.ok ? undefined : result.message };
+      } catch (wsErr) {
+        console.error('[ACTION:delete_file] Failed:', wsErr);
+        return { action, success: false, error: `Could not delete file: ${wsErr instanceof Error ? wsErr.message : wsErr}` };
+      }
+    }
+
+    case "run_code": {
+      const language = action.params?.language as string;
+      const code = action.params?.code as string;
+      const timeout = action.params?.timeout as number | undefined;
+
+      if (!language || !code) {
+        return { action, success: false, error: 'run_code requires language and code params. Example: [ACTION:run_code("python", "print(1+1)")]' };
+      }
+
+      try {
+        const { runInSandbox, formatSandboxResult } = await import('../execution/code-sandbox.js');
+        const result = await runInSandbox(language as 'python' | 'javascript' | 'js' | 'py', code, timeout || 10000);
+        const formatted = formatSandboxResult(result);
+        return {
+          action,
+          success: result.success,
+          result: formatted,
+          error: result.success ? undefined : result.stderr || result.error,
+        };
+      } catch (sbErr) {
+        console.error('[ACTION:run_code] Failed:', sbErr);
+        return { action, success: false, error: `Code execution failed: ${sbErr instanceof Error ? sbErr.message : sbErr}` };
       }
     }
 

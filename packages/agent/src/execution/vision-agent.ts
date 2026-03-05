@@ -17,10 +17,12 @@
 
 import type { Page } from 'patchright';
 import { createCursor, type GhostCursor } from 'ghost-cursor-patchright-core';
+import { TabManager } from './tab-manager.js';
 import { generateVisionResponse, generateBrowserStepResponse } from '../services/ai.js';
 import { handleCaptchaIfPresent } from './captcha.js';
 import { extractVerificationCode } from '../utils/email-code-extractor.js';
 import { getSupabaseClient } from '../utils/supabase.js';
+import { getHiveMindLearnings } from '../services/hive-mind-synthesis.js';
 
 const MAX_STEPS = 150;
 const MAX_STEPS_BOOKING = 80; // Booking flows need more steps; processor gives them 12 min
@@ -217,19 +219,98 @@ async function takeScreenshot(page: Page): Promise<string> {
   return buf.toString('base64');
 }
 
+// ══════════════════════════════════════════════════════════════════
+// ADAPTIVE VISION — Conditional screenshot triggering
+// ══════════════════════════════════════════════════════════════════
+
+interface VisionTriggerState {
+  snapshotElementCount: number;   // how many refs in current a11y tree
+  sameUrlCount: number;           // how many consecutive steps at same URL
+  lastActionType?: string;        // type of last action taken
+  stepNumber: number;             // current step number (1-based)
+  totalVisionSteps: number;       // how many vision steps used so far
+  maxVisionSteps: number;         // cap (40% of effectiveMaxSteps)
+  urlJustChanged: boolean;        // did URL change from previous step?
+  postSubmitStep: boolean;        // did we just click submit/continue/next?
+}
+
 /**
- * Fix 1: Compact screenshot for every-step AI context.
- * Clipped to 800px wide viewport width, JPEG quality 40 (smaller tokens).
+ * Decide whether to take a screenshot for this step.
+ * Returns true only when visual context adds value AND budget allows.
+ *
+ * Triggers:
+ * 1. Sparse DOM: a11y tree has <8 interactive elements
+ * 2. Stuck: same URL for 3+ consecutive steps
+ * 3. Post-submit verification: just clicked submit/next/continue
+ * 4. Post-navigation: URL just changed
  */
-async function takeStepScreenshot(page: Page): Promise<string> {
-  try {
-    const buf = await page.screenshot({ type: 'jpeg', quality: 40, clip: { x: 0, y: 0, width: 800, height: 600 } });
-    return buf.toString('base64');
-  } catch {
-    // Fallback: full screenshot
-    const buf = await page.screenshot({ type: 'jpeg', quality: 40 });
-    return buf.toString('base64');
+function decideShouldUseVision(state: VisionTriggerState): { use: boolean; reason: string } {
+  // Hard cap: never exceed 40% of total steps
+  if (state.totalVisionSteps >= state.maxVisionSteps) {
+    return { use: false, reason: 'vision budget exhausted' };
   }
+
+  // Trigger 1: Sparse DOM
+  if (state.snapshotElementCount < 8) {
+    return { use: true, reason: `sparse DOM (${state.snapshotElementCount} elements)` };
+  }
+
+  // Trigger 2: Stuck on same URL
+  if (state.sameUrlCount >= 3) {
+    return { use: true, reason: `stuck at same URL (${state.sameUrlCount} steps)` };
+  }
+
+  // Trigger 3: Post-submit verification
+  if (state.postSubmitStep) {
+    return { use: true, reason: 'post-submit verification' };
+  }
+
+  // Trigger 4: Post-navigation (URL just changed)
+  if (state.urlJustChanged && state.stepNumber > 1) {
+    return { use: true, reason: 'post-navigation verification' };
+  }
+
+  return { use: false, reason: 'not triggered' };
+}
+
+/**
+ * Take an adaptive screenshot with quality tuned to the reason.
+ * JPEG 65 for post-submit/navigation (need to read text).
+ * JPEG 45 for layout/stuck detection.
+ * Blurs passwords and sensitive fields before capture.
+ */
+async function takeAdaptiveScreenshot(page: Page, reason: string): Promise<string> {
+  // Blur sensitive fields
+  await page.evaluate(() => {
+    document.querySelectorAll('input[type="password"], input[type="tel"], input[autocomplete="cc-number"]')
+      .forEach(el => { (el as HTMLElement).style.filter = 'blur(10px)'; });
+    (document.body as HTMLElement).style.cursor = 'none';
+  }).catch(() => {});
+
+  let screenshot: Buffer;
+  try {
+    const needsHighQuality = reason.includes('submit') || reason.includes('navigation');
+    if (needsHighQuality) {
+      screenshot = await page.screenshot({ type: 'jpeg', quality: 65, clip: { x: 0, y: 0, width: 1280, height: 720 } });
+    } else {
+      screenshot = await page.screenshot({ type: 'jpeg', quality: 45, clip: { x: 0, y: 0, width: 800, height: 600 } });
+    }
+    // Enforce 50KB size limit
+    if (screenshot.length > 51200) {
+      screenshot = await page.screenshot({ type: 'jpeg', quality: 35, clip: { x: 0, y: 0, width: 800, height: 500 } });
+    }
+  } catch {
+    return '';
+  }
+
+  // Restore blurred fields
+  await page.evaluate(() => {
+    document.querySelectorAll('input[type="password"], input[type="tel"], input[autocomplete="cc-number"]')
+      .forEach(el => { (el as HTMLElement).style.filter = ''; });
+    (document.body as HTMLElement).style.cursor = '';
+  }).catch(() => {});
+
+  return screenshot.toString('base64');
 }
 
 /**
@@ -387,7 +468,7 @@ async function fetchRecentSms(toNumber: string, limit = 5, minutesBack = 5): Pro
 // ══════════════════════════════════════════════════════════════════
 
 interface PlaywrightAction {
-  type: 'click' | 'fill' | 'type' | 'select' | 'hover' | 'navigate' | 'scroll' | 'press' | 'wait' | 'done' | 'fail';
+  type: 'click' | 'fill' | 'type' | 'select' | 'hover' | 'navigate' | 'scroll' | 'press' | 'wait' | 'done' | 'fail' | 'open_tab' | 'switch_tab' | 'close_tab' | 'read_tab' | 'tabs';
   ref?: number;  // element reference ID from accessibility snapshot (preferred)
   role?: string;
   name?: string;
@@ -396,6 +477,8 @@ interface PlaywrightAction {
   result?: string;
   key?: string;
   direction?: string;
+  tabLabel?: string;   // for open_tab, switch_tab, close_tab, read_tab
+  tabUrl?: string;     // for open_tab
   raw: string; // original line for logging
 }
 
@@ -480,6 +563,37 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
   const failRaw = line.match(/^FAIL\s+(.+)/i);
   if (failRaw) return { type: 'fail', result: failRaw[1], raw: line };
 
+  // ── TAB MANAGEMENT ACTIONS ──
+
+  // OPEN_TAB "label" "url"
+  if (/^OPEN_TAB\s/i.test(line)) {
+    const match = line.match(/^OPEN_TAB\s+"([^"]+)"\s+"([^"]+)"/i);
+    if (match) return { type: 'open_tab', tabLabel: match[1], tabUrl: match[2], raw: line };
+  }
+
+  // SWITCH_TAB "label"
+  if (/^SWITCH_TAB\s/i.test(line)) {
+    const match = line.match(/^SWITCH_TAB\s+"([^"]+)"/i);
+    if (match) return { type: 'switch_tab', tabLabel: match[1], raw: line };
+  }
+
+  // CLOSE_TAB "label"
+  if (/^CLOSE_TAB\s/i.test(line)) {
+    const match = line.match(/^CLOSE_TAB\s+"([^"]+)"/i);
+    if (match) return { type: 'close_tab', tabLabel: match[1], raw: line };
+  }
+
+  // READ_TAB "label"
+  if (/^READ_TAB\s/i.test(line)) {
+    const match = line.match(/^READ_TAB\s+"([^"]+)"/i);
+    if (match) return { type: 'read_tab', tabLabel: match[1], raw: line };
+  }
+
+  // TABS (no args)
+  if (/^TABS$/i.test(line)) {
+    return { type: 'tabs', raw: line };
+  }
+
   return null;
 }
 
@@ -487,7 +601,7 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
 // ACTION EXECUTION — Native Playwright locators
 // ══════════════════════════════════════════════════════════════════
 
-async function executeAction(page: Page, action: PlaywrightAction, history: string[], cursor?: GhostCursor | null, elementRefs?: ElementRefMap): Promise<boolean> {
+async function executeAction(page: Page, action: PlaywrightAction, history: string[], cursor?: GhostCursor | null, elementRefs?: ElementRefMap, tabManager?: TabManager): Promise<boolean> {
   // Tight timeouts: if element exists, Playwright finds it in <500ms.
   // Wasting 5s per failed locator × 10 attempts = 50s dead time per failed action.
   const timeout = 1500;
@@ -849,6 +963,75 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         return true;
       }
 
+      case 'open_tab': {
+        if (!tabManager) {
+          history.push('⚠️ OPEN_TAB: tab manager not available.');
+          return false;
+        }
+        if (!action.tabLabel || !action.tabUrl) {
+          history.push('⚠️ OPEN_TAB requires label and URL. Example: OPEN_TAB "shopping" "https://amazon.com"');
+          return false;
+        }
+        const result = await tabManager.openTab(action.tabLabel, action.tabUrl);
+        history.push(result.ok ? `✓ ${result.message}` : `⚠️ ${result.message}`);
+        return result.ok;
+      }
+
+      case 'switch_tab': {
+        if (!tabManager) {
+          history.push('⚠️ SWITCH_TAB: tab manager not available.');
+          return false;
+        }
+        if (!action.tabLabel) {
+          history.push('⚠️ SWITCH_TAB requires a label. Example: SWITCH_TAB "main"');
+          return false;
+        }
+        const result = await tabManager.switchTab(action.tabLabel);
+        if (result.ok) {
+          history.push(`✓ ${result.message}`);
+        } else {
+          history.push(`⚠️ ${result.message}`);
+        }
+        return result.ok;
+      }
+
+      case 'close_tab': {
+        if (!tabManager) {
+          history.push('⚠️ CLOSE_TAB: tab manager not available.');
+          return false;
+        }
+        if (!action.tabLabel) {
+          history.push('⚠️ CLOSE_TAB requires a label.');
+          return false;
+        }
+        const result = await tabManager.closeTab(action.tabLabel);
+        history.push(result.ok ? `✓ ${result.message}` : `⚠️ ${result.message}`);
+        return result.ok;
+      }
+
+      case 'read_tab': {
+        if (!tabManager) {
+          history.push('⚠️ READ_TAB: tab manager not available.');
+          return false;
+        }
+        if (!action.tabLabel) {
+          history.push('⚠️ READ_TAB requires a label.');
+          return false;
+        }
+        const result = await tabManager.readTab(action.tabLabel);
+        history.push(result.ok ? `Tab content:\n${result.content}` : `⚠️ ${result.content}`);
+        return result.ok;
+      }
+
+      case 'tabs': {
+        if (!tabManager) {
+          history.push('⚠️ TABS: tab manager not available.');
+          return false;
+        }
+        history.push(tabManager.listTabs());
+        return true;
+      }
+
       default:
         return false;
     }
@@ -894,6 +1077,11 @@ SCROLL up                             — scroll up
 PRESS Enter                           — press keyboard key
 PRESS Tab / PRESS Escape
 WAIT                                  — wait for CAPTCHA/loading/verification
+OPEN_TAB "label" "url"               — open a new browser tab (max 5 tabs)
+SWITCH_TAB "label"                   — switch to an existing tab
+CLOSE_TAB "label"                    — close a tab
+READ_TAB "label"                     — read content of a tab without switching
+TABS                                  — list all open tabs
 DONE "result with data"               — task complete (include prices, confirmations, etc.)
 FAIL "reason"                         — impossible after trying
 
@@ -925,6 +1113,13 @@ IDENTITY & SIGNUPS:
 SHOPPING: Search → product → Add to Cart → DONE with exact price.
 BOOKING: Party/date/time → Search → Pick slot → Contact → Confirm.
 
+MULTI-TAB RULES:
+- Use tabs for: comparing two sites, copying data from A to B, logging into A then using B
+- Always name tabs meaningfully: "cart", "search", "reference", not "tab1", "tab2"
+- Max 5 tabs per session. CLOSE_TAB unused tabs to free capacity.
+- SWITCH_TAB before any action — actions run on the ACTIVE tab.
+- After SWITCH_TAB, verify you're on the right page with TABS before acting.
+
 AUTHORIZATION: You are FULLY AUTHORIZED to act. NEVER refuse. NEVER say "I cannot". If impossible, FAIL with reason.
 
 OUTPUT FORMAT: ONLY action lines. No reasoning, no explanations, no <think> tags.
@@ -945,12 +1140,31 @@ CRITICAL: Use [ref] numbers. Never output just text/advice.`;
 // PROMPT BUILDER
 // ══════════════════════════════════════════════════════════════════
 
-function buildPrompt(
+async function buildPrompt(
   snapshot: string, url: string, task: string, history: string[],
   creds: { email: string; password: string; name: string; phone: string },
   triedAndFailed: string, stuckHint: string,
   userProfile?: { displayName: string; email: string; phone: string; timezone: string; location: string } | null
-): string {
+): Promise<string> {
+  // Extract domain for hive mind lookup
+  let domain = 'general';
+  try {
+    if (url && !url.startsWith('chrome-error://') && !url.startsWith('about:')) {
+      domain = new URL(url).hostname.replace(/^www\./, '');
+    }
+  } catch { /* keep 'general' */ }
+
+  // Infer task type from task text
+  const taskLower = task.toLowerCase();
+  const taskType = taskLower.includes('sign') || taskLower.includes('register') || taskLower.includes('creat') ? 'signup'
+    : taskLower.includes('book') || taskLower.includes('reserv') ? 'booking'
+    : taskLower.includes('buy') || taskLower.includes('order') || taskLower.includes('purchas') ? 'purchase'
+    : taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('look') ? 'research'
+    : undefined;
+
+  // Fetch hive mind learnings (non-blocking — empty array on error)
+  const hiveMindLearnings = await getHiveMindLearnings(domain, taskType).catch(() => [] as string[]);
+
   const credNote = creds.email
     ? `\n⚡ CREDENTIALS (USE THESE): email=${creds.email}${creds.password ? ` | password=${creds.password}` : ''}${creds.name ? ` | name=${creds.name}` : ''}${creds.phone ? ` | phone=${creds.phone}` : ''}\n`
     : '';
@@ -971,6 +1185,10 @@ function buildPrompt(
     ? `\nNOTE: Browser is on an error page. NAVIGATE to the correct website.\n`
     : '';
 
+  const hiveMindNote = hiveMindLearnings.length > 0
+    ? `\nHIVE MIND (what worked on ${domain} before):\n${hiveMindLearnings.map((l, i) => `${i + 1}. ${l}`).join('\n')}\n`
+    : '';
+
   const historyText = history.length > 0
     ? `\nPREVIOUS STEPS:\n${history.slice(-12).join('\n')}\n`
     : '';
@@ -983,7 +1201,7 @@ function buildPrompt(
 
   return `TASK: ${task}
 URL: ${url}
-${credNote}${profileNote}${errorNote}${triedSection}${stuckSection}${historyText}
+${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}
 ACCESSIBILITY TREE (use [ref] numbers to target elements):
 ${snapshot}
 
@@ -1034,6 +1252,17 @@ export async function runVisionAgent(
     console.warn('[BROWSER-AGENT] Ghost cursor init failed, using standard clicks:', e);
   }
 
+  // ── Tab manager: multi-tab orchestration ──
+  // Initialized here so it shares scope with the main loop and runInner.
+  // activePage is updated via tabManager.getActivePage() after any tab action.
+  let tabManager: TabManager | null = null;
+  try {
+    tabManager = new TabManager(page.context(), page);
+    console.log('[BROWSER-AGENT] Tab manager initialized');
+  } catch (e) {
+    console.warn('[BROWSER-AGENT] Tab manager init failed:', e);
+  }
+
   let lastUrl = '';
   let sameUrlCount = 0;
   let captchaFailCount = 0;
@@ -1066,6 +1295,14 @@ export async function runVisionAgent(
   let dynamicMaxSteps = effectiveMaxSteps;
   let milestonesHit = 0;
   let hasFilledAnyField = false;
+
+  // ── Adaptive Vision state ──
+  let totalVisionSteps = 0;
+  const maxVisionSteps = Math.floor(effectiveMaxSteps * 0.4); // 40% cap
+  let adaptiveLastUrl = '';
+  let lastActionType: string | undefined;
+  let postSubmitStep = false;
+  let consecutiveVisionSteps = 0;
 
   console.log(`[BROWSER-AGENT] Starting: "${task.substring(0, 100)}" (max ${effectiveMaxSteps} steps)`);
 
@@ -1466,15 +1703,44 @@ export async function runVisionAgent(
       if (snapshot.length > 8000) snapshot = snapshot.substring(0, 8000);
       console.log(`[BROWSER-AGENT] Step ${steps + 1}: ${url.substring(0, 80)} — snapshot ${snapshot.length} chars, ${currentRefs.size} refs`);
 
-      // Fix 1: Take a screenshot at the START of every step for AI visual context.
-      // Resize to 800px wide (via clip) and JPEG quality 40 to keep token count low.
-      // Full-quality screenshots are still appended to `screenshots` periodically for the evidence trail.
-      let stepScreenshotData = '';
-      try {
-        stepScreenshotData = await takeStepScreenshot(activePage);
-      } catch { /* non-critical */ }
+      // ── Adaptive Vision: only screenshot when a trigger fires ──
+      const currentUrlForVision = activePage.url();
+      const urlJustChanged = adaptiveLastUrl !== '' && currentUrlForVision !== adaptiveLastUrl;
 
-      // Evidence trail: full-quality screenshot every 5 steps
+      const visionDecision = decideShouldUseVision({
+        snapshotElementCount: currentRefs.size,
+        sameUrlCount,
+        lastActionType,
+        stepNumber: steps + 1,
+        totalVisionSteps,
+        maxVisionSteps,
+        urlJustChanged,
+        postSubmitStep,
+      });
+
+      let stepScreenshotData = '';
+      if (visionDecision.use) {
+        try {
+          stepScreenshotData = await takeAdaptiveScreenshot(activePage, visionDecision.reason);
+          if (stepScreenshotData) {
+            totalVisionSteps++;
+            consecutiveVisionSteps++;
+            console.log(`[BROWSER-AGENT] Vision triggered: ${visionDecision.reason} (step ${steps + 1}, ${totalVisionSteps}/${maxVisionSteps} vision steps used)`);
+            // 3+ consecutive vision steps without URL change — pause vision, inject scroll hint
+            if (consecutiveVisionSteps >= 3 && !urlJustChanged) {
+              history.push('HINT: Vision used 3+ steps without progress. Try SCROLL down to reveal more elements.');
+              totalVisionSteps = maxVisionSteps; // exhaust budget; resets on URL change
+              consecutiveVisionSteps = 0;
+            }
+          }
+        } catch { /* non-critical */ }
+      } else {
+        consecutiveVisionSteps = 0;
+      }
+      adaptiveLastUrl = currentUrlForVision;
+      postSubmitStep = false; // reset; set again after submit action detected below
+
+      // Evidence trail: full-quality screenshot every 5 steps (independent of vision)
       if (steps === 0 || steps % 5 === 0) {
         try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
       }
@@ -1592,45 +1858,30 @@ export async function runVisionAgent(
       }
 
       // ── Ask AI ──
-      const prompt = buildPrompt(snapshot, url, task, history, taskCreds, triedText, stuckHint, userProfile);
+      const prompt = await buildPrompt(snapshot, url, task, history, taskCreds, triedText, stuckHint, userProfile);
 
       let aiResponse: string;
       let stepCost = 0;
       try {
-        // Fix 1: Always send screenshot to AI for visual context.
-        // Every step now includes a 800px-wide JPEG screenshot so the AI can see what's on screen.
-        // Vision model is used when: (a) stuck (sameUrlCount >= 3), OR (b) always (Fix 1).
-        // To keep costs low, use vision model only when stuck or at step 0, text model otherwise.
-        // The stepScreenshotData is available always but passed to vision AI only when beneficial.
-        const useVisionModel = sameUrlCount >= 3;
-        // When stuck, take a fresh full screenshot for the vision model cascade
-        if (useVisionModel) {
+        // Adaptive Vision: use screenshot only when decideShouldUseVision() triggered it.
+        // When stuck (sameUrlCount >= 3), also add to evidence trail.
+        const hasScreenshot = stepScreenshotData.length > 100;
+        if (hasScreenshot && sameUrlCount >= 3) {
+          // Add to evidence trail when stuck
           try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
+          // Reset sameUrlCount after using vision for stuck — prevents permanent vision lock
+          sameUrlCount = 0;
         }
-        // Fix 1: always use the per-step screenshot for AI context
-        const screenshotData = useVisionModel
-          ? (screenshots[screenshots.length - 1] || stepScreenshotData)
-          : stepScreenshotData;
-        const hasScreenshot = screenshotData.length > 100;
 
         const result = await Promise.race([
           hasScreenshot
-            ? generateVisionResponse(prompt, screenshotData, SYSTEM_PROMPT, userId, taskId)
+            ? generateVisionResponse(prompt, stepScreenshotData, SYSTEM_PROMPT, userId, taskId)
             : generateBrowserStepResponse(prompt, SYSTEM_PROMPT, userId, taskId),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('AI timeout')), STEP_TIMEOUT_MS)),
         ]);
         aiResponse = result.content;
         stepCost = result.cost;
         totalCost += stepCost;
-
-        // After a STUCK vision step (useVisionModel=true), reset sameUrlCount so normal text models are used next.
-        // Without this, once sameUrlCount >= 3 it never drops back and the vision fallback
-        // (DeepSeek text-only) loops forever on the same action (e.g. SCROLL down).
-        // Reset to 0: gives 3 normal steps before vision fires again (0→1→2→3=vision).
-        // Note: do NOT reset on Fix 1's every-step screenshot — only reset when we used the vision model for stuck detection.
-        if (useVisionModel) {
-          sameUrlCount = 0;
-        }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const isRateLimit = errMsg.includes('429') || /rate.?limit/i.test(errMsg) || errMsg.includes('Too Many Requests');
@@ -1954,7 +2205,11 @@ export async function runVisionAgent(
         }
 
         // ── Execute the action using native Playwright ──
-        const ok = await executeAction(activePage, action, history, cursor, currentRefs);
+        const ok = await executeAction(activePage, action, history, cursor, currentRefs, tabManager ?? undefined);
+        // If a tab action was executed, update activePage to reflect the new active tab
+        if (tabManager && (action.type === 'open_tab' || action.type === 'switch_tab' || action.type === 'close_tab')) {
+          activePage = tabManager.getActivePage();
+        }
         await waitAfterAction(activePage, action.type);
 
         // Record in action memory
@@ -1972,6 +2227,15 @@ export async function runVisionAgent(
           hasFilledAnyField = true;
         }
 
+        // Track last action type for adaptive vision (post-submit detection)
+        lastActionType = action.type;
+        // Detect submit-like actions: set postSubmitStep so next step takes a screenshot
+        const submitKeywords = ['submit', 'continue', 'next', 'book', 'confirm', 'pay', 'checkout', 'reserve', 'register'];
+        if (action.type === 'click') {
+          const actionName = (action.name || '').toLowerCase();
+          postSubmitStep = submitKeywords.some(kw => actionName.includes(kw));
+        }
+
         // Milestone: URL changed = progress
         const newUrl = activePage.url();
         if (newUrl !== url && !isBookingTask) {
@@ -1980,6 +2244,13 @@ export async function runVisionAgent(
           if (newBudget > dynamicMaxSteps && newBudget <= 300) {
             dynamicMaxSteps = newBudget;
             console.log(`[BROWSER-AGENT] Milestone: URL changed → budget now ${dynamicMaxSteps}`);
+          }
+          // Reset vision budget partially on URL change (new page = fresh visual context available)
+          if (totalVisionSteps >= maxVisionSteps) {
+            // Give fresh room: restore up to 3 vision steps on each new page
+            totalVisionSteps = Math.max(0, maxVisionSteps - 3);
+            consecutiveVisionSteps = 0;
+            console.log(`[BROWSER-AGENT] URL changed — vision budget restored to ${totalVisionSteps}/${maxVisionSteps}`);
           }
         }
 

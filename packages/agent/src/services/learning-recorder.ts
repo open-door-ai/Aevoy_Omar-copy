@@ -5,6 +5,7 @@
  */
 
 import { getSupabaseClient } from "../utils/supabase.js";
+import { promoteToGlobal } from "./hive-mind-synthesis.js";
 
 interface TaskOutcome {
   taskId: string;
@@ -93,6 +94,9 @@ export async function recordLearning(outcome: TaskOutcome): Promise<void> {
 
       console.log(`[LEARNING] Recorded new learning: ${title} (${steps.length} steps, ${difficulty})`);
     }
+
+    // Attempt global promotion (non-blocking — runs in background, never throws)
+    promoteToGlobal().catch(() => {});
   } catch (error) {
     // Non-critical - don't fail task if learning recording fails
     console.error('[LEARNING] Failed to record learning:', error);

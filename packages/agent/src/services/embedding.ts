@@ -13,18 +13,47 @@ const CF_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 const CF_MODEL = "@cf/baai/bge-small-en-v1.5";
 const EMBEDDING_DIMS = 384;
 
+const VOYAGE_API_KEY = process.env.VOYAGE_API_KEY;
+const VOYAGE_MODEL = 'voyage-3-lite'; // 1024 dims, $0.02/M
+
 // Track consecutive CF failures to avoid hammering a down service
 let cfFailureCount = 0;
 const CF_FAILURE_THRESHOLD = 5;
 let cfBackoffUntil = 0;
 
+async function generateVoyageEmbedding(text: string): Promise<number[] | null> {
+  if (!VOYAGE_API_KEY) return null;
+  try {
+    const truncated = text.length > 4000 ? text.substring(0, 4000) : text;
+    const res = await fetch('https://api.voyageai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${VOYAGE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ input: [truncated], model: VOYAGE_MODEL }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json() as { data?: { embedding: number[] }[] };
+    return json?.data?.[0]?.embedding || null;
+  } catch { return null; }
+}
+
 /**
- * Generate a 384-dimensional embedding vector for the given text.
- * Returns null if the embedding service is unavailable — callers MUST handle null.
+ * Generate an embedding vector for the given text.
+ * Tries Voyage AI first (1024 dims, higher quality), falls back to CF Workers AI (384 dims).
+ * Returns null if all embedding services are unavailable — callers MUST handle null.
  */
 export async function generateEmbedding(text: string): Promise<number[] | null> {
-  if (!CF_ACCOUNT_ID || !CF_API_TOKEN) return null;
   if (process.env.USE_SEMANTIC_SEARCH !== "true") return null;
+
+  // Try Voyage AI first (higher quality)
+  const voyageEmbedding = await generateVoyageEmbedding(text);
+  if (voyageEmbedding) return voyageEmbedding;
+
+  // Fall back to Cloudflare Workers AI
+  if (!CF_ACCOUNT_ID || !CF_API_TOKEN) return null;
 
   // Back off if CF has been failing repeatedly
   if (cfFailureCount >= CF_FAILURE_THRESHOLD && Date.now() < cfBackoffUntil) {
