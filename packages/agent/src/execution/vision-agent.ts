@@ -675,7 +675,23 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
                 return true;
               } catch { /* fall through */ }
             }
-            history.push(`⚠️ Ref [${action.ref}] (${resolved.entry.role} "${resolved.entry.name}") not clickable — try a different ref.`);
+            // Strategy 5: ViGoRL visual grounding — take screenshot, ask vision model for coordinates
+            // Activates when DOM ref stale/missing coords. Only for named elements (need a description to search for).
+            if (resolved.entry.name) {
+              try {
+                const { predictClickCoordinates } = await import('./vigorl.js');
+                const grounding = await predictClickCoordinates(page, resolved.entry.name, resolved.entry.role || 'button');
+                if (grounding) {
+                  if (cursor) {
+                    await cursor.moveTo({ x: grounding.x, y: grounding.y });
+                  }
+                  await page.mouse.click(grounding.x, grounding.y);
+                  console.log(`[VIGORL] Strategy 5 click at (${grounding.x},${grounding.y}) confidence=${grounding.confidence} for "${resolved.entry.name}"`);
+                  return true;
+                }
+              } catch { /* fall through — vigorl never throws */ }
+            }
+            history.push(`⚠️ Ref [${action.ref}] (${resolved.entry.role} "${resolved.entry.name}") not clickable after 5 strategies — try a different ref.`);
             return false;
           }
           history.push(`⚠️ Ref [${action.ref}] not found in snapshot. Use refs from the CURRENT accessibility tree.`);
