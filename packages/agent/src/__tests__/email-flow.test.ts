@@ -7,19 +7,38 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---- Mock: Supabase client (chainable) ----
+// ---- Mock: Supabase client (fully chainable, all filter/order methods) ----
 const mockSupabaseChain = () => {
+  // All methods that return `this` (filter/query builders)
+  const CHAIN_METHODS = [
+    'from', 'select', 'insert', 'update', 'upsert', 'delete',
+    'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
+    'like', 'ilike', 'is', 'in', 'contains', 'containedBy',
+    'or', 'not', 'filter', 'match',
+    'order', 'limit', 'range', 'offset',
+    'returns', 'throwOnError',
+  ];
+  // Terminal methods that resolve to a value
+  const RESOLVE_METHODS: Record<string, unknown> = {
+    single:      { data: null, error: null },
+    maybeSingle: { data: null, error: null },
+    rpc:         { data: null, error: null },
+  };
+
   const chain: Record<string, ReturnType<typeof vi.fn>> = {};
-  chain.from = vi.fn().mockReturnValue(chain);
-  chain.select = vi.fn().mockReturnValue(chain);
-  chain.insert = vi.fn().mockReturnValue(chain);
-  chain.update = vi.fn().mockReturnValue(chain);
-  chain.upsert = vi.fn().mockReturnValue(chain);
-  chain.delete = vi.fn().mockReturnValue(chain);
-  chain.eq = vi.fn().mockReturnValue(chain);
-  chain.gte = vi.fn().mockReturnValue(chain);
-  chain.single = vi.fn().mockResolvedValue({ data: null, error: null });
-  chain.rpc = vi.fn().mockResolvedValue({ data: null, error: null });
+  for (const method of CHAIN_METHODS) {
+    chain[method] = vi.fn().mockReturnValue(chain);
+  }
+  for (const [method, value] of Object.entries(RESOLVE_METHODS)) {
+    chain[method] = vi.fn().mockResolvedValue(value);
+  }
+  // Fire-and-forget pattern: .from().update().eq().then(cb) — must be callable
+  chain.then = vi.fn().mockImplementation((onFulfilled?: (v: any) => any, _onRejected?: any) => {
+    const result = { data: null, error: null };
+    if (onFulfilled) onFulfilled(result);
+    return Promise.resolve(result);
+  });
+  chain.catch = vi.fn().mockReturnValue(chain);
   return chain;
 };
 
