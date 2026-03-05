@@ -8,6 +8,25 @@
 // Platform billing markup (cost + 20%)
 export const BILLING_MARKUP = 1.20;
 
+// Twilio pricing (domestic North America)
+export const TWILIO_RATES = {
+  // Per-minute rates
+  INBOUND_LOCAL_PER_MIN: 0.0085,
+  OUTBOUND_NA_PER_MIN: 0.014,
+  CONVERSATION_RELAY_PER_MIN: 0.01,
+  ELEVENLABS_TTS_PER_MIN: 0.024,
+  DEEPGRAM_STT_PER_MIN: 0.01,
+  // Combined full bundle rate (what we actually pay per minute)
+  FULL_BUNDLE_INBOUND_PER_MIN: 0.0525,  // inbound + relay + TTS + STT
+  FULL_BUNDLE_OUTBOUND_PER_MIN: 0.0585, // outbound + relay + TTS + STT
+  // SMS
+  SMS_OUTBOUND_NA: 0.0079,
+  SMS_INBOUND_NA: 0.0083,
+  // Phone number monthly
+  LOCAL_NUMBER_MONTHLY: 1.15,
+  TOLL_FREE_MONTHLY: 2.15,
+} as const;
+
 // AI Model Costs (per 1M tokens) — verified Feb 2026
 // Token counts are EXACT values from API responses. Rates are maintained constants.
 // Source: provider pricing pages, last verified 2026-02-20.
@@ -49,26 +68,37 @@ export const CAPTCHA_COSTS = {
   },
 } as const;
 
-export function calculateVoiceCost(durationSeconds: number, isInternational: boolean = false): number {
-  const minutes = Math.ceil(durationSeconds / 60);
-  // Full cost stack per minute (ConversationRelay with ElevenLabs + Deepgram):
-  // - Twilio carrier: $0.0085 inbound / $0.014 international
-  // - ConversationRelay orchestration: $0.01/min
-  // - ElevenLabs TTS (via Twilio): ~$0.024/min
-  // - Deepgram STT (via Twilio): ~$0.01/min
-  const carrierRate = isInternational ? 0.014 : 0.0085;
-  const conversationRelayRate = 0.01;  // Twilio ConversationRelay
-  const ttsRate = 0.024;               // ElevenLabs via Twilio
-  const sttRate = 0.01;                // Deepgram via Twilio
-  const ratePerMinute = carrierRate + conversationRelayRate + ttsRate + sttRate;
-  return minutes * ratePerMinute;
+export function calculateVoiceCost(durationSeconds: number, direction: 'inbound' | 'outbound' | boolean = 'inbound'): number {
+  const durationMinutes = Math.ceil(durationSeconds / 60); // Twilio rounds up to nearest minute
+  // Support legacy boolean isInternational param (treated as outbound if true)
+  let ratePerMin: number;
+  if (direction === true) {
+    // Legacy: isInternational=true → use outbound international rate
+    ratePerMin = TWILIO_RATES.OUTBOUND_NA_PER_MIN + TWILIO_RATES.CONVERSATION_RELAY_PER_MIN + TWILIO_RATES.ELEVENLABS_TTS_PER_MIN + TWILIO_RATES.DEEPGRAM_STT_PER_MIN;
+  } else if (direction === 'outbound') {
+    ratePerMin = TWILIO_RATES.FULL_BUNDLE_OUTBOUND_PER_MIN;
+  } else {
+    // 'inbound' or false (legacy isInternational=false)
+    ratePerMin = TWILIO_RATES.FULL_BUNDLE_INBOUND_PER_MIN;
+  }
+  return durationMinutes * ratePerMin * BILLING_MARKUP;
 }
 
 export function calculateSMSCost(to: string, messageLength: number = 160): number {
   const isInternational = !to.startsWith('+1');
   const segments = Math.ceil(messageLength / 160);
-  const ratePerSegment = isInternational ? 0.0075 : 0.0079;
+  const ratePerSegment = isInternational ? 0.0075 : TWILIO_RATES.SMS_OUTBOUND_NA;
   return segments * ratePerSegment;
+}
+
+/**
+ * Calculate SMS cost by direction (for cost tracking).
+ * @param direction - 'inbound' or 'outbound'
+ * @param count - number of SMS messages
+ */
+export function calculateSMSCostByDirection(direction: 'inbound' | 'outbound' = 'outbound', count: number = 1): number {
+  const rate = direction === 'inbound' ? TWILIO_RATES.SMS_INBOUND_NA : TWILIO_RATES.SMS_OUTBOUND_NA;
+  return rate * count * BILLING_MARKUP;
 }
 
 export const BROWSER_SESSION_COSTS = {

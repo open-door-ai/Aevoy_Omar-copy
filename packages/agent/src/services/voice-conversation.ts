@@ -43,6 +43,14 @@ interface VoiceSession {
   userProfile: string;
   // Mid-call memory refresh tracking
   lastMemoryRefresh: number;
+  // Silence watchdog — per-session interval that fires every 5s
+  silenceWatchdog: ReturnType<typeof setInterval> | null;
+  // How many consecutive silence warnings have been sent without user response
+  silenceWarnings: number;
+  // Per-call cost budget (USD)
+  callBudgetUsd: number;
+  // Whether the 80% budget warning has already been injected
+  budgetWarned: boolean;
 }
 
 const activeSessions = new Map<string, VoiceSession>();
@@ -78,6 +86,11 @@ export function setExternalCallContext(key: string, ctx: ExternalCallContext): v
 function cleanupSession(sessionId: string): void {
   const session = activeSessions.get(sessionId);
   if (session) {
+    // Clear per-session silence watchdog
+    if (session.silenceWatchdog) {
+      clearInterval(session.silenceWatchdog);
+      session.silenceWatchdog = null;
+    }
     activeSessions.delete(sessionId);
     console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} cleaned up (active: ${activeSessions.size})`);
   }
@@ -108,7 +121,7 @@ setInterval(() => {
       activeSessions.delete(id);
     }
   }
-}, 60_000);
+}, 10_000);
 
 // ---- WebSocket Handler ----
 
@@ -175,6 +188,11 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
     clearInterval(pingInterval);
     const session = activeSessions.get(sessionId);
     if (session) {
+      // Clear silence watchdog immediately on close
+      if (session.silenceWatchdog) {
+        clearInterval(session.silenceWatchdog);
+        session.silenceWatchdog = null;
+      }
       const duration = Math.round((Date.now() - session.startedAt) / 1000);
       console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} closed after ${duration}s (${session.conversationHistory.length} exchanges)`);
       logCallHistory(session, duration);
@@ -217,6 +235,9 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     botName: 'Aevoy', greetingStyle: 'casual', timezone: 'America/Los_Angeles',
     conversationHistory: [], state: 'setup', pinAttempts: 0, pinDigits: '',
     ws, startedAt: Date.now(), lastActivityAt: Date.now(), lastResponseAt: 0, lastResponseText: '', callType, memoryContext: '', userProfile: '', lastMemoryRefresh: Date.now(),
+    silenceWatchdog: null, silenceWarnings: 0,
+    callBudgetUsd: callType === 'demo' ? 2.0 : callType === 'external_call' ? 1.0 : 5.0,
+    budgetWarned: false,
   };
   activeSessions.set(sessionId, placeholderSession);
 
@@ -456,6 +477,45 @@ RULES:
 
   console.log(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
 
+  // ── SILENCE WATCHDOG ──────────────────────────────────────────────────────
+  // Check every 5s for dead air. External calls get a tighter 15s timeout;
+  // all other call types get 25s. Two consecutive warnings with no user
+  // response trigger a graceful hang-up.
+  const SILENCE_TIMEOUT_MS = session.callType === 'external_call' ? 15_000 : 25_000;
+  session.silenceWatchdog = setInterval(() => {
+    const currentSession = activeSessions.get(sessionId);
+    if (!currentSession || currentSession.ws.readyState !== WebSocket.OPEN) {
+      clearInterval(session.silenceWatchdog!);
+      session.silenceWatchdog = null;
+      return;
+    }
+    const silentFor = Date.now() - currentSession.lastActivityAt;
+    if (silentFor > SILENCE_TIMEOUT_MS) {
+      if (currentSession.silenceWarnings >= 2) {
+        // Two warnings already sent with no response — hang up gracefully
+        console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE HANG-UP after ${currentSession.silenceWarnings} warnings`);
+        try {
+          const farewell = currentSession.callType === 'external_call'
+            ? "No response detected. Ending the call. Goodbye."
+            : "I haven't heard from you in a while, so I'll let you go. Talk soon!";
+          currentSession.ws.send(JSON.stringify({ type: "text", token: farewell, last: true }));
+          currentSession.ws.send(JSON.stringify({ type: "end" }));
+          currentSession.ws.close();
+        } catch { /* ignore */ }
+        clearInterval(session.silenceWatchdog!);
+        session.silenceWatchdog = null;
+      } else {
+        // First / second warning — prompt the user
+        currentSession.silenceWarnings++;
+        currentSession.lastActivityAt = Date.now(); // Reset timer so next check is fresh
+        console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE WARNING ${currentSession.silenceWarnings} (silent ${Math.round(silentFor / 1000)}s)`);
+        try {
+          currentSession.ws.send(JSON.stringify({ type: "text", token: "Are you still there?", last: true }));
+        } catch { /* ignore */ }
+      }
+    }
+  }, 5_000);
+
   if (needsPin) {
     ws.send(JSON.stringify({
       type: "text",
@@ -471,6 +531,32 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   if (!voicePrompt || !last) return; // Wait for complete utterance
 
   session.lastActivityAt = Date.now();
+  session.silenceWarnings = 0; // Reset silence counter on any user speech
+
+  // ── PER-CALL COST BUDGET GUARD ───────────────────────────────────────────
+  const elapsedMinutes = (Date.now() - session.startedAt) / 60000;
+  const estimatedCostUsd = elapsedMinutes * 0.0525; // Full ConversationRelay bundle rate
+  if (estimatedCostUsd > session.callBudgetUsd) {
+    // Over budget — send farewell and hang up
+    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET EXCEEDED ($${estimatedCostUsd.toFixed(3)} > $${session.callBudgetUsd}) — hanging up`);
+    const budgetFarewell = "I need to wrap up now — we've been on a while. It was great chatting! Talk soon.";
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(JSON.stringify({ type: "text", token: budgetFarewell, last: true }));
+      session.ws.send(JSON.stringify({ type: "end" }));
+      setTimeout(() => { try { session.ws.close(); } catch { /* ignore */ } }, 4000);
+    }
+    return;
+  }
+  if (estimatedCostUsd > session.callBudgetUsd * 0.8 && !session.budgetWarned) {
+    // 80% budget warning — inject note into AI context
+    session.budgetWarned = true;
+    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET 80% ($${estimatedCostUsd.toFixed(3)} of $${session.callBudgetUsd})`);
+    // Note is injected into the memory context so the AI wraps up naturally
+    const budgetNote = "\n\n⚠️ Call budget at 80%. Wrap up the conversation soon.";
+    if (!session.memoryContext.includes("Call budget at 80%")) {
+      session.memoryContext += budgetNote;
+    }
+  }
 
   // ── ECHO DETECTION ──────────────────────────────────────────────────────
   // When TTS plays through the phone speaker, the microphone can pick it up.
@@ -661,6 +747,23 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     session.lastResponseText = cleanedResponse;
 
     console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} assistant: "${response.slice(0, 80)}"`);
+
+    // ── GOODBYE DETECTION ─────────────────────────────────────────────────
+    // When BOTH user speech AND AI response contain farewell signals, schedule
+    // a hang-up after 3s to let TTS finish playing the farewell message.
+    const userGoodbye = /(bye|goodbye|good night|take care|talk (to you |ya |u )?later|gotta go|i('ll| will) let you go|have a (good|great|nice)|that('s| is) all|thanks,? that('s| is) all)/i.test(voicePrompt);
+    const aiGoodbye = /(bye|goodbye|take care|talk (to you |ya )?soon|have a (good|great|nice)|pleasure|it was (great|nice) (talking|speaking|chatting))/i.test(cleanedResponse);
+    if (userGoodbye && aiGoodbye) {
+      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Conversation-end detected — hanging up in 3s`);
+      setTimeout(() => {
+        try {
+          if (session.ws.readyState === WebSocket.OPEN) {
+            session.ws.send(JSON.stringify({ type: "end" }));
+            session.ws.close();
+          }
+        } catch { /* ignore */ }
+      }, 3000);
+    }
 
     // Save any memories the AI decided to remember (async, non-blocking)
     if (memories.length > 0 && session.userId) {
@@ -1037,8 +1140,62 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
   } catch { /* non-critical */ }
 }
 
+// ---- AMD Voicemail Handler ----
+
+function handleAmdVoicemail(callSid: string): void {
+  // Find session by callSid
+  let targetSession: VoiceSession | undefined;
+  for (const session of activeSessions.values()) {
+    if (session.callSid === callSid) {
+      targetSession = session;
+      break;
+    }
+  }
+
+  if (!targetSession) {
+    console.log(`[AMD] No active session found for callSid ${callSid.slice(0, 10)} — may not have connected yet`);
+    return;
+  }
+
+  const session = targetSession;
+  if (session.ws.readyState !== WebSocket.OPEN) return;
+
+  console.log(`[AMD] Voicemail detected for session ${session.sessionId.slice(0, 8)} — leaving message and hanging up`);
+
+  let voicemailMsg: string;
+  if (session.callType === 'external_call') {
+    const bizName = 'the person you asked me to call';
+    voicemailMsg = `Hi, this is ${session.botName} calling on behalf of ${session.userName}. Please call back when convenient. Thank you, have a great day. Goodbye.`;
+    console.log(`[AMD] Leaving voicemail at ${bizName}`);
+  } else {
+    // AI calling the user
+    voicemailMsg = `Hey ${session.userName}, it's ${session.botName}. Give me a call back when you're free! Talk soon.`;
+  }
+
+  try {
+    session.ws.send(JSON.stringify({ type: "text", token: voicemailMsg, last: true }));
+    setTimeout(() => {
+      try {
+        if (session.ws.readyState === WebSocket.OPEN) {
+          session.ws.send(JSON.stringify({ type: "end" }));
+          session.ws.close();
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+  } catch { /* ignore */ }
+}
+
 // ---- Exports ----
 
 export function getActiveSessionCount(): number {
   return activeSessions.size;
+}
+
+/**
+ * Alias for handleAmdVoicemail — called by /webhook/voice/amd-status
+ * when Twilio AMD detects a machine/voicemail on an outbound call.
+ */
+export function triggerAmdHangup(callSid: string, answeredBy: string): void {
+  console.log(`[AMD] triggerAmdHangup: callSid=${callSid.slice(0, 10)} answeredBy=${answeredBy}`);
+  handleAmdVoicemail(callSid);
 }
