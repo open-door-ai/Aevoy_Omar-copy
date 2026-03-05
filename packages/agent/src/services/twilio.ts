@@ -189,11 +189,18 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // This supports ConversationRelay properly (inline Twiml param doesn't)
     const callbackUrl = `${agentUrl}/webhook/voice/outbound-twiml?userId=${encodeURIComponent(request.userId)}&message=${encodeURIComponent(request.message || '')}`;
 
+    const callbackBase = process.env.TWILIO_CALLBACK_URL || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
     const params = new URLSearchParams({
       To: request.to,
       From: fromNumber || config.phoneNumber,
       Url: callbackUrl,
       Method: 'POST',
+      StatusCallback: `${callbackBase}/webhook/voice/call-end`,
+      StatusCallbackMethod: 'POST',
+      StatusCallbackEvent: 'completed',
+      MachineDetection: 'DetectMessageEnd',
+      AsyncAmdStatusCallback: `${callbackBase}/webhook/voice/amd-status`,
+      AsyncAmdStatusCallbackMethod: 'POST',
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -208,8 +215,8 @@ export async function callUser(request: VoiceCallRequest): Promise<{
 
     // Track usage
     await trackVoiceUsage(request.userId, 1);
-    // Track dollar cost: ~3 min domestic estimate × $0.0525/min
-    trackServiceCost(request.userId, "twilio", "voice_call_outbound", 0.16, "voice_outbound").catch(() => {});
+    // Preliminary estimate (~2 min) — will be corrected by /webhook/voice/call-end StatusCallback
+    trackServiceCost(request.userId, "twilio", "voice_outbound_estimate", 0.10, "voice_outbound").catch(() => {});
 
     console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
     return { success: true, callSid: data.sid };
@@ -251,11 +258,18 @@ export async function callExternal(
     const baseUrl = config.webhookBaseUrl || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
     const twimlUrl = `${baseUrl}/webhook/voice/external-call-twiml?userId=${encodeURIComponent(userId)}&contextKey=${encodeURIComponent(contextKey)}&businessName=${encodeURIComponent(businessName || 'the business')}&script=${encodeURIComponent(message.substring(0, 200))}`;
 
+    const callbackBase = process.env.TWILIO_CALLBACK_URL || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
     const params = new URLSearchParams({
       To: to,
       From: fromNumber || config.phoneNumber,
       Url: twimlUrl,
       Method: 'POST',
+      StatusCallback: `${callbackBase}/webhook/voice/call-end`,
+      StatusCallbackMethod: 'POST',
+      StatusCallbackEvent: 'completed',
+      MachineDetection: 'DetectMessageEnd',
+      AsyncAmdStatusCallback: `${callbackBase}/webhook/voice/amd-status`,
+      AsyncAmdStatusCallbackMethod: 'POST',
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -266,8 +280,8 @@ export async function callExternal(
 
     const data = await response.json() as { sid: string };
     await trackVoiceUsage(userId, 1);
-    // Track dollar cost: ~3 min domestic estimate × $0.0525/min
-    trackServiceCost(userId, "twilio", "voice_call_outbound", 0.16, "voice_outbound").catch(() => {});
+    // Preliminary estimate (~2 min) — will be corrected by /webhook/voice/call-end StatusCallback
+    trackServiceCost(userId, "twilio", "voice_outbound_estimate", 0.10, "voice_outbound").catch(() => {});
 
     console.log(`[CALL-EXTERNAL] ConversationRelay call placed: to=${to}, from=${fromNumber || config.phoneNumber}, sid=${data.sid}, business=${businessName || 'unknown'}`);
     return { success: true, callSid: data.sid };
@@ -388,6 +402,43 @@ export async function sendSms(request: SmsRequest): Promise<{
 
   const config = getTwilioConfig();
   if (!config) return { success: false, error: "Twilio not configured" };
+
+  // COST GUARD: Daily SMS cap per user (proactive/monitoring runaway protection)
+  const MAX_PROACTIVE_SMS_PER_DAY = 15;
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
+  if (request.userId) {
+    try {
+      const supabase = getSupabaseClient();
+
+      // Count SMS sent today for this user
+      const { count } = await supabase
+        .from('ai_cost_log')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', request.userId)
+        .eq('provider', 'twilio')
+        .in('purpose', ['sms', 'sms_inbound'])
+        .gte('created_at', `${today}T00:00:00.000Z`);
+
+      const dailySmsCount = count || 0;
+
+      // Get user's custom cap from settings (default 15)
+      const { data: settings } = await supabase
+        .from('user_settings')
+        .select('daily_sms_limit')
+        .eq('user_id', request.userId)
+        .single();
+
+      const dailyCap = (settings as any)?.daily_sms_limit ?? MAX_PROACTIVE_SMS_PER_DAY;
+
+      if (dailySmsCount >= dailyCap) {
+        console.warn(`[SMS-CAP] User ${request.userId.slice(0, 8)} hit daily SMS cap (${dailySmsCount}/${dailyCap}). Skipping SMS: "${request.body.slice(0, 50)}"`);
+        return { success: false, error: `Daily SMS cap reached (${dailyCap}/day). Resets at midnight.` };
+      }
+    } catch (capErr) {
+      console.warn('[SMS-CAP] Failed to check daily cap:', capErr); // Don't block SMS on cap check failure
+    }
+  }
 
   try {
     // SECURITY: Sanitize SMS body and phone number before sending
@@ -729,6 +780,27 @@ export async function provisionPhoneNumber(
       );
     } catch {
       // Non-critical
+    }
+
+    // Log initial monthly fee and schedule recurring billing
+    try {
+      const { TWILIO_RATES, BILLING_MARKUP } = await import('../utils/cost-calculator.js');
+      const { trackServiceCost } = await import('./ai.js');
+      const monthlyFee = TWILIO_RATES.LOCAL_NUMBER_MONTHLY * BILLING_MARKUP;
+      // Log first month immediately
+      trackServiceCost(userId, 'twilio', 'phone_number_monthly', monthlyFee, 'phone_number').catch(() => {});
+      // Schedule recurring monthly fee on the 1st of every month at 9am
+      const nextFirstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1, 9, 0, 0);
+      await getSupabaseClient().from('scheduled_tasks').insert({
+        user_id: userId,
+        description: `Monthly phone number fee for ${phoneNumber}`,
+        task_template: `phone_number_fee:${phoneNumber}:${monthlyFee}`,
+        cron_expression: '0 9 1 * *',
+        next_run_at: nextFirstOfMonth.toISOString(),
+        is_active: true,
+      });
+    } catch {
+      // Non-critical — don't fail provisioning if billing setup fails
     }
 
     console.log(`[TWILIO] Provisioned number for user ${userId.slice(0, 8)}...`);

@@ -98,6 +98,7 @@ import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
 import { startInboxManager } from "./services/inbox-manager.js";
 import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE, escapeXml } from "./services/twilio.js";
+import { trackServiceCost } from "./services/ai.js";
 import { resolveUser } from "./services/identity/resolver.js";
 import { getSupabaseClient } from "./utils/supabase.js";
 import type { TaskRequest, TaskResult } from "./types/index.js";
@@ -1184,6 +1185,19 @@ const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
 const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
 
+// ---- Demo Daily Minute Cap (cost protection: max 60 min/day ~$3.15) ----
+const DEMO_DAILY_MINUTE_CAP = 60;
+let demoDailyMinutes = 0;
+let demoDayKey = new Date().toISOString().split('T')[0];
+
+function checkDemoCap(callDurationMinutes: number = 3): boolean {
+  const today = new Date().toISOString().split('T')[0];
+  if (today !== demoDayKey) { demoDailyMinutes = 0; demoDayKey = today; } // Reset daily
+  if (demoDailyMinutes + callDurationMinutes > DEMO_DAILY_MINUTE_CAP) return false;
+  demoDailyMinutes += callDurationMinutes;
+  return true;
+}
+
 // ---- Demo Outbound Call TwiML ----
 // Called by Twilio when a demo outbound call connects (from "Call Me Now" button)
 // Looks up caller in profiles for interview detection, returns ConversationRelay TwiML
@@ -1438,6 +1452,17 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     const isDemoCall = normalizedTo === normalizedDemo;
 
     if (isDemoCall) {
+      // COST GUARD: Daily minute cap for demo number (max 60 min/day ~$3.15)
+      if (!checkDemoCap(3)) {
+        console.warn(`[VOICE-DEMO] Daily minute cap reached (${demoDailyMinutes}/${DEMO_DAILY_MINUTE_CAP} min). Rejecting demo call from ${maskPhone(callerNumber)}`);
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">Sorry, our demo line is currently unavailable. Please visit aevoy.com to sign up and get your own AI assistant. Talk soon!</Say>
+  <Hangup/>
+</Response>`);
+      }
+
       // Check if this caller is a registered user (by phone number)
       const callerDigits = callerNumber.replace(/\D/g, "").slice(-10);
       let registeredUserId = "";
@@ -3151,6 +3176,67 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
   <Say voice="${voice}">Sorry, something went wrong. Please try again later. Goodbye!</Say>
   <Hangup/>
 </Response>`);
+  }
+});
+
+// ---- Call Cost Tracking (StatusCallback) ----
+
+// POST /webhook/voice/call-end — Twilio StatusCallback for completed calls
+// Receives actual call duration and calculates real cost (replaces hardcoded estimate)
+app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) => {
+  res.sendStatus(204); // Respond immediately — Twilio doesn't need a response body
+
+  const { CallSid, CallDuration, Direction, CallStatus, To, From } = req.body;
+  if (CallStatus !== 'completed' || !CallDuration) return;
+
+  const durationSeconds = parseInt(CallDuration, 10);
+  if (isNaN(durationSeconds) || durationSeconds <= 0) return;
+
+  console.log(`[CALL-END] CallSid=${CallSid} Duration=${durationSeconds}s Direction=${Direction}`);
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Try to find user from their dedicated Twilio number
+    const phoneToSearch = Direction?.includes('inbound') ? To : From;
+    const { data: numberRecord } = await supabase
+      .from('user_twilio_numbers')
+      .select('user_id')
+      .eq('phone_number', phoneToSearch)
+      .single();
+
+    const userId = numberRecord?.user_id;
+    if (!userId) {
+      console.log(`[CALL-END] No user found for phone ${maskPhone(phoneToSearch)} — demo/platform call`);
+      return;
+    }
+
+    // Calculate real cost based on actual duration
+    const { calculateVoiceCost } = await import('./utils/cost-calculator.js');
+    const direction: 'inbound' | 'outbound' = Direction?.includes('inbound') ? 'inbound' : 'outbound';
+    const realCost = calculateVoiceCost(durationSeconds, direction);
+
+    // Log the actual cost
+    await trackServiceCost(userId, 'twilio', `voice_${direction}_actual`, realCost, `voice_${direction}`);
+
+    console.log(`[CALL-END] Logged real cost $${realCost.toFixed(4)} for ${durationSeconds}s ${direction} call (user ${maskUserId(userId)})`);
+  } catch (err) {
+    console.error('[CALL-END] Failed to log call cost:', err);
+  }
+});
+
+// POST /webhook/voice/amd-status — AMD (Answering Machine Detection) result callback
+app.post('/webhook/voice/amd-status', validateTwilioSignature, async (req, res) => {
+  res.sendStatus(204);
+  const { CallSid, AnsweredBy } = req.body;
+  console.log(`[AMD] CallSid=${CallSid} AnsweredBy=${AnsweredBy}`);
+  if (AnsweredBy && AnsweredBy.startsWith('machine')) {
+    try {
+      const { triggerAmdHangup } = await import('./services/voice-conversation.js');
+      triggerAmdHangup(CallSid, AnsweredBy);
+    } catch (err) {
+      console.error('[AMD] Failed to trigger hangup:', err);
+    }
   }
 });
 

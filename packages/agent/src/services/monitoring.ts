@@ -148,6 +148,25 @@ export async function registerMonitoringJob(
     return;
   }
 
+  // Hard cap: max 3 active monitoring jobs per user (or user's custom max_monitor_jobs setting)
+  try {
+    const { data: settingsRow } = await getSupabaseClient()
+      .from('user_settings')
+      .select('max_monitor_jobs')
+      .eq('user_id', userId)
+      .single();
+    const maxJobs = (settingsRow as any)?.max_monitor_jobs ?? 3;
+
+    const userJobs = monitoringJobs.get(userId) || [];
+    const activeCount = userJobs.filter(j => j.isActive).length;
+    if (activeCount >= maxJobs) {
+      console.warn(`[MONITORING] User ${userId.slice(0, 8)} already has ${activeCount} active monitors (cap: ${maxJobs}) — blocking new one: "${jobDescription.slice(0, 60)}"`);
+      return; // Silently skip — don't error, just don't create over the cap
+    }
+  } catch (capErr) {
+    console.warn('[MONITORING] Failed to check monitor job cap:', capErr); // Non-fatal
+  }
+
   const interval = checkIntervalMs ?? parseIntervalMs(jobDescription);
   const now = new Date();
   const job: MonitoringJob = {

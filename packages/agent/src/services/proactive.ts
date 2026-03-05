@@ -20,6 +20,18 @@ import { sendResponse } from "./email.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
 
+// ---- Proactive SMS Rate Limit (1 SMS per user per hour max) ----
+
+const lastProactiveSms = new Map<string, number>(); // userId → timestamp
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+function canSendProactiveSms(userId: string): boolean {
+  const last = lastProactiveSms.get(userId) || 0;
+  if (Date.now() - last < ONE_HOUR_MS) return false;
+  lastProactiveSms.set(userId, Date.now());
+  return true;
+}
+
 // ---- Proactive Engine ----
 
 export class ProactiveEngine {
@@ -539,6 +551,18 @@ export class ProactiveEngine {
           return;
         }
         if ((preferredChannel === "sms" || preferredChannel === "voice") && user.phone) {
+          // RATE LIMIT: max 1 proactive SMS per user per hour (prevents runaway loops)
+          if (!canSendProactiveSms(user.userId)) {
+            console.log(`[PROACTIVE] Skipping SMS for ${user.username} — rate limited (1/hour). Finding: ${finding.trigger}`);
+            // Silently degrade to email for low-priority, skip for sms channel
+            await sendResponse({
+              to: user.email,
+              from: `${user.username}@aevoy.com`,
+              subject: emailSubject,
+              body: action,
+            });
+            return;
+          }
           if (fallbackToCall && preferredChannel === "voice") {
             await callUser({ userId: user.userId, to: user.phone, message: action });
           }
