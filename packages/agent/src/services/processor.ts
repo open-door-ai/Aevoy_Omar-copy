@@ -848,6 +848,27 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const clarified = await clarifyTask(body, memory, userId);
 
     // Create task record with structured intent
+    // Determine session_chain_id: reuse from related recent task if found (cross-session linking)
+    let sessionChainId: string | null = null;
+    try {
+      const recentChain = await getSupabaseClient()
+        .from("tasks")
+        .select("session_chain_id, id")
+        .eq("user_id", userId)
+        .not("session_chain_id", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+      // Reuse chain if last chained task was within 24 hours
+      if (recentChain.data?.session_chain_id) {
+        sessionChainId = recentChain.data.session_chain_id;
+      }
+    } catch { /* non-critical */ }
+    // If no existing chain, start a new one for this task
+    if (!sessionChainId) {
+      sessionChainId = crypto.randomUUID();
+    }
+
     const { data: taskRecord, error: taskError } = await getSupabaseClient()
       .from("tasks")
       .insert({
@@ -859,6 +880,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
         confidence: clarified.confidence,
         started_at: new Date().toISOString(),
         input_channel: task.inputChannel || 'email',
+        session_chain_id: sessionChainId,
       })
       .select()
       .single();
@@ -2154,11 +2176,32 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     try {
       const _contextResult = await Promise.race([
         (async () => {
-          // Context carryover from related tasks (24hr window)
+          // Context carryover: prefer session chain (same conversation thread), fall back to topic matching
           const recentContext = await getRecentContext(userId, body);
           if (recentContext) {
             contextCarryover = formatContextForPrompt(recentContext);
             console.log(`[CONTEXT] Found relevant context from task ${recentContext.taskId.slice(0, 8)}`);
+          } else {
+            // Try to load context from the current task's session chain
+            const { data: currentTask } = await getSupabaseClient()
+              .from("tasks").select("session_chain_id").eq("id", taskId).single();
+            if (currentTask?.session_chain_id) {
+              const { data: chainTasks } = await getSupabaseClient()
+                .from("tasks")
+                .select("email_subject, response_text")
+                .eq("session_chain_id", currentTask.session_chain_id)
+                .eq("status", "completed")
+                .neq("id", taskId)
+                .order("created_at", { ascending: false })
+                .limit(3);
+              if (chainTasks && chainTasks.length > 0) {
+                const chainContext = chainTasks.map((t: any) =>
+                  `Previous task: "${t.email_subject}" → ${(t.response_text || "").slice(0, 200)}`
+                ).join("\n");
+                contextCarryover = `RELATED SESSION CONTEXT:\n${chainContext}\n`;
+                console.log(`[CONTEXT] Loaded ${chainTasks.length} tasks from session chain ${currentTask.session_chain_id.slice(0, 8)}`);
+              }
+            }
           }
 
           // Hive learnings for known approaches

@@ -492,6 +492,50 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+// ---- Memory subsystem health check ----
+app.get("/health/memory", async (_req, res) => {
+  const checks: Record<string, string> = {};
+
+  // Supabase user_memory table
+  try {
+    const { error } = await getSupabaseClient().from("user_memory").select("id").limit(1);
+    checks.supabase_memory = error ? "error" : "ok";
+  } catch { checks.supabase_memory = "unavailable"; }
+
+  // Check if pgvector extension works
+  try {
+    const { error } = await getSupabaseClient().rpc("match_user_memories", {
+      query_embedding: Array(384).fill(0.0),
+      match_user_id: "00000000-0000-4000-8000-000000000000",
+      match_threshold: 0.99,
+      match_count: 1,
+    });
+    checks.pgvector = error?.message?.includes("does not exist") ? "not_installed" : "ok";
+  } catch { checks.pgvector = "error"; }
+
+  // Check embedding service
+  checks.cf_embedding = process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN
+    ? "configured"
+    : "not_configured (keyword fallback active)";
+  checks.semantic_search = process.env.USE_SEMANTIC_SEARCH === "true" ? "enabled" : "disabled (flag off)";
+
+  // Check long-term facts RPC
+  try {
+    const { error } = await getSupabaseClient().rpc("get_long_term_facts", {
+      p_user_id: "00000000-0000-4000-8000-000000000000",
+      p_limit: 1,
+    });
+    checks.long_term_facts_rpc = error ? `error: ${error.message}` : "ok";
+  } catch { checks.long_term_facts_rpc = "unavailable"; }
+
+  const allOk = Object.values(checks).every(v => v === "ok" || v.startsWith("not_configured") || v.startsWith("disabled") || v === "configured");
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? "healthy" : "degraded",
+    ...checks,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // ---- Live API Key Validation — actually calls each API ----
 app.get("/debug/test-apis", async (_req, res) => {
   const results: Record<string, { status: string; detail?: string; latency_ms?: number }> = {};
