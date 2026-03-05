@@ -7171,7 +7171,7 @@ The user explicitly asked you to negotiate. That requires a phone call. DO IT NO
           console.log(`[PHONE-GATE-POST] Got ${phoneSearchResponse.actions.length} phone actions, executing`);
           for (const phoneAction of phoneSearchResponse.actions) {
             try {
-              const phoneResult = await executeAction(phoneAction, userId, username, executionEngine);
+              const phoneResult = await executeAction(phoneAction, userId, username, executionEngine, task.suppressEmail);
               actionResults.push(phoneResult);
               if (phoneResult.success) {
                 console.log(`[PHONE-GATE-POST] ${phoneAction.type} succeeded`);
@@ -7227,7 +7227,7 @@ DO NOT give step-by-step instructions. DO the steps yourself using [ACTION:...] 
             console.log(`[ACCOUNT-GATE] Got ${accountResponse.actions.length} browser actions, executing`);
             for (const acctAction of accountResponse.actions) {
               try {
-                const acctResult = await executeAction(acctAction, userId, username, executionEngine);
+                const acctResult = await executeAction(acctAction, userId, username, executionEngine, task.suppressEmail);
                 actionResults.push(acctResult);
                 if (acctResult.success) {
                   aiResponse.content = accountResponse.content || aiResponse.content;
@@ -7295,7 +7295,7 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
               console.log(`[ADVICE-GATE] Got ${actionResponse.actions.length} browser actions, executing`);
               for (const advAction of actionResponse.actions) {
                 try {
-                  const advResult = await executeAction(advAction, userId, username, executionEngine);
+                  const advResult = await executeAction(advAction, userId, username, executionEngine, task.suppressEmail);
                   actionResults.push(advResult);
                   if (advResult.success) {
                     aiResponse.content = actionResponse.content || aiResponse.content;
@@ -7404,7 +7404,7 @@ Extract the ACTUAL phone number from search results and call them:
           if (callBizResponse.actions && callBizResponse.actions.length > 0) {
             for (const callBizAction of callBizResponse.actions) {
               try {
-                const callBizResult = await executeAction(callBizAction, userId, username, executionEngine);
+                const callBizResult = await executeAction(callBizAction, userId, username, executionEngine, task.suppressEmail);
                 actionResults.push(callBizResult);
                 if (callBizResult.success && callBizAction.type === 'call_external') {
                   aiResponse.content += `\n\nCalled the business: ${callBizResult.result || 'call placed'}`;
