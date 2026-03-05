@@ -1556,10 +1556,10 @@ QUICK MAP: "call me"→call_user | "text me"→send_sms | "email me"→send_emai
 CONTENT TASKS: For write/create/generate requests (code, HTML, poems, emails), produce content DIRECTLY. Don't search for templates.
 
 MEMORY (what I know about you):
-${(memory.facts || '').substring(0, 1500)}
+${(memory.facts || '').substring(0, 3200)}
 
 RECENT ACTIVITY:
-${(memory.recentLogs || 'No recent activity').substring(0, 800)}
+${(memory.recentLogs || 'No recent activity').substring(0, 1600)}
 
 ---
 

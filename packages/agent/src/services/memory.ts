@@ -19,7 +19,21 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { encryptWithServerKey, decryptWithServerKey } from "../security/encryption.js";
+import { generateEmbedding } from "./embedding.js";
 import type { Memory, MemoryType, WorkingMemory, EpisodicMemory } from "../types/index.js";
+
+// Dynamic token budgets by task type (1 token ≈ 4 chars)
+// Browser tasks get smaller budgets to keep latency low
+// Complex tasks get larger budgets for richer context
+export type MemoryTaskType = "browser" | "classify" | "complex" | "voice" | "default";
+
+const MEMORY_BUDGETS: Record<MemoryTaskType, { longTerm: number; working: number; episodic: number }> = {
+  browser:  { longTerm: 500,  working: 300, episodic: 200 },  // 1000 total — latency-sensitive
+  classify: { longTerm: 200,  working: 100, episodic: 0   },  //  300 total — fast classification
+  voice:    { longTerm: 600,  working: 400, episodic: 200 },  // 1200 total — voice is real-time
+  complex:  { longTerm: 1500, working: 800, episodic: 500 },  // 2800 total — deep reasoning tasks
+  default:  { longTerm: 800,  working: 500, episodic: 300 },  // 1600 total — 2x original budget
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACES_DIR = path.join(__dirname, "../../workspaces");
@@ -38,6 +52,11 @@ interface ShortTermEntry {
 
 const shortTermMemory = new Map<string, ShortTermEntry>();
 
+// Scope short-term memory key by userId to prevent cross-user collision
+function stmKey(userId: string, taskId: string): string {
+  return `${userId}:${taskId}`;
+}
+
 // Periodic cleanup of expired short-term memory entries
 setInterval(() => {
   const now = Date.now();
@@ -48,26 +67,29 @@ setInterval(() => {
   }
 }, 60_000); // Check every minute
 
-export function setShortTermMemory(taskId: string, data: Record<string, unknown>): void {
-  const existing = shortTermMemory.get(taskId);
-  shortTermMemory.set(taskId, {
+export function setShortTermMemory(taskId: string, data: Record<string, unknown>, userId?: string): void {
+  const key = userId ? stmKey(userId, taskId) : taskId;
+  const existing = shortTermMemory.get(key);
+  shortTermMemory.set(key, {
     data: { ...(existing?.data), ...data },
     createdAt: existing?.createdAt ?? Date.now(),
   });
 }
 
-export function getShortTermMemory(taskId: string): Record<string, unknown> | undefined {
-  const entry = shortTermMemory.get(taskId);
+export function getShortTermMemory(taskId: string, userId?: string): Record<string, unknown> | undefined {
+  const key = userId ? stmKey(userId, taskId) : taskId;
+  const entry = shortTermMemory.get(key);
   if (!entry) return undefined;
   if (Date.now() - entry.createdAt > SHORT_TERM_TTL_MS) {
-    shortTermMemory.delete(taskId);
+    shortTermMemory.delete(key);
     return undefined;
   }
   return entry.data;
 }
 
-export function clearShortTermMemory(taskId: string): void {
-  shortTermMemory.delete(taskId);
+export function clearShortTermMemory(taskId: string, userId?: string): void {
+  const key = userId ? stmKey(userId, taskId) : taskId;
+  shortTermMemory.delete(key);
 }
 
 // ---- Encryption ----
@@ -189,11 +211,42 @@ export async function saveMemory(userId: string, content: string): Promise<void>
 async function loadWorkingMemories(
   userId: string,
   limit: number = 10,
-  keywords?: string[]
+  keywords?: string[],
+  queryEmbedding?: number[] | null
 ): Promise<WorkingMemory[]> {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // SEMANTIC SEARCH PATH: if we have a query embedding and the flag is on, use vector similarity
+  if (queryEmbedding && process.env.USE_SEMANTIC_SEARCH === "true") {
+    try {
+      const { data: semData, error: semErr } = await getSupabaseClient()
+        .rpc("match_user_memories", {
+          query_embedding: queryEmbedding,
+          match_user_id: userId,
+          match_threshold: 0.4,
+          match_count: limit,
+          memory_type_filter: "working",
+        });
+      if (!semErr && semData && semData.length > 0) {
+        const memories: WorkingMemory[] = [];
+        for (const row of semData) {
+          try {
+            const content = await decrypt(row.encrypted_data);
+            memories.push({ id: row.id, content, createdAt: row.created_at });
+          } catch { /* skip corrupted */ }
+        }
+        const ids = memories.map(m => m.id);
+        if (ids.length > 0) {
+          getSupabaseClient().from("user_memory")
+            .update({ last_accessed_at: new Date().toISOString() })
+            .in("id", ids).then(() => {}, () => {});
+        }
+        return memories;
+      }
+    } catch { /* fall through to keyword search */ }
+  }
 
-  let query = getSupabaseClient()
+  // KEYWORD SEARCH FALLBACK (always works, no external service needed)
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await getSupabaseClient()
     .from("user_memory")
     .select("id, encrypted_data, created_at")
     .eq("user_id", userId)
@@ -202,49 +255,30 @@ async function loadWorkingMemories(
     .order("created_at", { ascending: false })
     .limit(limit);
 
-  const { data, error } = await query;
-
-  if (error || !data) {
-    return [];
-  }
+  if (error || !data) return [];
 
   const memories: Array<WorkingMemory & { _score: number }> = [];
   for (const row of data) {
     try {
       const content = await decrypt(row.encrypted_data);
-      // Score by keyword relevance
-      let score = 0.5; // default
+      let score = 0.5;
       if (keywords && keywords.length > 0) {
         const lower = content.toLowerCase();
         const matchCount = keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
-        score = matchCount / keywords.length; // 0.0 to 1.0
-        if (score === 0) continue; // No relevant keywords at all
+        score = matchCount / keywords.length;
+        if (score === 0) continue;
       }
-      memories.push({
-        id: row.id,
-        content,
-        createdAt: row.created_at,
-        _score: score,
-      });
-    } catch {
-      // Skip corrupted entries
-    }
+      memories.push({ id: row.id, content, createdAt: row.created_at, _score: score });
+    } catch { /* skip corrupted */ }
   }
 
-  // Sort by relevance score (highest first)
   memories.sort((a, b) => b._score - a._score);
-
-  // Update last_accessed_at for loaded memories
   const loadedIds = memories.map(m => m.id);
   if (loadedIds.length > 0) {
-    Promise.resolve(
-      getSupabaseClient()
-        .from("user_memory")
-        .update({ last_accessed_at: new Date().toISOString() })
-        .in("id", loadedIds)
-    ).catch(() => { /* non-critical */ });
+    getSupabaseClient().from("user_memory")
+      .update({ last_accessed_at: new Date().toISOString() })
+      .in("id", loadedIds).then(() => {}, () => {});
   }
-
   return memories.map(({ _score, ...m }) => m);
 }
 
@@ -253,9 +287,41 @@ async function loadWorkingMemories(
 async function loadEpisodicMemories(
   userId: string,
   limit: number = 5,
-  keywords?: string[]
+  keywords?: string[],
+  queryEmbedding?: number[] | null
 ): Promise<EpisodicMemory[]> {
-  let query = getSupabaseClient()
+  // SEMANTIC SEARCH PATH
+  if (queryEmbedding && process.env.USE_SEMANTIC_SEARCH === "true") {
+    try {
+      const { data: semData, error: semErr } = await getSupabaseClient()
+        .rpc("match_user_memories", {
+          query_embedding: queryEmbedding,
+          match_user_id: userId,
+          match_threshold: 0.4,
+          match_count: limit,
+          memory_type_filter: "episodic",
+        });
+      if (!semErr && semData && semData.length > 0) {
+        const memories: EpisodicMemory[] = [];
+        for (const row of semData) {
+          try {
+            const content = await decrypt(row.encrypted_data);
+            memories.push({ id: row.id, content, importance: row.importance || 0.5, createdAt: row.created_at });
+          } catch { /* skip corrupted */ }
+        }
+        const ids = memories.map(m => m.id);
+        if (ids.length > 0) {
+          getSupabaseClient().from("user_memory")
+            .update({ last_accessed_at: new Date().toISOString() })
+            .in("id", ids).then(() => {}, () => {});
+        }
+        return memories;
+      }
+    } catch { /* fall through to keyword search */ }
+  }
+
+  // KEYWORD + IMPORTANCE FALLBACK
+  const { data, error } = await getSupabaseClient()
     .from("user_memory")
     .select("id, encrypted_data, importance, created_at")
     .eq("user_id", userId)
@@ -263,11 +329,7 @@ async function loadEpisodicMemories(
     .order("importance", { ascending: false })
     .limit(limit);
 
-  const { data, error } = await query;
-
-  if (error || !data) {
-    return [];
-  }
+  if (error || !data) return [];
 
   const memories: Array<EpisodicMemory & { _score: number }> = [];
   for (const row of data) {
@@ -280,36 +342,19 @@ async function loadEpisodicMemories(
         const matchCount = keywords.filter((kw) => lower.includes(kw.toLowerCase())).length;
         keywordOverlap = matchCount / keywords.length;
       }
-      // Weighted score: importance 60%, keyword relevance 40%
       const score = (importance * 0.6) + (keywordOverlap * 0.4);
-      memories.push({
-        id: row.id,
-        content,
-        importance,
-        createdAt: row.created_at,
-        _score: score,
-      });
-    } catch {
-      // Skip corrupted
-    }
+      memories.push({ id: row.id, content, importance, createdAt: row.created_at, _score: score });
+    } catch { /* skip corrupted */ }
   }
 
-  // Sort by combined score (highest first)
   memories.sort((a, b) => b._score - a._score);
-
   const result = memories.slice(0, limit);
-
-  // Update last_accessed_at for loaded memories
   const loadedIds = result.map(m => m.id);
   if (loadedIds.length > 0) {
-    Promise.resolve(
-      getSupabaseClient()
-        .from("user_memory")
-        .update({ last_accessed_at: new Date().toISOString() })
-        .in("id", loadedIds)
-    ).catch(() => { /* non-critical */ });
+    getSupabaseClient().from("user_memory")
+      .update({ last_accessed_at: new Date().toISOString() })
+      .in("id", loadedIds).then(() => {}, () => {});
   }
-
   return result.map(({ _score, ...m }) => m);
 }
 
@@ -324,30 +369,41 @@ async function loadEpisodicMemories(
  * - 5 most recent interactions (24h)
  * - Relevant episodic memories
  */
-export async function loadMemory(userId: string, taskContext?: string): Promise<Memory> {
+export async function loadMemory(
+  userId: string,
+  taskContext?: string,
+  memoryTaskType: MemoryTaskType = "default"
+): Promise<Memory> {
   // Extract keywords from task for relevance filtering
   const keywords = taskContext
-    ? taskContext
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((w) => w.length > 3)
-        .slice(0, 10)
+    ? taskContext.toLowerCase().split(/\s+/).filter((w) => w.length > 3).slice(0, 10)
     : [];
 
-  // Load all 3 persistent types in parallel
+  // Generate query embedding for semantic search (fire-and-forget on failure)
+  let queryEmbedding: number[] | null = null;
+  if (taskContext && process.env.USE_SEMANTIC_SEARCH === "true") {
+    queryEmbedding = await generateEmbedding(taskContext).catch(() => null);
+  }
+
+  // Get dynamic token budgets based on task type
+  const budget = MEMORY_BUDGETS[memoryTaskType] || MEMORY_BUDGETS.default;
+
+  // Load all persistent types in parallel
   const [longTerm, working, episodic, recentLogs] = await Promise.all([
     loadLongTermMemory(userId),
-    loadWorkingMemories(userId, 10, keywords),
-    loadEpisodicMemories(userId, 5, keywords),
+    loadWorkingMemories(userId, 10, keywords, queryEmbedding),
+    loadEpisodicMemories(userId, 5, keywords, queryEmbedding),
     loadRecentLogs(userId, 3),
   ]);
 
-  // Estimate total tokens to stay under budget
-  const longTermTruncated = truncateToTokenBudget(longTerm, 500);
+  // Apply dynamic token budgets
+  const longTermTruncated = truncateToTokenBudget(longTerm, budget.longTerm);
   const workingText = working.map((w) => w.content).join("\n");
-  const workingTruncated = truncateToTokenBudget(workingText, 300);
+  const workingTruncated = truncateToTokenBudget(workingText, budget.working);
   const episodicText = episodic.map((e) => e.content).join("\n");
-  const episodicTruncated = truncateToTokenBudget(episodicText, 200);
+  const episodicTruncated = budget.episodic > 0
+    ? truncateToTokenBudget(episodicText, budget.episodic)
+    : "";
 
   const facts = `${longTermTruncated}${workingTruncated ? "\n\nRecent:\n" + workingTruncated : ""}${episodicTruncated ? "\n\nMemories:\n" + episodicTruncated : ""}`;
 
@@ -362,12 +418,24 @@ export async function loadMemory(userId: string, taskContext?: string): Promise<
 // ---- Save memories to Supabase ----
 
 export async function saveWorkingMemory(userId: string, content: string): Promise<void> {
-  await getSupabaseClient().from("user_memory").insert({
+  const { data, error } = await getSupabaseClient().from("user_memory").insert({
     user_id: userId,
     memory_type: "working",
     encrypted_data: await encrypt(content),
     importance: 0.5,
-  });
+  }).select("id").single();
+
+  // Fire-and-forget: generate embedding and store it (does not block task execution)
+  if (!error && data?.id && process.env.USE_SEMANTIC_SEARCH === "true") {
+    generateEmbedding(content).then(async (embedding) => {
+      if (embedding) {
+        await Promise.resolve(getSupabaseClient().rpc("update_memory_embedding", {
+          p_memory_id: data.id,
+          p_embedding: embedding,
+        })).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 }
 
 export async function saveEpisodicMemory(
@@ -375,12 +443,24 @@ export async function saveEpisodicMemory(
   content: string,
   importance: number = 0.7
 ): Promise<void> {
-  await getSupabaseClient().from("user_memory").insert({
+  const { data, error } = await getSupabaseClient().from("user_memory").insert({
     user_id: userId,
     memory_type: "episodic",
     encrypted_data: await encrypt(content),
     importance: Math.min(Math.max(importance, 0), 1),
-  });
+  }).select("id").single();
+
+  // Fire-and-forget embedding
+  if (!error && data?.id && process.env.USE_SEMANTIC_SEARCH === "true") {
+    generateEmbedding(content).then(async (embedding) => {
+      if (embedding) {
+        await Promise.resolve(getSupabaseClient().rpc("update_memory_embedding", {
+          p_memory_id: data.id,
+          p_embedding: embedding,
+        })).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 }
 
 // ---- Daily log (encrypted file) ----

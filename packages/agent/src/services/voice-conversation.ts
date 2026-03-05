@@ -41,6 +41,8 @@ interface VoiceSession {
   // Memory context loaded at session start
   memoryContext: string;
   userProfile: string;
+  // Mid-call memory refresh tracking
+  lastMemoryRefresh: number;
 }
 
 const activeSessions = new Map<string, VoiceSession>();
@@ -214,7 +216,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     sessionId, callSid: callSid || '', userId, userName: 'there', userEmail: '',
     botName: 'Aevoy', greetingStyle: 'casual', timezone: 'America/Los_Angeles',
     conversationHistory: [], state: 'setup', pinAttempts: 0, pinDigits: '',
-    ws, startedAt: Date.now(), lastActivityAt: Date.now(), lastResponseAt: 0, lastResponseText: '', callType, memoryContext: '', userProfile: '',
+    ws, startedAt: Date.now(), lastActivityAt: Date.now(), lastResponseAt: 0, lastResponseText: '', callType, memoryContext: '', userProfile: '', lastMemoryRefresh: Date.now(),
   };
   activeSessions.set(sessionId, placeholderSession);
 
@@ -370,7 +372,7 @@ RULES:
           .eq("user_id", userId)
           .single()
           .then(r => r, (e: any) => { console.error("[VOICE-WS] Settings load failed:", e); return { data: null }; }),
-        loadMemory(userId).catch(() => ({ facts: "", recentLogs: "", workingMemories: [], episodicMemories: [] })),
+        loadMemory(userId, undefined, "voice").catch(() => ({ facts: "", recentLogs: "", workingMemories: [], episodicMemories: [] })),
       ]);
 
       const profile = profileResult.data;
@@ -449,6 +451,7 @@ RULES:
   session.timezone = timezone;
   session.state = needsPin ? "awaiting_pin" : "ready";
   session.memoryContext = memoryContext;
+  session.lastMemoryRefresh = Date.now();
   session.userProfile = userProfile;
 
   console.log(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
@@ -544,6 +547,34 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   // Normal conversation
   session.conversationHistory.push({ role: "user", content: voicePrompt });
   console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} user: "${voicePrompt.slice(0, 80)}"`);
+
+  // MID-CALL MEMORY REFRESH — every 5 minutes, reload user's memory
+  // This ensures the agent doesn't miss things saved by other channels during a long call
+  const MEMORY_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  const callDuration = Date.now() - session.startedAt;
+  const timeSinceRefresh = Date.now() - (session.lastMemoryRefresh || 0);
+  if (
+    session.userId &&
+    callDuration > MEMORY_REFRESH_INTERVAL &&
+    timeSinceRefresh > MEMORY_REFRESH_INTERVAL
+  ) {
+    session.lastMemoryRefresh = Date.now();
+    loadMemory(session.userId, undefined, "voice").then((freshMemory) => {
+      if (freshMemory.facts && freshMemory.facts.length > 20) {
+        // Append refresh notice only if memory has meaningful content
+        if (session.memoryContext && !session.memoryContext.includes("USER MEMORY:")) {
+          session.memoryContext += `\n\nUSER MEMORY (refreshed):\n${freshMemory.facts}`;
+        } else {
+          // Replace the USER MEMORY section with fresh data
+          session.memoryContext = session.memoryContext.replace(
+            /USER MEMORY.*$/s,
+            `USER MEMORY (refreshed):\n${freshMemory.facts}`
+          );
+        }
+        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Memory refreshed at ${Math.round(callDuration / 60000)}min`);
+      }
+    }).catch(() => { /* non-critical — call continues */ });
+  }
 
   try {
     // FAST PATH: Email queries — fetch and respond inline (< 5s) instead of creating background task
