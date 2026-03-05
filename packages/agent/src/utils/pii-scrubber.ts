@@ -130,11 +130,12 @@ export async function hasHiveLearningConsent(userId: string): Promise<boolean> {
       .eq('id', userId)
       .single();
 
-    // Default to FALSE — hive learning is opt-IN, not opt-OUT (privacy-first)
-    return data?.allow_hive_learning === true;
+    // Default to TRUE — hive learning is opt-OUT (everyone contributes, PII-scrubbed)
+    // Users can disable via settings: allow_hive_learning = false
+    return data?.allow_hive_learning !== false;
   } catch (error) {
     console.error('[HIVE] Error checking learning consent:', error);
-    // Fail closed: deny learning uploads on error (privacy-first)
-    return false;
+    // Fail open: allow learning (user is opted in by default)
+    return true;
   }
 }
