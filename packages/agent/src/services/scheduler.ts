@@ -75,6 +75,22 @@ export function startScheduler(): void {
   // Start persistent task heartbeat monitor (every 15 minutes)
   startMonitoringService();
   console.log('[SCHEDULER] Monitoring service started');
+
+  // Daily Twilio cost reconciliation — runs 60s after startup, then every 24h
+  setTimeout(async () => {
+    try {
+      const { runTwilioReconciliation } = await import('./twilio-reconciliation.js');
+      await runTwilioReconciliation();
+    } catch { /* non-critical */ }
+
+    setInterval(async () => {
+      try {
+        const { runTwilioReconciliation } = await import('./twilio-reconciliation.js');
+        await runTwilioReconciliation();
+      } catch { /* non-critical */ }
+    }, 24 * 60 * 60 * 1000);
+  }, 60 * 1000);
+  console.log('[SCHEDULER] Twilio reconciliation scheduled (daily)');
 }
 
 /**
