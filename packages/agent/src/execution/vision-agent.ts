@@ -2165,7 +2165,11 @@ export async function runVisionAgent(
             const forceRetryHint = (hasNoResults && altLocationMatch)
               ? ` The previous search had NO RESULTS. IMMEDIATELY search again — change the location to "${altLocationMatch[0]}" or remove location filters entirely. Do NOT ask, just DO IT NOW.`
               : '';
-            history.push(`⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${forceRetryHint}${profileHint}`);
+            // Context-aware re-prompt: research tasks need data extraction, not form filling
+            const rejectionHint = dataMissing && !isActionTask
+              ? `⚠️ DATA-MISSING DONE rejected: "${doneResult.substring(0, 100)}". You are on the correct page — READ the visible content and output DONE with the ACTUAL DATA the user asked for (titles, prices, names, addresses, etc.). Do NOT navigate away. Do NOT describe the page. Just output DONE "Item 1: [name] £X.XX, Item 2: ..."${forceRetryHint}`
+              : `⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${forceRetryHint}${profileHint}`;
+            history.push(rejectionHint);
 
             const rejectCount = history.filter(h => h.includes('DONE rejected')).length;
             if (rejectCount >= 5) {
