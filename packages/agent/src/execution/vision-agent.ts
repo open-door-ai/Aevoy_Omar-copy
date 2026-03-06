@@ -164,9 +164,18 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
             const labelledByText = labelledById
               ? (document.getElementById(labelledById)?.textContent?.trim() || '')
               : '';
+            // Check wrapping <label>Text<input></label> style (no for/id needed)
+            const parentLabel = isInput ? el.closest('label') : null;
+            const wrappedLabelText = parentLabel
+              ? Array.from(parentLabel.childNodes)
+                  .filter((n: ChildNode) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim())
+                  .map((n: ChildNode) => (n.textContent || '').trim())
+                  .join(' ')
+              : '';
             const name = el.getAttribute('aria-label') ||
               labelledByText ||
               labelText ||
+              wrappedLabelText ||
               (isInput ? el.getAttribute('placeholder') : null) ||
               visibleText ||
               el.getAttribute('title') ||
