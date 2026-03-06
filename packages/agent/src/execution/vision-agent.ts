@@ -1161,6 +1161,17 @@ Tree shows: [1] searchbox "Search" [2] button "Go" [3] link "Sign Up"
 → TYPE [1] "wireless earbuds"
 → PRESS Enter
 
+FORM FILL EXAMPLE (CORRECT field mapping by label):
+Tree shows: [1] textbox "Customer name" [2] textbox "Telephone" [3] textbox "E-mail address" [4] radio "Large" [5] checkbox "Extra Cheese" [6] button "Submit"
+Task: fill name=Alice, phone=555-1234, email=alice@example.com, size=Large, topping=Extra Cheese
+→ FILL [1] "Alice"           ← "Customer name" field gets the NAME value
+→ FILL [2] "555-1234"        ← "Telephone" field gets the PHONE value
+→ FILL [3] "alice@example.com" ← "E-mail address" field gets the EMAIL value
+→ CLICK [4]
+→ CLICK [5]
+→ CLICK [6]
+❌ WRONG: FILL [1] "alice@example.com" — NEVER put email in a "name" field
+
 Tree shows: [5] textbox "Email" [6] textbox "Password" [7] button "Create Account"
 → FILL [5] "user@aevoy.com"
 → FILL [6] "MyP@ssw0rd"
