@@ -564,11 +564,13 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
   // WAIT
   if (/^WAIT$/i.test(line)) return { type: 'wait', raw: line };
 
-  // DONE "result"
-  const done = line.match(/^DONE\s+"((?:[^"\\]|\\.)*)"/i);
+  // DONE "result" — use greedy match (last " on line) so inner quotes don't truncate result
+  // e.g. DONE "Found: "Product Name" for £23.99" — greedy captures everything up to last "
+  const done = line.match(/^DONE\s+"(.+)"$/i);
   if (done) return { type: 'done', result: done[1], raw: line };
+  // Fallback: no quotes or mismatched quotes — capture everything after DONE
   const doneRaw = line.match(/^DONE\s+(.+)/i);
-  if (doneRaw) return { type: 'done', result: doneRaw[1], raw: line };
+  if (doneRaw) return { type: 'done', result: doneRaw[1].replace(/^"|"$/g, ''), raw: line };
 
   // FAIL "reason"
   const fail = line.match(/^FAIL\s+"((?:[^"\\]|\\.)*)"/i);
@@ -784,7 +786,23 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (!action.value) return false;
         // REF-BASED
         if (action.ref !== undefined) {
-          const resolved = resolveByRef(action.ref);
+          let resolved = resolveByRef(action.ref);
+          // Smart mismatch correction: if email value goes into a "name" field, redirect to email field
+          if (resolved && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(action.value)) {
+            const fieldLabel = resolved.entry.name.toLowerCase();
+            const isNameField = /\b(name|username|user\s*name|full\s*name|first\s*name|last\s*name|customer\s*name)\b/i.test(fieldLabel);
+            if (isNameField) {
+              // Find the email field in the refs map
+              let emailRef: number | null = null;
+              refs.forEach((entry, refId) => {
+                if (!emailRef && /\b(e.?mail|email)\b/i.test(entry.name)) emailRef = refId;
+              });
+              if (emailRef !== null) {
+                console.log(`[BROWSER-AGENT] Label mismatch: email value "${action.value.substring(0, 30)}" was going into "${resolved.entry.name}" — redirecting to email field [${emailRef}]`);
+                resolved = resolveByRef(emailRef);
+              }
+            }
+          }
           if (resolved) {
             try {
               await humanType(page, resolved.locator, action.value);
