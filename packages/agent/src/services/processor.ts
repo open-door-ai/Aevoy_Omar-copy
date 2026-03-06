@@ -1812,7 +1812,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           } catch { /* ignore */ }
         }
 
-                if (weatherText && weatherText.length > 3) {
+        // All weather APIs failed — return graceful error (never burn Bright Data on weather)
+        if (!weatherText) {
+          const noWeatherResp = `I couldn't retrieve live weather data for ${rawLocation} right now. Please check weather.com or Environment Canada for current conditions.`;
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed', response_text: noWeatherResp,
+            completed_at: new Date().toISOString(), type: 'general',
+          }).eq('id', taskId);
+          if (!task.suppressEmail) {
+            sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, noWeatherResp).catch(() => {});
+          }
+          clearTimeout(masterTimer);
+          return { taskId, success: true, response: noWeatherResp, actions: [] };
+        }
+
+        if (weatherText && weatherText.length > 3) {
           const weatherResponse = `Current weather in ${rawLocation}: ${weatherText}`;
           console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
           await getSupabaseClient().from('tasks').update({
