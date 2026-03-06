@@ -150,11 +150,23 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
                 el.getAttribute('type') === 'radio' ? 'radio' : 'textbox') :
               tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' : tag);
             // Name priority:
-            // - Inputs/textareas: aria-label > placeholder > title (no visible text to use)
+            // - Inputs/textareas: aria-label > <label for="id"> > placeholder > title (no visible text to use)
             // - Links/buttons:    aria-label > visible textContent > title (title is tooltip, not label)
-            const isInput = tag === 'input' || tag === 'textarea';
+            const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
             const visibleText = isInput ? '' : (el.textContent?.trim()?.substring(0, 60) || '');
+            // Read <label for="..."> association (the correct HTML labeling mechanism)
+            const elId = el.getAttribute('id');
+            const labelText = elId
+              ? (document.querySelector(`label[for="${elId}"]`)?.textContent?.trim() || '')
+              : '';
+            // Also check aria-labelledby
+            const labelledById = el.getAttribute('aria-labelledby');
+            const labelledByText = labelledById
+              ? (document.getElementById(labelledById)?.textContent?.trim() || '')
+              : '';
             const name = el.getAttribute('aria-label') ||
+              labelledByText ||
+              labelText ||
               (isInput ? el.getAttribute('placeholder') : null) ||
               visibleText ||
               el.getAttribute('title') ||
