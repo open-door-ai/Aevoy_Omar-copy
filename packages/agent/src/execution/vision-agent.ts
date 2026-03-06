@@ -2364,9 +2364,19 @@ export async function runVisionAgent(
     return { success: false, error: `Max steps (${dynamicMaxSteps}) reached`, steps, cost: totalCost, screenshots, pageData: endPageData };
 
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const isCdpDrop = /target closed|protocol error|connection closed|websocket was closed|session closed|browser has been closed/i.test(errMsg);
     let pageData = '';
-    try { pageData = await capturePageData(activePage); } catch { /* best effort */ }
-    return { success: false, error: err instanceof Error ? err.message : String(err), steps, cost: totalCost, screenshots, pageData };
+    if (!isCdpDrop) {
+      try { pageData = await capturePageData(activePage); } catch { /* best effort */ }
+    }
+    // If CDP dropped and we have history, surface partial results
+    if (isCdpDrop && history.length > 0) {
+      const partialSummary = history.slice(-5).join('; ');
+      console.warn(`[BROWSER-AGENT] CDP disconnect after ${steps} steps — partial result from history`);
+      return { success: false, error: `CDP disconnected: ${errMsg.substring(0, 80)}`, pageData: `Browser disconnected after ${steps} steps. Last actions: ${partialSummary}`, steps, cost: totalCost, screenshots };
+    }
+    return { success: false, error: errMsg, steps, cost: totalCost, screenshots, pageData };
   }
   }; // end runInner
 
@@ -2374,15 +2384,22 @@ export async function runVisionAgent(
   try {
     agentResult = await runInner();
   } catch (outerErr) {
+    const outerErrMsg = outerErr instanceof Error ? outerErr.message : String(outerErr);
+    const isCdpDrop = /target closed|protocol error|connection closed|websocket was closed|session closed|browser has been closed/i.test(outerErrMsg);
     const fallbackUrl = (() => { try { return activePage.url(); } catch { return lastGoodUrl || 'unknown'; } })();
     console.warn(`[BROWSER-AGENT] Outer catch: unhandled error after ${steps} steps: ${outerErr}`);
+    // If CDP dropped and we did meaningful work, return partial data from history
+    const partialHistory = history.length > 0 ? `Last actions: ${history.slice(-5).join('; ')}` : '';
     agentResult = {
       success: false,
-      error: `Browser agent crashed: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`,
-      result: `I worked through ${steps} step(s) on ${fallbackUrl.substring(0, 80)} and encountered an error. Please retry.`,
+      error: `Browser agent crashed: ${outerErrMsg}`,
+      result: isCdpDrop && steps > 5
+        ? `Browser session dropped after ${steps} step(s). ${partialHistory}`
+        : `I worked through ${steps} step(s) on ${fallbackUrl.substring(0, 80)} and encountered an error. Please retry.`,
       steps,
       cost: totalCost,
       screenshots,
+      pageData: partialHistory,
     };
   }
   // Guaranteed non-null result
