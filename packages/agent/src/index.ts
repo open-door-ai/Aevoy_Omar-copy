@@ -595,7 +595,7 @@ app.get("/debug/test-apis", async (_req, res) => {
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'Reply OK' }], max_tokens: 5 }),
+        body: JSON.stringify({ model: 'meta-llama/llama-4-scout-17b-16e-instruct', messages: [{ role: 'user', content: 'Reply OK' }], max_tokens: 5 }),
         signal: AbortSignal.timeout(10000),
       });
       const d = await r.json() as any;

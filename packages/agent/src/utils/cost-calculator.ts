@@ -31,7 +31,7 @@ export const TWILIO_RATES = {
 // Token counts are EXACT values from API responses. Rates are maintained constants.
 // Source: provider pricing pages, last verified 2026-02-20.
 export const AI_MODEL_COSTS = {
-  groq: { input: 0.59, output: 0.79 },         // llama-3.3-70b-versatile
+  groq: { input: 0.59, output: 0.79 },         // llama-4-scout / compound-mini
   deepseek: { input: 0.27, output: 1.10 },      // deepseek-chat (DeepSeek V3)
   kimi: { input: 0.60, output: 2.50 },           // kimi-k2 (moonshot)
   gemini: { input: 0, output: 0 },               // gemini-2.0-flash (free tier)

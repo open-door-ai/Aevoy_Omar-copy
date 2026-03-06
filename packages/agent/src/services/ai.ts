@@ -357,7 +357,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   plan: [
@@ -369,7 +369,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   ],
   reason: [
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
@@ -392,7 +392,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'google/gemma-3-27b-it:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'qwen-3-32b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 }, // last resort
@@ -423,7 +423,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'cerebras', model: 'llama-3.3-70b', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 }, // paid fallback
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 }, // last resort — always available
@@ -470,7 +470,7 @@ const MODEL_MIN_INTERVAL: Record<string, number> = {
   'meta-llama/llama-4-scout-17b-16e-instruct': 12000, // 30K TPM — generous
   'moonshotai/kimi-k2-instruct-0905': 20000,          // 10K TPM — moderate
   'qwen/qwen3-32b': 30000,                            // 6K TPM — tightest, 2 calls/min max
-  'llama-3.3-70b-versatile': 20000,                    // 12K TPM
+  'groq/compound-mini': 20000,                          // 70K TPM, no TPD limit
   'llama-3.1-8b-instant': 8000,                        // 6K TPM but ~2K per call, browser workhorse
   'gemini-2.5-flash': 15000,                            // free tier 10 RPM — needs spacing
 };
@@ -2078,12 +2078,12 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
   }
 
   // Second fallback: Groq — fast when not rate-limited
-  if (process.env.GROQ_API_KEY && !isModelBackedOff('groq', 'llama-3.3-70b-versatile')) {
+  if (process.env.GROQ_API_KEY && !isModelBackedOff('groq', 'meta-llama/llama-4-scout-17b-16e-instruct')) {
     try {
       const groqClient = getGroqClient();
       const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. If search results only contain article links without real data, use your training knowledge to name specific restaurants/products/services. NEVER say "available at", "not directly retrieved", "can be found at", or redirect to a URL. Max 2-3 sentences.`;
       const res = await groqClient.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         max_tokens: 300,
         temperature: 0.1,
         messages: [
@@ -2096,8 +2096,8 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
         const groqInputTokens = res.usage?.prompt_tokens || 100;
         const groqOutputTokens = res.usage?.completion_tokens || 100;
-        const groqCost = (groqInputTokens * 0.59 + groqOutputTokens * 0.79) / 1_000_000;
-        trackApiCall(userId, "llama-3.3-70b-versatile", groqInputTokens, groqOutputTokens, groqCost, "groq", taskId, "fallback_direct_answer").catch(() => {});
+        const groqCost = (groqInputTokens * 0.11 + groqOutputTokens * 0.34) / 1_000_000;
+        trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", groqInputTokens, groqOutputTokens, groqCost, "groq", taskId, "fallback_direct_answer").catch(() => {});
         console.log(`[FALLBACK-GROQ] Direct answer via Groq (${clean.length} chars, $${groqCost.toFixed(5)})`);
         return { content: clean, cost: groqCost, tokensUsed: groqInputTokens + groqOutputTokens };
       }
@@ -2647,11 +2647,11 @@ export async function generateVisionResponse(
     }
   }
 
-  // 5. Groq text-only fallback — fastest text model, good for rapid vision decisions
+  // 5. Groq text-only fallback — Scout has 500K TPD (5x more than 70b's 100K)
   if (process.env.GROQ_API_KEY) {
     try {
       const stream = await withTimeout(getGroqClient().chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         messages: [
           { role: 'system', content: systemPrompt || 'You are a browser automation expert. Analyze the page state and output the next action.' },
           { role: 'user', content: `${prompt}\n\n[Note: No screenshot available — decide from the text context above.]` },
@@ -2669,7 +2669,7 @@ export async function generateVisionResponse(
       if (content.length > 5) {
         // Groq is free but track for visibility
         console.log(`[AI] Vision (Groq text-fallback) | Cost: ~$0 | ${content.length} chars`);
-        if (userId) trackApiCall(userId, "llama-3.3-70b-versatile", 0, 0, 0, "groq", taskId, "vision").catch(() => {});
+        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", 0, 0, 0, "groq", taskId, "vision").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {

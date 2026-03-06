@@ -48,7 +48,7 @@ export async function requiresAutonomousPlanning(
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
         max_tokens: 5,
         temperature: 0,
         messages: [
@@ -146,7 +146,7 @@ Rules:
         "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: {
-        model: "llama-3.3-70b-versatile",
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
         max_tokens: 2000,
         temperature: 0.3,
         messages: [
@@ -218,7 +218,7 @@ async function verifyGoalAchievement(
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
         max_tokens: 500,
         temperature: 0,
         messages: [
