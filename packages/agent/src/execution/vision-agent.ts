@@ -1218,9 +1218,16 @@ async function buildPrompt(
 
   const stuckSection = stuckHint ? `\n${stuckHint}\n` : '';
 
+  // If currently on a confirmation/result URL, force the agent to output DONE
+  const urlPath = (() => { try { return new URL(url).pathname; } catch { return ''; } })();
+  const isConfirmationPage = /\/(post|success|confirm|thank|order|receipt|result|done|complete|submitted|checkout\/complete)\b/i.test(urlPath);
+  const confirmationNote = isConfirmationPage
+    ? `\n🎯 CONFIRMATION PAGE DETECTED: You are on "${url}" — this is a result/success page. The task is DONE. Output: DONE "Summary of what you see (form data, order details, JSON keys, confirmation message)". Do NOT output any other action. Do NOT navigate back.\n`
+    : '';
+
   return `TASK: ${task}
 URL: ${url}
-${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}
+${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}${confirmationNote}
 ACCESSIBILITY TREE (use [ref] numbers to target elements):
 ${snapshot}
 
@@ -1975,6 +1982,29 @@ export async function runVisionAgent(
         history.push(`Step ${steps + 1}: parse failed — AI didn't output valid actions`);
         steps--; // Don't count parse failures as steps
         continue;
+      }
+
+      // ── Confirmation URL enforcement: force DONE if on result/success page ──
+      // When the AI outputs non-DONE actions while on a confirmation page, intercept and force DONE.
+      // Prevents re-filling form loops after successful submission.
+      {
+        const postActionUrl = activePage.url();
+        const postUrlPath = (() => { try { return new URL(postActionUrl).pathname; } catch { return ''; } })();
+        const isOnConfirmPage = /\/(post|success|confirm|thank|order|receipt|result|done|complete|submitted|checkout\/complete)\b/i.test(postUrlPath);
+        const firstParsedType = parsedActions[0]?.type;
+        if (isOnConfirmPage && firstParsedType !== 'done' && firstParsedType !== 'fail') {
+          // Capture the page content as the result
+          const confirmPageText = await Promise.race([
+            activePage.evaluate(() => (document.body?.innerText || '').substring(0, 1000)),
+            new Promise<string>((resolve) => setTimeout(() => resolve(''), 2000)),
+          ]).catch(() => '');
+          const confirmResult = confirmPageText.length > 20
+            ? `Completed on ${postActionUrl}. Page shows: ${confirmPageText.substring(0, 400)}`
+            : `Task completed on ${postActionUrl}`;
+          console.log(`[BROWSER-AGENT] Force-DONE on confirmation URL: ${postActionUrl.substring(0, 80)}`);
+          try { screenshots.push(await takeScreenshot(activePage)); } catch { /* ok */ }
+          return { success: true, result: confirmResult, steps: steps + 1, cost: totalCost, screenshots };
+        }
       }
 
       // ── Loop detection ──
