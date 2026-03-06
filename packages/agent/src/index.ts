@@ -2744,7 +2744,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-whatsapp-link-secret": process.env.TELEGRAM_WEBHOOK_SECRET || "",
+            "x-whatsapp-link-secret": process.env.WHATSAPP_WEBHOOK_SECRET || process.env.TELEGRAM_WEBHOOK_SECRET || "",
           },
           body: JSON.stringify({ code, phone: fromPhone }),
         });
@@ -3385,7 +3385,7 @@ server.listen(PORT, async () => {
                     subject: task.email_subject || 'Your task',
                     body: gracefulResponse,
                   });
-                  console.log(`[WATCHDOG] Sent recovery email to ${profile.email}`);
+                  console.log(`[WATCHDOG] Sent recovery email to ${maskEmail(profile.email)}`);
                 }
               } catch (emailErr) {
                 console.warn('[WATCHDOG] Could not send recovery email:', emailErr);
@@ -3440,7 +3440,7 @@ server.listen(PORT, async () => {
 
           // If webhook is wrong (localhost, dead IP, different host), repair it
           if (data.voice_url !== expectedVoice || data.sms_url !== expectedSms) {
-            console.log(`[WEBHOOK-HEALER] Repairing ${num.phone_number}: ${data.voice_url} → ${expectedVoice}`);
+            console.log(`[WEBHOOK-HEALER] Repairing ${maskPhone(num.phone_number)}: ${data.voice_url} → ${expectedVoice}`);
 
             await fetch(
               `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/IncomingPhoneNumbers/${num.twilio_sid}.json`,
@@ -3458,10 +3458,10 @@ server.listen(PORT, async () => {
                 }).toString(),
               }
             );
-            console.log(`[WEBHOOK-HEALER] ✅ Fixed ${num.phone_number}`);
+            console.log(`[WEBHOOK-HEALER] ✅ Fixed ${maskPhone(num.phone_number)}`);
           }
         } catch (err) {
-          console.error(`[WEBHOOK-HEALER] Error checking ${num.phone_number}:`, err);
+          console.error(`[WEBHOOK-HEALER] Error checking ${maskPhone(num.phone_number)}:`, err);
         }
       }
     } catch (e) {

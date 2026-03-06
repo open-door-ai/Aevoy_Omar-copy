@@ -23,6 +23,7 @@ import { handleCaptchaIfPresent } from './captcha.js';
 import { extractVerificationCode } from '../utils/email-code-extractor.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 import { getHiveMindLearnings } from '../services/hive-mind-synthesis.js';
+import { maskPhone, maskEmail } from '../utils/logging.js';
 
 const MAX_STEPS = 150;
 const MAX_STEPS_BOOKING = 80; // Booking flows need more steps; processor gives them 12 min
@@ -1335,7 +1336,7 @@ export async function runVisionAgent(
   }
 
   if (taskCreds.email) {
-    console.log(`[BROWSER-AGENT] Credentials: email=${taskCreds.email}, password=${taskCreds.password ? '***' : '(none)'}${taskCreds.phone ? `, phone=${taskCreds.phone}` : ''}`);
+    console.log(`[BROWSER-AGENT] Credentials: email=${maskEmail(taskCreds.email || '')}, password=${taskCreds.password ? '***' : '(none)'}${taskCreds.phone ? `, phone=${maskPhone(taskCreds.phone)}` : ''}`);
   }
 
   // ── Fetch user profile for context injection ──
@@ -2175,7 +2176,7 @@ export async function runVisionAgent(
 
           // ── Try SMS verification if email didn't find a code ──
           if (!codeFound && (isSmsVerification || isAnyVerification) && taskCreds.phone) {
-            console.log(`[BROWSER-AGENT] Checking SMS verification codes on ${taskCreds.phone}`);
+            console.log(`[BROWSER-AGENT] Checking SMS verification codes on ${maskPhone(taskCreds.phone || '')}`);
             if (!isEmailVerification) await activePage.waitForTimeout(15000); // wait for SMS delivery
             try {
               const smsMessages = await fetchRecentSms(taskCreds.phone, 5, 5);
@@ -2205,7 +2206,7 @@ export async function runVisionAgent(
                 }
               }
               if (!codeFound && smsMessages.length === 0) {
-                console.log(`[BROWSER-AGENT] No SMS found yet on ${taskCreds.phone} — will retry on next WAIT`);
+                console.log(`[BROWSER-AGENT] No SMS found yet on ${maskPhone(taskCreds.phone || '')} — will retry on next WAIT`);
               }
             } catch (e) { console.warn(`[BROWSER-AGENT] SMS check failed: ${e}`); }
           }
