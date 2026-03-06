@@ -315,40 +315,10 @@ async function runJobCheck(job: MonitoringJob): Promise<void> {
 
     let aiResponse = '';
 
-    // ---- Strategy: real task execution for platform checks ----
-    if (needsRealCheck(job.description)) {
-      const platformUrl = extractPlatformUrl(job.description);
-      console.log(`[MONITORING] Platform check: "${job.description.substring(0, 50)}" → ${platformUrl || 'no URL'}`);
-
-      try {
-        // Fire a real subtask through the processor (suppressed email)
-        const { processTask } = await import('./processor.js');
-        const checkSubject = `[MONITOR CHECK] ${job.description}. Report what you find — any new messages, notifications, earnings, points, followers, or changes. Be specific with numbers.`;
-
-        const subtaskRequest: TaskRequest = {
-          userId: job.userId,
-          username: job.username,
-          from: `${job.username}@aevoy.com`,
-          subject: checkSubject,
-          body: platformUrl ? `Start by browsing ${platformUrl}` : '',
-          inputChannel: 'proactive',
-          suppressEmail: true,
-          sessionHint: platformUrl ? { userId: job.userId, domain: new URL(platformUrl).hostname } : undefined,
-        };
-
-        const result = await Promise.race([
-          processTask(subtaskRequest),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 5 * 60 * 1000)), // 5 min timeout
-        ]);
-
-        if (result && 'response' in result) {
-          aiResponse = (result as any).response || '';
-        }
-      } catch (taskErr) {
-        console.error(`[MONITORING] Subtask execution failed for job ${job.id}:`, taskErr);
-        // Fall through to quickValidate
-      }
-    }
+    // NOTE: Monitoring jobs use TEXT-ONLY AI inference — no browser sessions.
+    // Browser-based monitoring was removed: it launched Bright Data sessions for every
+    // job on every 15-min heartbeat, burning $10-15/day per user with MONITOR: tags.
+    // Real browser checks must be user-initiated tasks, not background monitoring.
 
     // ---- Fallback: AI-only check (inbox, email, simple reasoning) ----
     if (!aiResponse) {
