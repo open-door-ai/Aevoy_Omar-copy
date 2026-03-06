@@ -2005,9 +2005,22 @@ export async function runVisionAgent(
           // This prevents rejecting valid answers like "£53.74, One star" or "Population: 13,982,112"
           // Use \d{2,} not \d{3,} — prices like £53.74 only have 2 consecutive digits
           const hasFactualData = /\d{2,}/.test(doneResult) && doneResult.length > 15;
+          // Detect give-up language: agent reporting failure in DONE instead of data
+          const isGiveUp = /\b(got stuck|couldn't|couldn.t|couldn.t complete|couldn.t find|could not|unable to|hit a snag|ran into|wasn.t working|got confused|I.m unable|unable to (access|find|complete|navigate)|may require a different|no longer accessible|the site (may|might)|try again|different approach|stuck after \d|stuck on the|couldn.t proceed|couldn.t access)\b/i.test(doneResult);
           const isInfoTask = /\b(tell me|what is|list|find|how much|how many|population|price|cost|address|rating|show me|what are|name the)\b/i.test(task);
-          if (hasFactualData && isInfoTask) {
+          if (hasFactualData && isInfoTask && !isGiveUp) {
             // Skip all rejection — this has real data for an info task
+          } else if (isGiveUp) {
+            // Agent is reporting failure in DONE — force it to keep trying
+            const rejectGiveUpCount = history.filter(h => h.includes('GIVEUP rejected')).length;
+            if (rejectGiveUpCount >= 3) {
+              // Truly stuck after 3 rejections — fall through to normal DONE handling
+              console.log('[BROWSER-AGENT] DONE with give-up language rejected ' + rejectGiveUpCount + ' times — accepting to avoid loop');
+            } else {
+              console.log('[BROWSER-AGENT] Rejected GIVEUP DONE: "' + doneResult.substring(0, 80) + '"');
+              history.push('GIVEUP rejected: DO NOT give up. You have not tried all strategies yet. SCROLL down, try CLICK on visible elements, or NAVIGATE to a different path. Keep going — task: "' + task.substring(0, 100) + '".');
+              break; // break action loop, continue main loop
+            }
           } else {
 
           // Passive DONE rejection — catch ANY occurrence of passive phrasing anywhere in the result
