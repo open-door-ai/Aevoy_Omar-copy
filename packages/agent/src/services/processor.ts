@@ -7554,6 +7554,9 @@ Extract the ACTUAL phone number from search results and call them:
     // This MUST happen before multi-action SMS injection so thinking doesn't leak into texts
     if (aiResponse.content) {
       aiResponse.content = aiResponse.content
+        // Strip XML-style function_calls blocks (can leak from some models)
+        .replace(/<function_calls>[\s\S]*?<\/function_calls>\s*/gi, '')
+        .replace(/<function_calls>[\s\S]*?<\/antml:function_calls>\s*/gi, '')
         // Strip [THINKING]...[/THINKING] tagged blocks
         .replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '')
         // Strip untagged thinking-like prose that AI sometimes writes
