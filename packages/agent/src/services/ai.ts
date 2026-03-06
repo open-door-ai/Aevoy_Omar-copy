@@ -2037,12 +2037,17 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
     ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results concisely. No "I'll" or "Let me".`
     : `The user asked: "${userRequest}"\n\nGive the best specific knowledge-based answer. Name real websites with URLs. Start with a concrete fact. No "I'll" or "Let me".`;
 
+  // PASSIVE_LINE: matches lines that are purely future-intent or offer-to-help — reject them
+  const PASSIVE_LINE = /^(?:i'?ll|i\u2019ll|let me|i will|i'm going to|i\u2019m going to|i can try|i need to|want me to|shall i|would you like|do you want me to|should i)\s/i;
+  // Whole-response passive: short response that's only an offer with no facts
+  const isWholeResponsePassive = (t: string): boolean =>
+    /(?:want me to|shall i|would you like me to|do you want me to|should i)\s/i.test(t) && t.split('\n').length <= 3 && t.length < 200;
   // Helper: strip narration lines from any model output
   const stripNarration = (text: string): string => {
     const lines = text.split('\n');
     const clean = lines.filter(line => {
       const lc = line.toLowerCase().trim();
-      return !(/^(?:i'?ll|i\u2019ll|let me|i will|i'm going to|i\u2019m going to|i can try|i need to)\s/i.test(lc));
+      return !PASSIVE_LINE.test(lc);
     }).join('\n').trim();
     return clean; // Return empty string if ALL lines were narration
   };
@@ -2062,7 +2067,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       }), 15000);
       const content = res.choices[0]?.message?.content || '';
       const clean = stripNarration(content);
-      if (clean && clean.length > 20) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
         trackApiCall(userId, "mistralai/mistral-small-3.1-24b-instruct:free", 0, 0, 0, "openrouter", taskId, "fallback_direct_answer").catch(() => {});
         console.log(`[FALLBACK-OR] Direct answer via OpenRouter (${clean.length} chars, $0)`);
         return { content: clean, cost: 0, tokensUsed: 0 };
@@ -2088,7 +2093,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       });
       const content = res.choices[0]?.message?.content || '';
       const clean = stripNarration(content);
-      if (clean && clean.length > 20) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
         const groqInputTokens = res.usage?.prompt_tokens || 100;
         const groqOutputTokens = res.usage?.completion_tokens || 100;
         const groqCost = (groqInputTokens * 0.59 + groqOutputTokens * 0.79) / 1_000_000;
@@ -2114,7 +2119,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       }), 15000);
       const content = response.choices[0]?.message?.content || "";
       const clean = stripNarration(content);
-      if (clean && clean.length > 20) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "fallback_direct_answer").catch(() => {});
@@ -2144,7 +2149,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
       });
       const content = res.choices[0]?.message?.content || "";
       const clean = stripNarration(content);
-      if (clean && clean.length > 20) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
         const dsInputTokens = res.usage?.prompt_tokens || 100;
         const dsOutputTokens = res.usage?.completion_tokens || 100;
         const dsCost = (dsInputTokens * 0.27 + dsOutputTokens * 1.10) / 1_000_000;
