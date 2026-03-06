@@ -3748,13 +3748,19 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         console.log(`[BROWSER-FAST-PATH] Explicit domain task — navigating directly to ${_bfpTargetUrl} and launching vision agent`);
         const _bfpPage = executionEngine.getPage?.();
         if (_bfpPage && !_bfpPage.isClosed()) {
+          let _bfpVisionAttempted = false; // track whether we reached runVisionAgent call
           try {
-            // Navigate directly to the target URL
-            await _bfpPage.goto(_bfpTargetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-            await _bfpPage.waitForTimeout(2000); // Let JS/SPA render
+            // Navigate directly to the target URL — use .catch() so goto errors don't skip iteration loop
+            await _bfpPage.goto(_bfpTargetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch((gotoErr: Error) => {
+              console.warn(`[BROWSER-FAST-PATH] goto(${_bfpTargetUrl}) failed: ${gotoErr.message} — checking page state`);
+            });
+            await _bfpPage.waitForTimeout(1000); // Let JS/SPA render
 
             const _bfpPageUrl = _bfpPage.url();
-            const _bfpIsError = _bfpPageUrl.startsWith('chrome-error://') || _bfpPageUrl.startsWith('about:');
+            // Only treat chrome-error:// as an unrecoverable error page.
+            // about:blank means goto() failed — the vision agent's own pre-navigation logic
+            // will handle it (it detects blank and navigates itself).
+            const _bfpIsError = _bfpPageUrl.startsWith('chrome-error://');
 
             if (!_bfpIsError) {
               // Prepare vision agent context (same as the existing invocation in the iteration loop)
@@ -3789,6 +3795,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                 progress_message: `[BROWSER-FAST-PATH] Vision agent running on ${_bfpPageUrl.substring(0, 60)}`
               }).eq('id', taskId).then(() => {});
 
+              _bfpVisionAttempted = true;
               // Run vision agent — any task requiring multi-step interaction gets 12 min
               // Generic: form fills, account creation, purchases, earning, bookings, signups
               const _bfpIsComplex = _bfpIsBooking || _bfpIsSignup ||
@@ -3936,7 +3943,14 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           } catch (_bfpErr) {
             const _bfpErrMsg = _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr);
             const _bfpDomainForErr = (() => { try { return new URL(_bfpTargetUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
-            console.warn(`[BROWSER-FAST-PATH] Navigation/vision failed:`, _bfpErrMsg);
+            console.warn(`[BROWSER-FAST-PATH] Navigation/vision failed (visionAttempted=${_bfpVisionAttempted}):`, _bfpErrMsg);
+
+            // If vision agent never ran (error in pre-navigation setup), fall through to
+            // the main iteration loop — it will handle the task with fetch-based search/AI.
+            if (!_bfpVisionAttempted) {
+              console.log(`[BROWSER-FAST-PATH] Pre-vision error — falling through to iteration loop`);
+              // isTaskComplete stays false → iteration loop runs
+            } else {
 
             // For timeout errors: try to capture live page data and summarize before giving up
             if (/timeout/i.test(_bfpErrMsg) && _bfpPage && !_bfpPage.isClosed()) {
@@ -3973,7 +3987,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               } catch { /* fall through */ }
             }
 
-            if (!isTaskComplete) {
+            if (!isTaskComplete && _bfpVisionAttempted) {
               const isBlocked = /bot|blocked|access denied|CAPTCHA|Cloudflare/i.test(_bfpErrMsg);
               const isTimeout = /timeout/i.test(_bfpErrMsg);
               aiResponse.content = isTimeout
@@ -3997,6 +4011,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               aiSignaledComplete = true;
               signupAutoCompleted = true;
             }
+            } // close else (_bfpVisionAttempted)
           }
         }
       }
