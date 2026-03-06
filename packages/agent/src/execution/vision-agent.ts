@@ -1993,8 +1993,10 @@ export async function runVisionAgent(
       {
         const postActionUrl = activePage.url();
         const postUrlPath = (() => { try { return new URL(postActionUrl).pathname; } catch { return ''; } })();
-        const postLastSeg = postUrlPath.split('/').filter(Boolean).pop() || '';
-        const isOnConfirmPage = /^(post|success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(postLastSeg) ||
+        const postSegs = postUrlPath.split('/').filter(Boolean);
+        const postLastSeg = [...postSegs].pop() || '';
+        const isOnConfirmPage = /^(success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(postLastSeg) ||
+          (postLastSeg.toLowerCase() === 'post' && postSegs.length === 1) ||
           /\/(checkout\/complete|order[-_]confirm|order[-_]success|payment[-_]success|booking[-_]confirm)\b/i.test(postUrlPath);
         const firstParsedType = parsedActions[0]?.type;
         if (isOnConfirmPage && firstParsedType !== 'done' && firstParsedType !== 'fail') {
@@ -2042,8 +2044,11 @@ export async function runVisionAgent(
           // the URL changed, and we're on a success/result page. Don't second-guess it.
           // Use the LAST path segment to avoid false positives (/forms/post is NOT confirmation; /post IS).
           const doneUrlPath = (() => { try { return new URL(doneUrl).pathname; } catch { return ''; } })();
-          const doneLastSeg = doneUrlPath.split('/').filter(Boolean).pop() || '';
-          const isConfirmationUrl = /^(post|success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(doneLastSeg) ||
+          const doneSegs = doneUrlPath.split('/').filter(Boolean);
+          const doneLastSeg = doneSegs.pop() || '';
+          // 'post' is a confirmation only when it's the sole path segment (/post), not nested (/forms/post)
+          const isConfirmationUrl = /^(success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(doneLastSeg) ||
+            (doneLastSeg.toLowerCase() === 'post' && doneSegs.length === 0) ||
             /\/(checkout\/complete|order[-_]confirm|order[-_]success|payment[-_]success|booking[-_]confirm)\b/i.test(doneUrlPath);
           if (isConfirmationUrl) {
             console.log(`[BROWSER-AGENT] Auto-accepting DONE on confirmation URL: ${doneUrl.substring(0, 80)}`);
