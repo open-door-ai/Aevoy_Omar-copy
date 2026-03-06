@@ -1532,8 +1532,8 @@ export async function runVisionAgent(
     }
 
     // ── Service mismatch check — only for simple service names, not explicit domains ──
-    // Skip if task already contains an explicit domain (e.g. "books.toscrape.com")
-    const hasExplicitDomain = /[\w-]+\.[\w-]+\.(com|org|net|io|co|app|ca|uk)\b/i.test(task);
+    // Skip if task already contains an explicit URL or domain
+    const hasExplicitDomain = /https?:\/\/|[\w-]+\.(?:com|org|net|io|co|app|ca|uk|gov|edu)\b/i.test(task);
     if (!hasExplicitDomain) {
       const postNavUrl = activePage.url();
       if (postNavUrl && !postNavUrl.startsWith('about:') && !postNavUrl.startsWith('chrome-error://')) {
@@ -1543,7 +1543,7 @@ export async function runVisionAgent(
         if (svcMatch) {
           const expected = svcMatch[1].toLowerCase();
           const currentDomain = (() => { try { return new URL(postNavUrl).hostname.toLowerCase(); } catch { return ''; } })();
-          const skip = new Set(['account', 'free', 'new', 'the', 'email', 'user', 'test']);
+          const skip = new Set(['account', 'free', 'new', 'the', 'email', 'user', 'test', 'https', 'http']);
           if (!skip.has(expected) && expected.length >= 3 && currentDomain && !currentDomain.includes(expected)) {
             const correctUrl = `https://www.${expected}.com`;
             console.log(`[BROWSER-AGENT] Service mismatch: expected "${expected}" but on "${currentDomain}" → ${correctUrl}`);
