@@ -1773,6 +1773,10 @@ export async function runVisionAgent(
       // Cap total snapshot to prevent token explosion (8000 chars ≈ 2000 tokens)
       if (snapshot.length > 8000) snapshot = snapshot.substring(0, 8000);
       console.log(`[BROWSER-AGENT] Step ${steps + 1}: ${url.substring(0, 80)} — snapshot ${snapshot.length} chars, ${currentRefs.size} refs`);
+      if (currentRefs.size > 0 && currentRefs.size <= 20) {
+        const refSummary = [...currentRefs.entries()].map(([k, v]) => `[${k}]${v.role}:"${v.name}"`).join(' | ');
+        console.log(`[BROWSER-AGENT] Refs: ${refSummary}`);
+      }
 
       // ── Adaptive Vision: only screenshot when a trigger fires ──
       const currentUrlForVision = activePage.url();
