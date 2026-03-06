@@ -2267,7 +2267,27 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  // ═══ EMERGENCY FALLBACK: Groq Llama-8B — free ═══
+  // ═══ FALLBACK: Groq Scout — 30K TPM, good instruction following ═══
+  if (process.env.GROQ_API_KEY) {
+    try {
+      await paceModelCall("meta-llama/llama-4-scout-17b-16e-instruct");
+      const response = await withTimeout(getGroqClient().chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        max_tokens: 512,
+        messages,
+      }), 8000);
+      const content = stripThinkTags(response.choices[0]?.message?.content || '');
+      if (content.length > 10) {
+        console.log(`[AI] BrowserStep (Groq Scout) | $0`);
+        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
+        return { content, cost: 0 };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ EMERGENCY FALLBACK: Groq Llama-8B — smallest, least rate-limited ═══
   if (process.env.GROQ_API_KEY) {
     try {
       await paceModelCall("llama-3.1-8b-instant");
@@ -2287,7 +2307,9 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  return { content: "", cost: 0 };
+  // All models exhausted — throw so vision-agent's consecutiveAiErrors counter fires
+  // (returning empty string causes silent infinite loop on parse-fail)
+  throw new Error("ALL_BROWSER_STEP_MODELS_FAILED: Haiku/DeepSeek/OpenRouter/Groq all unavailable or rate-limited");
 }
 
 /**
