@@ -1743,7 +1743,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     }
 
     // Weather fast path — instant weather via Open-Meteo (cloud-friendly) + wttr.in fallback
-    const weatherText0 = subject + ' ' + (body || '');
+    const weatherText0 = (subject || '').trim();
     const weatherMatch = weatherText0.match(/\b(?:in|for|at)\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+(?:right now|today|now|this|tomorrow|tonight|next|and|over)|\?|$)/i)
       || weatherText0.match(/weather\s+(?:in|for|at)?\s+([A-Za-z][a-zA-Z ]{2,30}?)(?:\s+(?:right now|today|now|this|tomorrow|tonight|next|and|over)|\?|$)/i);
     const isWeatherQuery = /\b(weather|temperature|forecast|how (hot|cold|warm)|will it rain|is it raining|is it sunny)\b/i.test(weatherText0);
