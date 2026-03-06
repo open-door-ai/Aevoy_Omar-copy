@@ -1118,6 +1118,7 @@ RULES:
 - ALWAYS use [ref] numbers from the tree. Example: if tree shows [5] button "Reserve", output CLICK [5].
 - [ref] numbers change each step. Always use refs from the CURRENT tree, never from previous steps.
 - Batch actions: FILL [12] "email" then FILL [13] "pass" then CLICK [14] — all in one response.
+- FORM FIELD MATCHING: Match values to field LABELS. "Customer name" [1] → fill with the NAME value, "E-mail" [3] → fill with the EMAIL value. NEVER put an email address into a "name" field.
 - FILL first. Only use TYPE for search boxes with live autocomplete.
 - For dropdowns: CLICK [ref] to open, then CLICK [ref] on the option that appears.
 - HOVER [ref] to reveal sub-menus, then CLICK the revealed items next step.
