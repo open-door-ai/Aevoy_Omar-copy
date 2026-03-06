@@ -794,7 +794,7 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
             if (isNameField) {
               // Find the email field in the refs map
               let emailRef: number | null = null;
-              refs.forEach((entry, refId) => {
+              elementRefs?.forEach((entry, refId) => {
                 if (!emailRef && /\b(e.?mail|email)\b/i.test(entry.name)) emailRef = refId;
               });
               if (emailRef !== null) {
