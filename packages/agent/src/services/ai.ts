@@ -395,6 +395,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 }, // last resort
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
@@ -425,6 +426,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'llama-3.3-70b-versatile', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 }, // paid fallback
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 }, // last resort — always available
   ],
 };
 
