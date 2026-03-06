@@ -1218,9 +1218,12 @@ async function buildPrompt(
 
   const stuckSection = stuckHint ? `\n${stuckHint}\n` : '';
 
-  // If currently on a confirmation/result URL, force the agent to output DONE
+  // If currently on a confirmation/result URL, force the agent to output DONE.
+  // Use the LAST path segment to avoid false positives (e.g. /forms/post should NOT match — only /post should).
   const urlPath = (() => { try { return new URL(url).pathname; } catch { return ''; } })();
-  const isConfirmationPage = /\/(post|success|confirm|thank|order|receipt|result|done|complete|submitted|checkout\/complete)\b/i.test(urlPath);
+  const lastPathSegment = urlPath.split('/').filter(Boolean).pop() || '';
+  const isConfirmationPage = /^(success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(lastPathSegment) ||
+    /\/(checkout\/complete|order[-_]confirm|order[-_]success|payment[-_]success|booking[-_]confirm)\b/i.test(urlPath);
   const confirmationNote = isConfirmationPage
     ? `\n🎯 CONFIRMATION PAGE DETECTED: You are on "${url}" — this is a result/success page. The task is DONE. Output: DONE "Summary of what you see (form data, order details, JSON keys, confirmation message)". Do NOT output any other action. Do NOT navigate back.\n`
     : '';
@@ -1990,7 +1993,9 @@ export async function runVisionAgent(
       {
         const postActionUrl = activePage.url();
         const postUrlPath = (() => { try { return new URL(postActionUrl).pathname; } catch { return ''; } })();
-        const isOnConfirmPage = /\/(post|success|confirm|thank|order|receipt|result|done|complete|submitted|checkout\/complete)\b/i.test(postUrlPath);
+        const postLastSeg = postUrlPath.split('/').filter(Boolean).pop() || '';
+        const isOnConfirmPage = /^(post|success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(postLastSeg) ||
+          /\/(checkout\/complete|order[-_]confirm|order[-_]success|payment[-_]success|booking[-_]confirm)\b/i.test(postUrlPath);
         const firstParsedType = parsedActions[0]?.type;
         if (isOnConfirmPage && firstParsedType !== 'done' && firstParsedType !== 'fail') {
           // Capture the page content as the result
@@ -2035,8 +2040,11 @@ export async function runVisionAgent(
 
           // Auto-accept DONE on confirmation/response endpoints — the form was submitted,
           // the URL changed, and we're on a success/result page. Don't second-guess it.
+          // Use the LAST path segment to avoid false positives (/forms/post is NOT confirmation; /post IS).
           const doneUrlPath = (() => { try { return new URL(doneUrl).pathname; } catch { return ''; } })();
-          const isConfirmationUrl = /\/(post|success|confirm|thank|order|receipt|result|done|complete|submitted|checkout\/complete)\b/i.test(doneUrlPath);
+          const doneLastSeg = doneUrlPath.split('/').filter(Boolean).pop() || '';
+          const isConfirmationUrl = /^(post|success|confirm|thank|order|receipt|result|done|complete|submitted)$/i.test(doneLastSeg) ||
+            /\/(checkout\/complete|order[-_]confirm|order[-_]success|payment[-_]success|booking[-_]confirm)\b/i.test(doneUrlPath);
           if (isConfirmationUrl) {
             console.log(`[BROWSER-AGENT] Auto-accepting DONE on confirmation URL: ${doneUrl.substring(0, 80)}`);
             try { screenshots.push(await takeScreenshot(activePage)); } catch { /* ok */ }
