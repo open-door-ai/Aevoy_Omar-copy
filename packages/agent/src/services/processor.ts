@@ -1797,7 +1797,22 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           } catch { weatherText = ''; }
         }
 
-        if (weatherText && weatherText.length > 3) {
+        // Third fallback: DDG instant answer for weather (no browser needed)
+        if (!weatherText) {
+          try {
+            const ddgWRes = await fetch(
+              `https://api.duckduckgo.com/?q=weather+${encodeURIComponent(rawLocation)}&format=json&no_html=1&skip_disambig=1`,
+              { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': 'Mozilla/5.0' } }
+            );
+            if (ddgWRes.ok) {
+              const ddgWJson = await ddgWRes.json() as { Answer?: string; AbstractText?: string };
+              const ans = ddgWJson.Answer || ddgWJson.AbstractText || '';
+              if (ans.length > 10) weatherText = ans.slice(0, 200);
+            }
+          } catch { /* ignore */ }
+        }
+
+                if (weatherText && weatherText.length > 3) {
           const weatherResponse = `Current weather in ${rawLocation}: ${weatherText}`;
           console.log(`[FAST-PATH-WEATHER] Got: ${weatherText}`);
           await getSupabaseClient().from('tasks').update({
@@ -1812,6 +1827,19 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }
       } catch (weatherErr) {
         console.warn(`[FAST-PATH-WEATHER] Failed (${weatherErr}), falling through to main processor`);
+        // Last resort: avoid burning a Bright Data session on weather — return a simple error
+        try {
+          const errResponse = `I couldn't fetch live weather data for ${rawLocation} right now. Please check weather.com or Environment Canada for current conditions.`;
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed', response_text: errResponse,
+            completed_at: new Date().toISOString(), type: 'general',
+          }).eq('id', taskId);
+          if (!task.suppressEmail) {
+            sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, errResponse).catch(() => {});
+          }
+          clearTimeout(masterTimer);
+          return { taskId, success: true, response: errResponse, actions: [] };
+        } catch { /* fall through */ }
       }
     }
 
