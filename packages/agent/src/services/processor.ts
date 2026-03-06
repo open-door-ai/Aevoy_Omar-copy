@@ -3928,17 +3928,24 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               }
             } else {
               // Navigation failed (chrome-error, DNS failure, SSL error, etc.)
-              // Construct a meaningful failure response — NEVER fall through to generic text
               const _bfpDomainForError = (() => { try { return new URL(_bfpTargetUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
-              aiResponse.content = _pickVariant([
-                `I had some trouble getting into ${_bfpDomainForError} — it wasn't cooperating today. You could try visiting ${_bfpTargetUrl} directly, or send the task again and I'll try a different approach.`,
-                `${_bfpDomainForError} was a bit tricky to reach. These things happen! Try visiting ${_bfpTargetUrl} directly, or resend and I'll find another way in.`,
-                `I ran into some resistance from ${_bfpDomainForError} this time around. Feel free to try ${_bfpTargetUrl} yourself, or send it again and I'll take a different route.`,
-              ]);
-              isTaskComplete = true;
-              aiSignaledComplete = true;
-              signupAutoCompleted = true;
-              console.warn(`[BROWSER-FAST-PATH] Navigation landed on error page — constructed failure response`);
+              // For research/info tasks: fall through to iteration loop (uses fetch-based search/DDG)
+              // For action tasks (signup/book/order): generate failure response
+              const _bfpIsResearchTask = /\b(find|search|list|show|get|compare|what|which|best|top|cheapest|rating|price|review|who|when|where|how much|tell me)\b/i.test(taskTextLower);
+              if (_bfpIsResearchTask) {
+                console.log(`[BROWSER-FAST-PATH] Chrome-error on research task — falling through to fetch-based search`);
+                // isTaskComplete stays false → iteration loop uses fetch-based search
+              } else {
+                aiResponse.content = _pickVariant([
+                  `I had some trouble getting into ${_bfpDomainForError} — it wasn't cooperating today. You could try visiting ${_bfpTargetUrl} directly, or send the task again and I'll try a different approach.`,
+                  `${_bfpDomainForError} was a bit tricky to reach. These things happen! Try visiting ${_bfpTargetUrl} directly, or resend and I'll find another way in.`,
+                  `I ran into some resistance from ${_bfpDomainForError} this time around. Feel free to try ${_bfpTargetUrl} yourself, or send it again and I'll take a different route.`,
+                ]);
+                isTaskComplete = true;
+                aiSignaledComplete = true;
+                signupAutoCompleted = true;
+                console.warn(`[BROWSER-FAST-PATH] Navigation landed on error page — constructed failure response`);
+              }
             }
           } catch (_bfpErr) {
             const _bfpErrMsg = _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr);
