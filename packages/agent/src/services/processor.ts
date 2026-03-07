@@ -1320,10 +1320,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   let executionEngine: ExecutionEngine | null = null;
 
   try {
-    // 1. Check quota
+    // 1. Check quota + fetch email in one query
     const { data: profile } = await getSupabaseClient()
       .from("profiles")
-      .select("messages_used, messages_limit, subscription_status")
+      .select("messages_used, messages_limit, subscription_status, email")
       .eq("id", userId)
       .single();
 
@@ -1420,6 +1420,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         userTwilioPhone = profilePhone?.twilio_number || profilePhone?.phone_number || '';
       } catch { /* non-critical */ }
     }
+
+    // 1d. Email context: agent email for new signups, user email for managing their accounts
+    const agentEmail = `${username}@aevoy.com`;
+    const userEmail = profile?.email && profile.email !== agentEmail ? profile.email : '';
 
     // 2. Create or update task record
     if (taskId) {
@@ -2853,7 +2857,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             .eq('id', userId)
             .single();
 
-          const _userEmail = _fsProfile?.email || `${username}@aevoy.com`;
           const _hasExistingPasswords = !!_fsProfile?.agent_passwords_encrypted;
 
           // Generate a secure password if no agent passwords are stored
@@ -2880,20 +2883,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
             } catch { /* use empty — AI will see the stored passwords via {primary_password} template */ }
           }
 
-          const _signupEmail = _userEmail;
+          const _agentEmail = agentEmail;
           const _signupPass = _autoPassword || '{primary_password}';
           effectiveBody = `${effectiveBody}\n\n[MANDATORY EXECUTION — DO NOT DESCRIBE, DO NOT ADVISE, DO NOT ASK PERMISSION]
 You MUST create this account RIGHT NOW. Steps:
 1. [ACTION:browse("website URL")] — Navigate to the signup/registration page
-2. Fill the form: email="${_signupEmail}", password="${_signupPass}", name="${senderName || username}"
+2. Fill the form: email="${_agentEmail}", password="${_signupPass}", name="${senderName || username}"
 3. Click "Sign Up" / "Create Account" / "Continue" button
 4. If OAuth available (Google/Apple): click "Continue with Google" instead
 5. Wait for verification email if needed — auto-read it from inbox
-6. Report: "Signed up for [service] using ${_signupEmail}"
+6. Report: "Signed up for [service] using ${_agentEmail}"
 
 NEVER say "want me to sign up?" — DO IT NOW. NEVER describe the service. NEVER say "you can sign up at...".
-Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthorized.`;
-          console.log(`[FULL-SEND] Aggressive signup execution context injected (email=${_signupEmail})`);
+Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthorized.`;
+          console.log(`[FULL-SEND] Aggressive signup execution context injected (email=${_agentEmail})`);
 
       } catch (fsErr) {
         console.error('[FULL-SEND] Failed to inject auto-credentials:', fsErr);
@@ -2907,7 +2910,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // The DOC-FAST-PATH makes ONE dedicated "generate" call, which is all we need.
     let aiResponse = (_isDocumentAction && !forceCheapModel)
       ? { content: '', actions: [] as import('../types/index.js').Action[], cost: 0, tokensUsed: 0, model: 'doc-bypass', sessionId: null as string | null }
-      : await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName);
+      : await generateResponse(memory, subject, bodyWithLearnings, username, aiTaskType, userId, taskId, senderName, userEmail);
 
     // REFUSAL DETECTOR — if the AI refuses the task, skip the retry (all free models may refuse)
     // and directly inject a browse action to start the task. This is faster than retrying.
@@ -3084,7 +3087,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
       if (aiResponse.actions.length === 0) {
         console.log(`[MISSING-ACTION] Task mentions "${pattern.actionType}" but AI returned 0 actions — re-prompting`);
         const retryBody = `${body}\n\nIMPORTANT: You MUST output ${pattern.example} in your response. Writing "${pattern.actionType}" in plain text does NOTHING. The [ACTION:...] tag is what executes the action. Output the tag now.`;
-        const retryResponse = await generateResponse(memory, subject, retryBody, username, aiTaskType, userId, taskId, senderName);
+        const retryResponse = await generateResponse(memory, subject, retryBody, username, aiTaskType, userId, taskId, senderName, userEmail);
         if (retryResponse.actions.length > 0 && retryResponse.actions.some(a => a.type === pattern.actionType)) {
           console.log(`[MISSING-ACTION] Re-prompt succeeded with ${pattern.actionType}`);
           aiResponse = retryResponse;
@@ -3730,6 +3733,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
     // hasBrowseEver (set by successful action execution in the loop).
     // This fast path: navigate → vision agent → done. No wasted rounds.
     // ════════════════════════════════════════════════════════════════════
+    let visionFailureNote = ''; // Context injected into next iteration when vision agent fails (declared early for BFP use)
     let _bfpVisionCost = 0; // Track vision agent cost from browser fast path (added to totalAiCost below)
     // Browser fast path fires for:
     // 1. Explicit domain tasks ("go to X.com") — _hasExplicitDomainCheck
@@ -3773,7 +3777,7 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
                 const _bfpPw = await getAgentPasswords(userId);
                 _bfpPassword = _bfpPw?.primary || 'AevoyAgent2026!';
               } catch { _bfpPassword = 'AevoyAgent2026!'; }
-              const _bfpEmail = `${username}@aevoy.com`;
+              const _bfpEmail = agentEmail;
               const _bfpName = senderName || username;
               const _bfpLearnings = learningsHint ? `\n\nHIVE MIND INTELLIGENCE (from past tasks on this site):\n${learningsHint.substring(0, 600)}` : '';
               const _bfpIsSignup = /\b(sign\s?up|signup|register|create.*account|make.*account|enroll)\b/i.test(taskTextLower);
@@ -3872,61 +3876,14 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                   } catch { /* try next strategy */ }
                 }
 
-                // Strategy 2: For signup/action tasks that ran many steps, describe what happened
-                // This covers Notion signup (25 steps, stuck at verification), etc.
-                if (!isTaskComplete && _bfpSteps >= 3) {
-                  const _bfpCurrentUrl = _bfpPage && !_bfpPage.isClosed() ? _bfpPage.url() : _bfpPageUrl;
-                  const _bfpDomain = (() => { try { return new URL(_bfpCurrentUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
-                  // Construct a meaningful failure response from the error
-                  let _bfpFailMsg = '';
-                  if (/captcha/i.test(_bfpError)) {
-                    _bfpFailMsg = _pickVariant([
-                      `I made it to ${_bfpDomain} but ran into a CAPTCHA puzzle I couldn't crack. Their anti-bot protection blocked the way. Want me to try a different approach?`,
-                      `${_bfpDomain} threw a CAPTCHA at me — I got pretty far but it stopped me in my tracks. I'll note that for next time.`,
-                      `I had some trouble with ${_bfpDomain} — they put up a CAPTCHA that tripped me up. Resend the task and I'll try another route.`,
-                    ]);
-                  } else if (/bot.?wall|blocked|access denied/i.test(_bfpError)) {
-                    _bfpFailMsg = _pickVariant([
-                      `I ran into some resistance from ${_bfpDomain} — they weren't thrilled about my visit. I'll note that and try a different way next time.`,
-                      `${_bfpDomain} was a bit guarded today and blocked my access after a few tries. These things happen! Resend and I'll find another path.`,
-                      `That page on ${_bfpDomain} wasn't cooperating. I'll try coming at it differently if you send the task again.`,
-                    ]);
-                  } else if (/call.?gate|phone/i.test(_bfpError)) {
-                    const _bfpPhone = _bfpError.match(/\+?\d[\d\s()-]{8,}/)?.[0] || '';
-                    _bfpFailMsg = _bfpPhone
-                      ? `I worked through ${_bfpDomain} but the final step needs a phone call — I can't dial in from the browser. You can call them directly at ${_bfpPhone} to finish up.`
-                      : `I got pretty far on ${_bfpDomain} but hit a step that needs a real person. You may need to pop in and complete the last part yourself.`;
-                  } else if (/verification|verify|code|otp/i.test(_bfpError) || /verification|verify/i.test(_bfpCurrentUrl)) {
-                    _bfpFailMsg = `I started the signup on ${_bfpDomain} and used your email (${username}@aevoy.com), but they want a verification code from your inbox before I can continue. Check for an email from ${_bfpDomain} and reply with the code — I'll finish it up.`;
-                  } else if (/timeout|max steps/i.test(_bfpError)) {
-                    _bfpFailMsg = _pickVariant([
-                      `I spent ${_bfpSteps} steps on ${_bfpDomain} and made good progress, but ran out of time before finishing. Resend it and I'll pick a faster route.`,
-                      `I kept at it on ${_bfpDomain} for ${_bfpSteps} steps but needed more time than I had. Send it again and I'll take a more direct path.`,
-                      `${_bfpDomain} took more back-and-forth than expected — ${_bfpSteps} steps in and I had to wrap up. Resend and I'll try a shortcut.`,
-                    ]);
-                  } else if (/stuck/i.test(_bfpError)) {
-                    _bfpFailMsg = _pickVariant([
-                      `I got to ${_bfpDomain} and made it ${_bfpSteps} steps in, but then hit a wall. Send it again and I'll try a different angle.`,
-                      `I navigated to ${_bfpDomain} and worked through ${_bfpSteps} steps, then got stuck. Resend and I'll approach it differently.`,
-                    ]);
-                  } else if (_bfpVisionResult && _bfpVisionResult.length > 30) {
-                    _bfpFailMsg = _bfpVisionResult;
-                  } else {
-                    _bfpFailMsg = _pickVariant([
-                      `I got to ${_bfpDomain} and worked through ${_bfpSteps} steps, but couldn't quite finish. Send the task again and I'll try a different approach.`,
-                      `I spent ${_bfpSteps} steps on ${_bfpDomain} — made some progress but hit a snag at the end. Resend it and I'll take a fresh look.`,
-                    ]);
-                  }
-                  aiResponse.content = _bfpFailMsg;
-                  isTaskComplete = true;
-                  aiSignaledComplete = true;
-                  signupAutoCompleted = true;
-                  console.log(`[BROWSER-FAST-PATH] Constructed failure response (${_bfpSteps} steps, error: ${_bfpError.substring(0, 80)})`);
-                }
-
-                // Strategy 3: If very few steps (<3) and no useful data, fall through
+                // NEVER give up here — always fall through to the iteration loop.
+                // The iteration loop has 15 rounds + 15-min master timeout to keep trying
+                // different approaches (search, call, alternative sites, etc.)
                 if (!isTaskComplete) {
-                  console.log(`[BROWSER-FAST-PATH] Vision failed early (${_bfpSteps} steps) — falling through to iteration loop`);
+                  const _bfpDomain = (() => { try { return new URL(_bfpPageUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
+                  // Pass what we learned to the iteration loop as context, not as a final answer
+                  visionFailureNote = `Browser fast path attempted ${_bfpSteps} steps on ${_bfpDomain} but didn't complete. Error: ${_bfpError.substring(0, 200)}. Try a DIFFERENT approach — alternative site, search for another method, call the business, use an API, etc.`;
+                  console.log(`[BROWSER-FAST-PATH] Vision didn't complete (${_bfpSteps} steps) — falling through to iteration loop to keep trying`);
                 }
               }
             } else {
@@ -3935,20 +3892,10 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               // For research/info tasks: fall through to iteration loop (uses fetch-based search/DDG)
               // For action tasks (signup/book/order): generate failure response
               const _bfpIsResearchTask = /\b(find|search|list|show|get|compare|what|which|best|top|cheapest|rating|price|review|who|when|where|how much|tell me)\b/i.test(taskTextLower);
-              if (_bfpIsResearchTask) {
-                console.log(`[BROWSER-FAST-PATH] Chrome-error on research task — falling through to fetch-based search`);
-                // isTaskComplete stays false → iteration loop uses fetch-based search
-              } else {
-                aiResponse.content = _pickVariant([
-                  `I had some trouble getting into ${_bfpDomainForError} — it wasn't cooperating today. You could try visiting ${_bfpTargetUrl} directly, or send the task again and I'll try a different approach.`,
-                  `${_bfpDomainForError} was a bit tricky to reach. These things happen! Try visiting ${_bfpTargetUrl} directly, or resend and I'll find another way in.`,
-                  `I ran into some resistance from ${_bfpDomainForError} this time around. Feel free to try ${_bfpTargetUrl} yourself, or send it again and I'll take a different route.`,
-                ]);
-                isTaskComplete = true;
-                aiSignaledComplete = true;
-                signupAutoCompleted = true;
-                console.warn(`[BROWSER-FAST-PATH] Navigation landed on error page — constructed failure response`);
-              }
+              // Never give up on nav failure — fall through to iteration loop for ALL task types.
+              // The iteration loop can try alternative sites, search, call the business, etc.
+              visionFailureNote = `Direct navigation to ${_bfpDomainForError} failed (DNS/SSL/blocked). Try a DIFFERENT approach: search for alternatives, try a different URL, call the business, or find another way to accomplish the task.`;
+              console.log(`[BROWSER-FAST-PATH] Nav error on ${_bfpDomainForError} — falling through to iteration loop`);
             }
           } catch (_bfpErr) {
             const _bfpErrMsg = _bfpErr instanceof Error ? _bfpErr.message : String(_bfpErr);
@@ -3997,29 +3944,10 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               } catch { /* fall through */ }
             }
 
+            // Never give up in the catch block either — fall through to iteration loop
             if (!isTaskComplete && _bfpVisionAttempted) {
-              const isBlocked = /bot|blocked|access denied|CAPTCHA|Cloudflare/i.test(_bfpErrMsg);
-              const isTimeout = /timeout/i.test(_bfpErrMsg);
-              aiResponse.content = isTimeout
-                ? _pickVariant([
-                    `I spent a while on ${_bfpDomainForErr} but the site needed more back-and-forth than I could handle in one session. Send it again and I'll pick a faster path.`,
-                    `${_bfpDomainForErr} took longer than expected and I had to wrap up. Resend the task and I'll jump right back in with a different approach.`,
-                    `I kept at it on ${_bfpDomainForErr} but ran out of time. Feel free to resend — I'll try a more direct route next time.`,
-                  ])
-                : isBlocked
-                  ? _pickVariant([
-                      `I had some trouble with ${_bfpDomainForErr} — that site was a bit guarded today. I'll note it for next time. Want me to try a different approach?`,
-                      `${_bfpDomainForErr} wasn't very welcoming — I hit a wall trying to access it. Resend the task and I'll find another way.`,
-                      `That page on ${_bfpDomainForErr} wasn't cooperating. These things happen! Send it again and I'll try a different route.`,
-                    ])
-                  : _pickVariant([
-                      `I ran into a snag on ${_bfpDomainForErr} this time. Send the task again and I'll take a fresh approach.`,
-                      `Something went sideways on ${_bfpDomainForErr}. I'll try a different path if you resend the task.`,
-                      `${_bfpDomainForErr} gave me a bit of trouble. Resend it and I'll come at it from a different angle.`,
-                    ]);
-              isTaskComplete = true;
-              aiSignaledComplete = true;
-              signupAutoCompleted = true;
+              visionFailureNote = `Browser fast path error on ${_bfpDomainForErr}: ${_bfpErrMsg.substring(0, 200)}. Try a COMPLETELY DIFFERENT approach — search for alternatives, try another site, call the business, use an API, etc. Do NOT retry the same URL.`;
+              console.log(`[BROWSER-FAST-PATH] Vision error — falling through to iteration loop to keep trying`);
             }
             } // close else (_bfpVisionAttempted)
           }
@@ -4042,7 +3970,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
     // Context summarization: store round results for compression after round 5
     const roundHistory: { round: number; summary: string }[] = [];
     let compressedHistory = ''; // Compressed summary of rounds 1-N after round 5
-    let visionFailureNote = ''; // Context injected into next iteration when vision agent fails
+    // visionFailureNote declared earlier (before BFP block)
     let lastVisionPageData = ''; // Raw page data from vision agent for rate-limit-proof fallback
     let bookingGateRejectCount = 0; // Track booking gate rejections — after 2, force phone call
     let visionAgentInvocations = 0; // Guard: max 2 vision agent runs per task (prevents 8min × 15 iteration waste)
@@ -4209,7 +4137,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               agentPassword = passwords?.primary || 'AevoyAgent2026!';
             } catch { agentPassword = 'AevoyAgent2026!'; }
 
-            const email = `${username}@aevoy.com`;
+            const email = agentEmail;
             const displayName = senderName || username;
 
             // Step 1: Click "Continue with email" / "Sign up with email" / "Continue another way"
@@ -4391,7 +4319,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               try {
                 let vgPw = '';
                 try { const { getAgentPasswords } = await import("./agent-passwords.js"); const vgP = await getAgentPasswords(userId); vgPw = vgP?.primary || 'AevoyAgent2026!'; } catch { vgPw = 'AevoyAgent2026!'; }
-                const vgEmail = `${username}@aevoy.com`;
+                const vgEmail = agentEmail;
                 const vgName = senderName || username;
                 const vgPhone = userTwilioPhone;
                 const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy${vgPhone ? `, phone=${vgPhone}` : ''}. Submit the form.`;
@@ -4454,7 +4382,7 @@ Replace +1PHONENUMBER with the ACTUAL phone number from your search results.
 OPTION B — Try OpenTable/Resy directly:
 [ACTION:search("${subject.substring(0, 60)} OpenTable OR Resy reservation")]
 Then browse the direct OpenTable/Resy page URL from results.
-Select date/time/party size, fill Name="${username}", Email="${username}@aevoy.com", confirm.
+Select date/time/party size, fill Name="${username}", Email="${agentEmail}", confirm.
 
 DO NOT navigate back to the restaurant's homepage. Do NOT give me the URL again.
 DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
@@ -4465,10 +4393,12 @@ DO NOT give address or hours. EXECUTE THE BOOKING RIGHT NOW.`,
             aiResponse = _fbResp;
             aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
             console.log(`[BOOKING-GATE-INDEPENDENT] Re-prompted, got ${aiResponse.actions.length} actions`);
-            if (aiResponse.actions.length === 0) {
+            if (aiResponse.actions.length === 0 && currentIteration > 6) {
               isTaskComplete = true;
               aiSignaledComplete = true;
               break;
+            } else if (aiResponse.actions.length === 0) {
+              visionFailureNote = 'Booking via web failed. Search for the business phone number and use call_external to call them directly.';
             }
             // Continue to action execution with the new booking actions
           }
@@ -4541,7 +4471,7 @@ APPROACH 1 — Online booking (try first):
 1. Navigate to the restaurant's reservation page (OpenTable, Resy, Sevenrooms, or their website)
 2. For SevenRooms: add ?party_size=N&date=YYYY-MM-DD to the URL to pre-fill
 3. Select the date, time (${subject}), and party size
-4. Fill in: Name="${senderName || username}", Email="${username}@aevoy.com", Phone from profile
+4. Fill in: Name="${senderName || username}", Email="${agentEmail}", Phone from profile
 5. Click the Book/Reserve/Confirm button
 6. Report the confirmation number or "Booking confirmed" message
 
@@ -4586,7 +4516,7 @@ The user asked you to SIGN THEM UP — you must ACTUALLY CREATE THE ACCOUNT.
 DO THIS NOW:
 1. Navigate to the signup page
 2. Look for "Continue with Google" button — click it FIRST (OAuth is most reliable)
-3. If no Google button: fill email="${username}@aevoy.com", fill password, fill name="${senderName || username}"
+3. If no Google button: fill email="${agentEmail}", fill password, fill name="${senderName || username}"
 4. Click Submit / Create Account
 5. Handle any email verification (the system auto-fills verification codes)
 6. Report: "Signed up for [service] using [method]. Account is ready."
@@ -4686,11 +4616,14 @@ For "${subject}":
             aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
             console.log(`[QUALITY-GATE] Re-prompted AI, got ${aiResponse.actions.length} actions`);
             // Continue to action execution — don't break
-            if (aiResponse.actions.length === 0) {
-              // AI STILL gave no actions — give up and return what we have
+            if (aiResponse.actions.length === 0 && currentIteration > 4) {
+              // AI STILL gave no actions after multiple rounds — give up and return what we have
               isTaskComplete = true;
               aiSignaledComplete = true;
               break;
+            } else if (aiResponse.actions.length === 0) {
+              // Early rounds — inject hint and let the loop continue
+              visionFailureNote = 'AI gave advice instead of acting. Try a completely different approach: browse a different website, search with different keywords, or call the business.';
             }
             // Fall through to execute the new actions
           } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
@@ -4954,12 +4887,14 @@ DO NOT describe what you would do. OUTPUT THE [ACTION:...] TAGS NOW.`;
           aiResponse = forcedResponse;
           // Strip thinking blocks
           aiResponse.content = aiResponse.content.replace(/\[THINKING\][\s\S]*?\[\/THINKING\]\s*/gi, '').trim();
-          // If STILL no actions after the force-prompt, then truly give up
-          if (aiResponse.actions.length === 0) {
+          // If STILL no actions after the force-prompt
+          if (aiResponse.actions.length === 0 && currentIteration > 4) {
             console.log('[ITERATE] AI still produced no actions after force-prompt, task complete');
             isTaskComplete = true;
             aiSignaledComplete = true;
             break;
+          } else if (aiResponse.actions.length === 0) {
+            visionFailureNote = 'Force-prompt produced no actions. Try a fundamentally different strategy: different website, phone call, or simpler search query.';
           }
           // Fall through to execute the forced actions
           console.log(`[ITERATE] Force-prompt produced ${aiResponse.actions.length} actions, executing`);
@@ -5086,7 +5021,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                   // Smart value generation based on field type/label
                   let autoValue = '';
                   const lbl = field.label.toLowerCase();
-                  if (field.type === 'email' || lbl.includes('email')) autoValue = `${username}@aevoy.com`;
+                  if (field.type === 'email' || lbl.includes('email')) autoValue = agentEmail;
                   else if (field.type === 'tel' || lbl.includes('phone') || lbl.includes('tel')) {
                     // Look up user phone
                     try {
@@ -5788,7 +5723,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             autoPassword = pw?.primary || 'AevoyAgent2026!';
           } catch { autoPassword = 'AevoyAgent2026!'; }
 
-          const autoEmail = `${username}@aevoy.com`;
+          const autoEmail = agentEmail;
           const autoName = senderName || username;
 
           // Step 0: If we're not on a signup page, navigate there first
@@ -6149,7 +6084,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             const visionPw = await getAgentPasswords(userId);
             visionPassword = visionPw?.primary || 'AevoyAgent2026!';
           } catch { visionPassword = 'AevoyAgent2026!'; }
-          const visionEmail = `${username}@aevoy.com`;
+          const visionEmail = agentEmail;
           const visionName = senderName || username;
           // Inject Hive Mind learnings into vision agent task — agent starts with knowledge of what worked/failed for this domain
           const visionLearnings = learningsHint ? `\n\nHIVE MIND INTELLIGENCE (from past tasks on this site):\n${learningsHint.substring(0, 600)}` : '';
@@ -6476,12 +6411,12 @@ YOU must complete the task using a DIFFERENT approach:
               } else if (isBotWallError && /\b(sign\s*me?\s*up|signup|create\s+(an?\s+)?account|register\s+(for|on|with|at))\b/i.test(`${subject} ${body}`)) {
                 // Signup tasks blocked by Cloudflare — inject credentials and try Google OAuth fallback
                 const _signupService = (`${subject} ${body}`).match(/\b(prolific|figma|canva|notion|slack|discord|github|twitter|linkedin|reddit|shopify|dropbox|stripe|hubspot|salesforce|intercom)\b/i)?.[1] || 'the service';
-                const _signupEmail = `${username}@aevoy.com`;
+                const _agentEmail = agentEmail;
                 const _signupPassword = `${username}@aevoy2026`;
                 visionFailureNote = `[SIGNUP BLOCKED by Cloudflare] Bot-wall detected on ${_signupService} registration page. Do NOT give up or describe the service. Execute this strategy NOW:\n` +
                   `1. NAVIGATE to the service's Google OAuth login button (look for "Continue with Google" on the login/signup page)\n` +
                   `2. If Google OAuth unavailable, try DIRECT API: search for "${_signupService} API create account" or "${_signupService} REST API signup"\n` +
-                  `3. Fill email field with ${_signupEmail} and password field with ${_signupPassword}\n` +
+                  `3. Fill email field with ${_agentEmail} and password field with ${_signupPassword}\n` +
                   `4. If still blocked, report: "I hit Cloudflare bot protection on ${_signupService}. Please visit [signup URL] to complete registration."\n` +
                   `NEVER just say "you can sign up at [URL]" — you must actually attempt the registration.`;
                 console.log(`[BOT-WALL-SIGNUP] ${_signupService} signup blocked by Cloudflare — injecting OAuth+credential fallback`);
@@ -6520,7 +6455,7 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       // DIRECT RESULT INJECTION: For completed actions, inject the result directly —
       // BOTH success AND failure. NEVER let AI narration survive.
       // Success = show the data/confirmation. Failure = show clear error.
-      const DATA_ACTION_TYPES = ['read_email', 'check_calendar', 'analyze_health_data',
+      const DATA_ACTION_TYPES = ['read_email', 'check_calendar',
         'send_email', 'send_sms', 'send_whatsapp', 'send_telegram', 'call_user', 'schedule'];
       const dataAction = iterationResults.find(r => DATA_ACTION_TYPES.includes(r.action.type));
       if (dataAction) {
@@ -6638,9 +6573,11 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       // often recovers by trying a different search strategy.
       const isResearchOrGeneral = taskType === 'research' || taskType === 'general' || taskType === 'email';
       const allFailedThisRound = failedActions.length > 0 && successfulActions.length === 0;
-      if (allFailedThisRound && isResearchOrGeneral && currentIteration >= 2) {
+      if (allFailedThisRound && isResearchOrGeneral && currentIteration >= 6) {
         console.log(`[ITERATE] All actions failed for ${currentIteration} rounds on ${taskType} task — exiting for Haiku fallback`);
         break;
+      } else if (allFailedThisRound && isResearchOrGeneral && currentIteration >= 2) {
+        visionFailureNote = 'All actions failed this round. Try a completely different approach — different search engine, different website, or call the business directly.';
       }
 
       // RE-PROMPT with VISUAL OBSERVATION: Feed results + page state back to AI
@@ -6648,7 +6585,7 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         const actionDesc = `${r.action.type}(${Object.values(r.action.params).map(v => typeof v === 'string' ? v.substring(0, 60) : v).join(', ')})`;
         if (r.success) {
           // Give search/email results much more space so AI can see actual content
-          const limit = ['search', 'read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) ? 3000 : 400;
+          const limit = ['search', 'read_email', 'check_calendar'].includes(r.action.type) ? 3000 : 400;
           const resultStr = typeof r.result === 'string' ? r.result.substring(0, limit) : JSON.stringify(r.result).substring(0, limit);
           return `  ${i + 1}. ${actionDesc} → SUCCESS:\n${resultStr}`;
         } else {
@@ -6868,16 +6805,16 @@ Be specific and concise. 3-5 sentences max.`,
                 console.log(`[FORM-DETECT] 0 fields found on form page — injecting common selectors as fallback`);
                 formFieldsSection = `\n  ⚠️ FORM FIELDS NOT AUTO-DETECTED (page may use shadow DOM or custom components).
   You MUST try these common selectors to fill the form:
-    [ACTION:fill("input[type=email]", "${username}@aevoy.com")]
+    [ACTION:fill("input[type=email]", "${agentEmail}")]
     [ACTION:fill("input[type=password]", "{primary_password}")]
     [ACTION:fill("input[type=text]", "${senderName || username}")]
   If those don't work, try:
-    [ACTION:fill("[name*=email]", "${username}@aevoy.com")]
+    [ACTION:fill("[name*=email]", "${agentEmail}")]
     [ACTION:fill("[name*=pass]", "{primary_password}")]
-    [ACTION:fill("[placeholder*=email]", "${username}@aevoy.com")]
+    [ACTION:fill("[placeholder*=email]", "${agentEmail}")]
     [ACTION:fill("[placeholder*=pass]", "{primary_password}")]
-    [ACTION:fill("[aria-label*=email]", "${username}@aevoy.com")]
-    [ACTION:fill("[data-testid*=email]", "${username}@aevoy.com")]
+    [ACTION:fill("[aria-label*=email]", "${agentEmail}")]
+    [ACTION:fill("[data-testid*=email]", "${agentEmail}")]
   After filling, click the submit button:
     [ACTION:click("Sign Up")] or [ACTION:click("Create Account")] or [ACTION:click("Continue")]
   If the page has "Continue with email" or "Sign up with email" link, CLICK IT FIRST to reveal form fields.`;
@@ -7075,7 +7012,7 @@ CRITICAL RULES:
       visionFailureNote = '';
 
       const iterativePrompt = `Original request: ${subject} ${body}
-⚡ YOUR IDENTITY FOR THIS TASK: email=${username}@aevoy.com | Use this email for ALL signups, logins, and form fields. Verification codes for this email are auto-fetched via read_email() — call it after clicking "Verify" or "Confirm".
+⚡ YOUR IDENTITY FOR THIS TASK: email=${agentEmail} (for new signups, bookings — verification codes auto-fetched via read_email())${userEmail ? ` | USER EMAIL: ${userEmail} (for managing their existing accounts only)` : ''}
 ${historySection}
 ROUND ${currentIteration}/${MAX_ITERATIONS} RESULTS:
 ${resultsSummary}
@@ -7086,7 +7023,7 @@ ${retryEnforcement}
 ${searchCompletionHint}
 ${domainWarning}
 ${failedActions.length > 0 ? `\n${failedActions.length} action(s) failed. Try a DIFFERENT approach for those — don't repeat the same thing.\n` : ''}
-${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Wrap up: give your best answer from what you have and signal [TASK_COMPLETE].\n` : ''}${
+${currentIteration >= MAX_ITERATIONS - 2 ? `⚠️ RUNNING LOW ON ROUNDS (${MAX_ITERATIONS - currentIteration} left). Focus on COMPLETING the task — try ONE more alternative (different site, phone call, different query) before finalizing with [TASK_COMPLETE].\n` : ''}${
   // Phone nudge: for call-business or sourcing/negotiation tasks at round 3+, remind AI to call
   currentIteration >= 3 && (
     // Original: negotiation/sourcing tasks
@@ -7152,7 +7089,7 @@ Use training knowledge for all content. Do NOT search for templates. Just output
       // Use "complex" task type for iterative calls — bypasses cache so the AI
       // sees updated page observations rather than returning a stale cached plan.
       const nextResponse = await generateResponse(
-        memory, subject, iterativePrompt, username, "complex", userId, taskId, senderName
+        memory, subject, iterativePrompt, username, "complex", userId, taskId, senderName, userEmail
       );
       const responseDuration = Date.now() - responseStart;
       console.log(`[DEBUG-ITER] generateResponse completed in ${responseDuration}ms, cost: $${nextResponse.cost || 0}`);
@@ -7347,7 +7284,7 @@ EXECUTE NOW:
 4. Click submit/register/book buttons using [ACTION:click("button text")]
 5. If email verification needed: wait 10s, then [ACTION:read_email()] to get the code
 
-Your email address is ${username}@aevoy.com. Use it for signups.
+Your email address is ${agentEmail}. Use it for signups.
 You have access to user's agent passwords for form fields requiring passwords.
 
 DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
@@ -7379,7 +7316,7 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                 try {
                   let agPw = '';
                   try { const { getAgentPasswords } = await import("./agent-passwords.js"); const agP = await getAgentPasswords(userId); agPw = agP?.primary || 'AevoyAgent2026!'; } catch { agPw = 'AevoyAgent2026!'; }
-                  const agEmail = `${username}@aevoy.com`;
+                  const agEmail = agentEmail;
                   const agName = senderName || username;
                   const agPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';
                   const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy${agPhoneCtx}. Complete the task fully.`;
@@ -7644,7 +7581,7 @@ Extract the ACTUAL phone number from search results and call them:
       console.log(`[IMAGE-FAIL] Image creation task but generate_image failed — stopping loop: ${_imgFailed.error}`);
     }
     const hasDirectResultData = signupAutoCompleted || _isRealGeneratedContent || !!_imgResult || actionResults.some(r =>
-      ['read_email', 'check_calendar', 'analyze_health_data'].includes(r.action.type) &&
+      ['read_email', 'check_calendar'].includes(r.action.type) &&
       (aiResponse.content === r.result || aiResponse.content === r.error)
     );
     if (aiResponse.content && !hasDirectResultData) {
@@ -8434,7 +8371,6 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
             if (r.action.type === 'generate_image') return r.result ? String(r.result) : `Image generated`;
             if (r.action.type === 'generate_video_call') return r.result ? String(r.result) : `Video call room created`;
-            if (r.action.type === 'analyze_health_data') return r.result ? String(r.result) : `Health data analyzed`;
             if (r.action.type === 'post_tweet') return `Tweet posted`;
             if (r.action.type === 'send_email') return `Email sent`;
             if (r.action.type === 'send_sms') return `Text message sent`;
@@ -8513,13 +8449,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const _alreadyProgressed = /(logged in|completed|signed up|created|confirmed|cancelled|reserved|called|emailed)\b/i.test(cleanResponse);
     const _isLegitCredentialRequest = _passivePatterns.test(cleanResponse) && !_alreadyProgressed && (
       // Classic: asking for existing account credentials (login to external service)
+      // This is legitimate — can't log into the USER'S account without their credentials.
+      // SIGNUP password requests are NOT legitimate — agent uses its OWN password for signups.
       (
         /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription|uber|lyft|doordash|grubhub|instacart|airbnb|booking\.com|expedia|twitter|x\.com|linkedin|instagram|facebook|paypal|venmo)\b/i.test(cleanResponse) &&
         /\b(need|require|provide|your (email|password|login|credentials))\b/i.test(cleanResponse)
-      ) ||
-      // Signup: agent reached the signup page and specifically needs a PASSWORD to complete it
-      // This is ALWAYS legitimate — can't create account without user's desired password
-      /\b(i'?ll need (a|your) password|need (a|your) password to|what password (would|do) you|provide (a|your) password|password to (complete|create|finish|register|sign))\b/i.test(cleanResponse)
+      )
     );
 
     // Pre-check: if passive phrase is only in the LAST sentence of a substantive response (>80 chars
@@ -8598,7 +8533,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       if (_isSignupTask && !_isCancelManageTask) {
         // SIGNUP: Agent should use auto-credentials, not ask user
         // Re-submit the task with explicit credentials injected — agent just does it
-        const _autoEmail = `${username}@aevoy.com`;
+        const _autoEmail = agentEmail;
         const _autoPass = `${username}@aevoy2026`;
         const _credService = [subject, cleanResponse].join(' ')
           .match(/\b(canva|notion|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|swagbucks|fiverr|upwork)\b/i)?.[1]
@@ -8826,17 +8761,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
         const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom|adobe|usertesting|trymyui|willful|epilogue|resy|opentable|legalzoom|grammarly|typeform|hootsuite|mailchimp|buffer|semrush|ahrefs|moz)\b/i);
         const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
-        cleanResponse = `I reached the ${_svcName} signup page. To complete your account, reply with the password you'd like to use and I'll finish the registration immediately.`;
-        console.log(`[SIGNUP-FALLBACK] Converted instructional response to credential request for ${_svcName}`);
-        // FIX 3: Immediately persist the credential request to DB so the user can see what was asked.
-        // Without this, response_text stays as the old instructional text until the final DB update
-        // (which may be minutes later), leaving the user with a null or stale response_text.
+        // FULL-SEND: Agent uses its OWN credentials for signups — never asks the user.
+        // Replace the instructional response and let the loop continue (agent retries with auto-creds).
+        const _sfAutoEmail = agentEmail;
+        cleanResponse = `Navigating to ${_svcName} signup page now — completing registration with my own credentials (${_sfAutoEmail}).`;
+        console.log(`[SIGNUP-FALLBACK] Agent retrying signup autonomously for ${_svcName} (not asking user for password)`);
         if (taskId) {
           await getSupabaseClient().from('tasks').update({
             response_text: cleanResponse,
-            status: 'awaiting_user_input',
           }).eq('id', taskId);
-          console.log(`[SIGNUP-FALLBACK] DB updated — status=awaiting_user_input, response_text set for task ${taskId.slice(0, 8)}`);
         }
       }
     }
@@ -11198,64 +11131,6 @@ async function executeAction(
       } catch (videoErr) {
         console.error("[VIDEO_CALL] Failed:", videoErr);
         return { action, success: false, error: "Could not create video call room" };
-      }
-    }
-
-    case "analyze_health_data": {
-      const { query = "general health summary" } = action.params as { query?: string };
-      try {
-        console.log(`[HEALTH] Analyzing health data for user ${userId}: "${query}"`);
-        // Fetch last 7 days of health metrics from DB
-        const { data: metrics } = await getSupabaseClient()
-          .from("health_metrics")
-          .select("metric_type, value, unit, recorded_at, source")
-          .eq("user_id", userId)
-          .gte("recorded_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-          .order("recorded_at", { ascending: false });
-
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com";
-        if (!metrics || metrics.length === 0) {
-          return {
-            action,
-            success: true,
-            result: `No health data connected yet. Connect Fitbit or Apple Health at ${appUrl}/dashboard/health to get personalized insights.`,
-          };
-        }
-
-        // Aggregate by metric type
-        const grouped: Record<string, { values: number[]; unit: string; source: string }> = {};
-        for (const m of metrics) {
-          if (!grouped[m.metric_type]) grouped[m.metric_type] = { values: [], unit: m.unit || "", source: m.source };
-          grouped[m.metric_type].values.push(Number(m.value));
-        }
-        const summary = Object.entries(grouped).map(([type, data]) => {
-          const avg = (data.values.reduce((a, b) => a + b, 0) / data.values.length).toFixed(1);
-          const latest = data.values[0].toFixed(1);
-          return `${type.replace(/_/g, " ")}: latest ${latest} ${data.unit}, avg ${avg} ${data.unit} (${data.values.length} readings, source: ${data.source})`;
-        }).join("\n");
-
-        // Also fetch latest AI insight
-        const { data: latestInsight } = await getSupabaseClient()
-          .from("health_insights")
-          .select("insight_text, severity, anomalies, generated_at")
-          .eq("user_id", userId)
-          .order("generated_at", { ascending: false })
-          .limit(1)
-          .single();
-
-        let result = `Health data summary (last 7 days):\n${summary}`;
-        if (latestInsight) {
-          result += `\n\nAI Health Insight (${new Date(latestInsight.generated_at).toLocaleDateString()}): ${latestInsight.insight_text}`;
-          if (latestInsight.severity && latestInsight.severity !== "normal") {
-            result += `\nSeverity flag: ${latestInsight.severity}`;
-          }
-        }
-
-        console.log(`[HEALTH] Returning health summary: ${metrics.length} metrics across ${Object.keys(grouped).length} types`);
-        return { action, success: true, result };
-      } catch (healthErr) {
-        console.error("[HEALTH] Failed to analyze health data:", healthErr);
-        return { action, success: false, error: "Could not retrieve health data right now" };
       }
     }
 

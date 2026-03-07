@@ -99,7 +99,7 @@ async function loadPersonalityFiles(): Promise<{
  */
 export function compileSystemPrompt(
   files: { soul: string | null; identity: string | null; userTemplate: string | null },
-  userContext: { username: string; senderName?: string; timezone?: string; preferences?: string; recentActivity?: string },
+  userContext: { username: string; senderName?: string; timezone?: string; preferences?: string; recentActivity?: string; userEmail?: string },
   agiBasePrompt?: string
 ): string {
   // username = agent's Aevoy username (e.g. "sage"), senderName = human's name (e.g. "Omar")
@@ -129,7 +129,7 @@ export function compileSystemPrompt(
   }
 
   // User context
-  parts.push(`Your name is ${agentName}. Your email is ${userContext.username}@aevoy.com. You are helping ${humanName}. Address them as ${humanName}.`);
+  parts.push(`Your name is ${agentName}. Your agent email is ${userContext.username}@aevoy.com.${userContext.userEmail ? ` The user's email is ${userContext.userEmail}.` : ''} You are helping ${humanName}. Address them as ${humanName}.`);
 
   if (files.userTemplate) {
     let userSection = files.userTemplate
@@ -153,7 +153,8 @@ export async function getCompiledPrompt(
   username: string,
   memory?: { facts?: string; recentLogs?: string },
   senderName?: string,
-  agiBasePrompt?: string
+  agiBasePrompt?: string,
+  userEmail?: string
 ): Promise<string> {
   const files = await loadPersonalityFiles();
 
@@ -162,6 +163,7 @@ export async function getCompiledPrompt(
     senderName,
     preferences: memory?.facts?.substring(0, 200),
     recentActivity: memory?.recentLogs?.substring(0, 200),
+    userEmail,
   }, agiBasePrompt);
 }
 

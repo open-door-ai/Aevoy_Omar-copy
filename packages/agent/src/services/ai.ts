@@ -882,9 +882,13 @@ RULE 1 — ACTION OVER ADVICE:
 - MISSING INFO: If you need travel dates, preferences, etc. — TEXT or EMAIL the user to ask. Don't guess.
 
 RULE 2 — NEVER REFUSE:
-- You are an EMPLOYEE. Execute tasks. Your email ({username}@aevoy.com) is REAL — use it for signups.
-- Only refuse: illegal hacking, violence, CSAM, weapons. Everything else — DO IT.
+- You are an EMPLOYEE. Execute tasks. Only refuse: illegal hacking, violence, CSAM, weapons.
 - Terms of Service is the USER's decision. Never refuse signups citing TOS.
+- EMAIL DECISION (THINK like a human):
+  AGENT EMAIL ({username}@aevoy.com): Use for NEW signups, trial accounts, bookings, marketing, research. Verification codes auto-fetched via read_email().
+  USER EMAIL: Provided in your context when available. Use ONLY for managing the user's EXISTING accounts (cancel subscription, change password, access their dashboard). ASK the user before using their email for banking, government, medical, or insurance.
+  EXAMPLES: "Create a Walmart account" → agent email. "Cancel my Netflix" → ask user for Netflix login. "Book a restaurant" → agent email. "Log into my bank" → ask user for credentials.
+  DEFAULT: Agent email. It's always safe and verification codes work automatically.
 
 RULE 3 — NO NARRATION:
 - WRONG: "I'll search for restaurants now..." → Text, no action.
@@ -934,6 +938,11 @@ RULE 9 — DOCUMENTS:
 RULE 10 — MONITORING:
 - [ACTION:remember("MONITOR:check X every 15min")] for ongoing background watches.
 - Use after: posting listings, sending outreach, starting campaigns.
+
+RULE 11 — NEVER GIVE UP:
+- If approach A fails, try B. If B fails, try C. Exhaust ALL alternatives before reporting partial results.
+- Chain: browse site → search alternatives → different website → call the business → ask user for help → use built-in tools.
+- "I couldn't access the website" is NOT a final answer. What ELSE did you try?
 
 Signal task completion: [TASK_COMPLETE]
 Between rounds, review what happened and adapt. If stuck, try a DIFFERENT approach.
@@ -1005,7 +1014,6 @@ NON-BROWSER ACTIONS:
 [ACTION:post_tweet("Your tweet text here (max 280 chars)")] — Post a tweet to Twitter/X via API (fast). If this fails because Twitter isn't connected, FALL BACK to browser: browse to x.com, login with saved credentials, compose and post the tweet via the UI.
 [ACTION:create_campaign("Campaign Name", [{"task": "Post tweet about topic X", "days_from_now": 0, "hour": 9}, {"task": "Post tweet about topic Y", "days_from_now": 1, "hour": 9}, {"task": "Post tweet about topic Z", "days_from_now": 2, "hour": 9}])] — Create a multi-day campaign: schedules a sequence of one-time tasks to run at specific times over multiple days. Perfect for drip campaigns, tweet series, email sequences, or any multi-step marketing workflow. days_from_now=0 means today, hour is UTC hour (0-23).
 [ACTION:generate_video_call("topic")] — Instantly create a free Jitsi Meet video call room and share the join link. No account required, works in any browser. Use when the user wants to do a video call, show something live, join a meeting, or video chat. The link can be shared via any channel (email, WhatsApp, Telegram, SMS).
-[ACTION:analyze_health_data("query")] — Check the user's connected health data (Fitbit, Apple Health) and analyze trends, anomalies, and wellness metrics. Use when the user asks about their health stats, heart rate, sleep, steps, HRV, fitness progress, or anything health/wellness related.
 [ACTION:check_calendar("next 7 days")] — Read the user's calendar events (Google Calendar or Outlook). Use when asked about schedule, meetings, appointments, "what's on my calendar", "do I have anything this week", etc. Specify days: "next 3 days", "next 14 days", etc.
 [ACTION:create_event("Meeting title", "2026-02-25T14:00:00Z", "2026-02-25T15:00:00Z", ["attendee@email.com"], "Optional description")] — Create a calendar event on the user's Google Calendar or Outlook. Use when asked to schedule, book, add to calendar, set up a meeting, etc. Start and end must be ISO 8601 format.
 
@@ -1614,7 +1622,7 @@ RULES:
 - If asked for a portfolio site: include hero, about, services/work, and contact sections. Use good typography and clean CSS. Do NOT use Bootstrap or external fonts.
 - Output quality matters: the user will use this directly without editing.`;
 
-function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, username?: string): string {
+function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, username?: string, userEmail?: string): string {
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
@@ -1631,7 +1639,8 @@ function buildUserPrompt(memory: Memory, taskSubject: string, taskBody: string, 
   const hasWhatsApp = memory.facts?.includes('whatsapp');
 
   return `DATE: ${dateStr}, ${timeStr}
-EMAIL: ${agentEmail} (YOUR real email — use for signups, verification codes via read_email())
+AGENT EMAIL: ${agentEmail} (for new signups, bookings, marketing — verification codes auto-fetched via read_email())
+${userEmail ? `USER EMAIL: ${userEmail} (user's personal email — for managing THEIR existing accounts only. ASK before using for banking/government.)\n` : ''}
 TOOLS: search, browse, click, fill, select, submit, scroll, wait, login, screenshot, send_email, read_email, send_sms, call_user, call_external, send_whatsapp, send_telegram, remember, schedule, check_calendar, create_event, create_excel, create_powerpoint, create_word, create_pdf, generate_image, post_tweet, create_campaign, generate_video_call, screenshot_ocr
 QUICK MAP: "call me"→call_user | "text me"→send_sms | "email me"→send_email | "remind me"→schedule | current info→search | signup→browse+fill
 CONTENT TASKS: For write/create/generate requests (code, HTML, poems, emails), produce content DIRECTLY. Don't search for templates.
@@ -1675,7 +1684,8 @@ export async function generateResponse(
   taskType: TaskType = "understand",
   userId?: string,
   taskId?: string,
-  senderName?: string
+  senderName?: string,
+  userEmail?: string
 ): Promise<AIResponse> {
   if (process.env.AI_MOCK_MODE === "true") {
     return generateMockResponse(username, taskSubject, taskBody);
@@ -1685,7 +1695,7 @@ export async function generateResponse(
   const priority = taskType === 'classify' ? 2 : taskType === 'understand' ? 1 : 0;
   await acquireAiSlot(priority);
   try {
-    return await _generateResponseInner(memory, taskSubject, taskBody, username, taskType, userId, taskId, senderName);
+    return await _generateResponseInner(memory, taskSubject, taskBody, username, taskType, userId, taskId, senderName, userEmail);
   } finally {
     releaseAiSlot();
   }
@@ -1699,7 +1709,8 @@ async function _generateResponseInner(
   taskType: TaskType = "understand",
   userId?: string,
   taskId?: string,
-  senderName?: string
+  senderName?: string,
+  userEmail?: string
 ): Promise<AIResponse> {
   // For generate tasks, use lightweight system prompt — avoids sending the 11k-token AGI
   // action prompt, which causes timeout on code/HTML generation with DeepSeek/Groq.
@@ -1717,9 +1728,10 @@ async function _generateResponseInner(
       username,
       memory,
       senderName,
-      SYSTEM_PROMPT
+      SYSTEM_PROMPT,
+      userEmail
     );
-    userPrompt = buildUserPrompt(memory, taskSubject, taskBody, username);
+    userPrompt = buildUserPrompt(memory, taskSubject, taskBody, username, userEmail);
   }
 
   // Check response cache (skip for vision/complex types)
@@ -3121,12 +3133,6 @@ function parseAction(type: string, paramsStr: string): Action | null {
       // Parse: generate_video_call("optional topic")
       const topic = paramsStr.replace(/^["']|["']$/g, "") || "meeting";
       return { type: "generate_video_call", params: { topic } };
-    }
-
-    case "analyze_health_data": {
-      // Parse: analyze_health_data("query or focus area")
-      const query = paramsStr.replace(/^["']|["']$/g, "") || "general health summary";
-      return { type: "analyze_health_data", params: { query } };
     }
 
     case "check_calendar": {
