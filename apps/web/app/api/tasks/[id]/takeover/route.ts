@@ -54,9 +54,11 @@ export async function POST(
       );
     }
 
-    if (!task.needs_takeover) {
+    // Allow resolve/resume if task needs takeover OR is still processing
+    // (user can manually take over any active task via the UI)
+    if (!task.needs_takeover && task.status !== "processing") {
       return NextResponse.json(
-        { error: "bad_request", message: "Task does not need takeover" },
+        { error: "bad_request", message: "Task is not active" },
         { status: 400 }
       );
     }
