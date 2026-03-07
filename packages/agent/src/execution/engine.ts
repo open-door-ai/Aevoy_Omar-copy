@@ -31,6 +31,9 @@ import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
 import { validateUrlSafety } from '../utils/url-validator.js';
 
+// Bright Data concurrency limiter — only 1 session at a time to prevent WSS connection hangs
+let brightDataInUse = false;
+
 // Timeouts — tuned per action type for optimal speed vs reliability
 const TASK_TIMEOUT_MS = 1200000;  // 20 minutes per task
 const STEP_TIMEOUT_MS = 15000;    // 15 seconds for click/fill/select (fast fail on bad selectors)
@@ -115,8 +118,14 @@ export class ExecutionEngine {
     this.taskId = taskId;
 
     // PRIORITY 0: Bright Data Scraping Browser — managed real Chrome, bypasses DataDome/Akamai
+    // Only 1 concurrent session allowed (Bright Data hangs silently with multiple WSS connections)
+    if (this.useBrightData && brightDataInUse) {
+      console.log(`[ENGINE] Bright Data already in use by another task — skipping to local browser`);
+      this.useBrightData = false;
+    }
     if (this.useBrightData) {
       try {
+        brightDataInUse = true;
         const wsUrl = process.env.BRIGHT_DATA_BROWSER_WS!;
         console.log(`[ENGINE] Connecting to Bright Data Scraping Browser...`);
 
@@ -142,6 +151,8 @@ export class ExecutionEngine {
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.warn(`[ENGINE] Bright Data connection failed: ${errorMsg} — falling back`);
         this.browser = null; this.context = null; this.page = null; this.isRemoteCDP = false;
+        this.useBrightData = false;
+        brightDataInUse = false; // Release lock on connection failure
       }
     }
 
@@ -320,6 +331,12 @@ export class ExecutionEngine {
     this.page = null;
     this.context = null;
     this.browser = null;
+
+    // Release Bright Data concurrency lock
+    if (this.useBrightData) {
+      brightDataInUse = false;
+      console.log('[ENGINE] Released Bright Data concurrency lock');
+    }
 
     // Log Bright Data Scraping Browser bandwidth cost.
     // Estimate: ~2MB per page × $8/GB = $0.016/page; floor at $0.02 per session.
@@ -1216,6 +1233,7 @@ export class ExecutionEngine {
           } catch { /* ignore cleanup errors */ }
           this.browser = null; this.context = null; this.page = null;
           this.useBrightData = false; this.isRemoteCDP = false;
+          brightDataInUse = false; // Release concurrency lock
           await this.initialize(this.userId, this.domain, this.taskId);
           return this._doNavigate(url);
         }
@@ -1242,6 +1260,7 @@ export class ExecutionEngine {
         } catch { /* ignore cleanup errors */ }
         this.browser = null; this.context = null; this.page = null;
         this.useBrightData = false; this.isRemoteCDP = false;
+        brightDataInUse = false; // Release concurrency lock
         // Re-initialize with local browser (falls through Bright Data block in initialize())
         await this.initialize(this.userId, this.domain, this.taskId);
         // Retry the navigation on local browser

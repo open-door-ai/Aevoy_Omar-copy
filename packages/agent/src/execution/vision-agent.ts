@@ -1483,6 +1483,9 @@ export async function runVisionAgent(
       }
 
       if (startUrl && isSafeUrl(startUrl)) {
+        // Hard 30s timeout on pre-navigation — prevents WSS hangs from blocking the entire agent
+        const preNavTimeout = new Promise<void>((_, rej) => setTimeout(() => rej(new Error('Pre-navigation timeout (30s)')), 30000));
+        const preNavWork = (async () => {
         // Known signup URL overrides for platforms whose /signup redirects to homepage
         const SIGNUP_URL_MAP: Record<string, string> = {
           // Figma /signup redirects to Figma Make — use homepage and click "Get started for free"
@@ -1556,6 +1559,11 @@ export async function runVisionAgent(
           console.warn(`[BROWSER-AGENT] Pre-navigation landed on error page: ${preNavUrl} — Bright Data may have failed`);
           history.push(`⚠️ Initial navigation failed (${preNavUrl}). Will retry or use alternative approach.`);
         }
+        })(); // end preNavWork
+        await Promise.race([preNavWork, preNavTimeout]).catch(e => {
+          console.warn(`[BROWSER-AGENT] Pre-navigation failed: ${e instanceof Error ? e.message : e}`);
+          history.push(`⚠️ Navigation timed out. Will try alternative approach.`);
+        });
       }
     }
 
