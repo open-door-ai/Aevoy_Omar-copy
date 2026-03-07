@@ -131,8 +131,9 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
   try {
     const elements = await Promise.race([
       page.evaluate(() => {
-        const items: { tag: string; role: string; name: string; type: string; nth: number; cx: number; cy: number }[] = [];
+        const items: { tag: string; role: string; name: string; type: string; nth: number; cx: number; cy: number; formContext: string }[] = [];
         const tagCounts = new Map<string, number>();
+        const multiForm = document.querySelectorAll('form').length >= 2;
         const selectors = ['a', 'button', 'input', 'select', 'textarea',
           '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="searchbox"]',
           '[role="combobox"]', '[role="checkbox"]', '[role="radio"]', '[role="tab"]',
@@ -180,11 +181,27 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
               visibleText ||
               el.getAttribute('title') ||
               el.getAttribute('placeholder') || '';
+            // Form context: disambiguate elements in multi-form pages
+            let formContext = '';
+            if (multiForm) {
+              const parentForm = el.closest('form');
+              if (parentForm) {
+                const heading = parentForm.querySelector('h1,h2,h3,h4,h5,h6');
+                const legend = parentForm.querySelector('legend');
+                const submit = parentForm.querySelector('button[type="submit"],input[type="submit"]');
+                formContext = (heading?.textContent?.trim() ||
+                  legend?.textContent?.trim() ||
+                  parentForm.getAttribute('aria-label') ||
+                  submit?.textContent?.trim() ||
+                  (submit as HTMLInputElement | null)?.value ||
+                  '').substring(0, 30).toLowerCase();
+              }
+            }
             const nth = tagCounts.get(tag + role + name) || 0;
             tagCounts.set(tag + role + name, nth + 1);
             const cx = Math.round(rect.left + rect.width / 2);
             const cy = Math.round(rect.top + rect.height / 2);
-            items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy });
+            items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy, formContext });
             if (items.length >= 100) return; // cap
           });
         }
@@ -205,7 +222,8 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
       roleNameCounts.set(roleNameKey, nthOfKind + 1);
       refs.set(refId, { role: el.role, name: el.name, nthOfKind, cx: el.cx, cy: el.cy });
       const typeStr = el.type ? ` type="${el.type}"` : '';
-      lines.push(`[${refId}] ${el.role} "${sanitizeElementName(el.name)}"${typeStr}`);
+      const finalName = el.formContext && el.name ? `${el.name} (form: ${el.formContext})` : el.name;
+      lines.push(`[${refId}] ${el.role} "${sanitizeElementName(finalName)}"${typeStr}`);
     }
     return { text: lines.join('\n'), refs };
   } catch {
@@ -1355,6 +1373,9 @@ export async function runVisionAgent(
   let noChangeCount = 0;
   let lastSnapshotHash = '';
   let lastCheckedUrl = '';
+  // Fix 5: empty/dead page detection — bail fast when DOM has 0 interactive refs
+  let emptyPageCount = 0;
+  let emptyPageTriedUrls = new Set<string>();
 
   // ── Action memory: don't try the same thing more than twice ──
   interface ActionRecord { sig: string; raw: string; ok: boolean; step: number; }
@@ -1842,6 +1863,43 @@ export async function runVisionAgent(
       } else {
         lastUrl = url;
         sameUrlCount = 0;
+      }
+
+      // ── Empty/dead page detection (0 interactive refs) ──
+      if (currentRefs.size === 0) {
+        emptyPageCount++;
+        if (emptyPageCount >= 3) {
+          let parsed: URL | null = null;
+          try { parsed = new URL(url); } catch { /* invalid URL */ }
+          if (parsed) {
+            const domainRoot = `${parsed.protocol}//${parsed.host}`;
+            const taskLower = task.toLowerCase();
+            const altPaths = ['/'];
+            if (/sign.?up|register|create.?account/i.test(taskLower)) altPaths.push('/signup', '/register', '/join');
+            if (/log.?in|sign.?in/i.test(taskLower)) altPaths.push('/login', '/signin');
+            if (/book|reserv/i.test(taskLower)) altPaths.push('/book', '/reservations');
+            altPaths.push('/login', '/signup');
+            const candidates = [...new Set(altPaths)].map(p => domainRoot + p).filter(u => u !== url && !emptyPageTriedUrls.has(u) && isSafeUrl(u));
+            const nextUrl = candidates[0];
+            if (nextUrl) {
+              console.log(`[BROWSER-AGENT] Empty page detected (${emptyPageCount} steps, 0 refs) — trying ${nextUrl}`);
+              history.push(`Empty page (0 interactive elements, ${emptyPageCount} steps). Navigating to ${nextUrl}`);
+              emptyPageTriedUrls.add(nextUrl);
+              await activePage.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+              emptyPageCount = 0;
+              sameUrlCount = 0;
+            } else if (emptyPageCount >= 5) {
+              console.log(`[BROWSER-AGENT] Empty page — exhausted alternatives, bailing`);
+              const pageData = await capturePageData(activePage);
+              return { success: false, error: `Empty page at ${url} (0 interactive elements after ${emptyPageCount} steps, tried ${emptyPageTriedUrls.size} alternatives)`, steps, cost: totalCost, screenshots, pageData };
+            }
+          } else if (emptyPageCount >= 5) {
+            const pageData = await capturePageData(activePage);
+            return { success: false, error: `Empty page (0 refs) for ${emptyPageCount} steps`, steps, cost: totalCost, screenshots, pageData };
+          }
+        }
+      } else {
+        emptyPageCount = 0;
       }
 
       // ── Build "ALREADY TRIED" section ──

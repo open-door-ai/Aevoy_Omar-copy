@@ -2319,11 +2319,14 @@ export async function generateBrowserStepResponse(
 
 /**
  * Generate response for vision tasks (screenshot analysis).
- * Order: Haiku (PRIMARY, vision-capable) → Groq Scout → OpenRouter free → Gemini → DeepSeek text
+ * Order: Haiku (PRIMARY) → Gemini Flash → Groq Scout → OpenRouter free (with backoff) → DeepSeek text → Groq text
  * NO Sonnet — too expensive.
  *
  * Cost per 40-step task:
- *   Haiku: ~$0.032  |  Groq Scout: $0.012  |  OpenRouter free: $0.000  |  Gemini: $0.012
+ *   Haiku: ~$0.032  |  Gemini: $0.012  |  Groq Scout: $0.012  |  OpenRouter free: $0.000
+ *
+ * OpenRouter free models are tried LAST for image calls because they're chronically
+ * 429/exhausted. 5-min backoff per model prevents wasting 7×25s = 175s on dead models.
  */
 export async function generateVisionResponse(
   prompt: string,
@@ -2505,47 +2508,33 @@ export async function generateVisionResponse(
     console.warn(`[AI] VisionText fast path failed — falling through to vision cascade`);
   }
 
-  // ═══ 1. OpenRouter FREE — 20 RPM shared across all free models ═══
-  // Best for vision: Qwen3-VL (thinking), Gemma 3 27B, Nemotron Nano 12B VL, Mistral Small 3.1
-  if (process.env.OPENROUTER_API_KEY) {
-    const freeModels = [
-      { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B" },
-      { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL" },
-      { model: "nvidia/nemotron-3-nano-30b-a3b:free", name: "Nemotron-3-Nano-30B" },
-      { model: "mistralai/mistral-small-3.1-24b-instruct:free", name: "Mistral-Small-3.1" },
-      { model: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama-3.3-70B" },
-      { model: "qwen/qwen3-vl-30b-a3b-thinking", name: "Qwen3-VL-30B-Thinking" },
-      { model: "openai/gpt-oss-120b:free", name: "GPT-OSS-120B" },
-    ];
+  // ═══ 1. Gemini Flash — cheap, fast, different rate pool, supports images ═══
+  if (process.env.GOOGLE_API_KEY) {
+    try {
+      const response = await withTimeout(getGeminiClient().chat.completions.create({
+        model: "gemini-2.5-flash",
+        max_tokens: 1024,
+        messages: [
+          ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+          { role: "user" as const, content: buildImageContent() },
+        ],
+      }), 15000);
 
-    for (const fm of freeModels) {
-      try {
-        const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
-          model: fm.model,
-          max_tokens: 1024,
-          messages: [
-            ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
-            { role: "user" as const, content: buildImageContent() }
-          ],
-        }), 25000); // 25s timeout — free models can be slower
-
-        const content = response.choices[0]?.message?.content || "";
-        if (content.length > 10) {
-          const inTok = response.usage?.prompt_tokens || 0;
-          const outTok = response.usage?.completion_tokens || 0;
-          console.log(`[AI] Vision (${fm.name} FREE) | Cost: $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
-          if (userId) trackApiCall(userId, fm.model, inTok, outTok, 0, "openrouter", taskId, "vision").catch(() => {});
-          return { content, cost: 0 };
-        }
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        console.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
-        continue; // Always try next model regardless of error type
+      const content = response.choices[0]?.message?.content || "";
+      if (content.length > 10) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
+        console.log(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
+        return { content, cost };
       }
+    } catch (error) {
+      console.warn(`[AI] Vision (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  // ═══ 2. Groq Vision (Llama 4 Scout) — near-free, fast ═══
+  // ═══ 2. Groq Vision (Llama 4 Scout) — near-free, fast, supports images ═══
   // $0.11/$0.34 per M tokens. 30 RPM, 1K RPD free tier.
   // Shares rate limit bucket with fast text shortcut — check backoff map.
   const scoutBackoffKey = "groq:meta-llama/llama-4-scout-17b-16e-instruct";
@@ -2579,33 +2568,53 @@ export async function generateVisionResponse(
     }
   }
 
-  // ═══ 3. Gemini Flash — cheap, fast ═══
-  if (process.env.GOOGLE_API_KEY) {
-    try {
-      const response = await withTimeout(getGeminiClient().chat.completions.create({
-        model: "gemini-2.5-flash",
-        max_tokens: 1024,
-        messages: [
-          ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
-          { role: "user" as const, content: buildImageContent() },
-        ],
-      }), 15000);
+  // ═══ 3. OpenRouter FREE — 20 RPM shared across all free models ═══
+  // Last for image calls: most free models are 429/exhausted. Backoff prevents wasting 175s.
+  if (process.env.OPENROUTER_API_KEY) {
+    const freeModels = [
+      { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B" },
+      { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL" },
+      { model: "nvidia/nemotron-3-nano-30b-a3b:free", name: "Nemotron-3-Nano-30B" },
+      { model: "mistralai/mistral-small-3.1-24b-instruct:free", name: "Mistral-Small-3.1" },
+      { model: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama-3.3-70B" },
+      { model: "qwen/qwen3-vl-30b-a3b-thinking", name: "Qwen3-VL-30B-Thinking" },
+      { model: "openai/gpt-oss-120b:free", name: "GPT-OSS-120B" },
+    ];
 
-      const content = response.choices[0]?.message?.content || "";
-      if (content.length > 10) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
-        console.log(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
-        if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
-        return { content, cost };
+    for (const fm of freeModels) {
+      // Skip if rate-limited / exhausted recently (5 min backoff)
+      const backoffKey = `openrouter:${fm.model}`;
+      if (Date.now() < (rateLimitBackoff.get(backoffKey) || 0)) continue;
+
+      try {
+        const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
+          model: fm.model,
+          max_tokens: 1024,
+          messages: [
+            ...(systemPrompt ? [{ role: "system" as const, content: systemPrompt }] : []),
+            { role: "user" as const, content: buildImageContent() }
+          ],
+        }), 25000); // 25s timeout — free models can be slower
+
+        const content = response.choices[0]?.message?.content || "";
+        if (content.length > 10) {
+          const inTok = response.usage?.prompt_tokens || 0;
+          const outTok = response.usage?.completion_tokens || 0;
+          console.log(`[AI] Vision (${fm.name} FREE) | Cost: $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+          if (userId) trackApiCall(userId, fm.model, inTok, outTok, 0, "openrouter", taskId, "vision").catch(() => {});
+          return { content, cost: 0 };
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
+        // 5 min backoff for exhausted/rate-limited free models — prevents wasting 7×25s on dead models
+        if (msg.includes('429') || msg.toLowerCase().includes('rate limit') || msg.includes('402')) {
+          rateLimitBackoff.set(`openrouter:${fm.model}`, Date.now() + 300000);
+        }
+        continue;
       }
-    } catch (error) {
-      console.warn(`[AI] Vision (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-
-  // Anthropic removed — no funds on Railway, user wants 100% free models
 
   // ═══ 4. DeepSeek text-only fallback — CRITICAL for Railway where no vision model keys are set.
   // The buildObservePrompt already contains full DOM text, form fields, current URL, and history.
