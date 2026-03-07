@@ -79,15 +79,12 @@ export class ExecutionEngine {
     // Priority: Bright Data > Remote CDP > VPS Multi-User > Local Playwright
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
-    // Bright Data blocks password fields by default (KYC required to unlock).
-    // For login/signup tasks, skip Bright Data → use local patchright + Geonode proxy.
-    const needsLogin = /\b(sign\s?up|signup|register|create.*account|make.*account|log\s*in|login|cancel.*subscription|unsubscrib|manage.*account|change.*password|update.*profile|delete.*account)\b/i.test(intent.goal);
-    if (needsLogin && process.env.BRIGHT_DATA_BROWSER_WS) {
-      console.log(`[ENGINE] Task needs login/signup — skipping Bright Data (password fields blocked without KYC)`);
-    }
-
     // PRIORITY 0: Bright Data Scraping Browser (real managed Chrome, bypasses DataDome/Akamai)
-    this.useBrightData = !forceLocal && !needsLogin && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    // NOTE: Bright Data blocks password fields by default (KYC required to unlock).
+    // We start with Bright Data for ALL tasks. If the vision agent detects password-field
+    // blocking at runtime (FILL on password fails), it signals a restart with local browser.
+    // This is generic — no task-type pre-classification needed.
+    this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
     if (process.env.BRIGHT_DATA_BROWSER_WS) {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
     } else {

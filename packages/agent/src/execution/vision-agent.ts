@@ -1866,6 +1866,7 @@ export async function runVisionAgent(
       }
 
       // ── Empty/dead page detection (0 interactive refs) ──
+      // Generic: no task-type hardcoding. Try domain root first, then walk up the URL path.
       if (currentRefs.size === 0) {
         emptyPageCount++;
         if (emptyPageCount >= 3) {
@@ -1873,14 +1874,14 @@ export async function runVisionAgent(
           try { parsed = new URL(url); } catch { /* invalid URL */ }
           if (parsed) {
             const domainRoot = `${parsed.protocol}//${parsed.host}`;
-            const taskLower = task.toLowerCase();
-            const altPaths = ['/'];
-            if (/sign.?up|register|create.?account/i.test(taskLower)) altPaths.push('/signup', '/register', '/join');
-            if (/log.?in|sign.?in/i.test(taskLower)) altPaths.push('/login', '/signin');
-            if (/book|reserv/i.test(taskLower)) altPaths.push('/book', '/reservations');
-            altPaths.push('/login', '/signup');
-            const candidates = [...new Set(altPaths)].map(p => domainRoot + p).filter(u => u !== url && !emptyPageTriedUrls.has(u) && isSafeUrl(u));
-            const nextUrl = candidates[0];
+            // Walk up the URL path: /a/b/c → try /a/b → /a → /
+            const pathParts = parsed.pathname.split('/').filter(Boolean);
+            const candidates: string[] = [];
+            if (parsed.pathname !== '/' && parsed.pathname !== '') candidates.push(domainRoot + '/');
+            for (let i = pathParts.length - 1; i > 0; i--) {
+              candidates.push(domainRoot + '/' + pathParts.slice(0, i).join('/'));
+            }
+            const nextUrl = candidates.find(u => !emptyPageTriedUrls.has(u) && isSafeUrl(u));
             if (nextUrl) {
               console.log(`[BROWSER-AGENT] Empty page detected (${emptyPageCount} steps, 0 refs) — trying ${nextUrl}`);
               history.push(`Empty page (0 interactive elements, ${emptyPageCount} steps). Navigating to ${nextUrl}`);
