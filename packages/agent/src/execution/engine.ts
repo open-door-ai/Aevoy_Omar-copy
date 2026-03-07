@@ -1204,6 +1204,24 @@ export class ExecutionEngine {
       // Check for CAPTCHAs
       await handleCaptchaIfPresent(this.page!, this.userId, this.taskId);
 
+      // Check if we landed on a chrome error page (Bright Data SSL/cert failures load as pages, not exceptions)
+      const landedUrl = this.page!.url();
+      if (landedUrl.startsWith('chrome-error://') || landedUrl.startsWith('chromewebdata') || landedUrl === 'about:blank') {
+        console.warn(`[ENGINE] Navigation landed on error page: ${landedUrl}`);
+        if (this.useBrightData && ++this.brightDataNavFailures >= 2) {
+          console.warn(`[ENGINE] Bright Data error-page ${this.brightDataNavFailures}x — switching to local patchright + proxy`);
+          try {
+            await this.context?.close().catch(() => {});
+            await this.browser?.close().catch(() => {});
+          } catch { /* ignore cleanup errors */ }
+          this.browser = null; this.context = null; this.page = null;
+          this.useBrightData = false; this.isRemoteCDP = false;
+          await this.initialize(this.userId, this.domain, this.taskId);
+          return this._doNavigate(url);
+        }
+        return { success: false, action: 'navigate', error: `Navigation to ${url} landed on error page (${landedUrl}). Retry or try a different URL.` };
+      }
+
       console.log(`[ENGINE] Navigation successful: ${url}`);
       if (this.useBrightData) {
         this.brightDataPageCount++;

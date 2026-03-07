@@ -1549,6 +1549,13 @@ export async function runVisionAgent(
           await activePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
         }
         await activePage.waitForTimeout(300);
+
+        // Check if pre-navigation landed on chrome-error (Bright Data SSL/cert failure)
+        const preNavUrl = activePage.url();
+        if (preNavUrl.startsWith('chrome-error://') || preNavUrl.startsWith('chromewebdata')) {
+          console.warn(`[BROWSER-AGENT] Pre-navigation landed on error page: ${preNavUrl} — Bright Data may have failed`);
+          history.push(`⚠️ Initial navigation failed (${preNavUrl}). Will retry or use alternative approach.`);
+        }
       }
     }
 
