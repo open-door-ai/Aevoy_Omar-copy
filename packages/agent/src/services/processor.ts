@@ -7504,32 +7504,10 @@ Extract the ACTUAL phone number from search results and call them:
       if (successRate < 0.5) {
         console.log(`[CASCADE] Browser success rate ${(successRate * 100).toFixed(0)}%, trying fallbacks (domain: ${classification.domains[0]})`);
 
-        // Request user takeover when all cascades exhausted + enough actions tried
-        const isTakeoverEligible = taskType !== 'general' && taskType !== 'research';
-        if (executionEngine && taskId && successRate < 0.3 && actionResults.length >= 8 && isTakeoverEligible) {
-          // Update cost before takeover — query ai_cost_log for accurate billed cost
-          let takeoverCost = 0;
-          try {
-            const { data: tCostRows } = await getSupabaseClient()
-              .from('ai_cost_log').select('cost_usd').eq('task_id', taskId);
-            if (tCostRows) takeoverCost = tCostRows.reduce((s: number, r: { cost_usd: number }) => s + (r.cost_usd || 0), 0);
-          } catch { takeoverCost = (aiResponse.cost || 0) + (executionEngine?.getTotalCost() || 0); }
-          await getSupabaseClient().from("tasks").update({
-            tokens_used: aiResponse.tokensUsed || 0,
-            cost_usd: takeoverCost,
-            type: taskType,
-            execution_time_ms: Date.now() - startTime,
-          }).eq("id", taskId);
-
-          await requestTakeover(taskId, 'low_success_rate', userId, from, username, task.inputChannel);
-          // Return early - user will resolve and resume
-          return {
-            taskId,
-            success: false,
-            response: 'Waiting for your help with the browser session.',
-            actions: actionResults,
-            error: 'Browser takeover requested',
-          };
+        // Agent never gives up — keep trying. User can take over from dashboard anytime.
+        // Log the low success rate but DO NOT stop or request takeover.
+        if (executionEngine && taskId && successRate < 0.3 && actionResults.length >= 8) {
+          console.log(`[CASCADE] Low success rate ${(successRate * 100).toFixed(0)}% after ${actionResults.length} actions — agent keeps trying (user can take over from dashboard)`);
         }
 
         try {
