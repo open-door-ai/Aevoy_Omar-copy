@@ -530,14 +530,18 @@ async function callProvider(
       let content = '';
       let inputTokens = 0;
       let outputTokens = 0;
+      let cacheHitTokens = 0;
       for await (const chunk of stream) {
         content += chunk.choices[0]?.delta?.content || '';
         if (chunk.usage) {
           inputTokens = chunk.usage.prompt_tokens || 0;
           outputTokens = chunk.usage.completion_tokens || 0;
+          // DeepSeek returns cache info: prompt_cache_hit_tokens ($0.07/M) vs miss ($0.27/M)
+          const usageAny = chunk.usage as unknown as Record<string, number>;
+          cacheHitTokens = usageAny?.prompt_cache_hit_tokens || 0;
         }
       }
-      return { content, inputTokens, outputTokens };
+      return { content, inputTokens, outputTokens, cacheReadTokens: cacheHitTokens };
     }
 
     case 'kimi': {
@@ -716,6 +720,11 @@ function calculateCost(
     const baseCost = calculateAnthropicCost(inputTokens, outputTokens, cacheReadTokens || 0, cacheCreationTokens || 0, tier);
     // Apply reconciliation correction factor (learned from daily Admin API comparison)
     return baseCost * getAnthropicCorrectionFactor();
+  }
+  // DeepSeek cache: hit=$0.07/M, miss=$0.27/M, output=$1.10/M
+  if (config.provider === 'deepseek' && cacheReadTokens) {
+    const missTokens = Math.max(0, inputTokens - cacheReadTokens);
+    return (missTokens * 0.27 + cacheReadTokens * 0.07 + outputTokens * 1.10) / 1_000_000;
   }
   return (inputTokens * config.costPerMInput + outputTokens * config.costPerMOutput) / 1_000_000;
 }
