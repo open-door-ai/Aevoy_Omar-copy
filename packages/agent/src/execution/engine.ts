@@ -70,6 +70,7 @@ export class ExecutionEngine {
   private useBrightData = false;
   private brightDataSessionStart: number = 0;
   private brightDataPageCount: number = 0;
+  private brightDataNavFailures: number = 0;
   private taskId?: string;
 
   constructor(intent: LockedIntent) {
@@ -1204,11 +1205,31 @@ export class ExecutionEngine {
       await handleCaptchaIfPresent(this.page!, this.userId, this.taskId);
 
       console.log(`[ENGINE] Navigation successful: ${url}`);
-      if (this.useBrightData) this.brightDataPageCount++;
+      if (this.useBrightData) {
+        this.brightDataPageCount++;
+        this.brightDataNavFailures = 0; // Reset on success
+      }
       return { success: true, action: 'navigate', data: { url } };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown navigation error';
       console.error(`[ENGINE] Navigation failed for ${url}: ${message}`);
+
+      // Runtime Bright Data fallback: after 2 consecutive nav failures, switch to local browser.
+      // Generic — handles cert errors, cooldowns, blocked domains, any infrastructure issue.
+      if (this.useBrightData && ++this.brightDataNavFailures >= 2) {
+        console.warn(`[ENGINE] Bright Data failed ${this.brightDataNavFailures}x — switching to local patchright + proxy`);
+        try {
+          await this.context?.close().catch(() => {});
+          await this.browser?.close().catch(() => {});
+        } catch { /* ignore cleanup errors */ }
+        this.browser = null; this.context = null; this.page = null;
+        this.useBrightData = false; this.isRemoteCDP = false;
+        // Re-initialize with local browser (falls through Bright Data block in initialize())
+        await this.initialize(this.userId, this.domain, this.taskId);
+        // Retry the navigation on local browser
+        return this._doNavigate(url);
+      }
+
       return { success: false, action: 'navigate', error: `Navigation to ${url} failed: ${message}` };
     }
   }
