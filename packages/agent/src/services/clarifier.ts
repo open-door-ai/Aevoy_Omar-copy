@@ -22,6 +22,7 @@ export interface UserSettings {
   monitoringIntervalMs: number;
   maxTaskIterations: number;
   taskBudgetCents: number;
+  masterTimeoutMinutes: number;
   // Full Send Mode — autonomous email management
   fullSendMode: boolean;
   fullSendAutoReply: boolean;
@@ -59,6 +60,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   monitoringIntervalMs: 900000,    // 15 minutes
   maxTaskIterations: 15,
   taskBudgetCents: 500,            // $5
+  masterTimeoutMinutes: 15,        // 15 minutes
   // Full Send Mode defaults — off by default, opt-in
   fullSendMode: false,
   fullSendAutoReply: true,
@@ -96,6 +98,7 @@ export async function getUserSettings(userId: string): Promise<UserSettings> {
       monitoringIntervalMs: data.monitoring_interval_ms || 900000,
       maxTaskIterations: data.max_task_iterations || 15,
       taskBudgetCents: data.task_budget_cents || 500,
+      masterTimeoutMinutes: data.master_timeout_minutes ?? 15,
       // Full Send Mode
       fullSendMode: data.full_send_mode || false,
       fullSendAutoReply: data.full_send_auto_reply !== false, // default true

@@ -46,6 +46,9 @@ interface UserSettings {
   parallel_execution?: boolean;
   iterative_deepening?: boolean;
   monthly_budget?: number;
+  task_budget_cents?: number;
+  max_task_iterations?: number;
+  master_timeout_minutes?: number;
   report_frequency?: string;
   // Full Send Mode — autonomous email management
   full_send_mode?: boolean;
@@ -1534,6 +1537,91 @@ export default function SettingsPage() {
               </div>
             </div>
           </CardContent>
+        </Card>
+      )}
+
+      {/* Task Execution */}
+      {settings && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <BarChart2 className="w-5 h-5" />
+              <CardTitle>Task Execution</CardTitle>
+            </div>
+            <CardDescription>
+              Control how much time and resources the AI spends on each task
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Per-Task Budget */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Per-Task Budget</Label>
+              <p className="text-xs text-muted-foreground">
+                Maximum cost per individual task. Higher budgets allow more complex tasks.
+              </p>
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min={100}
+                  max={5000}
+                  step={50}
+                  value={settings.task_budget_cents ?? 500}
+                  onChange={(e) => setSettings({ ...settings, task_budget_cents: parseInt(e.target.value) })}
+                  className="flex-1 accent-primary"
+                />
+                <span className="text-sm font-medium w-16 text-right">
+                  ${((settings.task_budget_cents ?? 500) / 100).toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            {/* Task Timeout */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Task Timeout</Label>
+              <p className="text-xs text-muted-foreground">
+                How long a task can run before auto-completing. Longer timeouts for complex tasks.
+              </p>
+              <select
+                value={settings.master_timeout_minutes ?? 15}
+                onChange={(e) => setSettings({ ...settings, master_timeout_minutes: parseInt(e.target.value) })}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value={5}>5 minutes</option>
+                <option value={15}>15 minutes</option>
+                <option value={30}>30 minutes</option>
+                <option value={60}>1 hour</option>
+                <option value={180}>3 hours</option>
+                <option value={480}>8 hours</option>
+              </select>
+            </div>
+
+            {/* Max Iterations */}
+            <div className="space-y-2">
+              <Label className="font-semibold">Max Attempts</Label>
+              <p className="text-xs text-muted-foreground">
+                How many rounds the AI tries before completing. More attempts = more thorough.
+              </p>
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min={5}
+                  max={30}
+                  step={1}
+                  value={settings.max_task_iterations ?? 15}
+                  onChange={(e) => setSettings({ ...settings, max_task_iterations: parseInt(e.target.value) })}
+                  className="flex-1 accent-primary"
+                />
+                <span className="text-sm font-medium w-8 text-right">
+                  {settings.max_task_iterations ?? 15}
+                </span>
+              </div>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button onClick={handleSaveSettings} disabled={savingSettings}>
+              {savingSettings ? "Saving..." : "Save Task Settings"}
+            </Button>
+          </CardFooter>
         </Card>
       )}
 

@@ -42,9 +42,13 @@ export async function GET() {
     parallel_execution: true,
     iterative_deepening: true,
     monthly_budget: 15.0,
+    task_budget_cents: 500,
+    max_task_iterations: 15,
+    master_timeout_minutes: 15,
+    clarification_timeout_ms: 300000,
+    monitoring_interval_ms: 300000,
     dashboard_tour_seen: false,
     report_frequency: "weekly",
-    health_disclaimer_acknowledged: false,
     full_send_mode: false,
     full_send_auto_reply: true,
     full_send_draft_threshold: "medium",
@@ -111,6 +115,51 @@ export async function PUT(request: Request) {
       }
     }
 
+    // Validate task_budget_cents
+    if (body.task_budget_cents !== undefined) {
+      const v = parseInt(body.task_budget_cents);
+      if (isNaN(v)) {
+        return NextResponse.json({ error: "Invalid task_budget_cents" }, { status: 400 });
+      }
+      body.task_budget_cents = Math.max(100, Math.min(5000, v));
+    }
+
+    // Validate max_task_iterations
+    if (body.max_task_iterations !== undefined) {
+      const v = parseInt(body.max_task_iterations);
+      if (isNaN(v)) {
+        return NextResponse.json({ error: "Invalid max_task_iterations" }, { status: 400 });
+      }
+      body.max_task_iterations = Math.max(5, Math.min(30, v));
+    }
+
+    // Validate master_timeout_minutes
+    if (body.master_timeout_minutes !== undefined) {
+      const v = parseInt(body.master_timeout_minutes);
+      if (isNaN(v)) {
+        return NextResponse.json({ error: "Invalid master_timeout_minutes" }, { status: 400 });
+      }
+      body.master_timeout_minutes = Math.max(5, Math.min(480, v));
+    }
+
+    // Validate clarification_timeout_ms
+    if (body.clarification_timeout_ms !== undefined) {
+      const v = parseInt(body.clarification_timeout_ms);
+      if (isNaN(v)) {
+        return NextResponse.json({ error: "Invalid clarification_timeout_ms" }, { status: 400 });
+      }
+      body.clarification_timeout_ms = Math.max(30000, Math.min(3600000, v));
+    }
+
+    // Validate monitoring_interval_ms
+    if (body.monitoring_interval_ms !== undefined) {
+      const v = parseInt(body.monitoring_interval_ms);
+      if (isNaN(v)) {
+        return NextResponse.json({ error: "Invalid monitoring_interval_ms" }, { status: 400 });
+      }
+      body.monitoring_interval_ms = Math.max(60000, Math.min(3600000, v));
+    }
+
     // Build update payload — only include fields that were sent
     const updatePayload: Record<string, unknown> = {
       user_id: user.id,
@@ -129,6 +178,11 @@ export async function PUT(request: Request) {
     if (body.parallel_execution !== undefined) updatePayload.parallel_execution = body.parallel_execution;
     if (body.iterative_deepening !== undefined) updatePayload.iterative_deepening = body.iterative_deepening;
     if (body.monthly_budget !== undefined) updatePayload.monthly_budget = body.monthly_budget;
+    if (body.task_budget_cents !== undefined) updatePayload.task_budget_cents = body.task_budget_cents;
+    if (body.max_task_iterations !== undefined) updatePayload.max_task_iterations = body.max_task_iterations;
+    if (body.master_timeout_minutes !== undefined) updatePayload.master_timeout_minutes = body.master_timeout_minutes;
+    if (body.clarification_timeout_ms !== undefined) updatePayload.clarification_timeout_ms = body.clarification_timeout_ms;
+    if (body.monitoring_interval_ms !== undefined) updatePayload.monitoring_interval_ms = body.monitoring_interval_ms;
     if (body.dashboard_tour_seen !== undefined) updatePayload.dashboard_tour_seen = body.dashboard_tour_seen;
     if (body.voice_preference !== undefined) updatePayload.voice_preference = body.voice_preference;
     if (body.report_frequency !== undefined) {

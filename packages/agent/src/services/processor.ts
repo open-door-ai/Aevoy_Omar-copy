@@ -1289,13 +1289,14 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
   const senderName = task.senderName || (from.includes('@') ? from.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : undefined);
   let taskId = task.taskId || "";
   const startTime = Date.now();
-  const MASTER_TIMEOUT_MS = 900000; // 15 minutes — prevents zombie tasks; vision agent has 8-min sub-timeout
+  let MASTER_TIMEOUT_MS = 900000; // 15 minutes default — updated dynamically from user_settings after profile query
 
-  // Master timeout: abort if the entire task exceeds 15 minutes.
+  // Master timeout: abort if the entire task exceeds the configured limit.
   // The signal is checked between iterations AND we force-complete the task on timeout.
+  // Timer is re-set with dynamic value after user settings are loaded.
   const timeoutController = new AbortController();
   let _masterTimedOut = false;
-  const masterTimer = setTimeout(async () => {
+  let masterTimer = setTimeout(async () => {
     _masterTimedOut = true;
     timeoutController.abort();
     console.error(`[MASTER-TIMEOUT] Task ${task.taskId || 'unknown'} exceeded ${MASTER_TIMEOUT_MS / 60000} minutes — force-completing`);
@@ -2136,6 +2137,36 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       // Non-critical — default to full_send (most capable)
     }
     console.log(`[CONFIRM-MODE] User=${userId.slice(0, 8)} effectiveMode=${_effectiveConfirmMode}`);
+
+    // Dynamic master timeout from user settings — clear the default 15-min timer and reset
+    if (_taskUserSettings) {
+      const _dynTimeoutMin = Math.min(Math.max(_taskUserSettings.masterTimeoutMinutes || 15, 5), 480);
+      const _dynTimeoutMs = _dynTimeoutMin * 60 * 1000;
+      if (_dynTimeoutMs !== MASTER_TIMEOUT_MS) {
+        MASTER_TIMEOUT_MS = _dynTimeoutMs;
+        clearTimeout(masterTimer);
+        masterTimer = setTimeout(async () => {
+          _masterTimedOut = true;
+          timeoutController.abort();
+          console.error(`[MASTER-TIMEOUT] Task ${task.taskId || 'unknown'} exceeded ${MASTER_TIMEOUT_MS / 60000} minutes — force-completing`);
+          if (task.taskId) {
+            try {
+              await getSupabaseClient().from('tasks').update({
+                status: 'completed',
+                completed_at: new Date().toISOString(),
+                execution_time_ms: MASTER_TIMEOUT_MS,
+                response_text: _pickVariant([
+                  "That one took longer than expected and I had to wrap up. Send it again and I'll jump right back in.",
+                  "I was still working on this when I ran out of time. Feel free to resend and I'll pick it up.",
+                  "This took a bit longer than I can handle in one go. Resend it and I'll tackle it fresh.",
+                ]),
+              }).eq('id', task.taskId).eq('status', 'processing');
+            } catch { /* best effort */ }
+          }
+        }, MASTER_TIMEOUT_MS);
+        console.log(`[DYNAMIC-TIMEOUT] Master timeout set to ${_dynTimeoutMin} minutes for user ${userId.slice(0, 8)}`);
+      }
+    }
 
     // 5a. SELF-LEARNING: Predict difficulty + load intelligence BEFORE execution
     const primaryDomain = classification.domains[0] || "";
@@ -3568,7 +3599,12 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     // 80-95 %          : economy mode — prefer free/cheap models, minimise tokens
     // 95-100 %         : wind-down — finish current action, then force DONE
     // > 100 %          : stop — summarise what was accomplished and return
-    const TASK_BUDGET_USD = 5.0;
+    // Dynamic per-task budget from user settings (reuse _taskUserSettings loaded earlier)
+    let TASK_BUDGET_USD = 5.0;
+    if (_taskUserSettings) {
+      const _budgetCents = Math.min(Math.max(_taskUserSettings.taskBudgetCents || 500, 100), 5000);
+      TASK_BUDGET_USD = _budgetCents / 100;
+    }
     type CostTier = 'normal' | 'economy' | 'wind_down' | 'stop';
     function getCostTier(spentUsd: number): CostTier {
       const pct = spentUsd / TASK_BUDGET_USD;
@@ -3584,11 +3620,11 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     // until task is done, budget exceeded, or timeout hit.
     // ============================================================
     // Use user's configured max_task_iterations (default 15). Capped at 30 to prevent resource hogging.
+    // Reuse _taskUserSettings loaded earlier — no extra DB call.
     let MAX_ITERATIONS = 15;
-    try {
-      const _iterSettings = await getUserSettings(userId);
-      MAX_ITERATIONS = Math.min(Math.max(_iterSettings.maxTaskIterations || 15, 5), 30);
-    } catch { /* use default 15 */ }
+    if (_taskUserSettings) {
+      MAX_ITERATIONS = Math.min(Math.max(_taskUserSettings.maxTaskIterations || 15, 5), 30);
+    }
     let currentIteration = 0;
     let isTaskComplete = false;
     let aiSignaledComplete = false; // true when AI used [TASK_COMPLETE] or produced empty final round
