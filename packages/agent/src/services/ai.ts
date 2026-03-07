@@ -963,6 +963,7 @@ NON-BROWSER ACTIONS:
 [ACTION:read_email()] — Check your @aevoy.com inbox for recent emails (verification codes, replies, etc.)
 [ACTION:read_email(5, 60)] — Check last 5 emails from the past 60 minutes
 [ACTION:remember("important fact")] — Save information to long-term memory
+[ACTION:update_settings("proactive_enabled", false)] — Update user account settings. Available settings: proactive_enabled (true/false), proactive_channel (email/sms/push), confirmation_mode (always/smart/never), greeting_style (casual/formal/friendly), daily_sms_limit (number), max_monitor_jobs (number 0-10), response_channel (email/sms/web). Use when user says "stop sending emails", "turn off notifications", "disable proactive", "change my settings", etc.
 [ACTION:remember("MONITOR:check Fiverr inbox every 15min for new orders")] — Register an ongoing monitoring job. Use MONITOR: prefix to tell the agent to watch something continuously and notify the user when something new happens. Format: MONITOR:description of what to check and how often (e.g. every 15min, every hour, every day). Examples: "MONITOR:check Bitcoin price every hour and alert if above $100k", "MONITOR:watch user's Fiverr inbox every 15min for new orders", "MONITOR:check flight prices LHR→JFK daily and alert if under $400".
 [ACTION:schedule("task description", "in 2 minutes")] — Schedule a one-time task with relative time (e.g., "in 5 minutes", "in 1 hour", "in 30 seconds")
 [ACTION:schedule("task description", "at 5:10 PM")] — Schedule a one-time task at a specific time today (or tomorrow if time has passed). Supports: "at 5:10", "5:10 PM", "at 17:00", "at noon", "at midnight"
@@ -984,6 +985,9 @@ NON-BROWSER ACTIONS:
 CRITICAL — NON-BROWSER ACTIONS MUST USE TAGS TOO:
 - "Schedule a daily weather check" → [ACTION:schedule("Check weather in Tokyo", "0 9 * * *")] [TASK_COMPLETE]
 - "Remember my favorite color is blue" → [ACTION:remember("User's favorite color is blue")] [TASK_COMPLETE]
+- "Stop sending me emails" → [ACTION:update_settings("proactive_enabled", false)] [TASK_COMPLETE]
+- "Turn off notifications" → [ACTION:update_settings("proactive_enabled", false)] [TASK_COMPLETE]
+- "Stop monitoring" → [ACTION:update_settings("max_monitor_jobs", 0)] [TASK_COMPLETE]
 - "Email John about the meeting" → [ACTION:send_email("john@example.com", "Meeting Update", "Hi John, ...")] [TASK_COMPLETE]
 - "Check my email" → [ACTION:read_email()] [TASK_COMPLETE]
 - If you write "I've scheduled it" or "I'll remember that" WITHOUT the [ACTION:...] tag, NOTHING HAPPENS. The tag IS the execution.

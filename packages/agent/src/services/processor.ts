@@ -3048,6 +3048,8 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
         actionType: 'create_campaign', example: '[ACTION:create_campaign("name", [{"task":"...", "days_from_now":0, "hour":9}])]' },
       { keywords: ['remember that', 'remember my', 'don\'t forget', 'save that', 'note that'],
         actionType: 'remember', example: '[ACTION:remember("fact to save")]' },
+      { keywords: ['stop sending', 'stop emailing', 'stop texting', 'turn off', 'disable', 'stop notifications', 'stop proactive', 'stop monitoring', 'change my settings', 'update my settings'],
+        actionType: 'update_settings', example: '[ACTION:update_settings("proactive_enabled", false)]' },
       { keywords: ['generate image', 'create image', 'make an image', 'generate a picture', 'ai image'],
         actionType: 'generate_image', example: '[ACTION:generate_image("prompt", "1024x1024")]' },
       { keywords: ['post tweet', 'tweet about', 'post on twitter'],
@@ -3169,6 +3171,19 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
           const fact = body.replace(/^remember\s+(that\s+)?/i, '').trim();
           aiResponse.actions.push({ type: 'remember' as any, params: { fact } });
           console.log(`[MISSING-ACTION] Injected remember: "${fact}"`);
+        } else if (pattern.actionType === 'update_settings') {
+          // Infer which setting to update from the user's message
+          const lower = body.toLowerCase();
+          if (/stop|disable|turn off|no more/.test(lower) && /proactive|email|notification|sending|texting|monitor/.test(lower)) {
+            aiResponse.actions.push({ type: 'update_settings' as any, params: { setting: 'proactive_enabled', value: false } });
+            if (/monitor/.test(lower)) {
+              aiResponse.actions.push({ type: 'update_settings' as any, params: { setting: 'max_monitor_jobs', value: 0 } });
+            }
+            console.log(`[MISSING-ACTION] Injected update_settings: proactive_enabled=false`);
+          } else if (/enable|turn on|start/.test(lower) && /proactive|notification/.test(lower)) {
+            aiResponse.actions.push({ type: 'update_settings' as any, params: { setting: 'proactive_enabled', value: true } });
+            console.log(`[MISSING-ACTION] Injected update_settings: proactive_enabled=true`);
+          }
         } else if (pattern.actionType === 'create_campaign') {
           const dayPattern = /(?:day|step)\s*(\d+)\s*[:\-–]\s*([^,.;]+(?:[,.;]\s*)?)/gi;
           const steps: Array<{ task: string; days_from_now: number; hour: number }> = [];
@@ -8446,6 +8461,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         } else {
           const summaries = successActions.map(r => {
             if (r.action.type === 'remember') return `Remembered: ${r.action.params.fact || r.action.params.text || 'your preference'}`;
+            if (r.action.type === 'update_settings') return `Updated setting: ${r.action.params.setting} → ${r.action.params.value}`;
             if (r.action.type === 'schedule') return `Scheduled: ${r.action.params.description || 'your task'} (${r.action.params.cron || 'recurring'})`;
             if (r.action.type === 'create_campaign') return `Campaign created: ${r.action.params.name || 'your campaign'}`;
             if (r.action.type === 'generate_image') return r.result ? String(r.result) : `Image generated`;
@@ -9860,6 +9876,43 @@ async function executeAction(
         success: true,
         result: `Remembered: ${fact}`,
       };
+    }
+
+    case "update_settings": {
+      const setting = action.params.setting as string;
+      const value = action.params.value;
+
+      // Whitelist of settings the AI can update via natural language
+      const ALLOWED_SETTINGS: Record<string, { column: string; type: 'boolean' | 'string' | 'number' }> = {
+        proactive_enabled: { column: 'proactive_enabled', type: 'boolean' },
+        proactive_channel: { column: 'proactive_channel', type: 'string' },
+        confirmation_mode: { column: 'confirmation_mode', type: 'string' },
+        greeting_style: { column: 'greeting_style', type: 'string' },
+        daily_sms_limit: { column: 'daily_sms_limit', type: 'number' },
+        max_monitor_jobs: { column: 'max_monitor_jobs', type: 'number' },
+        response_channel: { column: 'response_channel', type: 'string' },
+      };
+
+      const settingDef = ALLOWED_SETTINGS[setting];
+      if (!settingDef) {
+        return { action, success: false, error: `Unknown setting: ${setting}. Allowed: ${Object.keys(ALLOWED_SETTINGS).join(', ')}` };
+      }
+
+      let typedValue: boolean | string | number = value as string;
+      if (settingDef.type === 'boolean') typedValue = value === true || value === 'true';
+      if (settingDef.type === 'number') typedValue = Number(value);
+
+      const { error: settingsErr } = await getSupabaseClient()
+        .from('user_settings')
+        .update({ [settingDef.column]: typedValue })
+        .eq('user_id', userId);
+
+      if (settingsErr) {
+        return { action, success: false, error: `Failed to update ${setting}: ${settingsErr.message}` };
+      }
+
+      console.log(`[SETTINGS] Updated ${setting}=${typedValue} for user ${userId.substring(0, 8)}`);
+      return { action, success: true, result: `Updated ${setting} to ${typedValue}` };
     }
 
     case "browse": {
