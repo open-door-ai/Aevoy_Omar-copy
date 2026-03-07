@@ -3477,27 +3477,18 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
       ]);
       console.log(`[BROWSER] Execution engine initialized`);
 
-      // Save Live View URL to task record for takeover feature
-      const liveViewUrl = executionEngine.getLiveViewUrl();
-      if (liveViewUrl && taskId) {
-        console.log(`[BROWSER] Live View URL available for user interaction`);
-        await getSupabaseClient()
-          .from('tasks')
-          .update({ live_view_url: liveViewUrl })
-          .eq('id', taskId);
+      // Register engine in task-engine registry for WebSocket takeover
+      if (taskId) {
+        const { registerEngine } = await import('../utils/task-engine-registry.js');
+        registerEngine(taskId, executionEngine, userId);
       }
     }
 
-    // Send progress update for browser tasks — SMS for voice/SMS, email for email channel.
-    // This is the tactile "proof of action" for complex browser tasks.
+    // Send progress update for browser tasks — SMS for voice/SMS channel
     if (executionEngine && !task.suppressEmail) {
-      const liveViewUrl = executionEngine.getLiveViewUrl();
       const channel = task.inputChannel || 'email';
       if (channel === 'voice' || channel === 'sms') {
-        // SMS progress: short, concrete, with live view link if available
-        const progressSms = liveViewUrl
-          ? `[Aevoy] Working on "${subject.substring(0, 40)}" — watch live: ${liveViewUrl}`
-          : `[Aevoy] Working on "${subject.substring(0, 60)}" — will text you when done`;
+        const progressSms = `[Aevoy] Working on "${subject.substring(0, 60)}" — will text you when done`;
         (async () => {
           try {
             const { phone: progressPhone } = await resolveRecipient(channel as any, from, userId);
@@ -3506,9 +3497,6 @@ Your email ${_signupEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unautho
             }
           } catch { /* non-critical */ }
         })();
-      } else if (liveViewUrl) {
-        // Progress email suppressed — live view link included in final result email instead
-        console.log(`[PROGRESS] Live view available (not emailed): ${liveViewUrl}`);
       }
     }
 
@@ -5444,13 +5432,10 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
             ]);
             console.log(`[BROWSER] Execution engine lazy-initialized for mid-task browser escalation`);
 
-            // Save Live View URL
-            const liveViewUrl = executionEngine.getLiveViewUrl();
-            if (liveViewUrl && taskId) {
-              await getSupabaseClient()
-                .from('tasks')
-                .update({ live_view_url: liveViewUrl })
-                .eq('id', taskId);
+            // Register engine for WebSocket takeover
+            if (taskId) {
+              const { registerEngine } = await import('../utils/task-engine-registry.js');
+              registerEngine(taskId, executionEngine, userId);
             }
           } catch (browserInitErr) {
             const initErrMsg = browserInitErr instanceof Error ? browserInitErr.message : String(browserInitErr);
@@ -5658,7 +5643,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               const page = executionEngine.getPage();
               if (!page) return;
               const screenshotBuffer = await page.screenshot({ type: 'jpeg', quality: 55, fullPage: false });
-              const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+              const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
               if (!supabaseUrl) return;
               const storagePath = `task-${taskId}/live.jpg`;
               const { error: uploadErr } = await getSupabaseClient().storage
@@ -5668,7 +5653,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 const publicUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${storagePath}`;
                 await getSupabaseClient().from('tasks').update({ live_view_url: publicUrl }).eq('id', taskId);
               }
-            } catch { /* Non-critical */ }
+            } catch (screenshotErr) {
+              console.warn('[SCREENSHOT] Upload failed:', screenshotErr instanceof Error ? screenshotErr.message : screenshotErr);
+            }
           })();
         }
 
@@ -7517,11 +7504,9 @@ Extract the ACTUAL phone number from search results and call them:
       if (successRate < 0.5) {
         console.log(`[CASCADE] Browser success rate ${(successRate * 100).toFixed(0)}%, trying fallbacks (domain: ${classification.domains[0]})`);
 
-        // If Live View URL is available, request user takeover before cascade fallbacks
-        const takeoverUrl = executionEngine?.getLiveViewUrl();
-        // Only request takeover if: live view available, low success, AND many actions tried
+        // Request user takeover when all cascades exhausted + enough actions tried
         const isTakeoverEligible = taskType !== 'general' && taskType !== 'research';
-        if (takeoverUrl && taskId && successRate < 0.3 && actionResults.length >= 4 && isTakeoverEligible) {
+        if (executionEngine && taskId && successRate < 0.3 && actionResults.length >= 8 && isTakeoverEligible) {
           // Update cost before takeover — query ai_cost_log for accurate billed cost
           let takeoverCost = 0;
           try {
@@ -8265,6 +8250,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // Cleanup browser if used (AFTER strike loop so browser stays alive between attempts)
     if (executionEngine) {
+      // Unregister from takeover registry
+      if (taskId) {
+        const { unregisterEngine } = await import('../utils/task-engine-registry.js');
+        unregisterEngine(taskId);
+      }
       await executionEngine.cleanup();
       console.log(`[BROWSER] Execution engine cleaned up`);
 
@@ -9581,6 +9571,13 @@ RULES:
 
     // CRITICAL: Clean up browser on error path — prevents resource leaks and concurrency counter drift
     if (executionEngine) {
+      // Unregister from takeover registry
+      if (taskId) {
+        try {
+          const { unregisterEngine } = await import('../utils/task-engine-registry.js');
+          unregisterEngine(taskId);
+        } catch { /* non-critical */ }
+      }
       try {
         await executionEngine.cleanup();
         console.log(`[BROWSER] Execution engine cleaned up (error path)`);

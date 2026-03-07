@@ -373,18 +373,12 @@ export class ExecutionEngine {
   }
 
   /**
-   * Get the Live View URL for the current browser session.
-   * Users can open this on their phone to see/interact with the browser in real time.
-   * Only available when using VPS Browser.
+   * @deprecated Live view is now handled by screenshot uploads to Supabase storage.
+   * The vision agent uploads screenshots every 3 steps to `screenshots` bucket,
+   * and processor uploads after visual actions. No VPS browser needed.
    */
-  async getLiveViewUrl(): Promise<string | null> {
-    if (!this.multiUserBrowser) return null;
-    try {
-      const { url } = await this.multiUserBrowser.createTakeover();
-      return url;
-    } catch {
-      return null;
-    }
+  getLiveViewUrl(): null {
+    return null;
   }
 
   getActionSuccessRate(): number {

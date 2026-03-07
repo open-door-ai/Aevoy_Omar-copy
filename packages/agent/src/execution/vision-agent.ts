@@ -1861,6 +1861,27 @@ export async function runVisionAgent(
         try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
       }
 
+      // Live screenshot upload to Supabase every 3 steps (fire-and-forget)
+      if (taskId && (steps === 0 || steps % 3 === 0)) {
+        (async () => {
+          try {
+            const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+            if (!supabaseUrl) return;
+            const liveBuf = await activePage.screenshot({ type: 'jpeg', quality: 55, fullPage: false });
+            const storagePath = `task-${taskId}/live.jpg`;
+            const { error: uploadErr } = await getSupabaseClient().storage
+              .from('screenshots')
+              .upload(storagePath, liveBuf, { contentType: 'image/jpeg', upsert: true });
+            if (!uploadErr) {
+              const publicUrl = `${supabaseUrl}/storage/v1/object/public/screenshots/${storagePath}`;
+              await getSupabaseClient().from('tasks').update({ live_view_url: publicUrl }).eq('id', taskId);
+            }
+          } catch (e) {
+            console.warn('[SCREENSHOT] Vision agent upload failed:', e instanceof Error ? e.message : e);
+          }
+        })();
+      }
+
       // ── Stuck detection ──
       if (url === lastUrl) {
         sameUrlCount++;

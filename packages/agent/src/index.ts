@@ -494,6 +494,40 @@ app.get("/health", async (_req, res) => {
   });
 });
 
+// ---- Takeover token validation (called by WebSocket handler) ----
+app.post("/takeover/validate-token", async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ valid: false, error: 'Token required' });
+    }
+    const { data } = await getSupabaseClient()
+      .from('takeover_tokens')
+      .select('task_id, user_id, expires_at, used')
+      .eq('token', token)
+      .single();
+    if (!data || data.used || new Date(data.expires_at) < new Date()) {
+      return res.status(401).json({ valid: false, error: 'Invalid or expired token' });
+    }
+    const { getEngine } = await import('./utils/task-engine-registry.js');
+    const hasEngine = !!getEngine(data.task_id);
+    return res.json({ valid: true, taskId: data.task_id, userId: data.user_id, hasEngine });
+  } catch (err) {
+    console.error('[TAKEOVER] Token validation error:', err);
+    return res.status(500).json({ valid: false, error: 'Internal error' });
+  }
+});
+
+// ---- Engine registry status (for dashboard) ----
+app.get("/engines", async (_req, res) => {
+  try {
+    const { getRegistrySize } = await import('./utils/task-engine-registry.js');
+    return res.json({ activeEngines: getRegistrySize() });
+  } catch {
+    return res.json({ activeEngines: 0 });
+  }
+});
+
 // ---- Memory subsystem health check ----
 app.get("/health/memory", async (_req, res) => {
   const checks: Record<string, string> = {};
@@ -3297,11 +3331,30 @@ const server = createServer(app);
 // WebSocket server for ConversationRelay voice calls
 const wss = new WebSocketServer({ noServer: true });
 
+// WebSocket server for browser takeover
+const takeoverWss = new WebSocketServer({ noServer: true });
+
 server.on("upgrade", (request, socket, head) => {
   const url = new URL(request.url!, `http://${request.headers.host}`);
   if (url.pathname === "/ws/voice") {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request);
+    });
+  } else if (url.pathname.startsWith("/ws/browser/")) {
+    const taskId = url.pathname.split("/ws/browser/")[1];
+    const token = url.searchParams.get("token");
+    if (!taskId || !token) {
+      socket.destroy();
+      return;
+    }
+    takeoverWss.handleUpgrade(request, socket, head, async (ws) => {
+      try {
+        const { handleBrowserTakeoverWs } = await import("./services/browser-takeover-ws.js");
+        await handleBrowserTakeoverWs(ws, taskId, token);
+      } catch (err) {
+        console.error("[TAKEOVER-WS] Handler error:", err);
+        ws.close(4500, "Internal error");
+      }
     });
   } else {
     socket.destroy();

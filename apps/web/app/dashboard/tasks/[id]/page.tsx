@@ -357,12 +357,24 @@ export default function TaskDetailPage() {
                   </span>
                 )}
               </div>
-              <Button variant="outline" size="sm" asChild>
-                <a href={task.live_view_url} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
-                  Open
-                </a>
-              </Button>
+              <div className="flex items-center gap-2">
+                {isProcessing && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push(`/dashboard/takeover/${taskId}`)}
+                  >
+                    <Monitor className="w-3.5 h-3.5 mr-1.5" />
+                    Take Over
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" asChild>
+                  <a href={task.live_view_url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
+                    Open
+                  </a>
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
