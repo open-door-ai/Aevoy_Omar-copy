@@ -20,7 +20,7 @@
 
 import type { WebSocket } from 'ws';
 import type { Page } from 'patchright';
-import { getEngine } from '../utils/task-engine-registry.js';
+import { getEngine, setTakeoverActive } from '../utils/task-engine-registry.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 
 const FRAME_INTERVAL_MS = 333; // ~3 FPS
@@ -135,6 +135,9 @@ export async function handleBrowserTakeoverWs(
     return;
   }
 
+  // Pause the vision agent so user has exclusive browser control
+  setTakeoverActive(taskId, true);
+
   console.log(`[TAKEOVER-WS] Session started for task ${taskId.slice(0, 8)}`);
   ws.send(JSON.stringify({ type: 'status', connected: true, message: 'Connected to browser session' }));
 
@@ -242,6 +245,8 @@ export async function handleBrowserTakeoverWs(
   function cleanup() {
     if (frameTimer) { clearInterval(frameTimer); frameTimer = null; }
     if (eventResetTimer) { clearInterval(eventResetTimer); eventResetTimer = null; }
+    // Release the vision agent so it can resume
+    setTakeoverActive(taskId, false);
     if (ws.readyState <= 1) ws.close();
     console.log(`[TAKEOVER-WS] Session ended for task ${taskId.slice(0, 8)}`);
   }

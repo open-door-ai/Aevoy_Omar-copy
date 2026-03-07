@@ -342,6 +342,18 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
+      {/* Take Over Browser — always visible when processing */}
+      {isProcessing && (
+        <Button
+          variant="outline"
+          className="w-full border-orange-200 dark:border-orange-800 text-orange-700 dark:text-orange-300 hover:bg-orange-50 dark:hover:bg-orange-950/30"
+          onClick={() => router.push(`/dashboard/takeover/${taskId}`)}
+        >
+          <Monitor className="w-4 h-4 mr-2" />
+          Take Over Browser
+        </Button>
+      )}
+
       {/* Live Browser View */}
       {task.live_view_url && (
         <Card>

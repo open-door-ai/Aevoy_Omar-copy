@@ -1641,6 +1641,28 @@ export async function runVisionAgent(
         return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots, pageData };
       }
 
+      // Yield to user takeover — pause while user has browser control
+      if (taskId) {
+        const { isTakeoverActive } = await import('../utils/task-engine-registry.js');
+        let pauseStart = 0;
+        while (isTakeoverActive(taskId)) {
+          if (!pauseStart) {
+            pauseStart = Date.now();
+            console.log(`[BROWSER-AGENT] Pausing — user takeover active for task ${taskId.slice(0, 8)}`);
+          }
+          await new Promise(r => setTimeout(r, 2000));
+          // Safety: don't pause forever (20 min max)
+          if (Date.now() - pauseStart > 20 * 60 * 1000) {
+            console.log(`[BROWSER-AGENT] Takeover pause timeout (20min) — resuming`);
+            break;
+          }
+        }
+        if (pauseStart) {
+          const pausedSec = ((Date.now() - pauseStart) / 1000).toFixed(0);
+          console.log(`[BROWSER-AGENT] Resuming after ${pausedSec}s user takeover`);
+        }
+      }
+
       // Heartbeat every 10 steps
       if (steps > 0 && steps % 10 === 0 && taskId) {
         const elapsed = ((Date.now() - startTime) / 60000).toFixed(1);
