@@ -1,14 +1,22 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { verifyAdminSession } from "@/lib/admin-auth";
+import { NextRequest } from "next/server";
+import { getAdminClient } from "@/lib/supabase/admin";
+import { requireAdmin, secureResponse, secureError } from "@/lib/admin-auth";
+
+const VALID_STATUSES = ["queued", "approved", "rejected", "needs_changes"];
 
 export async function GET(request: NextRequest) {
   try {
-    if (!await verifyAdminSession(request)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    const auth = await requireAdmin(request);
+    if ("error" in auth) return auth.error;
 
-    const supabase = await createClient();
+    const supabase = getAdminClient();
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status") || "queued";
+
+    // V37 fix: validate status
+    if (!VALID_STATUSES.includes(status)) {
+      return secureError("invalid_status", 400);
+    }
 
     const { data: submissions } = await supabase
       .from("app_submissions")
@@ -21,9 +29,9 @@ export async function GET(request: NextRequest) {
       .eq("review_status", status)
       .order("submitted_at", { ascending: true });
 
-    return NextResponse.json({ submissions: submissions || [] });
+    return secureResponse({ submissions: submissions || [] });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+    console.error("Admin submissions error:", err instanceof Error ? err.message : "unknown");
+    return secureError("internal_error", 500);
   }
 }

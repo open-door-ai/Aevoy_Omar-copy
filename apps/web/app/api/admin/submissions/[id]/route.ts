@@ -1,12 +1,19 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { verifyAdminSession } from "@/lib/admin-auth";
+import { NextRequest } from "next/server";
+import { getAdminClient } from "@/lib/supabase/admin";
+import { requireAdmin, logAdminAction, secureResponse, secureError } from "@/lib/admin-auth";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    if (!await verifyAdminSession(request)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    const supabase = await createClient();
+    const auth = await requireAdmin(request);
+    if ("error" in auth) return auth.error;
+
+    const supabase = getAdminClient();
     const { id } = await params;
+
+    // V07 fix: validate UUID
+    if (!UUID_RE.test(id)) return secureError("invalid_id", 400);
 
     const { data: submission } = await supabase
       .from("app_submissions")
@@ -14,24 +21,45 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .eq("id", id)
       .single();
 
-    if (!submission) return NextResponse.json({ error: "not_found" }, { status: 404 });
-    return NextResponse.json({ submission });
+    if (!submission) return secureError("not_found", 404);
+    return secureResponse({ submission });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+    console.error("Admin submission detail error:", err instanceof Error ? err.message : "unknown");
+    return secureError("internal_error", 500);
   }
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    if (!await verifyAdminSession(request)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    const supabase = await createClient();
-    const { id } = await params;
-    const body = await request.json();
-    const { action, notes } = body; // action: 'approve' | 'reject' | 'request_changes'
+    const auth = await requireAdmin(request);
+    if ("error" in auth) return auth.error;
 
-    const { data: submission } = await supabase.from("app_submissions").select("id, app_id, developer_id").eq("id", id).single();
-    if (!submission) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    const supabase = getAdminClient();
+    const { id } = await params;
+
+    if (!UUID_RE.test(id)) return secureError("invalid_id", 400);
+
+    // V08 fix: wrap json parse
+    let body: { action?: string; notes?: string };
+    try {
+      body = await request.json();
+    } catch {
+      return secureError("bad_request", 400);
+    }
+
+    const { action, notes } = body;
+
+    // V12 fix: validate notes length
+    if (notes && (typeof notes !== "string" || notes.length > 2000)) {
+      return secureError("notes_too_long", 400);
+    }
+
+    const { data: submission } = await supabase
+      .from("app_submissions")
+      .select("id, app_id, developer_id")
+      .eq("id", id)
+      .single();
+    if (!submission) return secureError("not_found", 404);
 
     let newReviewStatus: string;
     let newAppStatus: string | null = null;
@@ -39,7 +67,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (action === "approve") { newReviewStatus = "approved"; newAppStatus = "approved"; }
     else if (action === "reject") { newReviewStatus = "rejected"; newAppStatus = "rejected"; }
     else if (action === "request_changes") { newReviewStatus = "needs_changes"; newAppStatus = "draft"; }
-    else return NextResponse.json({ error: "bad_request" }, { status: 400 });
+    else return secureError("invalid_action", 400);
 
     await supabase.from("app_submissions").update({
       review_status: newReviewStatus,
@@ -48,23 +76,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }).eq("id", id);
 
     if (newAppStatus) {
-      await supabase.from("marketplace_apps").update({ status: newAppStatus, updated_at: new Date().toISOString() }).eq("id", submission.app_id);
+      await supabase.from("marketplace_apps").update({
+        status: newAppStatus,
+        updated_at: new Date().toISOString(),
+      }).eq("id", submission.app_id);
     }
 
-    // Audit log
-    const token = request.cookies.get("admin-session")?.value;
-    const { data: sess } = await supabase.from("admin_sessions").select("id").eq("session_token", token || "").single();
-    await supabase.from("admin_audit_log").insert({
-      admin_session_id: sess?.id,
-      action: `${action}_submission`,
-      target_type: "app",
-      target_id: submission.app_id,
-      notes: notes || null,
-    });
+    await logAdminAction(auth.session.id, `${action}_submission`, "app", submission.app_id, notes);
 
-    return NextResponse.json({ success: true });
+    return secureResponse({ success: true });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+    console.error("Admin submission action error:", err instanceof Error ? err.message : "unknown");
+    return secureError("internal_error", 500);
   }
 }
