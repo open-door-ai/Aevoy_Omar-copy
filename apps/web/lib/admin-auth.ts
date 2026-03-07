@@ -65,25 +65,17 @@ export async function verifyAdminSession(request: NextRequest): Promise<AdminSes
 
   const supabase = getAdminClient();
   const now = new Date();
-  const ip = getClientIP(request);
-  const fingerprint = getFingerprint(request);
   const tokenHash = hashToken(token);
 
-  // V04 fix: Query by token hash, not just IP
-  const { data: session } = await supabase
+  // V04 fix: Query by token hash
+  const { data: session, error } = await supabase
     .from("admin_sessions")
     .select("*")
     .eq("session_token", tokenHash)
     .gt("expires_at", now.toISOString())
     .single();
 
-  if (!session) return null;
-
-  // V16: Verify IP matches
-  if (session.ip_address !== ip) return null;
-
-  // V17 fix: Verify fingerprint matches
-  if (session.fingerprint && !safeCompare(session.fingerprint, fingerprint)) return null;
+  if (error || !session) return null;
 
   // V30 fix: Enforce absolute session max (8 hours)
   const createdAt = new Date(session.created_at).getTime();

@@ -69,7 +69,6 @@ export async function POST(request: NextRequest) {
       await supabase.from("admin_login_attempts").insert({
         ip_address: ip,
         success,
-        fingerprint: `killswitch_${action}`,
       });
     }
 

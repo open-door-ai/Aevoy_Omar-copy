@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminClient } from "@/lib/supabase/admin";
-import { getClientIP, getFingerprint, hashToken, logAdminAction, secureResponse, secureError } from "@/lib/admin-auth";
+import { getClientIP, hashToken, logAdminAction, secureResponse, secureError } from "@/lib/admin-auth";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 
@@ -18,7 +18,6 @@ export async function POST(request: NextRequest) {
 
     const supabase = getAdminClient();
     const ip = getClientIP(request);
-    const fingerprint = getFingerprint(request);
 
     let body: { password?: string };
     try {
@@ -66,7 +65,6 @@ export async function POST(request: NextRequest) {
     await supabase.from("admin_login_attempts").insert({
       ip_address: ip,
       success: isValid,
-      fingerprint,
     });
 
     if (!isValid) {
@@ -93,16 +91,20 @@ export async function POST(request: NextRequest) {
     const tokenHash = hashToken(sessionToken);
     const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
 
-    const { data: newSession } = await supabase.from("admin_sessions").insert({
+    const { data: newSession, error: insertError } = await supabase.from("admin_sessions").insert({
       session_token: tokenHash,
       ip_address: ip,
-      fingerprint,
       expires_at: expiresAt,
       last_activity_at: new Date().toISOString(),
     }).select("id").single();
 
+    if (insertError || !newSession) {
+      console.error("Session insert failed:", insertError?.message || "no data");
+      return secureError("internal_error", 500);
+    }
+
     // V11 fix: Link audit log to session
-    await logAdminAction(newSession?.id, "login", undefined, undefined, `IP: ${ip}`);
+    await logAdminAction(newSession.id, "login", undefined, undefined, `IP: ${ip}`);
 
     const response = secureResponse({ success: true });
     response.cookies.set("admin-session", sessionToken, {
