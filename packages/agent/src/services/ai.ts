@@ -5,7 +5,7 @@
  * NO Sonnet — too expensive ($3/$15 per M, can burn $20 in one night of testing).
  *
  * Model Hierarchy:
- * - Claude Haiku 4.5: $0.80/$4 per M — PRIMARY for all browser + vision tasks
+ * - Claude Haiku 4.5: $1.00/$5 per M — PRIMARY for all browser + vision tasks
  *   Vision-capable, fast, instruction-following, ~6¢ per 40-step browser session
  * - DeepSeek chat: $0.27/$1.10 per M — fallback when Haiku unavailable
  * - Groq (Kimi K2, Scout, Llama): FREE — for classification, validation, simple queries
@@ -19,7 +19,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { getCompiledPrompt } from "./personality.js";
-import { BILLING_MARKUP } from "../utils/cost-calculator.js";
+import { BILLING_MARKUP, COST_SAFETY_MARGIN, calculateAnthropicCost } from "../utils/cost-calculator.js";
+import { getAnthropicCorrectionFactor } from "./billing-reconciliation.js";
 import type { Memory, Action, AIResponse, TaskType, ModelProvider } from "../types/index.js";
 import { withTimeout } from "../utils/timeout.js";
 import { CircuitBreaker } from "../execution/retry.js";
@@ -354,28 +355,28 @@ interface ModelConfig {
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
   // Haiku first for all reasoning tasks — reliable, vision-capable, ~6¢/browser session
   understand: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   plan: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   reason: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
     { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
   ],
   vision: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0.11, costPerMOutput: 0.34 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60 },
   ],
@@ -395,7 +396,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 }, // last resort
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 }, // last resort
   ],
   local: [
     { provider: 'ollama', model: 'llama3', costPerMInput: 0, costPerMOutput: 0 },
@@ -426,7 +427,7 @@ const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
     { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 }, // paid fallback
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 0.80, costPerMOutput: 4.00 }, // last resort — always available
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 }, // last resort — always available
   ],
 };
 
@@ -511,7 +512,7 @@ async function callProvider(
   systemPrompt: string,
   userPrompt: string,
   maxTokens: number = 4096
-): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
+): Promise<{ content: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number }> {
   switch (config.provider) {
     case 'deepseek': {
       // Always stream — prevents server-side idle timeout that kills long generation (portfolio HTML etc.)
@@ -630,10 +631,14 @@ async function callProvider(
         messages: [{ role: "user", content: userPrompt }],
       });
       const content = response.content[0].type === "text" ? response.content[0].text : "";
+      // Extract cache token counts for accurate billing (auto-caching is on by default)
+      const usage = response.usage as unknown as Record<string, number>;
       return {
         content,
-        inputTokens: response.usage?.input_tokens || 0,
-        outputTokens: response.usage?.output_tokens || 0,
+        inputTokens: usage?.input_tokens || 0,
+        outputTokens: usage?.output_tokens || 0,
+        cacheReadTokens: usage?.cache_read_input_tokens || 0,
+        cacheCreationTokens: usage?.cache_creation_input_tokens || 0,
       };
     }
 
@@ -698,7 +703,20 @@ async function callProvider(
 
 // ---- Cost calculation & tracking ----
 
-function calculateCost(config: ModelConfig, inputTokens: number, outputTokens: number): number {
+function calculateCost(
+  config: ModelConfig,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens?: number,
+  cacheCreationTokens?: number
+): number {
+  // Use cache-aware pricing for Anthropic providers (auto-caching makes cache reads ~10% of base rate)
+  if ((config.provider === 'haiku' || config.provider === 'sonnet') && (cacheReadTokens || cacheCreationTokens)) {
+    const tier = config.provider === 'sonnet' ? 'sonnet' : 'haiku';
+    const baseCost = calculateAnthropicCost(inputTokens, outputTokens, cacheReadTokens || 0, cacheCreationTokens || 0, tier);
+    // Apply reconciliation correction factor (learned from daily Admin API comparison)
+    return baseCost * getAnthropicCorrectionFactor();
+  }
   return (inputTokens * config.costPerMInput + outputTokens * config.costPerMOutput) / 1_000_000;
 }
 
@@ -714,8 +732,8 @@ async function trackApiCall(
 ): Promise<void> {
   if (!userId) return;
   try {
-    // Apply 20% platform markup
-    const billedCost = costUsd * BILLING_MARKUP;
+    // Apply 8% safety margin (covers estimation drift) + 20% platform markup
+    const billedCost = costUsd * COST_SAFETY_MARGIN * BILLING_MARKUP;
     // Use actual cost rounded to nearest cent — no artificial minimum.
     // Old Math.max(1, ...) inflated costs: 2,632 calls × 1¢ minimum = $26+ phantom charges.
     // Cheap calls (Groq/Gemini at $0.0001) should cost $0.0001, not $0.01.
@@ -772,7 +790,7 @@ export async function trackServiceCost(
 ): Promise<void> {
   if (!userId || rawCostUsd <= 0) return;
   try {
-    const billedCost = rawCostUsd * BILLING_MARKUP;
+    const billedCost = rawCostUsd * COST_SAFETY_MARGIN * BILLING_MARKUP;
     const costCents = Math.round(billedCost * 100); // No artificial minimum — actual cost only
 
     // Always log to ai_cost_log (source of truth for task cost queries)
@@ -1789,10 +1807,10 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         `${config.provider}/${config.model}`
       );
       const latencyMs = Date.now() - startTime;
-      const cost = calculateCost(config, result.inputTokens, result.outputTokens);
+      const cost = calculateCost(config, result.inputTokens, result.outputTokens, result.cacheReadTokens, result.cacheCreationTokens);
       const totalTokens = result.inputTokens + result.outputTokens;
 
-      console.log(`[AI] ${config.provider}/${config.model} success | Tokens: ${totalTokens} | Cost: $${cost.toFixed(6)}`);
+      console.log(`[AI] ${config.provider}/${config.model} success | Tokens: ${totalTokens} | Cost: $${cost.toFixed(6)}${result.cacheReadTokens ? ` (${result.cacheReadTokens} cached)` : ''}`);
       cb.recordSuccess();
 
       // Track cost
@@ -1898,7 +1916,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
               timeout,
               `${config.provider}/${config.model} retry`
             );
-            const cost = calculateCost(config, retryResult.inputTokens, retryResult.outputTokens);
+            const cost = calculateCost(config, retryResult.inputTokens, retryResult.outputTokens, retryResult.cacheReadTokens, retryResult.cacheCreationTokens);
             const totalTokens = retryResult.inputTokens + retryResult.outputTokens;
             cb.recordSuccess();
             await trackApiCall(userId, config.model, retryResult.inputTokens, retryResult.outputTokens, cost, config.provider, taskId, taskType);
@@ -1959,7 +1977,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
           timeout,
           `${config.provider}/${config.model} global-retry`
         );
-        const cost = calculateCost(config, result.inputTokens, result.outputTokens);
+        const cost = calculateCost(config, result.inputTokens, result.outputTokens, result.cacheReadTokens, result.cacheCreationTokens);
         const totalTokens = result.inputTokens + result.outputTokens;
         const cb = getCircuitBreaker(config.provider, config.model);
         cb.recordSuccess();
@@ -2195,7 +2213,7 @@ export async function generateBrowserStepResponse(
   ];
 
   // ═══ PRIMARY: Haiku 4.5 — vision-capable, best instruction following for browser actions ═══
-  // $0.80/$4 per M → ~$0.032/40-step task. Reliable, fast, no rate limit cascade issues.
+  // $1.00/$5 per M (cache reads $0.10/M). Reliable, fast, no rate limit cascade issues.
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const response = await withTimeout(getAnthropicClient().messages.create({
@@ -2208,8 +2226,11 @@ export async function generateBrowserStepResponse(
       if (content.length > 10) {
         const inTok = response.usage?.input_tokens || 0;
         const outTok = response.usage?.output_tokens || 0;
-        const cost = (inTok * 0.80 + outTok * 4.00) / 1_000_000;
-        console.log(`[AI] BrowserStep (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        const usageAny = response.usage as unknown as Record<string, number>;
+        const cacheRead = usageAny?.cache_read_input_tokens || 0;
+        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
+        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
+        console.log(`[AI] BrowserStep (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out${cacheRead ? ` (${cacheRead} cached)` : ''}`);
         if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
@@ -2378,8 +2399,11 @@ export async function generateVisionResponse(
       if (content.length > 10) {
         const inTok = response.usage?.input_tokens || 0;
         const outTok = response.usage?.output_tokens || 0;
-        const cost = (inTok * 0.80 + outTok * 4.00) / 1_000_000;
-        console.log(`[AI] Vision (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${hasImage ? 'with screenshot' : 'text-only'}`);
+        const usageAny = response.usage as unknown as Record<string, number>;
+        const cacheRead = usageAny?.cache_read_input_tokens || 0;
+        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
+        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
+        console.log(`[AI] Vision (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out${cacheRead ? ` (${cacheRead} cached)` : ''} | ${hasImage ? 'with screenshot' : 'text-only'}`);
         if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "vision").catch(() => {});
         return { content, cost };
       }

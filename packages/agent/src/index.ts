@@ -97,6 +97,7 @@ import { processorV2 } from "./services/processor-v2.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
 import { startInboxManager } from "./services/inbox-manager.js";
+import { startReconciliationScheduler } from "./services/billing-reconciliation.js";
 import { handleIncomingSms, handleIncomingVoice, processVoiceCommand, getTwilioConfig, twilioRequest, getUserVoice, DEFAULT_VOICE, escapeXml } from "./services/twilio.js";
 import { trackServiceCost } from "./services/ai.js";
 import { resolveUser } from "./services/identity/resolver.js";
@@ -3476,6 +3477,7 @@ server.listen(PORT, async () => {
 
   startScheduler();
   startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)
+  startReconciliationScheduler(); // Daily billing reconciliation (Anthropic Admin API)
   // startInboxPoller(); // Disabled: Using Cloudflare Email Routing instead
 
   // Seed default skills (idempotent)

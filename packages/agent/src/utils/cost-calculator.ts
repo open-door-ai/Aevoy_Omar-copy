@@ -8,6 +8,11 @@
 // Platform billing markup (cost + 20%)
 export const BILLING_MARKUP = 1.20;
 
+// Safety margin on estimated costs — buffer against rate drift and estimation errors.
+// Applied BEFORE billing markup. Total customer multiplier = SAFETY_MARGIN × BILLING_MARKUP.
+// With 1.08 × 1.20 = 1.296, customer pays ~30% over raw provider cost.
+export const COST_SAFETY_MARGIN = 1.08;
+
 // Twilio pricing (domestic North America)
 export const TWILIO_RATES = {
   // Per-minute rates
@@ -36,7 +41,7 @@ export const AI_MODEL_COSTS = {
   kimi: { input: 0.60, output: 2.50 },           // kimi-k2 (moonshot)
   gemini: { input: 0, output: 0 },               // gemini-2.0-flash (free tier)
   sonnet: { input: 3.00, output: 15.00 },        // claude-sonnet-4-20250514
-  haiku: { input: 0.80, output: 4.00 },          // claude-3-5-haiku-latest (NOT claude-3-haiku)
+  haiku: { input: 1.00, output: 5.00 },          // claude-haiku-4-5-20251001 (was $0.80/$4 for 3.5 Haiku)
   ollama: { input: 0, output: 0 },               // local inference, free
   openrouter: { input: 0, output: 0 },           // per-model dynamic — see OpenRouter API
 } as const;
@@ -141,6 +146,37 @@ export function calculateAICost(
   const rates = AI_MODEL_COSTS[provider];
   if (!rates) return 0;
   return (inputTokens * rates.input + outputTokens * rates.output) / 1_000_000;
+}
+
+/**
+ * Cache-aware Anthropic cost calculation.
+ *
+ * Anthropic auto-caches repeat prompts. The API response breaks down:
+ *   input_tokens = total (includes cache_read + cache_creation + regular)
+ *   cache_read_input_tokens = served from cache (charged at 10% of base)
+ *   cache_creation_input_tokens = written to cache (charged at 125% of base)
+ *
+ * Without this, we charge ALL input at full rate — a ~7x overcharge when
+ * most tokens are cache reads (which is typical since our system prompt is huge).
+ */
+export function calculateAnthropicCost(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number = 0,
+  cacheCreationTokens: number = 0,
+  tier: 'haiku' | 'sonnet' = 'haiku'
+): number {
+  const rates = tier === 'sonnet'
+    ? { input: 3.00, output: 15.00, cacheRead: 0.30, cacheWrite: 3.75 }
+    : { input: 1.00, output: 5.00, cacheRead: 0.10, cacheWrite: 1.25 };
+
+  const regularInput = Math.max(0, inputTokens - cacheReadTokens - cacheCreationTokens);
+  return (
+    regularInput * rates.input +
+    cacheReadTokens * rates.cacheRead +
+    cacheCreationTokens * rates.cacheWrite +
+    outputTokens * rates.output
+  ) / 1_000_000;
 }
 
 export function calculateCaptchaCost(
