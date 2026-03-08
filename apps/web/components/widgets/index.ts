@@ -2,7 +2,6 @@ export { QuickStatsWidget } from "./quick-stats-widget";
 export { TaskStatsWidget } from "./task-stats-widget";
 export { AiContactWidget } from "./ai-contact-widget";
 export { UsageWidget } from "./usage-widget";
-export { HealthSummaryWidget } from "./health-summary-widget";
 export { InboxPreviewWidget } from "./inbox-preview-widget";
 export { SendTaskWidget } from "./send-task-widget";
 export { RecentActivityWidget } from "./recent-activity-widget";

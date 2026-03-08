@@ -88,16 +88,6 @@ export const BUILTIN_WIDGETS: WidgetDefinition[] = [
     permissions: ["profile", "usage"], tags: ["core", "billing"],
   },
   {
-    id: "health-summary",
-    name: "Health Summary",
-    description: "Your latest health metrics and AI insights.",
-    icon: "❤️",
-    defaultW: 2, defaultH: 1, minW: 2, minH: 1, maxW: 4, maxH: 2,
-    category: "health",
-    isBuiltin: true, isPremium: false,
-    permissions: ["health"], tags: ["health", "fitness"],
-  },
-  {
     id: "inbox-preview",
     name: "Inbox Preview",
     description: "Latest emails and AI-managed inbox queue.",
@@ -165,7 +155,6 @@ export const CATEGORY_LABELS: Record<string, string> = {
   productivity: "Productivity",
   analytics: "Analytics",
   communication: "Communication",
-  health: "Health",
   finance: "Finance",
   "ai-tools": "AI Tools",
 };

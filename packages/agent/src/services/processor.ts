@@ -12,7 +12,7 @@ import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEm
 import { sendSms } from "./twilio.js";
 import { createLockedIntent, getTaskTypeFromClassification, validateAction } from "../security/intent-lock.js";
 import { ActionValidator } from "../security/validator.js";
-import { ExecutionEngine } from "../execution/engine.js";
+import { ExecutionEngine, setTaskTimeoutMs } from "../execution/engine.js";
 import { runVisionAgent } from "../execution/vision-agent.js";
 import { getFailureMemory, recordFailure, learnSolution } from "../memory/failure-db.js";
 import { clarifyTask, formatConfirmationMessage, parseConfirmationReply, parseCardCommand, getUserSettings, type ClarifiedTask } from "./clarifier.js";
@@ -2166,6 +2166,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         }, MASTER_TIMEOUT_MS);
         console.log(`[DYNAMIC-TIMEOUT] Master timeout set to ${_dynTimeoutMin} minutes for user ${userId.slice(0, 8)}`);
       }
+      // Set engine-level timeout to master timeout + 5 min buffer.
+      // The processor's master timeout should always fire first; the engine
+      // timeout is just a last-resort safety net to prevent runaway browser ops.
+      setTaskTimeoutMs(MASTER_TIMEOUT_MS + 5 * 60 * 1000);
     }
 
     // 5a. SELF-LEARNING: Predict difficulty + load intelligence BEFORE execution
@@ -9064,6 +9068,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         .replace(/\n+[^\n]*\b(want me to|shall i|would you like me to|do you want me to)\b[^\n]*[?!.]?\s*$/i, '')
         .trim();
       if (_finalStrip.length > 50) cleanResponse = _finalStrip;
+    }
+
+    // SAFETY NET: response_text must NEVER be null/empty — users should always get a message
+    if (!cleanResponse || cleanResponse.trim().length === 0) {
+      cleanResponse = _pickVariant([
+        "I worked on this but wasn't able to generate a clear summary. Please try again and I'll do better.",
+        "I processed your request but something went wrong with the response. Feel free to resend it.",
+        "I completed some work on this but the results didn't come through properly. Try again and I'll sort it out.",
+      ]);
+      console.warn(`[SAFETY-NET] cleanResponse was empty/null for task ${taskId} — injected fallback`);
     }
 
     await getSupabaseClient()

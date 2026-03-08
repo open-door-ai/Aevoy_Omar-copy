@@ -35,7 +35,10 @@ import { validateUrlSafety } from '../utils/url-validator.js';
 let brightDataInUse = false;
 
 // Timeouts — tuned per action type for optimal speed vs reliability
-const TASK_TIMEOUT_MS = 1200000;  // 20 minutes per task
+// Default 40 min — safe ceiling above most dynamic user settings.
+// The processor's master timeout + vision supervisor handle real timeout control;
+// this is just a last-resort safety net so the engine never runs indefinitely.
+let TASK_TIMEOUT_MS = 2400000;  // 40 minutes per task (configurable via setTaskTimeoutMs)
 const STEP_TIMEOUT_MS = 15000;    // 15 seconds for click/fill/select (fast fail on bad selectors)
 const NAV_TIMEOUT_MS = 35000;     // 35 seconds for navigate/submit (heavy pages like Amazon need time)
 const POST_ACTION_WAIT_MS = 800;  // Wait after click/fill/submit/select
@@ -53,6 +56,18 @@ interface StepResult {
   data?: unknown;
   error?: string;
   screenshot?: string;
+}
+
+/**
+ * Override the engine-level task timeout (milliseconds).
+ * Call this from the processor after loading user_settings so the engine's
+ * safety-net timeout stays above the processor's master timeout.
+ */
+export function setTaskTimeoutMs(ms: number): void {
+  if (ms > 0) {
+    TASK_TIMEOUT_MS = ms;
+    console.log(`[ENGINE] Task timeout set to ${Math.round(ms / 60000)} minutes`);
+  }
 }
 
 export class ExecutionEngine {

@@ -16,7 +16,6 @@ export function ConnectedAppsWidget() {
         { key: "microsoft", name: "Microsoft", icon: "M" },
         { key: "twitter", name: "Twitter/X", icon: "X" },
         { key: "telegram", name: "Telegram", icon: "T" },
-        { key: "fitbit", name: "Fitbit", icon: "F" },
       ];
       const results = await Promise.allSettled(
         providers.map(async (p) => {

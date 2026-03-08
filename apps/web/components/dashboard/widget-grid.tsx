@@ -29,7 +29,6 @@ import { RecentActivityWidget } from "@/components/widgets/recent-activity-widge
 import { ScheduledTasksWidget } from "@/components/widgets/scheduled-tasks-widget";
 import { AiContactWidget } from "@/components/widgets/ai-contact-widget";
 import { UsageWidget } from "@/components/widgets/usage-widget";
-import { HealthSummaryWidget } from "@/components/widgets/health-summary-widget";
 import { InboxPreviewWidget } from "@/components/widgets/inbox-preview-widget";
 import { QueueWidget } from "@/components/widgets/queue-widget";
 import { ConnectedAppsWidget } from "@/components/widgets/connected-apps-widget";
@@ -45,7 +44,6 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
   "scheduled-tasks": ScheduledTasksWidget,
   "ai-contact": AiContactWidget,
   "usage": UsageWidget,
-  "health-summary": HealthSummaryWidget,
   "inbox-preview": InboxPreviewWidget,
   "queue": QueueWidget,
   "connected-apps": ConnectedAppsWidget,

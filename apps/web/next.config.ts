@@ -39,16 +39,6 @@ const nextConfig: NextConfig = {
           },
         ],
       },
-      {
-        // Consultation page override: allow camera + microphone (must come AFTER global rule)
-        source: "/dashboard/health/consultation",
-        headers: [
-          {
-            key: "Permissions-Policy",
-            value: "camera=(self), microphone=(self), geolocation=()",
-          },
-        ],
-      },
     ];
   },
 };

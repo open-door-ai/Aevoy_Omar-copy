@@ -1092,7 +1092,7 @@ async function maybeCreateTask(session: VoiceSession, userSpeech: string, aiResp
   if (!session.userId) return;
 
   // Detect task-like commands in user speech
-  const taskKeywords = /\b(book|schedule|remind|send|email|search|find|order|buy|create|set up|look up|research|remember)\b/i;
+  const taskKeywords = /\b(book|schedule|remind|send|email|search|find|order|buy|create|set up|look up|research|remember|cancel|sign up|sign me up|make|add|get|walmart|amazon|netflix|uber|subscribe|unsubscribe|register|account|cart|purchase|check|call|phone|ring|browse|go to|navigate|open|visit|download|upload|update|change|modify|delete|remove|pay|transfer|move|ship|deliver|track|monitor|watch|follow|unfollow|block|report|share|post|tweet|message|text|write|draft|compose|apply|submit|fill|complete|request|reserve|rent|hire|contact|reach|lookup|compare|price|cost|review|rate|recommend)\b/i;
   if (!taskKeywords.test(userSpeech)) return;
 
   try {

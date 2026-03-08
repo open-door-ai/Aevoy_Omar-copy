@@ -14,7 +14,6 @@ interface AppListing {
 const CATEGORIES = [
   { id: "productivity", name: "Productivity", icon: "⚡" },
   { id: "finance", name: "Finance", icon: "💰" },
-  { id: "health", name: "Health & Fitness", icon: "❤️" },
   { id: "communication", name: "Communication", icon: "💬" },
   { id: "analytics", name: "Analytics", icon: "📊" },
   { id: "ai-tools", name: "AI Tools", icon: "🤖" },

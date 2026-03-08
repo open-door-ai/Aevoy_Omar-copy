@@ -12,7 +12,7 @@ interface WidgetPickerProps {
   currentWidgetIds: string[];
 }
 
-const CATEGORIES = ["all", "productivity", "analytics", "communication", "health"];
+const CATEGORIES = ["all", "productivity", "analytics", "communication"];
 
 export function WidgetPicker({ isOpen, onClose, onAdd, currentWidgetIds }: WidgetPickerProps) {
   const [search, setSearch] = useState("");
