@@ -7031,7 +7031,7 @@ CRITICAL RULES:
         .filter(([, count]) => count >= 2)
         .map(([domain]) => domain);
       const domainWarning = blockedDomains.length > 0
-        ? `\n⛔ BLOCKED DOMAINS (failed ${blockedDomains.length > 1 ? '2+' : '2'} times — DO NOT retry these):\n${blockedDomains.map(d => `  - ${d} → use [ACTION:search("your query site:${d}")] instead`).join('\n')}\n`
+        ? `\n⛔ BLOCKED DOMAINS (failed ${blockedDomains.length > 1 ? '2+' : '2'} times — DO NOT browse these):\n${blockedDomains.map(d => `  - ${d} → use [ACTION:search("your query")] on the open web instead. If that site's data isn't in search results, try ALTERNATIVE sites/services that offer similar content.`).join('\n')}\nIMPORTANT: If search("... site:blocked-domain") returns no useful data, search WITHOUT site: restriction or try competitor/alternative sites.\n`
         : '';
 
       // PROGRESS LEDGER (Magentic-One pattern): Every 5 iterations, check if we're making progress.
