@@ -9,60 +9,102 @@
 import type { BrowserContext, Page } from 'patchright';
 
 // ---------------------------------------------------------------------------
-// 1. USER-AGENT ROTATION — Current Chrome 131+ (Jan 2026)
+// 1. CORRELATED FINGERPRINT PROFILES — Every property matches a real device
 // ---------------------------------------------------------------------------
-const USER_AGENTS = [
-  // Chrome 134 (Mar 2026 — current)
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-  // Chrome 133 (Feb 2026)
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-  // Chrome 132 (Jan 2026)
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
-];
-
-export function getRealisticUserAgent(): string {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-}
-
-// ---------------------------------------------------------------------------
-// 2. VIEWPORT PROFILES — Consistent device characteristics per session
-// ---------------------------------------------------------------------------
+// CRITICAL: UA, platform, WebGL, screen, CPU, memory MUST all correlate.
+// A Windows UA + Apple M1 GPU = instant bot detection.
+// Each profile is a complete, consistent real-world device.
 interface DeviceProfile {
+  userAgent: string;
   viewport: { width: number; height: number };
   screen: { width: number; height: number };
   deviceScaleFactor: number;
   platform: string;
   hardwareConcurrency: number;
   deviceMemory: number;
+  webgl: { vendor: string; renderer: string };
+  timezone: string;
+  locale: string;
 }
 
-const DEVICE_PROFILES: DeviceProfile[] = [
-  // MacBook Pro 14"
-  { viewport: { width: 1512, height: 982 }, screen: { width: 1512, height: 982 }, deviceScaleFactor: 2, platform: 'MacIntel', hardwareConcurrency: 10, deviceMemory: 16 },
-  // MacBook Air 13"
-  { viewport: { width: 1470, height: 956 }, screen: { width: 1470, height: 956 }, deviceScaleFactor: 2, platform: 'MacIntel', hardwareConcurrency: 8, deviceMemory: 8 },
-  // Windows desktop 1080p
-  { viewport: { width: 1920, height: 1080 }, screen: { width: 1920, height: 1080 }, deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 8, deviceMemory: 16 },
-  // Windows laptop 1366x768
-  { viewport: { width: 1366, height: 768 }, screen: { width: 1366, height: 768 }, deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 4, deviceMemory: 8 },
-  // Windows 1440p
-  { viewport: { width: 2560, height: 1440 }, screen: { width: 2560, height: 1440 }, deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 12, deviceMemory: 32 },
-  // Linux 1080p
-  { viewport: { width: 1920, height: 1080 }, screen: { width: 1920, height: 1080 }, deviceScaleFactor: 1, platform: 'Linux x86_64', hardwareConcurrency: 8, deviceMemory: 16 },
+const CORRELATED_PROFILES: DeviceProfile[] = [
+  // MacBook Pro 14" M2 — Chrome 134
+  {
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    viewport: { width: 1512, height: 982 }, screen: { width: 1512, height: 982 },
+    deviceScaleFactor: 2, platform: 'MacIntel', hardwareConcurrency: 10, deviceMemory: 16,
+    webgl: { vendor: 'Apple Inc.', renderer: 'Apple M2' },
+    timezone: 'America/Los_Angeles', locale: 'en-US',
+  },
+  // MacBook Air 13" M1 — Chrome 133
+  {
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+    viewport: { width: 1470, height: 956 }, screen: { width: 1470, height: 956 },
+    deviceScaleFactor: 2, platform: 'MacIntel', hardwareConcurrency: 8, deviceMemory: 8,
+    webgl: { vendor: 'Apple Inc.', renderer: 'Apple M1' },
+    timezone: 'America/New_York', locale: 'en-US',
+  },
+  // Windows desktop 1080p, RTX 3070 — Chrome 134
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 }, screen: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 8, deviceMemory: 16,
+    webgl: { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    timezone: 'America/Chicago', locale: 'en-US',
+  },
+  // Windows laptop 1080p, Intel Iris Xe — Chrome 133
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 }, screen: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 8, deviceMemory: 16,
+    webgl: { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    timezone: 'America/Denver', locale: 'en-US',
+  },
+  // Windows laptop 1366x768, GTX 1660 Ti — Chrome 134
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    viewport: { width: 1366, height: 768 }, screen: { width: 1366, height: 768 },
+    deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 4, deviceMemory: 8,
+    webgl: { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    timezone: 'America/Toronto', locale: 'en-CA',
+  },
+  // Windows 1440p, RTX 2060 — Chrome 132
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+    viewport: { width: 2560, height: 1440 }, screen: { width: 2560, height: 1440 },
+    deviceScaleFactor: 1, platform: 'Win32', hardwareConcurrency: 12, deviceMemory: 32,
+    webgl: { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    timezone: 'America/New_York', locale: 'en-US',
+  },
+  // Linux desktop 1080p, AMD GPU — Chrome 134
+  {
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 }, screen: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1, platform: 'Linux x86_64', hardwareConcurrency: 8, deviceMemory: 16,
+    webgl: { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6600M Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    timezone: 'Europe/London', locale: 'en-GB',
+  },
+  // Windows laptop, UHD 620 — Chrome 132
+  {
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 1080 }, screen: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1.25, platform: 'Win32', hardwareConcurrency: 4, deviceMemory: 8,
+    webgl: { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+    timezone: 'America/Vancouver', locale: 'en-CA',
+  },
 ];
 
 let sessionProfile: DeviceProfile | null = null;
 
 export function getDeviceProfile(): DeviceProfile {
   if (!sessionProfile) {
-    sessionProfile = DEVICE_PROFILES[Math.floor(Math.random() * DEVICE_PROFILES.length)];
+    sessionProfile = CORRELATED_PROFILES[Math.floor(Math.random() * CORRELATED_PROFILES.length)];
   }
   return sessionProfile;
+}
+
+export function getRealisticUserAgent(): string {
+  return getDeviceProfile().userAgent;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,15 +156,117 @@ export async function applyStealthPatches(context: BrowserContext): Promise<void
       },
     });
 
-    // --- navigator.languages ---
+    // --- navigator.languages (correlated with profile locale) ---
+    const primaryLang = p.locale;
+    const baseLang = primaryLang.split('-')[0];
     Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en'],
+      get: () => primaryLang === 'en-US' ? ['en-US', 'en'] : [primaryLang, baseLang, 'en'],
     });
 
     // --- navigator.platform / hardwareConcurrency / deviceMemory ---
     Object.defineProperty(navigator, 'platform', { get: () => p.platform });
     Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => p.hardwareConcurrency });
     Object.defineProperty(navigator, 'deviceMemory', { get: () => p.deviceMemory });
+
+    // --- navigator.userAgentData (Client Hints API — critical detection vector) ---
+    // Modern Chrome exposes NavigatorUAData. Headless Chrome may lack it or expose
+    // inconsistent values. We build a consistent one from the device profile.
+    const uaBrands = (() => {
+      const match = p.userAgent.match(/Chrome\/(\d+)/);
+      const major = match ? match[1] : '134';
+      // Chrome sends 3 brands: Chromium, "Not:A-Brand", and Google Chrome
+      // The "Not" brand rotates per version — use a realistic pattern
+      return [
+        { brand: 'Chromium', version: major },
+        { brand: 'Google Chrome', version: major },
+        { brand: 'Not-A.Brand', version: '99' },
+      ];
+    })();
+    const uaPlatform = p.platform.startsWith('Win') ? 'Windows'
+      : p.platform === 'MacIntel' ? 'macOS'
+      : 'Linux';
+    const uaMobile = false;
+    const uaArch = p.platform === 'MacIntel' ? 'arm' : 'x86';
+    const uaBitness = '64';
+    const uaModel = '';
+    const fullVersionMatch = p.userAgent.match(/Chrome\/([\d.]+)/);
+    const uaFullVersion = fullVersionMatch ? fullVersionMatch[1] : '134.0.0.0';
+    const uaPlatformVersion = p.platform.startsWith('Win') ? '15.0.0'
+      : p.platform === 'MacIntel' ? '14.5.0' : '6.8.0';
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!(navigator as any).userAgentData) {
+      Object.defineProperty(navigator, 'userAgentData', {
+        get: () => ({
+          brands: uaBrands,
+          mobile: uaMobile,
+          platform: uaPlatform,
+          getHighEntropyValues: (hints: string[]) => {
+            const result: Record<string, unknown> = {
+              brands: uaBrands,
+              mobile: uaMobile,
+              platform: uaPlatform,
+            };
+            if (hints.includes('architecture')) result.architecture = uaArch;
+            if (hints.includes('bitness')) result.bitness = uaBitness;
+            if (hints.includes('model')) result.model = uaModel;
+            if (hints.includes('platformVersion')) result.platformVersion = uaPlatformVersion;
+            if (hints.includes('fullVersionList')) result.fullVersionList = uaBrands.map(b => ({ ...b, version: b.brand === 'Not-A.Brand' ? '99.0.0.0' : uaFullVersion }));
+            if (hints.includes('uaFullVersion')) result.uaFullVersion = uaFullVersion;
+            return Promise.resolve(result);
+          },
+          toJSON: () => ({ brands: uaBrands, mobile: uaMobile, platform: uaPlatform }),
+        }),
+      });
+    }
+
+    // --- Function.prototype.toString() — prevent detection of overridden natives ---
+    // Anti-bot scripts call .toString() on navigator getters to check if they return
+    // "function get xyz() { [native code] }" vs something custom. We make all our
+    // defineProperty getters return proper native code strings.
+    const nativeToString = Function.prototype.toString;
+    const customFns = new Set<Function>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const origDefineProperty = (Object as any).__origDefineProperty || Object.defineProperty;
+    // Patch Function.prototype.toString to return [native code] for our overrides
+    Function.prototype.toString = function () {
+      if (customFns.has(this)) {
+        // Return a realistic [native code] string
+        return `function ${this.name || ''}() { [native code] }`;
+      }
+      return nativeToString.call(this);
+    };
+    // Mark all current navigator getter overrides as "native"
+    for (const prop of ['webdriver', 'plugins', 'mimeTypes', 'languages', 'platform',
+      'hardwareConcurrency', 'deviceMemory', 'connection', 'userAgentData'] as const) {
+      const desc = Object.getOwnPropertyDescriptor(navigator, prop);
+      if (desc && desc.get) customFns.add(desc.get);
+    }
+    // Also mark window/screen property overrides
+    for (const prop of ['devicePixelRatio', 'outerWidth', 'outerHeight', 'screenX', 'screenY', 'screenLeft', 'screenTop'] as const) {
+      const desc = Object.getOwnPropertyDescriptor(window, prop);
+      if (desc && desc.get) customFns.add(desc.get);
+    }
+    for (const prop of ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth'] as const) {
+      const desc = Object.getOwnPropertyDescriptor(screen, prop);
+      if (desc && desc.get) customFns.add(desc.get);
+    }
+
+    // --- Intl.DateTimeFormat timezone (must match profile) ---
+    // Some fingerprinters check Intl.DateTimeFormat().resolvedOptions().timeZone
+    const origDTF = Intl.DateTimeFormat;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (Intl as any).DateTimeFormat = function (locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+      if (!options || !options.timeZone) {
+        options = { ...options, timeZone: p.timezone };
+      }
+      return new origDTF(locales, options);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (Intl as any).DateTimeFormat.prototype = origDTF.prototype;
+    Object.defineProperty((Intl as any).DateTimeFormat, 'name', { value: 'DateTimeFormat' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (Intl as any).DateTimeFormat.supportedLocalesOf = origDTF.supportedLocalesOf;
 
     // --- window.chrome (must exist in real Chrome) ---
     if (!(window as unknown as Record<string, unknown>).chrome) {
@@ -219,19 +363,9 @@ export async function applyStealthPatches(context: BrowserContext): Promise<void
       return imageData;
     };
 
-    // --- WebGL fingerprint spoofing (randomized per session) ---
-    // Static "GTX 1650" every session is a fingerprinting signal — randomize from real GPU list
-    const webglProfiles = [
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6600M Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-      { vendor: 'Apple Inc.', renderer: 'Apple M1' },
-      { vendor: 'Apple Inc.', renderer: 'Apple M2' },
-    ];
-    const gpuProfile = webglProfiles[Math.floor(Math.random() * webglProfiles.length)];
+    // --- WebGL fingerprint spoofing (CORRELATED with device profile) ---
+    // Uses the GPU from the selected device profile — Mac gets Apple GPU, Windows gets NVIDIA/Intel/AMD
+    const gpuProfile = p.webgl;
     const getParameterOrig = WebGLRenderingContext.prototype.getParameter;
     WebGLRenderingContext.prototype.getParameter = function (param: number) {
       if (param === 0x9245) return gpuProfile.vendor;

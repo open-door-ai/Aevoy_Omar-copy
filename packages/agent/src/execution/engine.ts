@@ -21,7 +21,7 @@ import { quickValidate, generateVisionResponse, trackServiceCost } from '../serv
 import { getCredential } from '../services/credential-vault.js';
 import { MultiUserBrowserService, createMultiUserBrowser } from '../services/multi-user-browser.js';
 import { withTimeout, delay } from '../utils/timeout.js';
-import { applyStealthPatches, getRealisticUserAgent, humanizeInteraction } from './stealth.js';
+import { applyStealthPatches, humanizeInteraction } from './stealth.js';
 import { dismissPopups } from './popup-handler.js';
 import { waitForSPAReady } from './dynamic-content.js';
 import { checkAndHandleAntiBot, getProxyConfig } from './antibot.js';
@@ -151,13 +151,20 @@ export class ExecutionEngine {
         this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 15000, 'brightdata-connect');
         this.isRemoteCDP = true;
 
+        const { getDeviceProfile } = await import('./stealth.js');
+        const bdProfile = getDeviceProfile();
         this.context = await cdpTimeout(this.browser.newContext({
-          viewport: { width: 1280, height: 800 },
-          locale: 'en-US',
-          timezoneId: 'America/New_York',
+          viewport: bdProfile.viewport,
+          screen: bdProfile.screen,
+          deviceScaleFactor: bdProfile.deviceScaleFactor,
+          userAgent: bdProfile.userAgent,
+          locale: bdProfile.locale,
+          timezoneId: bdProfile.timezone,
         }), 10000, 'brightdata-newContext');
 
+        await applyStealthPatches(this.context);
         this.page = await cdpTimeout(this.context.newPage(), 10000, 'brightdata-newPage');
+        await humanizeInteraction(this.page);
         await cdpTimeout(this.page.evaluate(() => document.readyState), 5000, 'brightdata-readyState');
         this.brightDataSessionStart = Date.now();
         console.log(`[ENGINE] Connected to Bright Data Scraping Browser`);
@@ -199,9 +206,9 @@ export class ExecutionEngine {
           viewport: profile.viewport,
           screen: profile.screen,
           deviceScaleFactor: profile.deviceScaleFactor,
-          userAgent: getRealisticUserAgent(),
-          locale: 'en-US',
-          timezoneId: 'America/New_York',
+          userAgent: profile.userAgent,
+          locale: profile.locale,
+          timezoneId: profile.timezone,
         }), 10000, 'newContext');
 
         await applyStealthPatches(this.context);
@@ -289,9 +296,9 @@ export class ExecutionEngine {
       viewport: profile.viewport,
       screen: profile.screen,
       deviceScaleFactor: profile.deviceScaleFactor,
-      userAgent: getRealisticUserAgent(),
-      locale: 'en-US',
-      timezoneId: 'America/New_York',
+      userAgent: profile.userAgent,
+      locale: profile.locale,
+      timezoneId: profile.timezone,
       acceptDownloads: false,
       permissions: [],
     });
