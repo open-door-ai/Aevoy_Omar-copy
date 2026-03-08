@@ -1980,7 +1980,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const textOnlyPatterns = /^(calculate|compute|convert|what is \d|how much is|write (?:me )?a |compose |draft a |what time is it|when is the next|how far is|how long|what.s the population|tell me a joke|explain |define |translate |summarize this|list \d)/i;
     const textOnlyText = (subject || '').trim();
     const hasDeliveryAction = /\b(send|email|text me|sms|call)\b/i.test(textOnlyText);
-    if (textOnlyPatterns.test(textOnlyText) && !hasDeliveryAction) {
+    // Guard: if the task mentions creating a document file, skip text-only fast path
+    const _taskFullText = `${subject} ${body}`.toLowerCase();
+    const _taskNeedsFile = /\b(word\s*doc|\.docx|spreadsheet|\.xlsx|excel|powerpoint|\.pptx|presentation|pdf|create.*file|make.*file|as a\s+(word|excel|pdf|powerpoint)|save.*as|download|attach)/i.test(_taskFullText);
+    // Guard: if the task needs real-world research data (prices, contacts, comparisons), skip text-only fast path
+    const _taskNeedsResearch = /\b(real\s+(price|cost|data)|actual\s+(price|cost)|current\s+(price|cost)|today.s\s+price|canadian\s+supplier|local\s+supplier|compare.*price|market\s+price|quote|how much does.*cost|competitor.*price)\b/i.test(_taskFullText);
+    if (textOnlyPatterns.test(textOnlyText) && !hasDeliveryAction && !_taskNeedsFile && !_taskNeedsResearch) {
       console.log(`[FAST-PATH] Text-only AI task detected: "${textOnlyText.slice(0, 60)}"`);
       try {
         const { quickValidate } = await import("./ai.js");
@@ -3775,6 +3780,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     // ════════════════════════════════════════════════════════════════════
     let visionFailureNote = ''; // Context injected into next iteration when vision agent fails (declared early for BFP use)
     let _bfpVisionCost = 0; // Track vision agent cost from browser fast path (added to totalAiCost below)
+    let _bfpFailedDomain = ''; // Track domain that failed in browser fast path — pre-seed domainFailures
     // Browser fast path fires for:
     // 1. Explicit domain tasks ("go to X.com") — _hasExplicitDomainCheck
     // 2. Signup tasks where forced-browse injection already set a target URL
@@ -3922,7 +3928,8 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                 if (!isTaskComplete) {
                   const _bfpDomain = (() => { try { return new URL(_bfpPageUrl).hostname.replace('www.', ''); } catch { return _bfpTargetUrl; } })();
                   // Pass what we learned to the iteration loop as context, not as a final answer
-                  visionFailureNote = `Browser fast path attempted ${_bfpSteps} steps on ${_bfpDomain} but didn't complete. Error: ${_bfpError.substring(0, 200)}. Try a DIFFERENT approach — alternative site, search for another method, call the business, use an API, etc.`;
+                  _bfpFailedDomain = _bfpDomain;
+                  visionFailureNote = `Browser fast path attempted ${_bfpSteps} steps on ${_bfpDomain} but didn't complete. Error: ${_bfpError.substring(0, 200)}. Try a DIFFERENT approach — alternative site, search for another method, call the business, use an API, etc. DO NOT browse ${_bfpDomain} again — use search() instead.`;
                   console.log(`[BROWSER-FAST-PATH] Vision didn't complete (${_bfpSteps} steps) — falling through to iteration loop to keep trying`);
                 }
               }
@@ -3934,7 +3941,8 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               const _bfpIsResearchTask = /\b(find|search|list|show|get|compare|what|which|best|top|cheapest|rating|price|review|who|when|where|how much|tell me)\b/i.test(taskTextLower);
               // Never give up on nav failure — fall through to iteration loop for ALL task types.
               // The iteration loop can try alternative sites, search, call the business, etc.
-              visionFailureNote = `Direct navigation to ${_bfpDomainForError} failed (DNS/SSL/blocked). Try a DIFFERENT approach: search for alternatives, try a different URL, call the business, or find another way to accomplish the task.`;
+              _bfpFailedDomain = _bfpDomainForError;
+              visionFailureNote = `Direct navigation to ${_bfpDomainForError} failed (DNS/SSL/blocked). Try a DIFFERENT approach: search for alternatives, try a different URL, call the business, or find another way to accomplish the task. DO NOT browse ${_bfpDomainForError} again — use search() instead.`;
               console.log(`[BROWSER-FAST-PATH] Nav error on ${_bfpDomainForError} — falling through to iteration loop`);
             }
           } catch (_bfpErr) {
@@ -3986,7 +3994,8 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
 
             // Never give up in the catch block either — fall through to iteration loop
             if (!isTaskComplete && _bfpVisionAttempted) {
-              visionFailureNote = `Browser fast path error on ${_bfpDomainForErr}: ${_bfpErrMsg.substring(0, 200)}. Try a COMPLETELY DIFFERENT approach — search for alternatives, try another site, call the business, use an API, etc. Do NOT retry the same URL.`;
+              _bfpFailedDomain = _bfpDomainForErr;
+              visionFailureNote = `Browser fast path error on ${_bfpDomainForErr}: ${_bfpErrMsg.substring(0, 200)}. Try a COMPLETELY DIFFERENT approach — search for alternatives, try another site, call the business, use an API, etc. Do NOT browse ${_bfpDomainForErr} again — use search() instead.`;
               console.log(`[BROWSER-FAST-PATH] Vision error — falling through to iteration loop to keep trying`);
             }
             } // close else (_bfpVisionAttempted)
@@ -4020,6 +4029,11 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
     const domainFailures = new Map<string, number>(); // domain -> failure count
+    // Pre-seed from browser fast path failure — prevents iteration loop from retrying the same blocked site
+    if (_bfpFailedDomain) {
+      domainFailures.set(_bfpFailedDomain, 2); // 2 = immediately blocked (browser already proved it's unreachable)
+      console.log(`[DOMAIN-BLOCK] Pre-seeded ${_bfpFailedDomain} as blocked from browser fast path failure`);
+    }
 
     // AGI-LEVEL METHOD TYPE DIVERSITY: Prevent trying 30x same method TYPE
     // Track METHOD TYPES (not just specific methods) to force intelligent diversity
