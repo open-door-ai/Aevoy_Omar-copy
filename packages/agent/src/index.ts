@@ -787,7 +787,7 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
 
   const { userId, username, from, subject, body, inputChannel } = req.body;
 
-  if (!userId || !username || !from || !body) {
+  if (!userId || !username || !from || (!body && !subject)) {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
 
@@ -811,9 +811,9 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
       userId,
       username,
       email: from,
-      task: sanitizedV2.subject && sanitizedV2.subject !== sanitizedV2.body
+      task: sanitizedV2.subject && sanitizedV2.body && sanitizedV2.subject !== sanitizedV2.body
         ? `${sanitizedV2.subject}\n\n${sanitizedV2.body}`
-        : sanitizedV2.body,
+        : (sanitizedV2.body || sanitizedV2.subject),
       channel: inputChannel || "email",
     });
 
