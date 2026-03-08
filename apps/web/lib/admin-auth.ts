@@ -77,6 +77,16 @@ export async function verifyAdminSession(request: NextRequest): Promise<AdminSes
 
   if (error || !session) return null;
 
+  // IP binding: reject session if request IP differs from login IP.
+  // This prevents stolen session cookies from being replayed from a different IP.
+  // Gracefully skip check if session was created before IP was stored (ip_address is null).
+  if (session.ip_address) {
+    const currentIP = getClientIP(request);
+    if (currentIP !== "unknown" && session.ip_address !== currentIP) {
+      return null;
+    }
+  }
+
   // V30 fix: Enforce absolute session max (8 hours)
   const createdAt = new Date(session.created_at).getTime();
   if (now.getTime() - createdAt > ABSOLUTE_SESSION_MAX_MS) {

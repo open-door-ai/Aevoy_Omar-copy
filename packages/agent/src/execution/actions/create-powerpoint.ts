@@ -5,6 +5,7 @@
  */
 
 import pptxgen from 'pptxgenjs';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -246,11 +247,8 @@ export async function createPowerPoint(
       }
     }
 
-    // Generate filename with timestamp if needed
-    const timestamp = Date.now();
-    const filename = params.filename.endsWith('.pptx')
-      ? params.filename
-      : `${params.filename}-${timestamp}.pptx`;
+    // Generate cryptographically random filename to prevent enumeration
+    const filename = `${crypto.randomUUID()}.pptx`;
 
     // Save to temp directory
     const outputDir = path.join('/tmp', 'aevoy-files', 'powerpoint');

@@ -422,68 +422,7 @@ function getSupabaseClient(url: string, key: string) {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/debug" && request.method === "POST") {
-      const body = await request.json().catch(() => ({})) as Record<string, string>;
-      const testUsername = body.username || "sage";
-      const testEmail = body.email || "";
-      const diagnostics: Record<string, unknown> = {
-        keyPresent: !!env.SUPABASE_SERVICE_KEY,
-        keyPrefix: env.SUPABASE_SERVICE_KEY?.substring(0, 15) || "MISSING",
-        agentUrl: env.AGENT_URL,
-        supabaseUrl: env.SUPABASE_URL,
-      };
-
-      // Test username lookup
-      const userByUsername = await getUser(testUsername, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
-      diagnostics.userByUsername = userByUsername ? { id: userByUsername.id.substring(0, 8), username: userByUsername.username } : null;
-
-      // Test email lookup if provided
-      if (testEmail) {
-        const userByEmail = await getUserByEmail(testEmail, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
-        diagnostics.userByEmail = userByEmail ? { id: userByEmail.id.substring(0, 8), username: userByEmail.username } : null;
-      }
-
-      // Test agent reachability (health + task endpoint with auth)
-      try {
-        const agentRes = await fetch(`${env.AGENT_URL}/health`, { signal: AbortSignal.timeout(5000) });
-        diagnostics.agentReachable = agentRes.ok;
-        diagnostics.agentStatus = agentRes.status;
-      } catch (e) {
-        diagnostics.agentReachable = false;
-        diagnostics.agentError = String(e);
-      }
-
-      // Also test VPS directly with auth
-      const vpsUrl = "http://77.42.31.185:3001";
-      try {
-        const vpsHealth = await fetch(`${vpsUrl}/health`, { signal: AbortSignal.timeout(5000) });
-        diagnostics.vpsHealthStatus = vpsHealth.status;
-        diagnostics.vpsHealthOk = vpsHealth.ok;
-      } catch (e) {
-        diagnostics.vpsHealthStatus = String(e);
-      }
-      try {
-        const vpsTask = await fetch(`${vpsUrl}/task/incoming`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET },
-          body: JSON.stringify({ userId: "test", username: "test", from: "test@test.com", body: "ping", inputChannel: "email" }),
-          signal: AbortSignal.timeout(8000),
-        });
-        diagnostics.vpsTaskStatus = vpsTask.status;
-        diagnostics.vpsTaskOk = vpsTask.ok;
-        diagnostics.vpsTaskBody = await vpsTask.text().catch(() => '');
-      } catch (e) {
-        diagnostics.vpsTaskStatus = String(e);
-      }
-
-      return new Response(JSON.stringify(diagnostics, null, 2), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
+  async fetch(_request: Request, _env: Env): Promise<Response> {
     return new Response("Aevoy Email Router", { status: 200 });
   },
   async email(message: EmailMessage, env: Env): Promise<void> {

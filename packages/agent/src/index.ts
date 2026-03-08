@@ -574,6 +574,10 @@ app.get("/health/memory", async (_req, res) => {
 
 // ---- Live API Key Validation — actually calls each API ----
 app.get("/debug/test-apis", async (_req, res) => {
+  const secret = _req.query.secret;
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
   const results: Record<string, { status: string; detail?: string; latency_ms?: number }> = {};
 
   // 1. Gemini Flash
@@ -645,6 +649,10 @@ app.get("/debug/test-apis", async (_req, res) => {
 
 // ---- Image generation test endpoint ----
 app.get("/debug/test-image-gen", async (req, res) => {
+  const secret = req.query.secret;
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
   const googleKey = process.env.GOOGLE_API_KEY;
   if (!googleKey) return res.json({ error: "GOOGLE_API_KEY not set" });
 
@@ -1236,7 +1244,7 @@ function checkDemoCap(callDurationMinutes: number = 3): boolean {
 // ---- Demo Outbound Call TwiML ----
 // Called by Twilio when a demo outbound call connects (from "Call Me Now" button)
 // Looks up caller in profiles for interview detection, returns ConversationRelay TwiML
-app.post("/webhook/voice/demo-outbound", async (req, res) => {
+app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const callerNumber = req.body.To || ""; // For outbound calls, To = the user's phone
   const callSid = req.body.CallSid || "";
   const queryUserId = req.query.userId as string || ""; // Passed from /api/demo/call for logged-in users
@@ -1282,19 +1290,8 @@ app.post("/webhook/voice/demo-outbound", async (req, res) => {
             console.log(`[VOICE-DEMO] Outbound user ${profile.id.slice(0, 8)} already onboarded, regular demo`);
           }
 
-          // Auto-save the caller's phone number to their profile if not already set
-          if (callerDigits.length >= 10) {
-            const { data: currentProfile } = await supabase
-              .from("profiles")
-              .select("phone_number")
-              .eq("id", profile.id)
-              .single();
-            if (currentProfile && !currentProfile.phone_number) {
-              const normalized = callerNumber.startsWith("+") ? callerNumber : `+${callerNumber.replace(/\D/g, "")}`;
-              await supabase.from("profiles").update({ phone_number: normalized }).eq("id", profile.id);
-              console.log(`[VOICE-DEMO] Auto-saved phone number for user ${profile.id.slice(0, 8)}`);
-            }
-          }
+          // Phone number auto-save removed for security — phone numbers should only
+          // be set through authenticated channels (onboarding, settings), not webhooks.
         }
       } catch (e: any) {
         console.error("[VOICE-DEMO] Outbound userId lookup error:", e.message);
@@ -1371,7 +1368,7 @@ app.post("/webhook/voice/demo-outbound", async (req, res) => {
 // ---- Outbound Call TwiML (for scheduled callbacks) ----
 // Twilio fetches this URL when making outbound calls via callUser()
 // Returns ConversationRelay TwiML for full conversational callbacks
-app.post("/webhook/voice/outbound-twiml", async (req, res) => {
+app.post("/webhook/voice/outbound-twiml", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.query.userId as string || req.body.userId || '';
   const message = req.query.message as string || req.body.message || '';
   const wsUrl = `${(process.env.AGENT_URL || 'http://localhost:3001').replace('http', 'ws')}/ws/voice`;
@@ -1420,7 +1417,7 @@ app.post("/webhook/voice/outbound-twiml", async (req, res) => {
 // ---- External Call TwiML (for calling restaurants, businesses, etc.) ----
 // callExternal() creates the call and Twilio fetches this URL for TwiML.
 // Returns ConversationRelay so the AI can have a REAL conversation with the business.
-app.post("/webhook/voice/external-call-twiml", async (req, res) => {
+app.post("/webhook/voice/external-call-twiml", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const userId = req.query.userId as string || '';
   const contextKey = req.query.contextKey as string || '';
   const script = req.query.script as string || '';

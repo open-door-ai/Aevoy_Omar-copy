@@ -86,14 +86,13 @@ export async function POST(request: Request) {
     const phone = normalizePhone(rawPhone);
 
     // Check if the caller is a logged-in user (for onboarding calls)
-    let userId = body.userId || '';
-    if (!userId) {
-      try {
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) userId = user.id;
-      } catch { /* not logged in — cold demo */ }
-    }
+    // SECURITY: Always use session userId — never trust client-supplied userId
+    let userId = '';
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) userId = user.id;
+    } catch { /* not logged in — cold demo */ }
 
     // Twilio callback: when the callee answers, Twilio POSTs to this URL to get TwiML
     const demoUrl = new URL(`${TWILIO_CALLBACK_BASE}/webhook/voice/demo-outbound`);

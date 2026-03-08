@@ -5,6 +5,7 @@
  */
 
 import PDFDocument from 'pdfkit';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { promises as fsPromises } from 'fs';
@@ -86,11 +87,8 @@ export async function createPDF(params: PDFParams): Promise<PDFResult> {
         }
       });
 
-      // Generate filename with timestamp
-      const timestamp = Date.now();
-      const filename = params.filename.endsWith('.pdf')
-        ? params.filename
-        : `${params.filename}-${timestamp}.pdf`;
+      // Generate cryptographically random filename to prevent enumeration
+      const filename = `${crypto.randomUUID()}.pdf`;
 
       // Save to temp directory
       const outputDir = path.join('/tmp', 'aevoy-files', 'pdf');

@@ -141,7 +141,7 @@ TWILIO_CALLBACK_URL=https://agent-production-1339.up.railway.app
 - **Primary**: patchright (CDP stealth, patches Runtime.enable leak)
 - **Stealth layers**: `stealth.ts` (JS patches) + `captcha.ts` (CapSolver/2captcha)
 - **Vision agent**: 40 steps max, 8-min timeout, Gemini Flash vision AI
-- **CAPTCHA**: CapSolver API key: `CAP-025A0A30DAFBB09042E5D95A24B8917931ED20B18DE9933C128E8EBB4A5BC4D4`
+- **CAPTCHA**: CapSolver via env var `CAPSOLVER_API_KEY`
 
 ## Cost & Billing
 - `BILLING_MARKUP = 1.20` in `cost-calculator.ts`

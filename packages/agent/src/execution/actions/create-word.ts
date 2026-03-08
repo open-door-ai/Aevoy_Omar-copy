@@ -5,6 +5,7 @@
  */
 
 import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -227,11 +228,8 @@ export async function createWordDocument(
       }
     });
 
-    // Generate filename with timestamp
-    const timestamp = Date.now();
-    const filename = params.filename.endsWith('.docx')
-      ? params.filename
-      : `${params.filename}-${timestamp}.docx`;
+    // Generate cryptographically random filename to prevent enumeration
+    const filename = `${crypto.randomUUID()}.docx`;
 
     // Save to temp directory
     const outputDir = path.join('/tmp', 'aevoy-files', 'word');

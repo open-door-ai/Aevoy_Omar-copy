@@ -5,6 +5,7 @@
  */
 
 import ExcelJS from 'exceljs';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -168,11 +169,8 @@ export async function createExcelFile(
       }
     }
 
-    // Generate filename with timestamp if not unique
-    const timestamp = Date.now();
-    const filename = params.filename.endsWith('.xlsx')
-      ? params.filename
-      : `${params.filename}-${timestamp}.xlsx`;
+    // Generate cryptographically random filename to prevent enumeration
+    const filename = `${crypto.randomUUID()}.xlsx`;
 
     // Save to temp directory
     const outputDir = path.join('/tmp', 'aevoy-files', 'excel');

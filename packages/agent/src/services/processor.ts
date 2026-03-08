@@ -1689,7 +1689,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           const _ifpDir = '/tmp/aevoy-files/images';
           if (!_ifpFs.existsSync(_ifpDir)) _ifpFs.mkdirSync(_ifpDir, { recursive: true });
           const _ifpExt = _ifpMime === 'image/png' ? 'png' : 'jpg';
-          const _ifpFilename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${_ifpExt}`;
+          const _ifpFilename = `${crypto.randomUUID()}.${_ifpExt}`;
           const _ifpFilePath = _ifpPath.join(_ifpDir, _ifpFilename);
           _ifpFs.writeFileSync(_ifpFilePath, Buffer.from(_ifpBase64, 'base64'));
 
@@ -11144,7 +11144,7 @@ async function executeAction(
           fs.mkdirSync(imgDir, { recursive: true });
         }
         const ext = _imgMime === "image/png" ? "png" : "jpg";
-        const filename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const filename = `${crypto.randomUUID()}.${ext}`;
         const filePath = path.join(imgDir, filename);
         fs.writeFileSync(filePath, Buffer.from(_imgBase64, "base64"));
 
