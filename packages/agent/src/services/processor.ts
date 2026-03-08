@@ -10596,11 +10596,12 @@ async function executeAction(
       if (!to || !emailRegex.test(to)) {
         return { action, success: false, error: "Invalid email address" };
       }
-      // Block AI-generated send_email actions for background/scheduled tasks.
-      // suppressEmail means "this is a silent background run — don't send user notifications."
+      // Block AI-generated send_email actions for web dashboard tasks (suppressEmail=true).
+      // Instead of silently discarding, return the email body as the result so the
+      // response assembly can use it — prevents data loss on web channel tasks.
       if (suppressEmail) {
-        console.log(`[SEND-EMAIL] Skipped — suppressEmail=true (scheduled/background task). Recipient: ${to}`);
-        return { action, success: true, result: "Email skipped (background task — suppressEmail)" };
+        console.log(`[SEND-EMAIL] Skipped send — suppressEmail=true (web channel). Preserving body as result.`);
+        return { action, success: true, result: body || subject || "Email content prepared (not sent — web channel)" };
       }
       // Try sending from user's personal connected email first
       try {
