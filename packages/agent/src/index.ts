@@ -811,7 +811,9 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
       userId,
       username,
       email: from,
-      task: sanitizedV2.body,
+      task: sanitizedV2.subject && sanitizedV2.subject !== sanitizedV2.body
+        ? `${sanitizedV2.subject}\n\n${sanitizedV2.body}`
+        : sanitizedV2.body,
       channel: inputChannel || "email",
     });
 

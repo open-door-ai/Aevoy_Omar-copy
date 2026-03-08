@@ -6554,7 +6554,8 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         r.action.type === 'search' && r.result && String(r.result).length > 200
       );
       const _noFollowUpActions = !aiResponse.actions.some(a =>
-        ['browse', 'send_email', 'send_sms', 'call_user', 'call_external', 'fill_form', 'schedule'].includes(a.type)
+        ['browse', 'send_email', 'send_sms', 'call_user', 'call_external', 'fill_form', 'schedule',
+         'create_excel', 'create_word', 'create_powerpoint', 'create_pdf', 'generate_image'].includes(a.type)
       );
       // Never fast-exit on search when user explicitly asked to GO TO a specific site
       // Includes prepositions (on/at/from/via) — "find X on bestbuy.ca" means visit the site
@@ -6562,7 +6563,27 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         /\b(on|at|from|via|through)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(subject) ||
         /\bhttps?:\/\/\S+/i.test(subject) ||
         /\b(add\s+to\s+cart|sign\s*up|book|reserve|fill.*form|complete.*form|star\b|follow\b|like\b|subscribe|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|join\b|share\b|retweet|repost)\b/i.test(subject);
-      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser) {
+
+      // Tasks that need document creation should NEVER fast-exit after search
+      const _taskNeedsDocumentFE = _isDocumentAction || /\b(spreadsheet|excel|word\s*doc|powerpoint|presentation|pdf|create.*file|make.*file|build.*spreadsheet)\b/i.test(`${subject} ${body}`);
+
+      // Tasks requesting specific local/current data need multiple searches, not a quick summary
+      const _needsSpecificData = /\b(how much|what.*cost|what.*price|phone number|address|contact info|contact details|hours|permit|license fee)\b/i.test(`${subject} ${body}`) ||
+        /\b(companies|businesses|restaurants|stores|shops|vendors|suppliers|providers|agencies|firms)\s+(in|near|around|from)\b/i.test(`${subject} ${body}`) ||
+        /\b(in|near|around)\s+[A-Z][a-z]{2,}\b/.test(`${subject} ${body}`) && /\b(find|cost|price|real|actual|specific)\b/i.test(`${subject} ${body}`);
+
+      // Tasks that ask to FIND multiple specific items need verification across sources
+      const _needsMultipleResults = /\b(\d+)\s+(real|actual|specific|best|top|different|good)?\s*(companies|businesses|restaurants|options|places|items|products|services|results|leads|contacts|vendors|listings|cars|jobs|apartments|flights|hotels)\b/i.test(`${subject} ${body}`);
+
+      // Deep research tasks: comparison, analysis, investigation
+      const _needsDeepResearch = /\b(compare|comparison|analyze|analysis|investigate|research|comprehensive|detailed|thorough|in-depth|cross-reference|verify|validate|pros?\s+and\s+cons?|advantages|disadvantages|trade-?offs?|which\s+is\s+better|vs\.?|versus)\b/i.test(`${subject} ${body}`);
+
+      // Log when fast-exit is blocked by these guards
+      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser && (_taskNeedsDocumentFE || _needsSpecificData || _needsMultipleResults || _needsDeepResearch)) {
+        console.log(`[SEARCH-FAST-EXIT] SKIPPED — task needs deeper work: doc=${_taskNeedsDocumentFE} specific=${_needsSpecificData} multi=${_needsMultipleResults} deep=${_needsDeepResearch}`);
+      }
+
+      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser && !_taskNeedsDocumentFE && !_needsSpecificData && !_needsMultipleResults && !_needsDeepResearch) {
         try {
           const searchData = String(_richSearchResult.result).substring(0, 3000);
           console.log(`[SEARCH-FAST-EXIT] Rich search results (${searchData.length} chars) — summarizing and completing`);

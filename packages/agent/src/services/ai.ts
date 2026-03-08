@@ -2069,16 +2069,18 @@ export async function generateForcedDirectAnswer(
 
 FORBIDDEN phrases (NEVER use these): "I'll", "I will", "Let me", "I'm going to", "I can try", "I'll search", "I'll find", "Let me look", "Want me to", "Shall I", "Would you like me to", "Do you want me to"
 
-GOOD examples:
-- "The top freelance writing platforms are Upwork (upwork.com) and Fiverr (fiverr.com). Upwork has 1,000+ writing jobs posted right now."
-- "Vancouver events tonight include the Jazz Festival at Orpheum Theatre and a Comedy Night at The Biltmore."
-- "The weather in Toronto is 31°F with cloudy skies and west winds at 12 mph."
+CRITICAL DATA INTEGRITY RULES:
+1. ONLY report specific numbers, prices, phone numbers, and addresses that appear VERBATIM in the search results below.
+2. If the search results contain generic article titles/links but NO specific data points the user asked for, say "Based on initial search results, I found [what IS there]. For more specific [prices/contacts/details], I need to search more targeted sources."
+3. NEVER invent or guess specific prices, phone numbers, addresses, or statistics. Generic knowledge (e.g. "food trucks typically cost $X") must be clearly labeled as "typical range" not presented as specific findings.
+4. Real company names and URLs from search results: use them. Company names NOT in search results: do NOT fabricate them.
+5. For leads/contacts requests: only list companies that appear in the search results. Do NOT guess email addresses.
 
-Rules: Use past or present tense only. If no live data: give specific knowledge-based answer with real company names, URLs, and guessed contact emails (info@domain.com format). For leads/contacts requests: list specific real companies with website + guessed email. Max 5 bullets allowed for lists of items. No vague hedging.`;
+Rules: Use past or present tense only. Max 5 bullets allowed for lists of items. No vague hedging — be specific about what you found vs. what you didn't.`;
 
   const userContent = hasContext
     ? `The user asked: "${userRequest}"\n\nMY COMPLETED ACTION RESULTS:\n${context}\n\nReport these results concisely. No "I'll" or "Let me".`
-    : `The user asked: "${userRequest}"\n\nGive the best specific knowledge-based answer. Name real websites with URLs. Start with a concrete fact. No "I'll" or "Let me".`;
+    : `The user asked: "${userRequest}"\n\nGive the best answer from general knowledge, but clearly distinguish between well-known facts and specifics you are uncertain about. Do NOT fabricate specific prices, phone numbers, or statistics. No "I'll" or "Let me".`;
 
   // PASSIVE_LINE: matches lines that are purely future-intent or offer-to-help — reject them
   const PASSIVE_LINE = /^(?:i'?ll|i\u2019ll|let me|i will|i'm going to|i\u2019m going to|i can try|i need to|want me to|shall i|would you like|do you want me to|should i)\s/i;
@@ -2124,7 +2126,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
   if (process.env.GROQ_API_KEY && !isModelBackedOff('groq', 'meta-llama/llama-4-scout-17b-16e-instruct')) {
     try {
       const groqClient = getGroqClient();
-      const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. If search results only contain article links without real data, use your training knowledge to name specific restaurants/products/services. NEVER say "available at", "not directly retrieved", "can be found at", or redirect to a URL. Max 2-3 sentences.`;
+      const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. ONLY report data that appears in the search results — do NOT invent specific prices, phone numbers, or company names not found in the results. If search results only contain article links without specific data, summarize what the articles reference and note that more specific data was not available. NEVER say "available at", "not directly retrieved", "can be found at", or redirect to a URL. Max 2-3 sentences.`;
       const res = await groqClient.chat.completions.create({
         model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         max_tokens: 300,
@@ -2179,7 +2181,7 @@ Rules: Use past or present tense only. If no live data: give specific knowledge-
   // Last resort: DeepSeek with ultra-strict prompt
   if (process.env.DEEPSEEK_API_KEY) {
     try {
-      const strictSystem = `RESULTS REPORT: Answer in present tense only. Start with a concrete fact (specific name, price, address). If search results only link to articles without real data, use your training knowledge to name real restaurants/prices/services. NEVER say "available at URL", "not directly retrieved", "can be found at", or point to a website. Max 2 sentences. Do NOT begin with "I'll", "Let me", or "I will".`;
+      const strictSystem = `RESULTS REPORT: Answer in present tense only. Start with a concrete fact from the search results. ONLY cite specific names, prices, and addresses that appear in the provided search data. If the search results only link to articles without the specific data requested, summarize what IS available and state clearly what data was not found. NEVER say "available at URL", "not directly retrieved", "can be found at", or point to a website. Max 2 sentences. Do NOT begin with "I'll", "Let me", or "I will".`;
       const client = getDeepSeekClient();
       const res = await client.chat.completions.create({
         model: "deepseek-chat",
