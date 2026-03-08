@@ -5782,7 +5782,32 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
       })).catch(() => {});
 
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
-      if (isTaskComplete) break;
+      // BUT: reject hollow completions — if response admits "data not available", keep iterating
+      if (isTaskComplete && currentIteration < MAX_ITERATIONS - 2) {
+        const _breakLC = (aiResponse.content || '').toLowerCase();
+        const _isBreakHollow = (
+          /no\s+(?:specific|detailed|actual)[\w\s]{0,40}(?:was|were|have been)\s+(?:found|retrieved|obtained|provided)/i.test(_breakLC) ||
+          /(?:specific|detailed)[\w\s]{0,30}(?:not|wasn't|weren't)\s+(?:available|provided|found|retrieved)/i.test(_breakLC) ||
+          /(?:could not|couldn't|unable to)\s+(?:retrieve|extract|find|obtain|get)\s+(?:specific|detailed|actual|concrete)/i.test(_breakLC) ||
+          /(?:more specific|more detailed)\s+(?:data|information|results?)\s+(?:was|were)\s+not\s+(?:available|found)/i.test(_breakLC)
+        );
+        if (_isBreakHollow) {
+          console.warn(`[HOLLOW-BREAK] Rejected hollow completion at iter=${currentIteration} — response admits no data. Continuing.`);
+          isTaskComplete = false;
+          aiSignaledComplete = false;
+          const _blockedList = [...domainFailures.entries()].filter(([, c]) => c >= 2).map(([d]) => d);
+          visionFailureNote = `Your response says "data not available" — this is NOT acceptable. A genius human NEVER gives up. Try completely different search queries:
+- Use different keywords, broader or more specific
+- Try review sites, comparison sites, aggregator sites
+- Search for "[product type] best [year] Canada" or "[product type] reviews"
+${_blockedList.length > 0 ? `DO NOT browse: ${_blockedList.join(', ')}` : ''}
+DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
+        } else {
+          break;
+        }
+      } else if (isTaskComplete) {
+        break;
+      }
 
       // IMAGE GENERATION FAILURE: If this is an image task and generate_image just failed,
       // stop immediately — don't let the AI iterate and search for stock photos or Canva
@@ -7891,7 +7916,11 @@ Extract the ACTUAL phone number from search results and call them:
               // "based on general business knowledge" — still using training data, not real results
               /based on (?:general|my|our|training)\s+(?:\w+\s+)?(?:business|knowledge|training|information|data)/i.test(_fbLC) ||
               // "primarily show X, not Y" — context mismatch description
-              /primarily show\b/i.test(_fbLC)
+              /primarily show\b/i.test(_fbLC) ||
+              // "no specific data/results was found" — hollow admission of failure
+              /no\s+(?:specific|detailed|actual|concrete)[\w\s]{0,40}(?:was|were)\s+(?:found|available|provided|retrieved)/i.test(_fbLC) ||
+              /(?:more specific|more detailed)\s+(?:data|information)\s+(?:was|were)\s+not\s+(?:available|found)/i.test(_fbLC) ||
+              /(?:do|did)\s+not\s+(?:provide|contain|include)\s+(?:specific|concrete|detailed)/i.test(_fbLC)
             );
             if (_fbStillNarration) {
               console.log('[QUALITY] Fallback response is still narration — trying pure knowledge mode');
