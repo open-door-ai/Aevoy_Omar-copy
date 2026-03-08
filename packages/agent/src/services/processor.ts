@@ -4148,6 +4148,38 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
         // Strip the signal from user-facing content
         aiResponse.content = aiResponse.content.replace(/\[TASK_COMPLETE\]/g, '').trim();
 
+        // HOLLOW RESPONSE REJECTION: AI said TASK_COMPLETE but response admits it has no data.
+        // A genius human NEVER reports "data not available" — they try different sources.
+        // Reject the completion signal and force a different strategy in the next iteration.
+        if (currentIteration <= 10) {
+          const _hrLC = aiResponse.content.toLowerCase();
+          const _isHollowResponse = (
+            /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available|provided|included)/i.test(_hrLC) ||
+            /(?:specific|detailed)\s+(?:results?|listings?|data|information)\s+(?:are|were)\s+not\s+(?:provided|available|found)/i.test(_hrLC) ||
+            /(?:could not|couldn't|unable to)\s+(?:retrieve|extract|find|obtain|get)\s+(?:specific|detailed|actual)/i.test(_hrLC) ||
+            /no\s+(?:specific|detailed|actual)\s+(?:results?|data|listings?|information|products?|jobs?)\s+(?:were|was|have been)\s+(?:found|retrieved|obtained)/i.test(_hrLC) ||
+            /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+(?:specific|detailed|actual)/i.test(_hrLC)
+          );
+          if (_isHollowResponse && aiResponse.content.length < 800) {
+            console.warn(`[HOLLOW-GATE] REJECTED: AI said TASK_COMPLETE but response admits no data found (iter=${currentIteration}). Forcing different strategy.`);
+            const _blockedList = [...domainFailures.entries()].filter(([, c]) => c >= 2).map(([d]) => d);
+            aiResponse.content = '';
+            aiResponse.actions = [{ type: 'search' as any, params: {
+              query: `${subject}`.substring(0, 80).replace(/\b(on|at|from|using)\s+\S+\.(com|ca|org|net)\b/gi, '').trim()
+            }}];
+            visionFailureNote = `Your previous search returned NO useful data. The user needs SPECIFIC results (names, prices, links). Try a COMPLETELY DIFFERENT search strategy:
+- Use different keywords (more specific or broader)
+- Search for competitor/alternative platforms (e.g., if Indeed failed, try LinkedIn, Glassdoor, remote.co, weworkremotely, builtin.com)
+- Search for aggregator/comparison sites instead of the source directly
+- If searching for jobs: "remote AI engineer salary Canada 2026 hiring"
+- If searching for products: try review sites, price comparison sites
+${_blockedList.length > 0 ? `\nDO NOT browse: ${_blockedList.join(', ')}` : ''}
+DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices, numbers, links).`;
+            // Don't set isTaskComplete — loop continues with new search strategy
+            continue; // Skip all other gates this round
+          }
+        }
+
         // BROWSER INTERACTION GATE: When the task explicitly mentions a website ("Go to X.com")
         // and requires physical interaction (add to cart, book, sign up, fill form), REJECT
         // completion if the vision agent has never run. Search results alone can't interact.
@@ -5708,9 +5740,34 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         const _dtUrl = String(_docCompletedThisRound.result || '');
         const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
         const _dtFullUrl = _dtUrl.startsWith('http') ? _dtUrl : `${_agBase}${_dtUrl}`;
-        aiResponse.content = `Your ${_dtName} is ready!\n\n**File:** ${_dtFile}\n**Download:** ${_dtFullUrl}`;
-        console.log(`[DOC-COMPLETE] ${_dtName} created — marking task complete, URL: ${_dtFullUrl}`);
-        isTaskComplete = true;
+
+        // DOCUMENT SELF-VERIFICATION: Verify the file actually has content before reporting success
+        let _docVerified = false;
+        try {
+          const { statSync } = await import('fs');
+          // Extract local file path from URL (e.g., /files/word/uuid.docx → /tmp/aevoy-files/word/uuid.docx)
+          const _dtLocalPath = _dtUrl.replace(/^\/files\//, '/tmp/aevoy-files/');
+          const _dtStat = statSync(_dtLocalPath);
+          if (_dtStat.size > 100) {
+            _docVerified = true;
+            console.log(`[DOC-VERIFY] ✓ File verified: ${_dtLocalPath} (${(_dtStat.size / 1024).toFixed(1)} KB)`);
+          } else {
+            console.warn(`[DOC-VERIFY] ✗ File too small: ${_dtLocalPath} (${_dtStat.size} bytes) — may be empty/corrupt`);
+          }
+        } catch (_dvErr) {
+          console.warn(`[DOC-VERIFY] ✗ Could not verify file: ${_dvErr instanceof Error ? _dvErr.message : _dvErr}`);
+        }
+
+        if (_docVerified) {
+          aiResponse.content = `Your ${_dtName} is ready!\n\n**File:** ${_dtFile}\n**Download:** ${_dtFullUrl}`;
+          console.log(`[DOC-COMPLETE] ${_dtName} created and verified — marking task complete, URL: ${_dtFullUrl}`);
+          isTaskComplete = true;
+        } else {
+          // File is empty or missing — retry document creation in next iteration
+          console.warn(`[DOC-COMPLETE] ${_dtName} file verification FAILED — continuing iteration to retry`);
+          visionFailureNote = `The ${_dtName} file was created but appears empty or corrupt. Please regenerate it with proper content sections.`;
+          // Don't set isTaskComplete — loop continues
+        }
       }
 
       // Stream progress: round complete
@@ -6608,11 +6665,22 @@ DO NOT attempt another browser action. Use search → call_external now.`;
             username
           );
           if (summary.content && summary.content.length > 30) {
-            aiResponse.content = summary.content.trim();
-            aiResponse.cost = (aiResponse.cost || 0) + (summary.cost || 0);
-            isTaskComplete = true;
-            console.log(`[SEARCH-FAST-EXIT] Complete in round ${currentIteration}, ${aiResponse.content.length} chars`);
-            break;
+            // Verify the summary actually contains useful data, not just "data not available"
+            const _sfeLC = summary.content.toLowerCase();
+            const _sfeHollow = (
+              /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available|provided)/i.test(_sfeLC) ||
+              /no\s+(?:specific|detailed|actual)\s+(?:results?|data|listings?|information)/i.test(_sfeLC) ||
+              /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+specific/i.test(_sfeLC)
+            );
+            if (_sfeHollow) {
+              console.log(`[SEARCH-FAST-EXIT] Summary is hollow ("data not available") — continuing iteration for better results`);
+            } else {
+              aiResponse.content = summary.content.trim();
+              aiResponse.cost = (aiResponse.cost || 0) + (summary.cost || 0);
+              isTaskComplete = true;
+              console.log(`[SEARCH-FAST-EXIT] Complete in round ${currentIteration}, ${aiResponse.content.length} chars`);
+              break;
+            }
           }
         } catch (_sfErr) {
           console.warn('[SEARCH-FAST-EXIT] Summary failed, continuing iteration:', _sfErr);
