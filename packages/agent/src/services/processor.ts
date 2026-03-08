@@ -4025,6 +4025,8 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
     let visionAgentInvocations = 0; // Guard: max 2 vision agent runs per task (prevents 8min × 15 iteration waste)
     let lastVisionFailed = false; // Tracks if last vision agent run failed (used in passive response guard)
     let _confirmationPauseSent = false; // Guard: only send confirmation request once per task
+    let _hollowRejectionCount = 0; // Track how many times hollow response was rejected — after 2, accept partial data
+    const MAX_HOLLOW_REJECTIONS = 2; // Don't burn budget trying endlessly for perfect data
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -4160,8 +4162,9 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
             /no\s+(?:specific|detailed|actual)\s+(?:results?|data|listings?|information|products?|jobs?)\s+(?:were|was|have been)\s+(?:found|retrieved|obtained)/i.test(_hrLC) ||
             /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+(?:specific|detailed|actual)/i.test(_hrLC)
           );
-          if (_isHollowResponse && aiResponse.content.length < 800) {
-            console.warn(`[HOLLOW-GATE] REJECTED: AI said TASK_COMPLETE but response admits no data found (iter=${currentIteration}). Forcing different strategy.`);
+          if (_isHollowResponse && aiResponse.content.length < 800 && _hollowRejectionCount < MAX_HOLLOW_REJECTIONS) {
+            _hollowRejectionCount++;
+            console.warn(`[HOLLOW-GATE] REJECTED (${_hollowRejectionCount}/${MAX_HOLLOW_REJECTIONS}): AI said TASK_COMPLETE but response admits no data found (iter=${currentIteration}). Forcing different strategy.`);
             const _blockedList = [...domainFailures.entries()].filter(([, c]) => c >= 2).map(([d]) => d);
             aiResponse.content = '';
             aiResponse.actions = [{ type: 'search' as any, params: {
@@ -5783,6 +5786,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
 
       // If task is already marked complete (TASK_COMPLETE or budget/timeout), stop
       // BUT: reject hollow completions — if response admits "data not available", keep iterating
+      // Limited to MAX_HOLLOW_REJECTIONS to prevent burning budget on impossible tasks
       if (isTaskComplete && currentIteration < MAX_ITERATIONS - 2) {
         const _breakLC = (aiResponse.content || '').toLowerCase();
         const _isBreakHollow = (
@@ -5791,8 +5795,9 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           /(?:could not|couldn't|unable to)\s+(?:retrieve|extract|find|obtain|get)\s+(?:specific|detailed|actual|concrete)/i.test(_breakLC) ||
           /(?:more specific|more detailed)\s+(?:data|information|results?)\s+(?:was|were)\s+not\s+(?:available|found)/i.test(_breakLC)
         );
-        if (_isBreakHollow) {
-          console.warn(`[HOLLOW-BREAK] Rejected hollow completion at iter=${currentIteration} — response admits no data. Continuing.`);
+        if (_isBreakHollow && _hollowRejectionCount < MAX_HOLLOW_REJECTIONS) {
+          _hollowRejectionCount++;
+          console.warn(`[HOLLOW-BREAK] Rejected hollow completion (${_hollowRejectionCount}/${MAX_HOLLOW_REJECTIONS}) at iter=${currentIteration} — response admits no data. Continuing.`);
           isTaskComplete = false;
           aiSignaledComplete = false;
           const _blockedList = [...domainFailures.entries()].filter(([, c]) => c >= 2).map(([d]) => d);
