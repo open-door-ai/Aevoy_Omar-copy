@@ -449,7 +449,7 @@ async function fetchUserProfile(userId: string): Promise<{ displayName: string; 
  * 40-110ms per char mimics real typing speed (~85-120 WPM).
  */
 async function humanType(pg: Page, locator: { click: (o?: any) => Promise<void> }, text: string): Promise<void> {
-  await locator.click({ timeout: 3000 });
+  await locator.click({ timeout: 1500 });
   await pg.keyboard.press('Control+a');
   await pg.keyboard.press('Backspace');
   await pg.waitForTimeout(80 + Math.random() * 80);
@@ -728,6 +728,13 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
                 await humanClick(textFallback);
                 return true;
               } catch { /* fall through */ }
+              // Strategy 3b: getByLabel (checkboxes, labeled controls)
+              try {
+                const labelFallback = page.getByLabel(resolved.entry.name, { exact: false }).first();
+                await labelFallback.waitFor({ state: 'visible', timeout: 1000 });
+                await humanClick(labelFallback);
+                return true;
+              } catch { /* fall through */ }
             }
             // Strategy 4: Coordinate click (most reliable — direct mouse event)
             if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
@@ -899,28 +906,81 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
             }
           }
           if (resolved) {
+            const _fillName = resolved.entry.name;
+            const _fillRole = resolved.entry.role;
+            // Strategy 1: exact role+name locator
             try {
               await humanType(page, resolved.locator, action.value);
+              console.log(`[FILL] ✓ Strategy 1 (exact role+name) for ref [${action.ref}] "${_fillName}"`);
               return true;
-            } catch {
-              // Fallback 1: inexact role+name match
+            } catch (e1) {
+              console.log(`[FILL] Strategy 1 failed for ref [${action.ref}] "${_fillName}": ${(e1 as Error).message?.substring(0, 80)}`);
+            }
+            // Strategy 2: inexact role+name match
+            try {
+              const fallbackLoc = page.getByRole(_fillRole as any, { name: _fillName, exact: false }).first();
+              await humanType(page, fallbackLoc, action.value);
+              console.log(`[FILL] ✓ Strategy 2 (inexact role) for ref [${action.ref}]`);
+              return true;
+            } catch { /* fall through */ }
+            // Strategy 3: getByPlaceholder (catches fields where placeholder IS the label)
+            if (_fillName) {
               try {
-                const fallbackLoc = page.getByRole(resolved.entry.role as any, { name: resolved.entry.name, exact: false }).first();
-                await humanType(page, fallbackLoc, action.value);
+                const phLoc = page.getByPlaceholder(_fillName, { exact: false }).first();
+                await humanType(page, phLoc, action.value);
+                console.log(`[FILL] ✓ Strategy 3 (placeholder) for ref [${action.ref}]`);
                 return true;
               } catch { /* fall through */ }
-              // Fallback 2: coordinate click to focus, then type
-              if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
+            }
+            // Strategy 4: getByLabel
+            if (_fillName) {
+              try {
+                const lblLoc = page.getByLabel(_fillName, { exact: false }).first();
+                await humanType(page, lblLoc, action.value);
+                console.log(`[FILL] ✓ Strategy 4 (label) for ref [${action.ref}]`);
+                return true;
+              } catch { /* fall through */ }
+            }
+            // Strategy 5: CSS type-based selectors (email/password fields are identifiable by type)
+            {
+              const nameL = (_fillName || '').toLowerCase();
+              const cssSelectors: string[] = [];
+              if (nameL.includes('email') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(action.value || '')) {
+                cssSelectors.push('input[type="email"]', 'input[name*="email"]', 'input[id*="email"]', 'input[placeholder*="email" i]', 'input[autocomplete="email"]');
+              } else if (nameL.includes('password')) {
+                cssSelectors.push('input[type="password"]', 'input[name*="password"]', 'input[id*="password"]', 'input[autocomplete*="password"]');
+              } else if (nameL.includes('user') || nameL.includes('name')) {
+                cssSelectors.push('input[name*="user"]', 'input[name*="name"]', 'input[id*="user"]', 'input[autocomplete="username"]');
+              }
+              for (const sel of cssSelectors) {
                 try {
-                  await page.mouse.click(resolved.entry.cx, resolved.entry.cy);
-                  await page.waitForTimeout(200);
-                  await page.keyboard.type(action.value || '', { delay: 30 });
-                  console.log(`[BROWSER-AGENT] Coordinate fill at (${resolved.entry.cx},${resolved.entry.cy}) for ref [${action.ref}]`);
-                  return true;
-                } catch { /* fall through */ }
+                  const el = page.locator(sel).first();
+                  if (await el.isVisible({ timeout: 800 })) {
+                    await humanType(page, el, action.value!);
+                    console.log(`[FILL] ✓ Strategy 5 (CSS ${sel}) for ref [${action.ref}]`);
+                    return true;
+                  }
+                } catch { continue; }
               }
             }
-            history.push(`⚠️ Ref [${action.ref}] (${resolved.entry.role} "${resolved.entry.name}") not fillable. Page may have changed.`);
+            // Strategy 6: coordinate click to focus, then type (most reliable if coords are fresh)
+            if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
+              try {
+                await page.mouse.click(resolved.entry.cx, resolved.entry.cy);
+                await page.waitForTimeout(300);
+                // Triple-click to select all existing text, then overwrite
+                await page.keyboard.press('Control+a');
+                await page.keyboard.press('Backspace');
+                await page.waitForTimeout(100);
+                await page.keyboard.type(action.value || '', { delay: 30 });
+                console.log(`[FILL] ✓ Strategy 6 (coordinate ${resolved.entry.cx},${resolved.entry.cy}) for ref [${action.ref}]`);
+                return true;
+              } catch (e6) {
+                console.warn(`[FILL] Strategy 6 (coordinate) failed: ${(e6 as Error).message?.substring(0, 80)}`);
+              }
+            }
+            console.warn(`[FILL] ALL 6 strategies failed for ref [${action.ref}] "${_fillName}" (${_fillRole})`);
+            history.push(`⚠️ Ref [${action.ref}] (${_fillRole} "${_fillName}") not fillable — all strategies failed. Page may have changed — try SCROLL or NAVIGATE.`);
             return false;
           }
           history.push(`⚠️ Ref [${action.ref}] not found for fill.`);
