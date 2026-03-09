@@ -99,11 +99,12 @@ export class ExecutionEngine {
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
     // PRIORITY 0: Bright Data Scraping Browser (real managed Chrome, bypasses DataDome/Akamai)
-    // NOTE: Bright Data blocks password fields by default (KYC required to unlock).
-    // We start with Bright Data for ALL tasks. If the vision agent detects password-field
-    // blocking at runtime (FILL on password fails), it signals a restart with local browser.
-    // This is generic — no task-type pre-classification needed.
-    this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    // NOTE: Bright Data blocks password fields without KYC verification.
+    // Skip Bright Data for tasks that likely need password entry (signup, login, forms).
+    // This is generic — detected from intent goal text, not per-site hardcoding.
+    const goalLower = (intent.goal || '').toLowerCase();
+    const needsPasswordEntry = /\b(sign\s*up|signup|register|create\s+(?:a\s+)?(?:an?\s+)?account|log\s*in|login|subscribe|apply|fill\s*(?:out)?\s*form|checkout|purchase|buy)\b/i.test(goalLower);
+    this.useBrightData = !forceLocal && !needsPasswordEntry && !!(process.env.BRIGHT_DATA_BROWSER_WS);
     if (process.env.BRIGHT_DATA_BROWSER_WS) {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
     } else {
@@ -116,6 +117,9 @@ export class ExecutionEngine {
     // PRIORITY 2: VPS Multi-User Browser (shared Chrome on this process)
     this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
 
+    if (needsPasswordEntry && process.env.BRIGHT_DATA_BROWSER_WS) {
+      console.log('[ENGINE] Skipping Bright Data — task needs password entry (KYC not available)');
+    }
     if (this.useBrightData) {
       console.log('[ENGINE] Will use Bright Data Scraping Browser ✓');
     } else if (this.useRemoteCDP) {
