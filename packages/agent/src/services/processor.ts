@@ -4134,7 +4134,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
       if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0 && _earlySignupCheck) {
         console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
-        const _domainMatch2 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello)\b/i);
+        const _domainMatch2 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello|typeform|mailchimp|hubspot|asana|monday|clickup|basecamp|todoist|evernote|figma|miro)\b/i);
         const _forceUrl = _domainMatch2
           ? `https://www.${_domainMatch2[1].toLowerCase()}.com/signup`
           : `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
@@ -4148,7 +4148,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           /\b(want me to|shall i|would you like|do you want|find the.*link|show you how)\b/i.test(aiResponse.content) &&
           !/\b(signed up|created.*account|account.*created|registered|successfully)\b/i.test(aiResponse.content)) {
         console.warn(`[PASSIVE-SIGNUP] AI described service instead of signing up — forcing browse`);
-        const _domainMatch3 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello)\b/i);
+        const _domainMatch3 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello|typeform|mailchimp|hubspot|asana|monday|clickup|basecamp|todoist|evernote|figma|miro)\b/i);
         const _forceSignupUrl = _domainMatch3
           ? `https://www.${_domainMatch3[1].toLowerCase()}.com`
           : `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
@@ -6689,12 +6689,14 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       const _taskNeedsDocumentFE = _isDocumentAction || /\b(spreadsheet|excel|word\s*doc|powerpoint|presentation|pdf|create.*file|make.*file|build.*spreadsheet)\b/i.test(`${subject} ${body}`);
 
       // Tasks requesting specific local/current data need multiple searches, not a quick summary
-      const _needsSpecificData = /\b(how much|what.*cost|what.*price|phone number|address|contact info|contact details|hours|permit|license fee)\b/i.test(`${subject} ${body}`) ||
+      const _needsSpecificData = /\b(how much|what.*costs?|what.*prices?|phone number|address|contact info|contact details|hours|permit|license fee)\b/i.test(`${subject} ${body}`) ||
+        /\b(with|include|list)\s+(specific\s+)?(prices?|costs?|ratings?|specifications?)\b/i.test(`${subject} ${body}`) ||
         /\b(companies|businesses|restaurants|stores|shops|vendors|suppliers|providers|agencies|firms)\s+(in|near|around|from)\b/i.test(`${subject} ${body}`) ||
         /\b(in|near|around)\s+[A-Z][a-z]{2,}\b/.test(`${subject} ${body}`) && /\b(find|cost|price|real|actual|specific)\b/i.test(`${subject} ${body}`);
 
       // Tasks that ask to FIND multiple specific items need verification across sources
-      const _needsMultipleResults = /\b(?:(\d+)\s+(real|actual|specific|best|top|different|good)?\s*|(?:top|best|find)\s+(\d+)\s+)(companies|businesses|restaurants|options|places|items|products|services|results|leads|contacts|vendors|listings|cars|jobs|positions|opportunities|gigs|apartments|flights|hotels|deals|rates|quotes|plans)\b/i.test(`${subject} ${body}`);
+      const _needsMultipleResults = /\b(?:(\d+)\s+(real|actual|specific|best|top|different|good)?\s*|(?:top|best|find)\s+(\d+)\s+)(companies|businesses|restaurants|options|places|items|products|services|results|leads|contacts|vendors|listings|cars|jobs|positions|opportunities|gigs|apartments|flights|hotels|deals|rates|quotes|plans|headphones|speakers|laptops|phones|cameras|monitors|keyboards|mice|tablets)\b/i.test(`${subject} ${body}`) ||
+        /\b(best|top|recommended)\s+\w+[\s-]?\w*\s+(under|below|for|around)\s+\$?\d+/i.test(`${subject} ${body}`);
 
       // Deep research tasks: comparison, analysis, investigation, step-by-step instructions
       const _needsDeepResearch = /\b(compare|comparison|analyze|analysis|investigate|research|comprehensive|detailed|thorough|in-depth|cross-reference|verify|validate|pros?\s+and\s+cons?|advantages|disadvantages|trade-?offs?|which\s+is\s+better|vs\.?|versus|step[\s-]by[\s-]step|instructions|how\s+(?:to|do\s+I|can\s+I)|guide|tutorial|walk[\s-]?through|cancel\w*\s+(?:my|a)\s+\w+\s+(?:subscription|account|plan|membership)|sign\s*up|create\s+(?:an?\s+)?account)\b/i.test(`${subject} ${body}`);

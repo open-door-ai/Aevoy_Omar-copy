@@ -1947,6 +1947,43 @@ export async function runVisionAgent(
       }
     }
 
+    // ── SIGNUP PAGE NAVIGATION: If on homepage for a signup task, try /signup paths ──
+    if (isFormFillTask) {
+      try {
+        const currentUrl = activePage.url();
+        const parsed = new URL(currentUrl);
+        const isHomepage = parsed.pathname === '/' || parsed.pathname === '';
+        if (isHomepage && !currentUrl.startsWith('about:') && !currentUrl.startsWith('chrome-error://')) {
+          // Try common signup paths
+          for (const path of ['/signup', '/register', '/sign-up', '/join', '/create-account']) {
+            try {
+              const resp = await activePage.goto(`${parsed.origin}${path}`, { waitUntil: 'domcontentloaded', timeout: 8000 });
+              const newUrl = activePage.url();
+              // Check if we landed on a real signup page (not redirect back to homepage)
+              if (resp && resp.status() < 400 && newUrl !== currentUrl && !newUrl.endsWith('/')) {
+                console.log(`[BROWSER-AGENT] Signup nav: ${parsed.origin}${path} → ${newUrl}`);
+                await activePage.waitForTimeout(1500);
+                break;
+              }
+            } catch { /* next path */ }
+          }
+          // Fallback: click a "Sign up" link/button on the homepage
+          if (activePage.url() === currentUrl || activePage.url() === currentUrl + '/') {
+            try {
+              const signupBtn = activePage.locator('a, button, [role="button"]').filter({
+                hasText: /^(Sign\s*up|Create\s*Account|Register|Get\s*Started|Join\s*Free|Start\s*Free)$/i
+              });
+              if (await signupBtn.count() > 0) {
+                await signupBtn.first().click({ timeout: 3000 });
+                console.log(`[BROWSER-AGENT] Signup nav: clicked signup button`);
+                await activePage.waitForTimeout(2000);
+              }
+            } catch { /* ok */ }
+          }
+        }
+      } catch { /* non-critical */ }
+    }
+
     // ── AUTO-FILL: Programmatically fill signup/login forms when credentials are available ──
     // Uses React-compatible native input setters. Runs here AND after navigate actions inside the loop.
     // SPA retry: if first attempt finds 0 inputs (SPA not rendered yet), wait 2s and retry once.
