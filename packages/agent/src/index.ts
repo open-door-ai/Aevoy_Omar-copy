@@ -108,7 +108,7 @@ import { trackBackgroundJob } from "./utils/job-tracker.js";
 import { maskPhone, maskEmail, maskUserId, maskPin } from "./utils/logging.js";
 import { hashPin, verifyPinHash, isBcryptHash } from "./utils/hashing.js";
 import { globalLimiter, taskLimiter, twilioLimiter } from "./middleware/rate-limit.js";
-import { registerActiveTask, unregisterActiveTask, getActiveTaskInfo, injectTaskUpdate, classifyUpdateRelevance } from "./utils/task-updates.js";
+import { registerActiveTask, unregisterActiveTask, getActiveTaskInfo, injectTaskUpdate, classifyUpdateRelevance, clearAllActiveTasks } from "./utils/task-updates.js";
 import { sanitizeTaskInput } from "./security/validator.js";
 
 import crypto from "crypto";
@@ -526,6 +526,17 @@ app.get("/engines", async (_req, res) => {
   } catch {
     return res.json({ activeEngines: 0 });
   }
+});
+
+// ---- Clear stale active task entries (admin) ----
+app.post("/admin/clear-active-tasks", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const cleared = clearAllActiveTasks();
+  console.log(`[ADMIN] Cleared ${cleared} active task entries`);
+  return res.json({ cleared, activeTasks });
 });
 
 // ---- Memory subsystem health check ----

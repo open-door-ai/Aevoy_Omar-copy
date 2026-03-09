@@ -15,6 +15,9 @@ interface ActiveTaskInfo {
 
 const activeTasksByUser = new Map<string, ActiveTaskInfo>();
 
+/** Max age for active task entries (45 min). Prevents stale entries from absorbing new tasks. */
+const ACTIVE_TASK_TTL_MS = 45 * 60 * 1000;
+
 export function registerActiveTask(userId: string, taskId: string, subject: string): void {
   activeTasksByUser.set(userId, {
     taskId,
@@ -28,8 +31,23 @@ export function unregisterActiveTask(userId: string): void {
   activeTasksByUser.delete(userId);
 }
 
+/** Force-clear all active task entries (admin use). Returns count of cleared entries. */
+export function clearAllActiveTasks(): number {
+  const count = activeTasksByUser.size;
+  activeTasksByUser.clear();
+  return count;
+}
+
 export function getActiveTaskInfo(userId: string): ActiveTaskInfo | undefined {
-  return activeTasksByUser.get(userId);
+  const info = activeTasksByUser.get(userId);
+  if (!info) return undefined;
+  // Auto-expire stale entries — prevents orphaned tasks from absorbing new submissions
+  if (Date.now() - info.startedAt > ACTIVE_TASK_TTL_MS) {
+    console.log(`[TASK-UPDATE] Auto-expired stale active task for user ${userId.substring(0, 8)} (age: ${Math.round((Date.now() - info.startedAt) / 60000)}min)`);
+    activeTasksByUser.delete(userId);
+    return undefined;
+  }
+  return info;
 }
 
 export function injectTaskUpdate(userId: string, update: string): boolean {
