@@ -1747,6 +1747,121 @@ export async function runVisionAgent(
       }
     }
 
+    // ── AUTO-FILL: Programmatically fill signup/login forms when credentials are available ──
+    // This bypasses the vision AI's decision-making for the initial form fill on signup pages.
+    // The AI model (Scout/Haiku) often describes the page instead of filling fields — this fixes that.
+    let autoFillCompleted = false;
+    if (isFormFillTask && taskCreds.email) {
+      try {
+        const autoFillResult = await activePage.evaluate((creds: { email: string; password: string; name: string; phone: string }) => {
+          const filled: string[] = [];
+          const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
+
+          // Find visible inputs only
+          const visibleInputs = inputs.filter(el => {
+            const rect = (el as HTMLElement).getBoundingClientRect();
+            const style = window.getComputedStyle(el as HTMLElement);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          }) as HTMLInputElement[];
+
+          if (visibleInputs.length === 0) return { filled: [], submitted: false };
+
+          // Classify each input by type/name/placeholder/label
+          for (const input of visibleInputs) {
+            const type = (input.type || '').toLowerCase();
+            const name = (input.name || '').toLowerCase();
+            const id = (input.id || '').toLowerCase();
+            const placeholder = (input.placeholder || '').toLowerCase();
+            const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+            const all = `${type} ${name} ${id} ${placeholder} ${ariaLabel}`;
+
+            let value = '';
+            if ((type === 'email' || /email/.test(all)) && creds.email) {
+              value = creds.email;
+            } else if ((type === 'password' || /password|passwd/.test(all)) && creds.password) {
+              value = creds.password;
+            } else if (/\b(first.?name|fname|given.?name)\b/.test(all) && creds.name) {
+              value = creds.name.split(/\s+/)[0] || creds.name;
+            } else if (/\b(last.?name|lname|surname|family.?name)\b/.test(all) && creds.name) {
+              const parts = creds.name.split(/\s+/);
+              value = parts.length > 1 ? parts[parts.length - 1] : creds.name;
+            } else if (/\b(full.?name|display.?name|your.?name)\b/.test(all) && creds.name) {
+              value = creds.name;
+            } else if (/\b(name)\b/.test(all) && !/\b(user|company|org)\b/.test(all) && creds.name) {
+              value = creds.name;
+            } else if (/\b(phone|tel|mobile|cell)\b/.test(all) && creds.phone) {
+              value = creds.phone;
+            } else if (/\b(username|user.?name|user.?id)\b/.test(all) && creds.email) {
+              value = creds.email; // Default username to email
+            }
+
+            if (value) {
+              // Use native input setter to trigger React/Vue change detection
+              const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+              if (nativeSet) {
+                nativeSet.call(input, value);
+              } else {
+                input.value = value;
+              }
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+              input.dispatchEvent(new Event('blur', { bubbles: true }));
+              filled.push(`${type || name || id || 'input'}=${value.substring(0, 3)}***`);
+            }
+          }
+
+          // Check terms/agreement checkboxes
+          const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+          for (const cb of checkboxes) {
+            const label = (cb.closest('label')?.textContent || '').toLowerCase();
+            const cbName = (cb.name || cb.id || '').toLowerCase();
+            if (/\b(agree|terms|tos|privacy|accept|consent|conditions)\b/.test(label + ' ' + cbName)) {
+              if (!cb.checked) {
+                cb.click();
+                filled.push('checkbox=terms');
+              }
+            }
+          }
+
+          // Find and click submit button (but don't submit if we didn't fill anything)
+          let submitted = false;
+          if (filled.length >= 1) {
+            const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
+            const submitBtn = buttons.find(btn => {
+              const txt = (btn.textContent || '').trim().toLowerCase();
+              const btnType = (btn as HTMLButtonElement).type?.toLowerCase();
+              return /\b(sign\s*up|register|create|submit|join|enroll|get\s*started|continue|next|log\s*in|sign\s*in)\b/.test(txt)
+                || btnType === 'submit';
+            }) as HTMLElement | null;
+            if (submitBtn && submitBtn.offsetParent !== null) {
+              submitBtn.click();
+              submitted = true;
+              filled.push('submit=clicked');
+            }
+          }
+
+          return { filled, submitted };
+        }, taskCreds);
+
+        if (autoFillResult.filled.length > 0) {
+          autoFillCompleted = true;
+          hasFilledAnyField = true;
+          console.log(`[BROWSER-AGENT] AUTO-FILL: ${autoFillResult.filled.join(', ')}`);
+          history.push(`✅ Auto-filled signup form: ${autoFillResult.filled.join(', ')}`);
+
+          // Wait for form submission to process
+          if (autoFillResult.submitted) {
+            await activePage.waitForTimeout(3000);
+            // Check if we landed on a success/confirmation page
+            const postSubmitUrl = activePage.url();
+            console.log(`[BROWSER-AGENT] AUTO-FILL post-submit URL: ${postSubmitUrl}`);
+          }
+        }
+      } catch (afErr) {
+        console.warn(`[BROWSER-AGENT] AUTO-FILL failed: ${afErr instanceof Error ? afErr.message : afErr}`);
+      }
+    }
+
     // ── Bot wall counters ──
     const BOT_WALL_MAX = isBookingTask ? 2 : 4;
     let botWallCount = 0;
