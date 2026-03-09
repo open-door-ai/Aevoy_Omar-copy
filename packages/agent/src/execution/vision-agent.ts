@@ -521,7 +521,10 @@ async function tryAutoFillForm(
         const id = (input.id || '').toLowerCase();
         const placeholder = (input.placeholder || '').toLowerCase();
         const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
-        const all = `${type} ${name} ${id} ${placeholder} ${ariaLabel}`;
+        // Also check associated <label> text (catches Notion's "Work email" label)
+        const labelEl = input.closest('label') || (input.id ? document.querySelector(`label[for="${input.id}"]`) : null);
+        const labelText = (labelEl?.textContent || '').toLowerCase().trim();
+        const all = `${type} ${name} ${id} ${placeholder} ${ariaLabel} ${labelText}`;
 
         let value = '';
         if ((type === 'email' || /email/.test(all)) && creds.email) {
@@ -551,6 +554,22 @@ async function tryAutoFillForm(
           input.dispatchEvent(new Event('change', { bubbles: true }));
           input.dispatchEvent(new Event('blur', { bubbles: true }));
           filled.push(`${type || name || id || 'input'}=${value.substring(0, 3)}***`);
+        }
+      }
+
+      // Single-input fallback: if exactly 1 visible non-password input wasn't filled,
+      // and it's on a signup/login page, fill it with email (signup flows always start with email)
+      if (filled.length === 0 && creds.email) {
+        const nonPasswordInputs = visibleInputs.filter(i => i.type !== 'password');
+        if (nonPasswordInputs.length === 1 && !nonPasswordInputs[0].value) {
+          const input = nonPasswordInputs[0];
+          const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (nativeSet) nativeSet.call(input, creds.email);
+          else input.value = creds.email;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('blur', { bubbles: true }));
+          filled.push(`single-input=${creds.email.substring(0, 3)}***`);
         }
       }
 
@@ -1211,6 +1230,18 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.ref !== undefined) {
           const resolved = resolveByRef(action.ref);
           if (resolved) {
+            // Password-in-email guard (same as FILL handler)
+            if (elementRefs) {
+              const _typeFieldLabel = resolved.entry.name.toLowerCase();
+              const _typeIsEmailValue = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(action.value);
+              const _typeIsPasswordValue = !_typeIsEmailValue && action.value.length >= 6 && /[A-Z]/.test(action.value) && /[0-9!@#$%^&*]/.test(action.value);
+              const _typeIsEmailField = /\b(e.?mail|email|work\s*email)\b/i.test(_typeFieldLabel);
+              if (_typeIsPasswordValue && _typeIsEmailField) {
+                console.warn(`[BROWSER-AGENT] TYPE BLOCKED: password value going into email field "${resolved.entry.name}"`);
+                history.push(`⚠️ TYPE blocked: You tried to type a password into the "${resolved.entry.name}" field. This field is for EMAIL addresses. Use FILL with the email from ⚡ CREDENTIALS instead.`);
+                return false;
+              }
+            }
             try {
               await resolved.locator.click({ timeout: 1500 });
               await page.keyboard.press('Control+a');
@@ -1918,9 +1949,15 @@ export async function runVisionAgent(
 
     // ── AUTO-FILL: Programmatically fill signup/login forms when credentials are available ──
     // Uses React-compatible native input setters. Runs here AND after navigate actions inside the loop.
+    // SPA retry: if first attempt finds 0 inputs (SPA not rendered yet), wait 2s and retry once.
     let autoFillCompleted = false;
     if (isFormFillTask && taskCreds.email) {
-      const autoFillResult = await tryAutoFillForm(activePage, taskCreds, true);
+      let autoFillResult = await tryAutoFillForm(activePage, taskCreds, true);
+      // SPA retry: form may not be rendered yet (Notion, React apps)
+      if (autoFillResult.filled.length === 0) {
+        await activePage.waitForTimeout(2500);
+        autoFillResult = await tryAutoFillForm(activePage, taskCreds, true);
+      }
       if (autoFillResult.filled.length > 0) {
         autoFillCompleted = true;
         hasFilledAnyField = true;
@@ -2056,7 +2093,7 @@ export async function runVisionAgent(
 
             // Bot wall check (includes .cf-browser-verification and #challenge-running DOM elements)
             const isBotWall = (
-              /just a moment|checking your browser|ddos protection|access denied|cloudflare|blocked|security check|verify you are human/.test(title + ' ' + bodyText) && bodyText.length < 1500
+              /just a moment|checking your (browser|connection)|ddos protection|access denied|cloudflare|blocked|security check|verify you are human|ray id:/.test(title + ' ' + bodyText) && bodyText.length < 1500
             ) || !!(document.querySelector('.cf-browser-verification, #challenge-running, #challenge-form'));
 
             // CAPTCHA check (quick — just element existence)
@@ -2897,6 +2934,35 @@ export async function runVisionAgent(
 
         if (ok && (action.type === 'fill' || action.type === 'type' || action.type === 'select')) {
           hasFilledAnyField = true;
+        }
+
+        // ── POST-FILL GUARD: Fix password-in-email corruption ──
+        // After any fill/type, check if email fields contain non-email values and correct them
+        if (ok && (action.type === 'fill' || action.type === 'type') && taskCreds.email) {
+          try {
+            const corrected = await activePage.evaluate((email: string) => {
+              const inputs = Array.from(document.querySelectorAll('input')) as HTMLInputElement[];
+              let fixed = false;
+              for (const input of inputs) {
+                const type = (input.type || '').toLowerCase();
+                const all = `${type} ${(input.name||'').toLowerCase()} ${(input.id||'').toLowerCase()} ${(input.placeholder||'').toLowerCase()} ${(input.getAttribute('aria-label')||'').toLowerCase()} ${(input.closest('label')?.textContent||'').toLowerCase()}`;
+                const isEmailField = type === 'email' || /\bemail\b/.test(all);
+                if (isEmailField && input.value && !input.value.includes('@')) {
+                  // Non-email value in email field — correct it
+                  const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                  if (ns) ns.call(input, email); else input.value = email;
+                  input.dispatchEvent(new Event('input', { bubbles: true }));
+                  input.dispatchEvent(new Event('change', { bubbles: true }));
+                  fixed = true;
+                }
+              }
+              return fixed;
+            }, taskCreds.email);
+            if (corrected) {
+              console.log(`[BROWSER-AGENT] POST-FILL GUARD: Corrected password-in-email field → ${taskCreds.email.substring(0, 5)}***`);
+              history.push(`⚠️ Corrected: email field had wrong value — now contains your email address.`);
+            }
+          } catch { /* page might have navigated */ }
         }
 
         // Track last action type for adaptive vision (post-submit detection)
