@@ -429,18 +429,21 @@ async function fetchUserProfile(userId: string): Promise<{ displayName: string; 
   try {
     const { data } = await getSupabaseClient()
       .from('profiles')
-      .select('display_name, preferred_name, email, phone_number, timezone, location')
+      .select('display_name, username, email, phone_number, timezone')
       .eq('id', userId)
       .single();
     if (!data) return null;
     return {
-      displayName: data.preferred_name || data.display_name || '',
+      displayName: data.display_name || data.username || '',
       email: data.email || '',
       phone: data.phone_number || '',
       timezone: data.timezone || 'UTC',
-      location: (data as any).location || '',
+      location: '', // not in profiles table
     };
-  } catch { return null; }
+  } catch (err) {
+    console.warn(`[BROWSER-AGENT] fetchUserProfile failed for ${userId.substring(0, 8)}:`, err);
+    return null;
+  }
 }
 
 /**
@@ -460,8 +463,11 @@ async function humanType(pg: Page, locator: { click: (o?: any) => Promise<void> 
 }
 
 function extractTaskCredentials(task: string): { email: string; password: string; name: string; phone: string } {
+  // Try structured format first (email=xxx), then fall back to bare email in natural language
+  const structuredEmail = task.match(/email=([^\s,\n;]+)/)?.[1] || '';
+  const bareEmail = !structuredEmail ? (task.match(/\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/)?.[1] || '') : '';
   return {
-    email: task.match(/email=([^\s,\n;]+)/)?.[1] || '',
+    email: structuredEmail || bareEmail,
     password: task.match(/password=([^\s,\n;]+)/)?.[1] || '',
     name: task.match(/name=([^\s,\n;]+)/)?.[1] || '',
     phone: task.match(/phone=([^\s,\n;]+)/)?.[1] || '',
