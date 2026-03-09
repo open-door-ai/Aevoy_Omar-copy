@@ -3439,7 +3439,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     // FORCE BROWSER for tasks that clearly need it — even if AI generated no browse actions.
     // This prevents the AI from faking "I navigated to..." text responses with 0 actions.
     const _taskText = `${subject} ${body || ''}`;
-    const _hasExplicitDomainCheck = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_taskText) || /\bhttps?:\/\/\S+/i.test(_taskText);
+    const _hasExplicitDomainCheck = /\b(go\s+to|navigate\s+to|open|visit|use|browse|on|at|from|via|through)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_taskText) || /\bhttps?:\/\/\S+/i.test(_taskText);
     const _isBrowserRequiredTask = _hasExplicitDomainCheck || /\b(sign\s?up|signup|create\b.*\baccount|book\s+(a|my|the)\b|add\s+to\s+cart|order\s+(me\s+)?(?:an?\s+)?|buy\s+(a|me)|purchase|subscribe|register\s+(for|on|at)|use\s+(the\s+)?browser|go\s+on\s+(the\s+)?(web|internet|browser))\b/i.test(_taskText);
     const _hasBrowserAction = aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type));
     if (!needsBrowser && _isBrowserRequiredTask && !_hasBrowserAction) {
