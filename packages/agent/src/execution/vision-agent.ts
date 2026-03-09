@@ -861,19 +861,40 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         // REF-BASED
         if (action.ref !== undefined) {
           let resolved = resolveByRef(action.ref);
-          // Smart mismatch correction: if email value goes into a "name" field, redirect to email field
-          if (resolved && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(action.value)) {
+          // Smart mismatch correction: redirect values to the correct field based on label+value analysis
+          if (resolved && elementRefs) {
             const fieldLabel = resolved.entry.name.toLowerCase();
+            const isEmailValue = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(action.value);
+            const isPasswordValue = !isEmailValue && action.value.length >= 6 && /[A-Z]/.test(action.value) && /[0-9!@#$%^&*]/.test(action.value);
+            const isEmailField = /\b(e.?mail|email|work\s*email)\b/i.test(fieldLabel);
             const isNameField = /\b(name|username|user\s*name|full\s*name|first\s*name|last\s*name|customer\s*name)\b/i.test(fieldLabel);
-            if (isNameField) {
-              // Find the email field in the refs map
+
+            // Case 1: Email value going into a name field → redirect to email field
+            if (isEmailValue && isNameField) {
               let emailRef: number | null = null;
-              elementRefs?.forEach((entry, refId) => {
-                if (!emailRef && /\b(e.?mail|email)\b/i.test(entry.name)) emailRef = refId;
+              elementRefs.forEach((entry, refId) => {
+                if (!emailRef && /\b(e.?mail|email|work\s*email)\b/i.test(entry.name)) emailRef = refId;
               });
               if (emailRef !== null) {
-                console.log(`[BROWSER-AGENT] Label mismatch: email value "${action.value.substring(0, 30)}" was going into "${resolved.entry.name}" — redirecting to email field [${emailRef}]`);
+                console.log(`[BROWSER-AGENT] Label mismatch: email "${action.value.substring(0, 30)}" redirected from "${resolved.entry.name}" to email field [${emailRef}]`);
                 resolved = resolveByRef(emailRef);
+              }
+            }
+            // Case 2: Password value going into an email field → redirect to password field
+            else if (isPasswordValue && isEmailField) {
+              let passwordRef: number | null = null;
+              elementRefs.forEach((entry, refId) => {
+                if (!passwordRef && /\b(password|pass|passwd)\b/i.test(entry.name)) passwordRef = refId;
+              });
+              if (passwordRef !== null) {
+                console.log(`[BROWSER-AGENT] Label mismatch: password redirected from "${resolved.entry.name}" to password field [${passwordRef}]`);
+                resolved = resolveByRef(passwordRef);
+              } else {
+                // No password field visible — this is probably a single-field form (email first, then password)
+                // Don't fill password into email field — skip this fill and let the agent continue
+                console.warn(`[BROWSER-AGENT] BLOCKED: password value going into email field "${resolved.entry.name}" — no password field found, skipping`);
+                history.push(`⚠️ FILL blocked: You tried to put a password into the "${resolved.entry.name}" field. This field is for EMAIL addresses. FILL it with the email from ⚡ CREDENTIALS instead.`);
+                return false;
               }
             }
           }

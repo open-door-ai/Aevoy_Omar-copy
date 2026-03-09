@@ -3263,6 +3263,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
       let _injectUrl = '';
       if (/\bcanva\b/i.test(_browseInjText)) _injectUrl = 'https://www.canva.com/create/business-cards/';
       else if (/\bfigma\b/i.test(_browseInjText)) _injectUrl = 'https://www.figma.com';
+      else if (/\badobe\b/i.test(_browseInjText)) _injectUrl = 'https://account.adobe.com';
       else if (/\bnotion\b/i.test(_browseInjText)) _injectUrl = 'https://www.notion.so/signup';
       else if (/\buber\b/i.test(_browseInjText)) _injectUrl = 'https://www.uber.com/ride/';
       else if (/\blyft\b/i.test(_browseInjText)) _injectUrl = 'https://www.lyft.com';
