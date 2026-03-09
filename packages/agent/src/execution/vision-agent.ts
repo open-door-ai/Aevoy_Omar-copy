@@ -15,7 +15,7 @@
  * CapSolver handles CAPTCHAs. Agent's own inbox handles verification codes.
  */
 
-import type { Page } from 'patchright';
+import type { Page, Frame } from 'patchright';
 import { createCursor, type GhostCursor } from 'ghost-cursor-patchright-core';
 import { TabManager } from './tab-manager.js';
 import { generateVisionResponse, generateBrowserStepResponse } from '../services/ai.js';
@@ -126,7 +126,7 @@ interface SnapshotResult {
  * When accessibility tree is sparse, scan the DOM directly for interactive elements.
  * Returns element list with CSS selectors for precise targeting.
  */
-async function extractDomElements(page: Page): Promise<{ text: string; refs: ElementRefMap }> {
+async function extractDomElements(page: Page | Frame): Promise<{ text: string; refs: ElementRefMap }> {
   const refs: ElementRefMap = new Map();
   try {
     const elements = await Promise.race([
@@ -252,10 +252,27 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
 
 async function getAccessibilitySnapshot(page: Page): Promise<SnapshotResult> {
   const emptyRefs: ElementRefMap = new Map();
-  // page.accessibility was removed in Playwright 1.47+ / patchright 1.47+.
-  // Go straight to DOM extraction — it's faster and more reliable anyway.
   try {
     const domResult = await extractDomElements(page);
+
+    // If main page has few interactive elements, check iframes for forms
+    // This catches signup modals rendered in cross-origin iframes (Canva, Google OAuth, etc.)
+    if (domResult.refs.size < 5) {
+      try {
+        const frames = page.frames().filter(f => f !== page.mainFrame() && f.url() && !f.url().startsWith('about:'));
+        for (const frame of frames.slice(0, 3)) { // Check up to 3 iframes
+          try {
+            const frameResult = await extractDomElements(frame);
+            if (frameResult.refs.size > domResult.refs.size) {
+              const frameUrl = frame.url();
+              console.log(`[SNAPSHOT] Found ${frameResult.refs.size} elements in iframe (${frameUrl.substring(0, 60)}) vs ${domResult.refs.size} in main`);
+              return { text: `INTERACTIVE ELEMENTS (iframe: ${frameUrl.substring(0, 40)}):\n${frameResult.text}`, refs: frameResult.refs };
+            }
+          } catch { /* frame may be detached */ }
+        }
+      } catch { /* frames() can fail on some pages */ }
+    }
+
     if (domResult.refs.size > 0) {
       return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}`, refs: domResult.refs };
     }
@@ -485,7 +502,7 @@ async function tryAutoFillForm(
   clickSubmit: boolean = true
 ): Promise<{ filled: string[]; submitted: boolean }> {
   try {
-    return await page.evaluate((args: { creds: typeof creds; clickSubmit: boolean }) => {
+    const result = await page.evaluate((args: { creds: typeof creds; clickSubmit: boolean }) => {
       const { creds, clickSubmit } = args;
       const filled: string[] = [];
       const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
@@ -565,6 +582,62 @@ async function tryAutoFillForm(
 
       return { filled, submitted };
     }, { creds, clickSubmit });
+
+    // If main page had no fillable inputs, try iframes (Canva, Google OAuth modals, etc.)
+    if (result.filled.length === 0) {
+      try {
+        const frames = page.frames().filter(f => f !== page.mainFrame() && f.url() && !f.url().startsWith('about:'));
+        for (const frame of frames.slice(0, 3)) {
+          try {
+            const frameResult = await frame.evaluate((args: { creds: typeof creds; clickSubmit: boolean }) => {
+              const { creds, clickSubmit } = args;
+              const filled: string[] = [];
+              const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
+              const visibleInputs = inputs.filter(el => {
+                const rect = (el as HTMLElement).getBoundingClientRect();
+                const style = window.getComputedStyle(el as HTMLElement);
+                return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+              }) as HTMLInputElement[];
+              if (visibleInputs.length === 0) return { filled: [], submitted: false };
+              for (const input of visibleInputs) {
+                const type = (input.type || '').toLowerCase();
+                const all = `${type} ${(input.name||'').toLowerCase()} ${(input.id||'').toLowerCase()} ${(input.placeholder||'').toLowerCase()} ${(input.getAttribute('aria-label')||'').toLowerCase()}`;
+                let value = '';
+                if ((type === 'email' || /email/.test(all)) && creds.email) value = creds.email;
+                else if ((type === 'password' || /password/.test(all)) && creds.password) value = creds.password;
+                else if (/\b(first.?name|fname)\b/.test(all) && creds.name) value = creds.name.split(/\s+/)[0] || creds.name;
+                else if (/\b(last.?name|lname|surname)\b/.test(all) && creds.name) { const p = creds.name.split(/\s+/); value = p.length > 1 ? p[p.length-1] : creds.name; }
+                else if (/\b(name)\b/.test(all) && !/\b(user|company)\b/.test(all) && creds.name) value = creds.name;
+                else if (/\b(phone|tel|mobile)\b/.test(all) && creds.phone) value = creds.phone;
+                else if (/\b(username|user.?name)\b/.test(all) && creds.email) value = creds.email;
+                if (value && !input.value) {
+                  const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                  if (ns) ns.call(input, value); else input.value = value;
+                  input.dispatchEvent(new Event('input', { bubbles: true }));
+                  input.dispatchEvent(new Event('change', { bubbles: true }));
+                  filled.push(`iframe:${type||'input'}=${value.substring(0,3)}***`);
+                }
+              }
+              let submitted = false;
+              if (clickSubmit && filled.length >= 1) {
+                const btn = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]')).find(b => {
+                  const t = (b.textContent||'').trim().toLowerCase();
+                  return /\b(sign\s*up|register|create|submit|join|continue|next|log\s*in|sign\s*in|get\s*started)\b/.test(t) || (b as HTMLButtonElement).type === 'submit';
+                }) as HTMLElement|null;
+                if (btn && btn.offsetParent !== null) { btn.click(); submitted = true; filled.push('iframe:submit=clicked'); }
+              }
+              return { filled, submitted };
+            }, { creds, clickSubmit });
+            if (frameResult.filled.length > 0) {
+              console.log(`[AUTO-FILL] Filled iframe form: ${frameResult.filled.join(', ')}`);
+              return frameResult;
+            }
+          } catch { /* frame may be cross-origin or detached */ }
+        }
+      } catch { /* frames() can fail */ }
+    }
+
+    return result;
   } catch {
     return { filled: [], submitted: false };
   }
