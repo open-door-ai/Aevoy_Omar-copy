@@ -103,7 +103,7 @@ export class ExecutionEngine {
     // Skip Bright Data for tasks that likely need password entry (signup, login, forms).
     // This is generic — detected from intent goal text, not per-site hardcoding.
     const goalLower = (intent.goal || '').toLowerCase();
-    const needsPasswordEntry = /\b(sign\s*up|signup|register|create\s+(?:a\s+)?(?:an?\s+)?account|log\s*in|login|subscribe|apply|fill\s*(?:out)?\s*form|checkout|purchase|buy)\b/i.test(goalLower);
+    const needsPasswordEntry = /\b(sign\s*(?:\w+\s+)?up|signup|register|create\s+(?:\w+\s+)*account|log\s*(?:\w+\s+)?in|login|subscribe|apply|fill\s*(?:out)?\s*(?:a\s+)?form|checkout|purchase|buy|enroll|join)\b/i.test(goalLower);
     this.useBrightData = !forceLocal && !needsPasswordEntry && !!(process.env.BRIGHT_DATA_BROWSER_WS);
     if (process.env.BRIGHT_DATA_BROWSER_WS) {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');

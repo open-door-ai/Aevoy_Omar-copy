@@ -1604,7 +1604,7 @@ export async function runVisionAgent(
       if (!startUrl) {
         const serviceMatch = task.match(
           // "Create a free Typeform account" — allow 0-3 words before "account" to catch service names
-          /\b(?:sign\s*up|create\s+(?:a|an|my)\s+(?:free\s+)?(?:(?:\w+)\s+){0,2}account|log\s*in|cancel|go\s+to|navigate\s+to|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+(?:\s*[A-Z][a-zA-Z]*)?)/i
+          /\b(?:sign\s*(?:\w+\s+)?up|create\s+(?:a|an|my)\s+(?:free\s+)?(?:(?:\w+)\s+){0,2}account|log\s*in|cancel|go\s+to|navigate\s+to|open|visit|enroll|join)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+(?:\s*[A-Z][a-zA-Z]*)?)/i
         ) || task.match(
           // "Create a free Typeform account" — extract service name directly from "for [ServiceName]" OR "[ServiceName] account"
           /\b(?:free\s+)?([A-Z][a-zA-Z]{2,})\s+account\b/i
@@ -1632,7 +1632,7 @@ export async function runVisionAgent(
           'prolific.co': 'https://app.prolific.com/register', // prolific uses .co TLD
           'resy.com': 'https://resy.com/cities/van/venues', // search page, not homepage
         };
-        const isSignupTask = /\b(sign\s?up|create.*account|register)\b/i.test(task);
+        const isSignupTask = /\b(sign\s*(?:\w+\s+)?up|create.*account|register|enroll|join)\b/i.test(task);
         if (isSignupTask) {
           for (const [domain, knownSignupUrl] of Object.entries(SIGNUP_URL_MAP)) {
             const baseName = domain.split('.')[0]; // 'prolific' from 'prolific.com'
@@ -1701,6 +1701,19 @@ export async function runVisionAgent(
           console.warn(`[BROWSER-AGENT] Pre-navigation failed: ${e instanceof Error ? e.message : e}`);
           history.push(`⚠️ Navigation timed out. Will try alternative approach.`);
         });
+        // RECOVERY: If page is still blank/error after pre-nav, force a simple goto
+        const postPreNavUrl = activePage.url();
+        if (!postPreNavUrl || postPreNavUrl === 'about:blank' || postPreNavUrl.startsWith('chrome-error://')) {
+          console.warn(`[BROWSER-AGENT] Pre-nav recovery: page still at ${postPreNavUrl} — forcing goto ${startUrl}`);
+          try {
+            await Promise.race([
+              activePage.goto(startUrl, { waitUntil: 'commit', timeout: 8000 }),
+              new Promise<void>((_, rej) => setTimeout(() => rej(new Error('recovery-goto-timeout')), 10000)),
+            ]);
+          } catch (recErr) {
+            console.warn(`[BROWSER-AGENT] Recovery goto also failed: ${recErr instanceof Error ? recErr.message : recErr}`);
+          }
+        }
       }
     }
 
@@ -1711,7 +1724,7 @@ export async function runVisionAgent(
       const postNavUrl = activePage.url();
       if (postNavUrl && !postNavUrl.startsWith('about:') && !postNavUrl.startsWith('chrome-error://')) {
         const svcMatch = task.match(
-          /\b(?:sign\s*up|create\s+(?:a|an|my)\s+\w*\s*account|log\s*in|cancel|go\s+to|navigate|open|visit)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+)/i
+          /\b(?:sign\s*(?:\w+\s+)?up|create\s+(?:a|an|my)\s+\w*\s*account|log\s*in|cancel|go\s+to|navigate|open|visit|enroll|join)\s+(?:for\s+(?:a\s+)?(?:free\s+)?)?(?:on\s+)?([A-Z][a-zA-Z]+)/i
         );
         if (svcMatch) {
           const expected = svcMatch[1].toLowerCase();
