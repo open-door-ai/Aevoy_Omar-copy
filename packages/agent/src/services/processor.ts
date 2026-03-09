@@ -8535,7 +8535,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           const { generateForcedDirectAnswer } = await import("./ai.js");
           const summary = await generateForcedDirectAnswer(
             `${subject} ${body || ''}`,
-            `${context}\n\nUsing ALL data above (including DETAILED PAGE DATA if present), give a clear, specific answer.\nRULES:\n- Extract and list specific items (company names, job titles, prices, addresses, ratings, URLs)\n- If the data contains individual listings, present each one with its details\n- NEVER say "aggregate results" or "check the website" — extract the actual data\n- Present results as a numbered or bulleted list with concrete details`,
+            context,
             username
           );
           cleanResponse = summary.content || (lastVisionPageData
@@ -8564,7 +8564,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             const { generateForcedDirectAnswer } = await import("./ai.js");
             const summary = await generateForcedDirectAnswer(
               `${subject} ${body || ''}`,
-              `Search results:\n${searchResults.substring(0, 6000)}\n\nUsing ALL data above (including DETAILED PAGE DATA if present), give the user a clear, specific answer.\nRULES:\n- Extract and list specific items (company names, job titles, prices, addresses, ratings, URLs)\n- If the data contains individual listings, present each one with its details\n- NEVER say "aggregate results" or "check the website" — extract the actual data\n- Present results as a numbered or bulleted list with concrete details`,
+              `Search results:\n${searchResults.substring(0, 6000)}`,
               username
             );
             cleanResponse = summary.content || `I searched for your request but couldn't extract a clear answer.`;
