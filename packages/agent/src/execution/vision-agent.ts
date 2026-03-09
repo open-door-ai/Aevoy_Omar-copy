@@ -137,74 +137,93 @@ async function extractDomElements(page: Page): Promise<{ text: string; refs: Ele
         const selectors = ['a', 'button', 'input', 'select', 'textarea',
           '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="searchbox"]',
           '[role="combobox"]', '[role="checkbox"]', '[role="radio"]', '[role="tab"]',
-          '[role="menuitem"]', '[role="option"]', '[role="switch"]'];
+          '[role="menuitem"]', '[role="option"]', '[role="switch"]',
+          // Catch contenteditable divs that act as inputs (React/Material UI/Canva)
+          '[contenteditable="true"]',
+          // Catch divs with input-like roles from React component libraries
+          'div[role="textbox"]', 'div[role="searchbox"]', 'span[role="textbox"]'];
         const seen = new Set<Element>();
-        for (const sel of selectors) {
-          document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el)) return;
-            seen.add(el);
-            const rect = el.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return; // hidden
-            const tag = el.tagName.toLowerCase();
-            const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
-              tag === 'input' ? (el.getAttribute('type') === 'checkbox' ? 'checkbox' :
-                el.getAttribute('type') === 'radio' ? 'radio' : 'textbox') :
-              tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' : tag);
-            // Name priority:
-            // - Inputs/textareas: aria-label > <label for="id"> > placeholder > title (no visible text to use)
-            // - Links/buttons:    aria-label > visible textContent > title (title is tooltip, not label)
-            const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
-            const visibleText = isInput ? '' : (el.textContent?.trim()?.substring(0, 60) || '');
-            // Read <label for="..."> association (the correct HTML labeling mechanism)
-            const elId = el.getAttribute('id');
-            const labelText = elId
-              ? (document.querySelector(`label[for="${elId}"]`)?.textContent?.trim() || '')
-              : '';
-            // Also check aria-labelledby
-            const labelledById = el.getAttribute('aria-labelledby');
-            const labelledByText = labelledById
-              ? (document.getElementById(labelledById)?.textContent?.trim() || '')
-              : '';
-            // Check wrapping <label>Text<input></label> style (no for/id needed)
-            const parentLabel = isInput ? el.closest('label') : null;
-            const wrappedLabelText = parentLabel
-              ? Array.from(parentLabel.childNodes)
-                  .filter((n: ChildNode) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim())
-                  .map((n: ChildNode) => (n.textContent || '').trim())
-                  .join(' ')
-              : '';
-            const name = el.getAttribute('aria-label') ||
-              labelledByText ||
-              labelText ||
-              wrappedLabelText ||
-              (isInput ? el.getAttribute('placeholder') : null) ||
-              visibleText ||
-              el.getAttribute('title') ||
-              el.getAttribute('placeholder') || '';
-            // Form context: disambiguate elements in multi-form pages
-            let formContext = '';
-            if (multiForm) {
-              const parentForm = el.closest('form');
-              if (parentForm) {
-                const heading = parentForm.querySelector('h1,h2,h3,h4,h5,h6');
-                const legend = parentForm.querySelector('legend');
-                const submit = parentForm.querySelector('button[type="submit"],input[type="submit"]');
-                formContext = (heading?.textContent?.trim() ||
-                  legend?.textContent?.trim() ||
-                  parentForm.getAttribute('aria-label') ||
-                  submit?.textContent?.trim() ||
-                  (submit as HTMLInputElement | null)?.value ||
-                  '').substring(0, 30).toLowerCase();
-              }
-            }
-            const nth = tagCounts.get(tag + role + name) || 0;
-            tagCounts.set(tag + role + name, nth + 1);
-            const cx = Math.round(rect.left + rect.width / 2);
-            const cy = Math.round(rect.top + rect.height / 2);
-            items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy, formContext });
-            if (items.length >= 100) return; // cap
-          });
+
+        // Collect elements from main document AND shadow DOM roots
+        function collectFromRoot(root: Document | ShadowRoot | Element) {
+          for (const sel of selectors) {
+            try {
+              root.querySelectorAll(sel).forEach(el => {
+                if (seen.has(el) || items.length >= 120) return;
+                seen.add(el);
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return; // hidden
+                const tag = el.tagName.toLowerCase();
+                const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
+                  tag === 'input' ? (el.getAttribute('type') === 'checkbox' ? 'checkbox' :
+                    el.getAttribute('type') === 'radio' ? 'radio' : 'textbox') :
+                  tag === 'select' ? 'combobox' : tag === 'textarea' ? 'textbox' :
+                  (el as HTMLElement).isContentEditable ? 'textbox' : tag);
+                const isInput = tag === 'input' || tag === 'textarea' || tag === 'select' || (el as HTMLElement).isContentEditable;
+                const visibleText = isInput ? '' : (el.textContent?.trim()?.substring(0, 60) || '');
+                const elId = el.getAttribute('id');
+                const labelText = elId
+                  ? (document.querySelector(`label[for="${elId}"]`)?.textContent?.trim() || '')
+                  : '';
+                const labelledById = el.getAttribute('aria-labelledby');
+                const labelledByText = labelledById
+                  ? (document.getElementById(labelledById)?.textContent?.trim() || '')
+                  : '';
+                const parentLabel = isInput ? el.closest('label') : null;
+                const wrappedLabelText = parentLabel
+                  ? Array.from(parentLabel.childNodes)
+                      .filter((n: ChildNode) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim())
+                      .map((n: ChildNode) => (n.textContent || '').trim())
+                      .join(' ')
+                  : '';
+                const name = el.getAttribute('aria-label') ||
+                  labelledByText ||
+                  labelText ||
+                  wrappedLabelText ||
+                  (isInput ? el.getAttribute('placeholder') : null) ||
+                  visibleText ||
+                  el.getAttribute('title') ||
+                  el.getAttribute('placeholder') || '';
+                let formContext = '';
+                if (multiForm) {
+                  const parentForm = el.closest('form');
+                  if (parentForm) {
+                    const heading = parentForm.querySelector('h1,h2,h3,h4,h5,h6');
+                    const legend = parentForm.querySelector('legend');
+                    const submit = parentForm.querySelector('button[type="submit"],input[type="submit"]');
+                    formContext = (heading?.textContent?.trim() ||
+                      legend?.textContent?.trim() ||
+                      parentForm.getAttribute('aria-label') ||
+                      submit?.textContent?.trim() ||
+                      (submit as HTMLInputElement | null)?.value ||
+                      '').substring(0, 30).toLowerCase();
+                  }
+                }
+                const nth = tagCounts.get(tag + role + name) || 0;
+                tagCounts.set(tag + role + name, nth + 1);
+                const cx = Math.round(rect.left + rect.width / 2);
+                const cy = Math.round(rect.top + rect.height / 2);
+                items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy, formContext });
+              });
+            } catch { /* selector may be invalid in shadow DOM */ }
+          }
         }
+
+        // Main document
+        collectFromRoot(document);
+
+        // Traverse Shadow DOM roots (React portals, Web Components, Canva, etc.)
+        if (items.length < 120) {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+          let node: Node | null;
+          while ((node = walker.nextNode()) && items.length < 120) {
+            const el = node as Element;
+            if (el.shadowRoot) {
+              collectFromRoot(el.shadowRoot);
+            }
+          }
+        }
+
         return items;
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dom timeout')), 5000)),
