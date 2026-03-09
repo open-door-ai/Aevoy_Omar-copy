@@ -6690,13 +6690,14 @@ DO NOT attempt another browser action. Use search → call_external now.`;
 
       // Tasks requesting specific local/current data need multiple searches, not a quick summary
       const _needsSpecificData = /\b(how much|what.*costs?|what.*prices?|phone number|address|contact info|contact details|hours|permit|license fee)\b/i.test(`${subject} ${body}`) ||
-        /\b(with|include|list)\s+(specific\s+)?(prices?|costs?|ratings?|specifications?)\b/i.test(`${subject} ${body}`) ||
+        /\b(with|include|list)\b.{0,30}\b(prices?|costs?|ratings?|specifications?)\b/i.test(`${subject} ${body}`) ||
+        /\bspecific\b.{0,30}\b(model|name|price|cost|detail|data|number|info|result)\b/i.test(`${subject} ${body}`) ||
         /\b(companies|businesses|restaurants|stores|shops|vendors|suppliers|providers|agencies|firms)\s+(in|near|around|from)\b/i.test(`${subject} ${body}`) ||
         /\b(in|near|around)\s+[A-Z][a-z]{2,}\b/.test(`${subject} ${body}`) && /\b(find|cost|price|real|actual|specific)\b/i.test(`${subject} ${body}`);
 
       // Tasks that ask to FIND multiple specific items need verification across sources
       const _needsMultipleResults = /\b(?:(\d+)\s+(real|actual|specific|best|top|different|good)?\s*|(?:top|best|find)\s+(\d+)\s+)(companies|businesses|restaurants|options|places|items|products|services|results|leads|contacts|vendors|listings|cars|jobs|positions|opportunities|gigs|apartments|flights|hotels|deals|rates|quotes|plans|headphones|speakers|laptops|phones|cameras|monitors|keyboards|mice|tablets)\b/i.test(`${subject} ${body}`) ||
-        /\b(best|top|recommended)\s+\w+[\s-]?\w*\s+(under|below|for|around)\s+\$?\d+/i.test(`${subject} ${body}`);
+        /\b(best|top|recommended)\s+[\w][\w\s-]{0,50}\s+(under|below|for|around)\s+\$?\d+/i.test(`${subject} ${body}`);
 
       // Deep research tasks: comparison, analysis, investigation, step-by-step instructions
       const _needsDeepResearch = /\b(compare|comparison|analyze|analysis|investigate|research|comprehensive|detailed|thorough|in-depth|cross-reference|verify|validate|pros?\s+and\s+cons?|advantages|disadvantages|trade-?offs?|which\s+is\s+better|vs\.?|versus|step[\s-]by[\s-]step|instructions|how\s+(?:to|do\s+I|can\s+I)|guide|tutorial|walk[\s-]?through|cancel\w*\s+(?:my|a)\s+\w+\s+(?:subscription|account|plan|membership)|sign\s*up|create\s+(?:an?\s+)?account)\b/i.test(`${subject} ${body}`);

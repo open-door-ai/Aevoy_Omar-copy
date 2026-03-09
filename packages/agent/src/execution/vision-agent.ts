@@ -1736,6 +1736,7 @@ export async function runVisionAgent(
   let lastActionType: string | undefined;
   let postSubmitStep = false;
   let consecutiveVisionSteps = 0;
+  let consecutiveInvalidOutputs = 0; // Tracks back-to-back invalid/description outputs — bail after 8
 
   console.log(`[BROWSER-AGENT] Starting: "${task.substring(0, 100)}" (max ${effectiveMaxSteps} steps)`);
 
@@ -2622,6 +2623,73 @@ export async function runVisionAgent(
         if (/\b(done|complete|finished|succeeded)\b/i.test(lower) && /\b(sign|account|creat|register)/i.test(lower)) {
           extracted.push(`DONE "Task completed"`);
         }
+
+        // ── NAME-BASED extraction: cheap models say "click 'Sign up'" without [ref] ──
+        // Match element names from the response against current refs to resolve ref numbers
+        if (extracted.length === 0 && currentRefs.size > 0) {
+          // Match: click/press/tap "element name" or click/press/tap 'element name' or click the Element Name button
+          const nameClickPatterns = [
+            // "click 'Sign up with email'" or "click \"Sign up\""
+            /\b(?:click|press|tap|hit|select)\s+(?:on\s+)?(?:the\s+)?["']([^"']{3,60})["']/gi,
+            // "click the Sign Up button" / "click Sign Up link"
+            /\b(?:click|press|tap|hit|select)\s+(?:on\s+)?(?:the\s+)?(.{3,40}?)\s*(?:button|link|tab|option|menu item|menu)\b/gi,
+          ];
+          for (const pattern of nameClickPatterns) {
+            for (const m of cleanedResponse.matchAll(pattern)) {
+              const targetName = m[1].trim().toLowerCase();
+              // Find the best matching ref by name similarity
+              let bestRef = -1;
+              let bestScore = 0;
+              for (const [refId, entry] of currentRefs.entries()) {
+                const refName = entry.name.toLowerCase();
+                // Exact match
+                if (refName === targetName) { bestRef = refId; bestScore = 100; break; }
+                // Contains match (target in ref or ref in target)
+                if (refName.includes(targetName) || targetName.includes(refName)) {
+                  const score = Math.min(targetName.length, refName.length) / Math.max(targetName.length, refName.length) * 80;
+                  if (score > bestScore) { bestRef = refId; bestScore = score; }
+                }
+              }
+              if (bestRef >= 0 && bestScore >= 40) {
+                extracted.push(`CLICK [${bestRef}]`);
+                console.log(`[BROWSER-AGENT] Name-matched: "${targetName}" → ref [${bestRef}] (score: ${bestScore.toFixed(0)})`);
+                break; // Only take the first name match
+              }
+            }
+            if (extracted.length > 0) break;
+          }
+
+          // "enter/type/fill X in/into the email field" (no [ref])
+          const nameFillPatterns = [
+            /\b(?:type|enter|input|fill|put)\s+["']?([^"'\n]{2,60})["']?\s+(?:in(?:to)?|on)\s+(?:the\s+)?["']?([^"'\n]{3,40})["']?\s*(?:field|input|box|textbox)?/gi,
+          ];
+          if (extracted.length === 0) {
+            for (const pattern of nameFillPatterns) {
+              for (const m of cleanedResponse.matchAll(pattern)) {
+                const value = m[1].trim();
+                const fieldName = m[2].trim().toLowerCase();
+                // Skip if value looks like a ref pattern (already handled above)
+                if (/^\[\d+\]$/.test(value)) continue;
+                let bestRef = -1;
+                let bestScore = 0;
+                for (const [refId, entry] of currentRefs.entries()) {
+                  const refName = entry.name.toLowerCase();
+                  if (refName.includes(fieldName) || fieldName.includes(refName)) {
+                    const score = Math.min(fieldName.length, refName.length) / Math.max(fieldName.length, refName.length) * 80;
+                    if (score > bestScore) { bestRef = refId; bestScore = score; }
+                  }
+                }
+                if (bestRef >= 0 && bestScore >= 30) {
+                  extracted.push(`FILL [${bestRef}] "${value}"`);
+                  console.log(`[BROWSER-AGENT] Name-fill-matched: "${fieldName}" → ref [${bestRef}], value="${value.substring(0, 20)}"`);
+                  break;
+                }
+              }
+              if (extracted.length > 0) break;
+            }
+          }
+        }
+
         if (extracted.length > 0) {
           console.log(`[BROWSER-AGENT] Extracted ${extracted.length} action(s) from verbose response: ${extracted.join(', ')}`);
           cleanedResponse = extracted.join('\n');
@@ -2631,28 +2699,63 @@ export async function runVisionAgent(
       // Description rejection — only AFTER extraction attempt failed
       const hasActionNow = /^(CLICK|FILL|TYPE|SELECT|HOVER|RIGHTCLICK|NAVIGATE|SCROLL|PRESS|WAIT|DONE|FAIL|OPEN_TAB|SWITCH_TAB|CLOSE_TAB|READ_TAB|TABS)\s/im.test(cleanedResponse);
       if (!hasActionNow) {
+        consecutiveInvalidOutputs++;
         const isDescriptionResponse = (
           /^(the page|this page|i see|i can see|the website|the site|there is|there are|the form|looking at|currently on|the current page|i notice|i observe|it appears|it looks like|the screen shows|on this page|i need to|i want to|i should|let me|i'll|i will|to find|to complete|first,? i|ok,? |okay,? |alright,? |sure,? |now i|my goal|the goal|the task)/im.test(cleanedResponse) ||
           (cleanedResponse.split('\n').length > 1 && !cleanedResponse.split('\n').some(l => /^(CLICK|FILL|TYPE|SELECT|HOVER|RIGHTCLICK|NAVIGATE|SCROLL|PRESS|WAIT|DONE|FAIL)\s/i.test(l.trim())))
         );
-        if (isDescriptionResponse) {
+
+        // After 8 consecutive invalid outputs, force a SCROLL to advance the page
+        if (consecutiveInvalidOutputs >= 8) {
+          console.warn(`[BROWSER-AGENT] ${consecutiveInvalidOutputs} consecutive invalid outputs — forcing SCROLL down`);
+          cleanedResponse = 'SCROLL down';
+          consecutiveInvalidOutputs = 0; // Reset after forced action
+        } else if (consecutiveInvalidOutputs >= 15) {
+          // After 15, bail out — model fundamentally can't follow instructions
+          console.error(`[BROWSER-AGENT] ${consecutiveInvalidOutputs} consecutive invalid outputs — bailing out`);
+          const endPageData = await Promise.race([
+            activePage.evaluate(() => `URL: ${location.href}\nTEXT: ${(document.body?.innerText || '').substring(0, 3000)}`),
+            new Promise<string>((resolve) => setTimeout(() => resolve(''), 2000)),
+          ]).catch(() => '');
+          return { success: false, error: `Model cannot produce valid actions after ${consecutiveInvalidOutputs} attempts`, steps, cost: totalCost, screenshots, pageData: endPageData };
+        } else if (isDescriptionResponse) {
           console.warn(`[BROWSER-AGENT] Description response (no extractable actions): "${cleanedResponse.substring(0, 100)}"`);
           const hintRefs = Array.from(currentRefs.entries()).slice(0, 5).map(([id, r]) => `[${id}] ${r.role} "${r.name}"`).join(', ');
           history.push(`Step ${steps + 1}: ⚠️ INVALID — ONLY output: CLICK [ref], FILL [ref] "value", SCROLL down, DONE "result". Elements: ${hintRefs || 'try SCROLL down'}`);
           steps--;
           continue;
         }
+      } else {
+        consecutiveInvalidOutputs = 0; // Reset on valid action
       }
 
       const actionLines = cleanedResponse.split('\n').map(l => l.trim()).filter(l => l.length > 0);
       const parsedActions = actionLines.map(parsePlaywrightAction).filter((a): a is PlaywrightAction => a !== null);
 
       if (parsedActions.length === 0) {
+        consecutiveInvalidOutputs++;
         console.warn(`[BROWSER-AGENT] No parseable actions: "${aiResponse.substring(0, 80)}"`);
         const hintRefs = Array.from(currentRefs.entries()).slice(0, 5).map(([id, r]) => `[${id}] ${r.role} "${r.name}"`).join(', ');
+
+        // After too many consecutive failures, force SCROLL or bail
+        if (consecutiveInvalidOutputs >= 8) {
+          console.warn(`[BROWSER-AGENT] Forcing SCROLL after ${consecutiveInvalidOutputs} invalid outputs`);
+          cleanedResponse = 'SCROLL down';
+          const forcedAction = parsePlaywrightAction('SCROLL down');
+          if (forcedAction) {
+            // Execute the forced scroll directly
+            try { await activePage.evaluate(() => window.scrollBy(0, 600)); } catch { /* ok */ }
+            history.push(`Step ${steps + 1}: Forced SCROLL down (model stuck)`);
+            consecutiveInvalidOutputs = 0;
+            continue;
+          }
+        }
+
         history.push(`Step ${steps + 1}: ⚠️ INVALID OUTPUT — you must output: CLICK [ref], FILL [ref] "value", SCROLL down. Elements: ${hintRefs || 'none visible — try SCROLL down'}`);
         steps--;
         continue;
+      } else {
+        consecutiveInvalidOutputs = 0; // Reset on valid action
       }
 
       // ── Confirmation URL enforcement: force DONE if on result/success page ──
