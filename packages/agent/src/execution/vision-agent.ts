@@ -2178,12 +2178,18 @@ export async function runVisionAgent(
       }
 
       // ── Reject pure descriptions (AI outputting observations instead of actions) ──
-      // Detect when AI describes the page instead of outputting FILL/CLICK/TYPE commands.
-      const isDescriptionResponse = /^(the page|this page|i see|i can see|the website|the site|there is|there are|the form|looking at|currently on|the current page|i notice|i observe|it appears|it looks like|the screen shows|on this page)/im.test(cleanedResponse) &&
-        !/^(CLICK|FILL|TYPE|SELECT|HOVER|RIGHTCLICK|NAVIGATE|SCROLL|PRESS|WAIT|DONE|FAIL|OPEN_TAB|SWITCH_TAB|CLOSE_TAB|READ_TAB|TABS)\s/im.test(cleanedResponse);
+      // Detect when AI describes the page or its reasoning instead of outputting FILL/CLICK/TYPE commands.
+      const hasAnyAction = /^(CLICK|FILL|TYPE|SELECT|HOVER|RIGHTCLICK|NAVIGATE|SCROLL|PRESS|WAIT|DONE|FAIL|OPEN_TAB|SWITCH_TAB|CLOSE_TAB|READ_TAB|TABS)\s/im.test(cleanedResponse);
+      const isDescriptionResponse = !hasAnyAction && (
+        /^(the page|this page|i see|i can see|the website|the site|there is|there are|the form|looking at|currently on|the current page|i notice|i observe|it appears|it looks like|the screen shows|on this page|i need to|i want to|i should|let me|i'll|i will|to find|to complete|first,? i|ok,? |okay,? |alright,? |sure,? |now i|my goal|the goal|the task)/im.test(cleanedResponse) ||
+        // Catch multi-line responses where first line is reasoning and no line starts with an action
+        (cleanedResponse.split('\n').length > 1 && !cleanedResponse.split('\n').some(l => /^(CLICK|FILL|TYPE|SELECT|HOVER|RIGHTCLICK|NAVIGATE|SCROLL|PRESS|WAIT|DONE|FAIL)\s/i.test(l.trim())))
+      );
       if (isDescriptionResponse) {
         console.warn(`[BROWSER-AGENT] Rejected description response: "${cleanedResponse.substring(0, 100)}"`);
-        history.push(`Step ${steps + 1}: ⚠️ You output a DESCRIPTION instead of actions. NEVER describe the page. Output FILL/CLICK/TYPE actions using [ref] numbers. Example: FILL [1] "email@test.com" then CLICK [2]`);
+        // Show available refs so the AI knows what to interact with
+        const hintRefs = Array.from(currentRefs.entries()).slice(0, 5).map(([id, r]) => `[${id}] ${r.role} "${r.name}"`).join(', ');
+        history.push(`Step ${steps + 1}: ⚠️ INVALID — you output reasoning/description instead of actions. ONLY output action commands: CLICK [ref], FILL [ref] "value", SCROLL down, DONE "result". Available elements: ${hintRefs || 'try SCROLL down'}`);
         steps--;
         continue;
       }
