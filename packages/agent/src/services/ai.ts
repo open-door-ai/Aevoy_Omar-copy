@@ -2207,6 +2207,19 @@ Rules: Use past or present tense only. Max 5 bullets allowed for lists of items.
     }
   }
 
+  // All models failed — fall back to raw search data instead of returning empty
+  if (hasContext) {
+    // Extract the most useful text from context (strip HTML, truncate)
+    const rawText = context
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .substring(0, 1500);
+    if (rawText.length > 50) {
+      console.warn(`[FALLBACK-RAW] All 4 models failed — returning raw search data (${rawText.length} chars)`);
+      return { content: `Here's what I found:\n\n${rawText}`, cost: 0, tokensUsed: 0 };
+    }
+  }
   return { content: "", cost: 0, tokensUsed: 0 };
 }
 

@@ -6700,11 +6700,11 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       const _needsDeepResearch = /\b(compare|comparison|analyze|analysis|investigate|research|comprehensive|detailed|thorough|in-depth|cross-reference|verify|validate|pros?\s+and\s+cons?|advantages|disadvantages|trade-?offs?|which\s+is\s+better|vs\.?|versus|step[\s-]by[\s-]step|instructions|how\s+(?:to|do\s+I|can\s+I)|guide|tutorial|walk[\s-]?through|cancel\w*\s+(?:my|a)\s+\w+\s+(?:subscription|account|plan|membership)|sign\s*up|create\s+(?:an?\s+)?account)\b/i.test(`${subject} ${body}`);
 
       // Log when fast-exit is blocked by these guards
-      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser && (_taskNeedsDocumentFE || _needsSpecificData || _needsMultipleResults || _needsDeepResearch)) {
+      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && !_userWantsBrowser && (_taskNeedsDocumentFE || _needsSpecificData || _needsMultipleResults || _needsDeepResearch)) {
         console.log(`[SEARCH-FAST-EXIT] SKIPPED — task needs deeper work: doc=${_taskNeedsDocumentFE} specific=${_needsSpecificData} multi=${_needsMultipleResults} deep=${_needsDeepResearch}`);
       }
 
-      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser && !_taskNeedsDocumentFE && !_needsSpecificData && !_needsMultipleResults && !_needsDeepResearch) {
+      if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && !_userWantsBrowser && !_taskNeedsDocumentFE && !_needsSpecificData && !_needsMultipleResults && !_needsDeepResearch) {
         try {
           const searchData = String(_richSearchResult.result).substring(0, 3000);
           console.log(`[SEARCH-FAST-EXIT] Rich search results (${searchData.length} chars) — summarizing and completing`);
@@ -8513,12 +8513,13 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
       if (hasBrowserActions) {
         // For browser tasks: generate AI summary using search results + action data
+        // Hoist searchResults so catch block can access it
+        const searchResults = successActions
+          .filter(r => ['search', 'browse', 'extract'].includes(r.action.type) && r.result)
+          .map(r => String(r.result).substring(0, 500))
+          .join('\n---\n');
         try {
-          // Include search result data (the actual content the AI found) — not just action types
-          const searchResults = successActions
-            .filter(r => ['search', 'browse', 'extract'].includes(r.action.type) && r.result)
-            .map(r => String(r.result).substring(0, 500))
-            .join('\n---\n');
+          // searchResults already extracted above (hoisted for catch block access)
           const actionSummary = successActions.map(r => {
             const params = Object.values(r.action.params || {}).map(v => String(v).substring(0, 50)).join(', ');
             return `${r.action.type}(${params}): ${r.success ? 'OK' : 'FAIL'}`;
@@ -8536,12 +8537,16 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           );
           cleanResponse = summary.content || (lastVisionPageData
             ? `Here's what I found:\n\n${lastVisionPageData.substring(0, 1000)}`
-            : `I attempted "${subject.substring(0, 60)}" but couldn't fully complete it. The site may have blocked automated access or the task requires manual steps.`);
+            : searchResults
+              ? `Here's what I found:\n\n${searchResults.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').substring(0, 1500)}`
+              : `I attempted "${subject.substring(0, 60)}" but couldn't fully complete it. The site may have blocked automated access or the task requires manual steps.`);
         } catch {
-          // Rate-limit-proof fallback: use raw page data when ALL AI providers fail
+          // Rate-limit-proof fallback: use raw page data / search data when ALL AI providers fail
           cleanResponse = lastVisionPageData
             ? `Here's what I found:\n\n${lastVisionPageData.substring(0, 1000)}`
-            : `I attempted "${subject.substring(0, 60)}" but couldn't extract the results. The site may require manual access.`;
+            : searchResults
+              ? `Here's what I found:\n\n${searchResults.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').substring(0, 1500)}`
+              : `I attempted "${subject.substring(0, 60)}" but couldn't extract the results. The site may require manual access.`;
         }
       } else {
         // Check if there are search results that need AI summarization
