@@ -3448,8 +3448,10 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
       const _forceDomainMatch = subject.match(/\b(\S+\.(com|ca|org|net|io|co|app))\b/i);
       // Also match brand names without explicit TLD (e.g. "on BestBuy", "for Swagbucks")
       const _brandMatch = !_forceDomainMatch && subject.match(/\b(?:on|for|at|from|to)\s+([A-Z][a-zA-Z0-9]+)\b/);
+      const _forceDomain = _forceDomainMatch?.[1] || '';
+      const _forceDotCount = (_forceDomain.match(/\./g) || []).length;
       const _forceUrl = _forceDomainMatch
-        ? `https://www.${_forceDomainMatch[1]}`
+        ? `https://${_forceDotCount >= 2 ? '' : 'www.'}${_forceDomain}`
         : _brandMatch
           ? `https://www.google.com/search?q=${encodeURIComponent(_brandMatch[1])} official site`
           : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
@@ -3795,8 +3797,11 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
         _bfpTaskText.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on|via|through|from)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i);
       const _bfpFromAction = !_bfpUrlMatch ? aiResponse.actions.find(a => a.type === 'browse')?.params?.url : null;
       const _bfpRawDomain = _bfpUrlMatch?.[1] || _bfpUrlMatch?.[0] || (_bfpFromAction as string) || '';
+      const _bfpCleanDomain = _bfpRawDomain.replace(/[,;!?)\]]+$/, '');
+      // Don't add www. if domain already has subdomains (2+ dots like books.toscrape.com)
+      const _bfpDotCount = (_bfpCleanDomain.match(/\./g) || []).length;
       const _bfpTargetUrl = _bfpRawDomain
-        ? (_bfpRawDomain.startsWith('http') ? _bfpRawDomain : `https://www.${_bfpRawDomain.replace(/[,;!?)\]]+$/, '')}`)
+        ? (_bfpRawDomain.startsWith('http') ? _bfpRawDomain : `https://${_bfpDotCount >= 2 ? '' : 'www.'}${_bfpCleanDomain}`)
         : '';
 
       if (_bfpTargetUrl) {
