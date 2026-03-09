@@ -1688,7 +1688,14 @@ export async function runVisionAgent(
           console.log(`[BROWSER-AGENT] Pre-navigating to ${startUrl}`);
           await activePage.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
         }
-        await activePage.waitForTimeout(300);
+        // SPA wait: give React/Vue/Angular apps time to hydrate and render forms
+        // Wait for interactive elements (input, form, button with signup text) to appear
+        try {
+          await Promise.race([
+            activePage.waitForSelector('input, form, [type="email"], [type="password"]', { state: 'visible', timeout: 5000 }),
+            activePage.waitForTimeout(3000), // minimum 3s for SPA hydration
+          ]);
+        } catch { /* timeout ok — page may not have forms yet */ }
 
         // Check if pre-navigation landed on chrome-error (Bright Data SSL/cert failure)
         const preNavUrl = activePage.url();
