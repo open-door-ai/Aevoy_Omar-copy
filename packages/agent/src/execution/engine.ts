@@ -286,11 +286,20 @@ export class ExecutionEngine {
     ];
 
     // Wire proxy config if available (for anti-bot bypass)
-    const proxyConfig = getProxyConfig();
+    // SKIP proxy for signup/login tasks — Geonode proxy may route through blocked regions
+    // (Notion: "prohibited jurisdiction", other sites: geo-blocking from Africa/Asia proxy IPs)
+    const goalLower = (this.intent.goal || '').toLowerCase();
+    const isSignupTask = /\b(sign\s*(?:\w+\s+)?up|signup|register|create\s+(?:\w+\s+)*account|log\s*(?:\w+\s+)?in|login|enroll|join)\b/i.test(goalLower);
+    const proxyConfig = isSignupTask ? undefined : getProxyConfig();
+    if (isSignupTask && process.env.PROXY_URL) {
+      console.log('[ENGINE] Skipping proxy for signup task — avoids geo-blocking');
+    }
 
     this.browser = await chromium.launch({
       headless: true,
-      args: launchArgs,
+      args: isSignupTask
+        ? launchArgs.filter(a => a !== '--disable-http2')  // Re-enable HTTP/2 without proxy
+        : launchArgs,
       ...(proxyConfig ? { proxy: proxyConfig } : {}),
     });
 
