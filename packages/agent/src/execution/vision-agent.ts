@@ -1899,12 +1899,31 @@ export async function runVisionAgent(
                 'button[class*="cookie"][class*="accept"]',
                 'button[class*="consent"][class*="accept"]',
                 '[aria-label*="Accept cookies"]', '[aria-label*="Accept all cookies"]',
+                // Reject/Decline/Close — for sites with no "Accept All" (like Typeform)
+                'button[id*="reject-all"]', 'button[id*="rejectAll"]', 'button[id*="reject_all"]',
+                '#onetrust-reject-all-handler', '.onetrust-reject-all-btn',
+                '[data-testid="uc-deny-all-button"]',
+                '[class*="cookie"] button[class*="reject"]', '[class*="consent"] button[class*="reject"]',
+                '[class*="cookie"] button[class*="decline"]', '[class*="consent"] button[class*="decline"]',
               ];
               for (const s of cookieSelectors) {
                 try {
                   const b = document.querySelector(s) as HTMLElement | null;
                   if (b && b.offsetParent !== null) { b.click(); break; }
                 } catch { /* selector may be invalid */ }
+              }
+              // Fallback: find any button with "Reject All", "Reject", "Decline", or close (X) inside cookie/consent modals
+              if (document.querySelector('[class*="cookie"], [id*="cookie"], [class*="consent"], [id*="consent"], [class*="privacy"], [id*="onetrust"]')) {
+                const allBtns = Array.from(document.querySelectorAll('button'));
+                for (const btn of allBtns) {
+                  const txt = (btn.textContent || '').trim().toLowerCase();
+                  if (/^(reject all|reject|decline all|decline|no thanks|deny|deny all)$/.test(txt)) {
+                    (btn as HTMLElement).click(); break;
+                  }
+                }
+                // Try close button (X) on cookie modal
+                const closeBtn = document.querySelector('[class*="cookie"] button[class*="close"], [class*="consent"] button[class*="close"], [id*="cookie"] [aria-label*="close"], [id*="cookie"] [aria-label*="Close"], [class*="preference"] button[class*="close"]') as HTMLElement | null;
+                if (closeBtn && closeBtn.offsetParent !== null) closeBtn.click();
               }
             }
             return { isBotWall, hasCaptcha };
