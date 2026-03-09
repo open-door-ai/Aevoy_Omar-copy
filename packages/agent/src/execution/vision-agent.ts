@@ -475,6 +475,102 @@ function extractTaskCredentials(task: string): { email: string; password: string
 }
 
 /**
+ * Auto-fill signup/login forms programmatically using page.evaluate().
+ * Uses React-compatible native input setters to trigger onChange.
+ * Returns list of filled fields, or empty array if nothing was fillable.
+ */
+async function tryAutoFillForm(
+  page: Page,
+  creds: { email: string; password: string; name: string; phone: string },
+  clickSubmit: boolean = true
+): Promise<{ filled: string[]; submitted: boolean }> {
+  try {
+    return await page.evaluate((args: { creds: typeof creds; clickSubmit: boolean }) => {
+      const { creds, clickSubmit } = args;
+      const filled: string[] = [];
+      const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
+
+      const visibleInputs = inputs.filter(el => {
+        const rect = (el as HTMLElement).getBoundingClientRect();
+        const style = window.getComputedStyle(el as HTMLElement);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      }) as HTMLInputElement[];
+
+      if (visibleInputs.length === 0) return { filled: [], submitted: false };
+
+      for (const input of visibleInputs) {
+        const type = (input.type || '').toLowerCase();
+        const name = (input.name || '').toLowerCase();
+        const id = (input.id || '').toLowerCase();
+        const placeholder = (input.placeholder || '').toLowerCase();
+        const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
+        const all = `${type} ${name} ${id} ${placeholder} ${ariaLabel}`;
+
+        let value = '';
+        if ((type === 'email' || /email/.test(all)) && creds.email) {
+          value = creds.email;
+        } else if ((type === 'password' || /password|passwd/.test(all)) && creds.password) {
+          value = creds.password;
+        } else if (/\b(first.?name|fname|given.?name)\b/.test(all) && creds.name) {
+          value = creds.name.split(/\s+/)[0] || creds.name;
+        } else if (/\b(last.?name|lname|surname|family.?name)\b/.test(all) && creds.name) {
+          const parts = creds.name.split(/\s+/);
+          value = parts.length > 1 ? parts[parts.length - 1] : creds.name;
+        } else if (/\b(full.?name|display.?name|your.?name)\b/.test(all) && creds.name) {
+          value = creds.name;
+        } else if (/\b(name)\b/.test(all) && !/\b(user|company|org)\b/.test(all) && creds.name) {
+          value = creds.name;
+        } else if (/\b(phone|tel|mobile|cell)\b/.test(all) && creds.phone) {
+          value = creds.phone;
+        } else if (/\b(username|user.?name|user.?id)\b/.test(all) && creds.email) {
+          value = creds.email;
+        }
+
+        if (value && !input.value) { // Only fill empty fields
+          const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (nativeSet) nativeSet.call(input, value);
+          else input.value = value;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('blur', { bubbles: true }));
+          filled.push(`${type || name || id || 'input'}=${value.substring(0, 3)}***`);
+        }
+      }
+
+      // Check terms/agreement checkboxes
+      const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+      for (const cb of checkboxes) {
+        const label = (cb.closest('label')?.textContent || '').toLowerCase();
+        const cbName = (cb.name || cb.id || '').toLowerCase();
+        if (/\b(agree|terms|tos|privacy|accept|consent|conditions)\b/.test(label + ' ' + cbName)) {
+          if (!cb.checked) { cb.click(); filled.push('checkbox=terms'); }
+        }
+      }
+
+      let submitted = false;
+      if (clickSubmit && filled.length >= 1) {
+        const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
+        const submitBtn = buttons.find(btn => {
+          const txt = (btn.textContent || '').trim().toLowerCase();
+          const btnType = (btn as HTMLButtonElement).type?.toLowerCase();
+          return /\b(sign\s*up|register|create|submit|join|enroll|get\s*started|continue|next|log\s*in|sign\s*in)\b/.test(txt)
+            || btnType === 'submit';
+        }) as HTMLElement | null;
+        if (submitBtn && submitBtn.offsetParent !== null) {
+          submitBtn.click();
+          submitted = true;
+          filled.push('submit=clicked');
+        }
+      }
+
+      return { filled, submitted };
+    }, { creds, clickSubmit });
+  } catch {
+    return { filled: [], submitted: false };
+  }
+}
+
+/**
  * Fetch the user's dedicated Twilio phone number from DB.
  * Returns the phone number string or empty string if none found.
  */
@@ -1748,117 +1844,19 @@ export async function runVisionAgent(
     }
 
     // ── AUTO-FILL: Programmatically fill signup/login forms when credentials are available ──
-    // This bypasses the vision AI's decision-making for the initial form fill on signup pages.
-    // The AI model (Scout/Haiku) often describes the page instead of filling fields — this fixes that.
+    // Uses React-compatible native input setters. Runs here AND after navigate actions inside the loop.
     let autoFillCompleted = false;
     if (isFormFillTask && taskCreds.email) {
-      try {
-        const autoFillResult = await activePage.evaluate((creds: { email: string; password: string; name: string; phone: string }) => {
-          const filled: string[] = [];
-          const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])'));
-
-          // Find visible inputs only
-          const visibleInputs = inputs.filter(el => {
-            const rect = (el as HTMLElement).getBoundingClientRect();
-            const style = window.getComputedStyle(el as HTMLElement);
-            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
-          }) as HTMLInputElement[];
-
-          if (visibleInputs.length === 0) return { filled: [], submitted: false };
-
-          // Classify each input by type/name/placeholder/label
-          for (const input of visibleInputs) {
-            const type = (input.type || '').toLowerCase();
-            const name = (input.name || '').toLowerCase();
-            const id = (input.id || '').toLowerCase();
-            const placeholder = (input.placeholder || '').toLowerCase();
-            const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
-            const all = `${type} ${name} ${id} ${placeholder} ${ariaLabel}`;
-
-            let value = '';
-            if ((type === 'email' || /email/.test(all)) && creds.email) {
-              value = creds.email;
-            } else if ((type === 'password' || /password|passwd/.test(all)) && creds.password) {
-              value = creds.password;
-            } else if (/\b(first.?name|fname|given.?name)\b/.test(all) && creds.name) {
-              value = creds.name.split(/\s+/)[0] || creds.name;
-            } else if (/\b(last.?name|lname|surname|family.?name)\b/.test(all) && creds.name) {
-              const parts = creds.name.split(/\s+/);
-              value = parts.length > 1 ? parts[parts.length - 1] : creds.name;
-            } else if (/\b(full.?name|display.?name|your.?name)\b/.test(all) && creds.name) {
-              value = creds.name;
-            } else if (/\b(name)\b/.test(all) && !/\b(user|company|org)\b/.test(all) && creds.name) {
-              value = creds.name;
-            } else if (/\b(phone|tel|mobile|cell)\b/.test(all) && creds.phone) {
-              value = creds.phone;
-            } else if (/\b(username|user.?name|user.?id)\b/.test(all) && creds.email) {
-              value = creds.email; // Default username to email
-            }
-
-            if (value) {
-              // Use native input setter to trigger React/Vue change detection
-              const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-              if (nativeSet) {
-                nativeSet.call(input, value);
-              } else {
-                input.value = value;
-              }
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              input.dispatchEvent(new Event('change', { bubbles: true }));
-              input.dispatchEvent(new Event('blur', { bubbles: true }));
-              filled.push(`${type || name || id || 'input'}=${value.substring(0, 3)}***`);
-            }
-          }
-
-          // Check terms/agreement checkboxes
-          const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
-          for (const cb of checkboxes) {
-            const label = (cb.closest('label')?.textContent || '').toLowerCase();
-            const cbName = (cb.name || cb.id || '').toLowerCase();
-            if (/\b(agree|terms|tos|privacy|accept|consent|conditions)\b/.test(label + ' ' + cbName)) {
-              if (!cb.checked) {
-                cb.click();
-                filled.push('checkbox=terms');
-              }
-            }
-          }
-
-          // Find and click submit button (but don't submit if we didn't fill anything)
-          let submitted = false;
-          if (filled.length >= 1) {
-            const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], [role="button"]'));
-            const submitBtn = buttons.find(btn => {
-              const txt = (btn.textContent || '').trim().toLowerCase();
-              const btnType = (btn as HTMLButtonElement).type?.toLowerCase();
-              return /\b(sign\s*up|register|create|submit|join|enroll|get\s*started|continue|next|log\s*in|sign\s*in)\b/.test(txt)
-                || btnType === 'submit';
-            }) as HTMLElement | null;
-            if (submitBtn && submitBtn.offsetParent !== null) {
-              submitBtn.click();
-              submitted = true;
-              filled.push('submit=clicked');
-            }
-          }
-
-          return { filled, submitted };
-        }, taskCreds);
-
-        if (autoFillResult.filled.length > 0) {
-          autoFillCompleted = true;
-          hasFilledAnyField = true;
-          console.log(`[BROWSER-AGENT] AUTO-FILL: ${autoFillResult.filled.join(', ')}`);
-          history.push(`✅ Auto-filled signup form: ${autoFillResult.filled.join(', ')}`);
-
-          // Wait for form submission to process
-          if (autoFillResult.submitted) {
-            await activePage.waitForTimeout(3000);
-            // Check if we landed on a success/confirmation page
-            const postSubmitUrl = activePage.url();
-            console.log(`[BROWSER-AGENT] AUTO-FILL post-submit URL: ${postSubmitUrl}`);
-          }
+      const autoFillResult = await tryAutoFillForm(activePage, taskCreds, true);
+      if (autoFillResult.filled.length > 0) {
+        autoFillCompleted = true;
+        hasFilledAnyField = true;
+        console.log(`[BROWSER-AGENT] AUTO-FILL (pre-loop): ${autoFillResult.filled.join(', ')}`);
+        history.push(`✅ Auto-filled signup form: ${autoFillResult.filled.join(', ')}`);
+        if (autoFillResult.submitted) {
+          await activePage.waitForTimeout(3000);
+          console.log(`[BROWSER-AGENT] AUTO-FILL post-submit URL: ${activePage.url()}`);
         }
-      } catch (afErr) {
-        console.warn(`[BROWSER-AGENT] AUTO-FILL failed: ${afErr instanceof Error ? afErr.message : afErr}`);
       }
     }
 
@@ -2835,6 +2833,23 @@ export async function runVisionAgent(
         if (action.type === 'click') {
           const actionName = (action.name || '').toLowerCase();
           postSubmitStep = submitKeywords.some(kw => actionName.includes(kw));
+        }
+
+        // ── AUTO-FILL after navigate/click lands on a signup page with visible form fields ──
+        if (ok && !autoFillCompleted && isFormFillTask && taskCreds.email &&
+            (action.type === 'navigate' || action.type === 'click')) {
+          // Wait for SPA rendering
+          await activePage.waitForTimeout(1500);
+          const afResult = await tryAutoFillForm(activePage, taskCreds, true);
+          if (afResult.filled.length > 0) {
+            autoFillCompleted = true;
+            hasFilledAnyField = true;
+            console.log(`[BROWSER-AGENT] AUTO-FILL (in-loop step ${steps + 1}): ${afResult.filled.join(', ')}`);
+            history.push(`✅ Auto-filled form: ${afResult.filled.join(', ')}`);
+            if (afResult.submitted) {
+              await activePage.waitForTimeout(3000);
+            }
+          }
         }
 
         // Milestone: URL changed = progress
