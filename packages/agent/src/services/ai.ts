@@ -2275,6 +2275,31 @@ export async function generateBrowserStepResponse(
     }
   }
 
+  // ═══ FALLBACK 1B: Gemini Flash — free, good at structured output ═══
+  if (process.env.GOOGLE_API_KEY) {
+    try {
+      await paceModelCall("gemini-2.5-flash");
+      const response = await withTimeout(getGeminiClient().chat.completions.create({
+        model: "gemini-2.5-flash",
+        max_tokens: 300,
+        temperature: 0.0,
+        messages,
+      }), 12000);
+      const rawContent = response.choices[0]?.message?.content || '';
+      const content = stripThinkTags(rawContent);
+      if (content.length > 10) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        const cost = (inTok * 0.15 + outTok * 0.60) / 1_000_000;
+        console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "gemini", taskId, "browser-step").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   // ═══ FALLBACK: DeepSeek V3 ═══
   if (process.env.DEEPSEEK_API_KEY && Date.now() > deepseekBackoffUntil) {
     try {
