@@ -10308,19 +10308,47 @@ async function executeAction(
         if (fetchResponse.ok) {
           const html = await fetchResponse.text();
           rawSearchHtml = html;  // Save for URL extraction
-          // Extract text from DDG Lite HTML (simple structure: <a> links + text snippets)
-          const textContent = html
-            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-            .replace(/\s+/g, ' ')
-            .trim();
-          if (textContent.length > 200 && !isGarbageText(textContent)) {
-            apiSearchResult = textContent.substring(0, 3000);
-            console.log(`[SEARCH] Fetch-based DDG succeeded: ${apiSearchResult.length} chars`);
+          // DDG Lite has structured results in <td> cells with class "result-snippet"
+          // Try structured extraction first
+          const ddgSnippets: string[] = [];
+          const ddgLinks: string[] = [];
+          // Extract result links
+          const ddgLinkRegex = /<a[^>]*class="result-link"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+          let dlm: RegExpExecArray | null;
+          while ((dlm = ddgLinkRegex.exec(html)) !== null && ddgLinks.length < 10) {
+            const title = dlm[2].replace(/<[^>]+>/g, '').trim();
+            if (title) ddgLinks.push(`${title} — ${dlm[1]}`);
+          }
+          // Extract snippets
+          const ddgSnipRegex = /<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
+          let dsm: RegExpExecArray | null;
+          while ((dsm = ddgSnipRegex.exec(html)) !== null && ddgSnippets.length < 10) {
+            const text = dsm[1].replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, ' ').trim();
+            if (text.length > 20) ddgSnippets.push(text);
+          }
+          if (ddgLinks.length >= 3 || ddgSnippets.length >= 3) {
+            const parts: string[] = [];
+            for (let di = 0; di < Math.max(ddgLinks.length, ddgSnippets.length) && di < 10; di++) {
+              if (ddgLinks[di]) parts.push(`${di + 1}. ${ddgLinks[di]}`);
+              if (ddgSnippets[di]) parts.push(`   ${ddgSnippets[di]}`);
+            }
+            apiSearchResult = parts.join('\n');
+            console.log(`[SEARCH] DDG Lite structured: ${ddgLinks.length} links, ${ddgSnippets.length} snippets`);
           } else {
-            console.log(`[SEARCH] Fetch-based DDG returned ${textContent.length} chars (${isGarbageText(textContent) ? 'garbage' : 'too short'})`);
+            // Fallback: strip HTML tags
+            const textContent = html
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (textContent.length > 200 && !isGarbageText(textContent)) {
+              apiSearchResult = textContent.substring(0, 3000);
+              console.log(`[SEARCH] DDG Lite fallback text: ${apiSearchResult.length} chars`);
+            } else {
+              console.log(`[SEARCH] DDG Lite returned ${textContent.length} chars (${isGarbageText(textContent) ? 'garbage' : 'too short'})`);
+            }
           }
         }
       } catch (fetchErr) {
@@ -10349,16 +10377,58 @@ async function executeAction(
           if (braveResponse.ok) {
             const html = await braveResponse.text();
             if (!rawSearchHtml) rawSearchHtml = html;  // Save for URL extraction
-            const textContent = html
-              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-              .replace(/\s+/g, ' ')
-              .trim();
-            if (textContent.length > 200 && !isGarbageText(textContent)) {
-              apiSearchResult = textContent.substring(0, 3000);
-              console.log(`[SEARCH] Brave Search succeeded: ${apiSearchResult.length} chars`);
+            // Try structured extraction first: Brave uses <div class="snippet"> for results
+            const snippets: string[] = [];
+            const snippetRegex = /<div[^>]*class="[^"]*snippet[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+            let snippetMatch: RegExpExecArray | null;
+            while ((snippetMatch = snippetRegex.exec(html)) !== null && snippets.length < 10) {
+              const clean = snippetMatch[1]
+                .replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+                .replace(/\s+/g, ' ').trim();
+              if (clean.length > 20) snippets.push(clean);
+            }
+            // Also extract titles with URLs
+            const titleRegex = /<a[^>]*class="[^"]*result-header[^"]*"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+            const titles: string[] = [];
+            let titleMatch: RegExpExecArray | null;
+            while ((titleMatch = titleRegex.exec(html)) !== null && titles.length < 10) {
+              const url = titleMatch[1];
+              const title = titleMatch[2].replace(/<[^>]+>/g, '').trim();
+              if (title && url && !url.includes('brave.com')) titles.push(`${title} — ${url}`);
+            }
+            if (snippets.length >= 3 || titles.length >= 3) {
+              // Structured results available
+              const parts: string[] = [];
+              for (let si = 0; si < Math.max(titles.length, snippets.length) && si < 10; si++) {
+                if (titles[si]) parts.push(`${si + 1}. ${titles[si]}`);
+                if (snippets[si]) parts.push(`   ${snippets[si]}`);
+              }
+              apiSearchResult = parts.join('\n');
+              console.log(`[SEARCH] Brave Search structured: ${titles.length} titles, ${snippets.length} snippets`);
+            } else {
+              // Fallback: strip HTML and clean up search engine chrome
+              let textContent = html
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '') // strip navigation
+                .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '') // strip header
+                .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '') // strip footer
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+                .replace(/\s+/g, ' ')
+                .trim();
+              // Strip search engine UI chrome
+              textContent = textContent
+                .replace(/^.*?(?=\d+\.\s|(?:https?:\/\/))/i, '') // strip everything before first result
+                .replace(/Related searches.*$/i, '') // strip related searches footer
+                .replace(/Brave Search.*?Goggles/gi, '') // strip Brave UI
+                .replace(/Only showing results from.*?Clear filter/gi, '')
+                .replace(/Ask AI.*?$/im, '')
+                .trim();
+              if (textContent.length > 200 && !isGarbageText(textContent)) {
+                apiSearchResult = textContent.substring(0, 3000);
+                console.log(`[SEARCH] Brave Search fallback text: ${apiSearchResult.length} chars`);
+              }
             }
           }
         } catch (braveErr) {
