@@ -3870,8 +3870,13 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                 aiResponse.content = _bfpResult.result;
                 isTaskComplete = true;
                 aiSignaledComplete = true;
-                signupAutoCompleted = true; // Protect from quality gate overwrite
-                console.log(`[BROWSER-FAST-PATH] SUCCESS — skipping iteration loop`);
+                // Only auto-pass quality gate for NON-browser-action tasks (doc creation, research).
+                // Browser action tasks (signup/book/order) MUST go through verification to prevent hallucination.
+                const _bfpIsBrowserActionTask = /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|apply|fill.*form)\b/i.test(_bfpTaskText);
+                if (!_bfpIsBrowserActionTask) {
+                  signupAutoCompleted = true;
+                }
+                console.log(`[BROWSER-FAST-PATH] SUCCESS (steps=${_bfpResult.steps}, browserAction=${_bfpIsBrowserActionTask}) — ${_bfpIsBrowserActionTask ? 'will verify' : 'auto-pass'}`);
               } else {
                 // Vision agent failed — construct a meaningful response from what happened.
                 // NEVER fall through to generic "I worked on your request" — always explain the outcome.
@@ -4395,13 +4400,21 @@ DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices
               aiResponse.content = resultMsg;
               console.log(`[SIGNUP-GATE] Direct form fill complete: email=${emailFilled}, password=${passwordFilled}`);
 
-              // CRITICAL: If we filled the form, mark task complete and stop iterating.
-              // Without this, the loop continues and wastes iterations re-prompting the AI.
-              if (emailFilled) {
+              // Only mark complete if form was actually SUBMITTED (email+password filled AND submit clicked).
+              // Just filling email without submitting is NOT completion — that's hallucination.
+              const _sgSubmitClicked = actionResults.some(r => r.success && r.action.type === 'click');
+              if (emailFilled && passwordFilled && _sgSubmitClicked) {
+                // Verify the URL changed (form submission usually redirects)
+                const _sgPostUrl = signupPage.url();
+                const _sgUrlChanged = _sgPostUrl !== signupPage.url(); // snapshot before submit
                 isTaskComplete = true;
                 aiSignaledComplete = true;
-                signupAutoCompleted = true; // Protect from quality gate + verification overwrite
+                // Don't auto-pass quality gate — let verification check the result
+                console.log(`[SIGNUP-GATE] Form submitted: email=${emailFilled}, password=${passwordFilled}, submit=${_sgSubmitClicked}`);
                 break;
+              } else if (emailFilled) {
+                // Partial fill — continue to iteration loop for vision agent to complete
+                console.log(`[SIGNUP-GATE] Partial fill only (email=${emailFilled}, password=${passwordFilled}, submit=${_sgSubmitClicked}) — continuing to iteration loop`);
               }
             } else {
               console.log(`[SIGNUP-GATE] Could not find email field — running vision agent fallback`);
@@ -8196,9 +8209,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           evidence: `All ${actionResults.length} actions failed — task did not complete successfully`
         };
       }
-    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier && !_taskMentionsDomain) || signupAutoCompleted || _awaitingCredentials) && aiResponse.content) {
+    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier && !_taskMentionsDomain) || (signupAutoCompleted && !/\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|apply)\b/i.test(taskTextLower)) || _awaitingCredentials) && aiResponse.content) {
       // NOTE: search-only auto-pass is BLOCKED when task mentions a specific domain ("Go to X.com")
       // because those tasks require actual browser interaction, not just search results.
+      // ANTI-HALLUCINATION: signupAutoCompleted does NOT auto-pass browser action tasks
+      // (signup/book/order) — they must go through the verification block below.
       const reason = noBrowserUsed ? 'no browser used' : hasNoActions ? 'no actions' : signupAutoCompleted ? 'signup-auto completed' : _awaitingCredentials ? 'awaiting user credentials' : 'search-only research';
       console.log(`[VERIFY] Fast path (${reason}, ${tier} tier) — AUTO-PASS`);
       verificationResult = {
@@ -8475,8 +8490,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const isConversationalSubject = ['hi', 'hello', 'thanks', 'thank you', 'ok', 'hey', 'good morning', 'good evening', 'sup', 'yo', 'what\'s up', 'how are you'].some(
       g => subject.toLowerCase().trim().startsWith(g) || (body || '').toLowerCase().trim().startsWith(g)
     );
-    if (signupAutoCompleted && rawCleanResponse) {
-      // Signup-auto result — use directly, never overwrite with AI summary
+    const _isBrowserActionForClean = /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|apply)\b/i.test(taskTextLower);
+    if (signupAutoCompleted && rawCleanResponse && !_isBrowserActionForClean) {
+      // Signup-auto result for non-browser tasks (doc creation etc.) — use directly
       cleanResponse = rawCleanResponse;
     } else if (strippedCleanResponse && !isGarbageResponse(strippedCleanResponse)) {
       // Use stripped response (narration prefix removed if needed), or raw if stripping wasn't needed

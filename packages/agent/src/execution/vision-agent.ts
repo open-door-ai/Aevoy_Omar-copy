@@ -2412,6 +2412,39 @@ export async function runVisionAgent(
             cleanResult = doneResult.match(/^[^<{]*?[.!]\s/)?.[0]?.trim() || `Task completed on ${activePage.url()}`;
           }
 
+          // ── POST-COMPLETION VERIFICATION: catch hallucinated completions ──
+          // The AI may output DONE "Signed up!" without having filled any form fields.
+          // This is the #1 source of hallucinated browser results.
+          const _isActionTaskDone = isFormFillTask || /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|subscribe|apply|cancel)\b/i.test(task);
+          if (_isActionTaskDone) {
+            const _verifyRejectCount = history.filter(h => h.includes('ACTION-VERIFY')).length;
+
+            // Check 1: Agent claims completion but never filled any form field
+            if (!hasFilledAnyField && _verifyRejectCount < 3) {
+              const _executedClicks = actionMemory.filter(a => a.ok && /^click/i.test(a.raw)).length;
+              if (_executedClicks < 3) {
+                console.warn(`[BROWSER-AGENT] ACTION-VERIFY rejected DONE: 0 fills, ${_executedClicks} clicks for action task. Claimed: "${cleanResult.substring(0, 80)}"`);
+                history.push(`⚠️ ACTION-VERIFY rejected: You claimed "${cleanResult.substring(0, 80)}" but executed 0 FILL actions. You MUST actually FILL the form fields (email, password, name) and CLICK submit. DO IT NOW — use the ⚡ CREDENTIALS.`);
+                break; // continue main loop
+              }
+            }
+
+            // Check 2: Form fields still visible = submission didn't go through
+            if (hasFilledAnyField && _verifyRejectCount < 2) {
+              try {
+                const _formStillVisible = await Promise.race([
+                  activePage.locator('input[type="email"], input[type="password"]').first().isVisible({ timeout: 2000 }),
+                  new Promise<boolean>(r => setTimeout(() => r(false), 3000)),
+                ]);
+                if (_formStillVisible) {
+                  console.warn(`[BROWSER-AGENT] ACTION-VERIFY rejected DONE: form fields still visible after "${cleanResult.substring(0, 60)}"`);
+                  history.push(`⚠️ ACTION-VERIFY rejected: The signup form is STILL VISIBLE — submission didn't go through. Look for error messages on the page. Find the submit/create account button and CLICK it.`);
+                  break;
+                }
+              } catch { /* if visibility check fails, allow DONE to proceed */ }
+            }
+          }
+
           console.log(`[BROWSER-AGENT] DONE after ${steps + 1} steps: ${cleanResult.substring(0, 200)}`);
           try { screenshots.push(await takeScreenshot(activePage)); } catch { /* ok */ }
           return { success: true, result: cleanResult, steps: steps + 1, cost: totalCost, screenshots };
