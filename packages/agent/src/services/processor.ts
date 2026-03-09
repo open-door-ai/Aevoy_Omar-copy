@@ -3724,6 +3724,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
             const _dfpFullUrl = _dfpUrl.startsWith('http') ? _dfpUrl : `${_agBase}${_dfpUrl}`;
             aiResponse.content = `Your ${_dfpTypeName} is ready!\n\n**File:** ${_dfpFile}\n**Download:** ${_dfpFullUrl}`;
             aiResponse.actions = [{ type: _dfpAct as any, params: { filename: _dfpFile, sections: _dfpSecs } }];
+            signupAutoCompleted = true; // Protect DOC-FAST-PATH response from being overwritten by quality gate
             console.log(`[DOC-FAST-PATH] ${_dfpTypeName} created: ${_dfpFullUrl}`);
           } else {
             const _dfpErrMsg = _dfpResult.error || 'unknown';
@@ -6674,10 +6675,10 @@ DO NOT attempt another browser action. Use search → call_external now.`;
         /\b(in|near|around)\s+[A-Z][a-z]{2,}\b/.test(`${subject} ${body}`) && /\b(find|cost|price|real|actual|specific)\b/i.test(`${subject} ${body}`);
 
       // Tasks that ask to FIND multiple specific items need verification across sources
-      const _needsMultipleResults = /\b(\d+)\s+(real|actual|specific|best|top|different|good)?\s*(companies|businesses|restaurants|options|places|items|products|services|results|leads|contacts|vendors|listings|cars|jobs|apartments|flights|hotels)\b/i.test(`${subject} ${body}`);
+      const _needsMultipleResults = /\b(?:(\d+)\s+(real|actual|specific|best|top|different|good)?\s*|(?:top|best|find)\s+(\d+)\s+)(companies|businesses|restaurants|options|places|items|products|services|results|leads|contacts|vendors|listings|cars|jobs|positions|opportunities|gigs|apartments|flights|hotels|deals|rates|quotes|plans)\b/i.test(`${subject} ${body}`);
 
-      // Deep research tasks: comparison, analysis, investigation
-      const _needsDeepResearch = /\b(compare|comparison|analyze|analysis|investigate|research|comprehensive|detailed|thorough|in-depth|cross-reference|verify|validate|pros?\s+and\s+cons?|advantages|disadvantages|trade-?offs?|which\s+is\s+better|vs\.?|versus)\b/i.test(`${subject} ${body}`);
+      // Deep research tasks: comparison, analysis, investigation, step-by-step instructions
+      const _needsDeepResearch = /\b(compare|comparison|analyze|analysis|investigate|research|comprehensive|detailed|thorough|in-depth|cross-reference|verify|validate|pros?\s+and\s+cons?|advantages|disadvantages|trade-?offs?|which\s+is\s+better|vs\.?|versus|step[\s-]by[\s-]step|instructions|how\s+(?:to|do\s+I|can\s+I)|guide|tutorial|walk[\s-]?through|cancel\w*\s+(?:my|a)\s+\w+\s+(?:subscription|account|plan|membership)|sign\s*up|create\s+(?:an?\s+)?account)\b/i.test(`${subject} ${body}`);
 
       // Log when fast-exit is blocked by these guards
       if (_searchOnlyRound && _richSearchResult && _noFollowUpActions && currentIteration <= 2 && !_userWantsBrowser && (_taskNeedsDocumentFE || _needsSpecificData || _needsMultipleResults || _needsDeepResearch)) {
