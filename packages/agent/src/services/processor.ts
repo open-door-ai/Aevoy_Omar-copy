@@ -25,6 +25,18 @@ import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, Strik
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+// ── Secure fallback password generator (used when agent-passwords service unavailable) ──
+function _generateSecureFallback(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  const special = '!@#$%&';
+  let pw = '';
+  const bytes = crypto.randomBytes(14);
+  for (let i = 0; i < 12; i++) pw += chars[bytes[i] % chars.length];
+  pw += special[bytes[12] % special.length];
+  pw += String(bytes[13] % 10);
+  return pw;
+}
+
 // ── Per-task call rate counters (module-level, cleaned up after task completes) ──
 const _taskCallCounters = new Map<string, { call_user: number; call_external: number }>();
 function _getCallCount(taskId: string, type: 'call_user' | 'call_external'): number {
@@ -1469,9 +1481,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Extract fields from task text and create the PDF directly with PDFKit vector drawing.
     // SKIP: If user names a specific website ("go to canva.com"), this is a BROWSER task.
     const _earlyBcText = `${subject} ${body || ''}`;
-    const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_earlyBcText) ||
+    // Generic website detection — no hardcoded site names
+    const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on|at|from|via)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(_earlyBcText) ||
       /\bhttps?:\/\/\S+/i.test(_earlyBcText) ||
-      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(_earlyBcText);
+      /\b(sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(_earlyBcText);
     const _earlyIsBc = !_earlyBcUsesWebsite && /\b(business cards?)\b/i.test(_earlyBcText);
     if (_earlyIsBc) {
       console.log(`[BUSINESS-CARD-FAST-PATH] Detected business card task — creating PDF directly`);
@@ -2833,9 +2846,10 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // EXCLUDE: document/spreadsheet tasks that must use action tags (create_excel, create_word, etc.)
     // Those need the full SYSTEM_PROMPT where [ACTION:] tags are defined — not GENERATE_SYSTEM_PROMPT
     // BUT: If user names a specific website ("go to canva.com and create a business card"), this is a BROWSER task
-    const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
+    // Generic website detection — catches ANY domain (no hardcoded site lists)
+    const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on|at|from|via)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
-      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa|opentable|swagbucks|bestbuy|amazon|ebay|etsy|shopify|wix|squarespace|wordpress)\b/i.test(`${subject} ${body}`);
+      /\b(sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`);
     const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
@@ -3256,25 +3270,19 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     // cleanResponseForEmail stripped the "I'll navigate to..." planning text), inject a
     // search or browse action so the task doesn't fall through to the generic fallback.
     const _browseInjText = `${subject} ${body || ''}`;
-    const _needsBrowseInject = /\b(canva|figma|adobe|visme|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|card)|sign\s*up|signup|register\s+(for|on|at)|book\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub))\b/i.test(_browseInjText);
+    // Generic browse injection — detect ANY browser-requiring task (signup, booking, design, ordering)
+    // NO hardcoded site URLs — extract domain from task text or fall back to search
+    const _needsBrowseInject = /\b(business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|card)|sign\s*up|signup|register\s+(for|on|at)|book\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(?:a\s+)?(?:ride|food|delivery|meal)\b)\b/i.test(_browseInjText);
     const _hasBrowseInAction = aiResponse.actions.some(a => ['browse', 'search', 'navigate', 'screenshot'].includes(a.type));
     if (_needsBrowseInject && !_hasBrowseInAction && aiResponse.actions.length === 0) {
-      // Map well-known services to direct URLs; fall back to search for others
-      let _injectUrl = '';
-      if (/\bcanva\b/i.test(_browseInjText)) _injectUrl = 'https://www.canva.com/create/business-cards/';
-      else if (/\bfigma\b/i.test(_browseInjText)) _injectUrl = 'https://www.figma.com';
-      else if (/\badobe\b/i.test(_browseInjText)) _injectUrl = 'https://account.adobe.com';
-      else if (/\bnotion\b/i.test(_browseInjText)) _injectUrl = 'https://www.notion.so/signup';
-      else if (/\buber\b/i.test(_browseInjText)) _injectUrl = 'https://www.uber.com/ride/';
-      else if (/\blyft\b/i.test(_browseInjText)) _injectUrl = 'https://www.lyft.com';
-      else if (/\bdoordash\b/i.test(_browseInjText)) _injectUrl = 'https://www.doordash.com';
-      else if (/\bgrubhub\b/i.test(_browseInjText)) _injectUrl = 'https://www.grubhub.com';
-      const _injectAction = _injectUrl
-        ? { type: 'browse' as any, params: { url: _injectUrl } }
+      // Generic: extract domain from task text, or fall back to search
+      const _domainInTask = _browseInjText.match(/\b(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))\b/i)?.[1];
+      const _injectAction = _domainInTask
+        ? { type: 'browse' as any, params: { url: `https://${_domainInTask}` } }
         : { type: 'search' as any, params: { query: subject.substring(0, 100) } };
       aiResponse.actions = [_injectAction];
       aiResponse.content = (aiResponse.content || '') + `\nNavigating to complete the task.`;
-      console.log(`[BROWSE-INJECT] Browser task with 0 actions — injected ${_injectUrl ? `browse(${_injectUrl})` : `search("${subject.substring(0, 60)}")`}`);
+      console.log(`[BROWSE-INJECT] Browser task with 0 actions — injected ${_domainInTask ? `browse(https://${_domainInTask})` : `search("${subject.substring(0, 60)}")`}`);
     }
 
     // 6c. CREDENTIAL-DEPENDENT TASK EARLY EXIT: If the task requires logging into a service
@@ -3830,8 +3838,8 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
               try {
                 const { getAgentPasswords } = await import("./agent-passwords.js");
                 const _bfpPw = await getAgentPasswords(userId);
-                _bfpPassword = _bfpPw?.primary || 'AevoyAgent2026!';
-              } catch { _bfpPassword = 'AevoyAgent2026!'; }
+                _bfpPassword = _bfpPw?.primary || _generateSecureFallback();
+              } catch { _bfpPassword = _generateSecureFallback(); }
               const _bfpEmail = agentEmail;
               const _bfpName = senderName || username;
               const _bfpLearnings = learningsHint ? `\n\nHIVE MIND INTELLIGENCE (from past tasks on this site):\n${learningsHint.substring(0, 600)}` : '';
@@ -4237,8 +4245,8 @@ DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices
             try {
               const { getAgentPasswords } = await import("./agent-passwords.js");
               const passwords = await getAgentPasswords(userId);
-              agentPassword = passwords?.primary || 'AevoyAgent2026!';
-            } catch { agentPassword = 'AevoyAgent2026!'; }
+              agentPassword = passwords?.primary || _generateSecureFallback();
+            } catch { agentPassword = _generateSecureFallback(); }
 
             const email = agentEmail;
             const displayName = senderName || username;
@@ -4429,7 +4437,7 @@ DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices
               // Vision agent handles custom React components, SPA forms, non-standard inputs
               try {
                 let vgPw = '';
-                try { const { getAgentPasswords } = await import("./agent-passwords.js"); const vgP = await getAgentPasswords(userId); vgPw = vgP?.primary || 'AevoyAgent2026!'; } catch { vgPw = 'AevoyAgent2026!'; }
+                try { const { getAgentPasswords } = await import("./agent-passwords.js"); const vgP = await getAgentPasswords(userId); vgPw = vgP?.primary || _generateSecureFallback(); } catch { vgPw = _generateSecureFallback(); }
                 const vgEmail = agentEmail;
                 const vgName = senderName || username;
                 const vgPhone = userTwilioPhone;
@@ -5883,8 +5891,8 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
           try {
             const { getAgentPasswords } = await import("./agent-passwords.js");
             const pw = await getAgentPasswords(userId);
-            autoPassword = pw?.primary || 'AevoyAgent2026!';
-          } catch { autoPassword = 'AevoyAgent2026!'; }
+            autoPassword = pw?.primary || _generateSecureFallback();
+          } catch { autoPassword = _generateSecureFallback(); }
 
           const autoEmail = agentEmail;
           const autoName = senderName || username;
@@ -6245,8 +6253,8 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
           try {
             const { getAgentPasswords } = await import("./agent-passwords.js");
             const visionPw = await getAgentPasswords(userId);
-            visionPassword = visionPw?.primary || 'AevoyAgent2026!';
-          } catch { visionPassword = 'AevoyAgent2026!'; }
+            visionPassword = visionPw?.primary || _generateSecureFallback();
+          } catch { visionPassword = _generateSecureFallback(); }
           const visionEmail = agentEmail;
           const visionName = senderName || username;
           // Inject Hive Mind learnings into vision agent task — agent starts with knowledge of what worked/failed for this domain
@@ -6725,7 +6733,10 @@ DO NOT attempt another browser action. Use search → call_external now.`;
             const _sfeHollow = (
               /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available|provided)/i.test(_sfeLC) ||
               /no\s+(?:specific|detailed|actual)\s+(?:results?|data|listings?|information)/i.test(_sfeLC) ||
-              /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+specific/i.test(_sfeLC)
+              /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+specific/i.test(_sfeLC) ||
+              /(?:requires? authentication|page didn't load|couldn't (?:access|load|reach))/i.test(_sfeLC) ||
+              // Link-dump detection: if summary is mostly URLs with no substantive data
+              ((_sfeLC.match(/https?:\/\//g) || []).length >= 3 && !(/\d{1,3}[,.]?\d{0,3}\s*(million|billion|speakers|people|users|%|dollars|\$|£|€)/i.test(summary.content)))
             );
             if (_sfeHollow) {
               console.log(`[SEARCH-FAST-EXIT] Summary is hollow ("data not available") — continuing iteration for better results`);
@@ -7513,7 +7524,7 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                 console.log(`[ADVICE-GATE] Launching vision agent to complete task on ${advGateUrl.substring(0, 80)}`);
                 try {
                   let agPw = '';
-                  try { const { getAgentPasswords } = await import("./agent-passwords.js"); const agP = await getAgentPasswords(userId); agPw = agP?.primary || 'AevoyAgent2026!'; } catch { agPw = 'AevoyAgent2026!'; }
+                  try { const { getAgentPasswords } = await import("./agent-passwords.js"); const agP = await getAgentPasswords(userId); agPw = agP?.primary || _generateSecureFallback(); } catch { agPw = _generateSecureFallback(); }
                   const agEmail = agentEmail;
                   const agName = senderName || username;
                   const agPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';

@@ -2267,7 +2267,7 @@ export async function generateBrowserStepResponse(
       if (content.length > 10) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.15 + outTok * 0.60) / 1_000_000;
+        const cost = (inTok * 0.075 + outTok * 0.30) / 1_000_000;
         console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "gemini", taskId, "browser-step").catch(() => {});
         return { content, cost };
@@ -2346,8 +2346,10 @@ export async function generateBrowserStepResponse(
       }), 8000);
       const content = stripThinkTags(response.choices[0]?.message?.content || '');
       if (content.length > 10) {
-        console.log(`[AI] BrowserStep (Groq Scout) | $0`);
-        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        console.log(`[AI] BrowserStep (Groq Scout) | $0 | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
@@ -2366,8 +2368,10 @@ export async function generateBrowserStepResponse(
       }), 5000);
       const content = stripThinkTags(response.choices[0]?.message?.content || '');
       if (content.length > 10) {
-        console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0`);
-        if (userId) trackApiCall(userId, "llama-3.1-8b-instant", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0 | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "llama-3.1-8b-instant", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
@@ -2408,7 +2412,7 @@ export async function generateBrowserStepResponse(
 
 /**
  * Generate response for vision tasks (screenshot analysis).
- * Order: Haiku (PRIMARY) → Gemini Flash → Groq Scout → OpenRouter free (with backoff) → DeepSeek text → Groq text
+ * Order: Gemini Flash (PRIMARY) → Groq Scout → OpenRouter free (with backoff) → DeepSeek text → Groq text → Haiku (LAST RESORT)
  * NO Sonnet — too expensive.
  *
  * Cost per 40-step task:
@@ -2584,7 +2588,7 @@ export async function generateVisionResponse(
       if (content.length > 10) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.10 + outTok * 0.40) / 1_000_000;
+        const cost = (inTok * 0.075 + outTok * 0.30) / 1_000_000;
         console.log(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
         if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
         return { content, cost };
