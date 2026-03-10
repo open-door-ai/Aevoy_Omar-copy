@@ -476,7 +476,7 @@ const MODEL_MIN_INTERVAL: Record<string, number> = {
   'qwen/qwen3-32b': 30000,                            // 6K TPM — tightest, 2 calls/min max
   'groq/compound-mini': 20000,                          // 70K TPM, no TPD limit
   'llama-3.1-8b-instant': 8000,                        // 6K TPM but ~2K per call, browser workhorse
-  'gemini-2.5-flash': 15000,                            // free tier 10 RPM — needs spacing
+  'gemini-2.5-flash': 7000,                             // free tier 10 RPM (6s/req) — 7s gives safety margin
 };
 
 async function paceModelCall(model: string): Promise<void> {
@@ -2329,8 +2329,8 @@ export async function generateBrowserStepResponse(
       if (msg.includes('429') || msg.includes('rate')) {
         deepseekBackoffUntil = Date.now() + 60000;
       } else if (msg.includes('402')) {
-        deepseekBackoffUntil = Date.now() + 300000; // 5 min if out of funds
-        console.error('[AI] DeepSeek balance depleted — falling back');
+        deepseekBackoffUntil = Date.now() + 3600000; // 1 hour if out of funds — no point retrying
+        console.error('[AI] DeepSeek balance depleted — backing off for 1 hour');
       } else {
         deepseekBackoffUntil = Date.now() + 10000;
       }
