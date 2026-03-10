@@ -1524,6 +1524,7 @@ IDENTITY & SIGNUPS:
 
 SHOPPING: Search → product → Add to Cart → DONE with price.
 BOOKING: Date/time/party → Search → Pick slot → Fill contact → Confirm.
+DATA EXTRACTION: If the task asks to FIND, GET, LIST, or EXTRACT information, and the page ALREADY shows that information (quotes, prices, names, data), output DONE with ALL the data immediately. Do NOT click around, navigate, or log in — just READ what is on the page and report it.
 
 MULTI-TAB: Name tabs meaningfully. Max 5. SWITCH_TAB before acting.
 
