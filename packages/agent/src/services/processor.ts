@@ -3918,6 +3918,45 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                   signupAutoCompleted = true;
                 }
                 console.log(`[BROWSER-FAST-PATH] SUCCESS (steps=${_bfpResult.steps}, browserAction=${_bfpIsBrowserActionTask}) — ${_bfpIsBrowserActionTask ? 'will verify' : 'auto-pass'}`);
+
+                // COMPOUND TASK: If BFP extracted data AND task also wants a document, create it now.
+                // e.g. "Go to HN, get top 5 stories, put them in an Excel spreadsheet"
+                const _bfpWantsDoc = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(_bfpTaskText) ? 'create_excel'
+                  : /\b(powerpoint|pptx|presentation slides?)\b/i.test(_bfpTaskText) ? 'create_powerpoint'
+                  : /\b(word document|docx)\b/i.test(_bfpTaskText) ? 'create_word'
+                  : /\b(pdf)\b/i.test(_bfpTaskText) ? 'create_pdf' : null;
+                if (_bfpWantsDoc) {
+                  try {
+                    const _bfpDocExt = _bfpWantsDoc === 'create_excel' ? 'xlsx' : _bfpWantsDoc === 'create_powerpoint' ? 'pptx' : _bfpWantsDoc === 'create_pdf' ? 'pdf' : 'docx';
+                    const _bfpDocFile = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_bfpDocExt}`;
+                    const _bfpDocTypeName = _bfpWantsDoc === 'create_excel' ? 'spreadsheet' : _bfpWantsDoc === 'create_powerpoint' ? 'presentation' : _bfpWantsDoc === 'create_pdf' ? 'PDF' : 'Word document';
+                    console.log(`[BROWSER-FAST-PATH] Compound task: creating ${_bfpDocTypeName} from browser-extracted data`);
+                    let _bfpDocResult: any;
+                    if (_bfpWantsDoc === 'create_excel') {
+                      const { createExcelFile } = await import('../execution/actions/create-excel.js');
+                      // Parse extracted data into rows
+                      const _bfpLines = _bfpResult.result.split(/\d+\.\s+/).filter((l: string) => l.trim().length > 3);
+                      const _bfpRows = _bfpLines.map((l: string) => l.trim().replace(/,?\s*$/, '').split(/\s*[-–—]\s*|\s*:\s*/));
+                      _bfpDocResult = await createExcelFile({ filename: _bfpDocFile, sheets: [{ name: 'Data', headers: ['Item', 'Details'], data: _bfpRows.length > 0 ? _bfpRows : [[_bfpResult.result]] }] });
+                    } else if (_bfpWantsDoc === 'create_powerpoint') {
+                      const { createPowerPoint } = await import('../execution/actions/create-powerpoint.js');
+                      _bfpDocResult = await createPowerPoint({ filename: _bfpDocFile, slides: [{ title: subject, content: _bfpResult.result }] });
+                    } else if (_bfpWantsDoc === 'create_word') {
+                      const { createWordDocument } = await import('../execution/actions/create-word.js');
+                      _bfpDocResult = await createWordDocument({ filename: _bfpDocFile, sections: [{ type: 'paragraph', text: _bfpResult.result }], title: subject });
+                    } else {
+                      const { createSimplePDF } = await import('../execution/actions/create-pdf.js');
+                      _bfpDocResult = await createSimplePDF(_bfpDocFile, subject, [_bfpResult.result]);
+                    }
+                    if (_bfpDocResult?.success && _bfpDocResult?.url) {
+                      aiResponse.content = `Your ${_bfpDocTypeName} is ready!\n\n**File:** ${_bfpDocFile}\n**Download:** ${_bfpDocResult.url}\n\nData included:\n${_bfpResult.result}`;
+                      console.log(`[BROWSER-FAST-PATH] Document created: ${_bfpDocResult.url}`);
+                    }
+                  } catch (docErr) {
+                    console.warn(`[BROWSER-FAST-PATH] Document creation failed: ${docErr}`);
+                    // Still return the extracted data as text (the BFP result is already set)
+                  }
+                }
               } // end data-check else
               } else {
                 // Vision agent failed — construct a meaningful response from what happened.
