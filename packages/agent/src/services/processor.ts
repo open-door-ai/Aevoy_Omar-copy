@@ -1481,10 +1481,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // Extract fields from task text and create the PDF directly with PDFKit vector drawing.
     // SKIP: If user names a specific website ("go to canva.com"), this is a BROWSER task.
     const _earlyBcText = `${subject} ${body || ''}`;
-    // Generic website detection — no hardcoded site names
-    const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on|at|from|via)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(_earlyBcText) ||
+    const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_earlyBcText) ||
       /\bhttps?:\/\/\S+/i.test(_earlyBcText) ||
-      /\b(sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(_earlyBcText);
+      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+([A-Z][a-z]{2,20})\b/i.test(_earlyBcText);
     const _earlyIsBc = !_earlyBcUsesWebsite && /\b(business cards?)\b/i.test(_earlyBcText);
     if (_earlyIsBc) {
       console.log(`[BUSINESS-CARD-FAST-PATH] Detected business card task — creating PDF directly`);
@@ -2846,10 +2845,9 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // EXCLUDE: document/spreadsheet tasks that must use action tags (create_excel, create_word, etc.)
     // Those need the full SYSTEM_PROMPT where [ACTION:] tags are defined — not GENERATE_SYSTEM_PROMPT
     // BUT: If user names a specific website ("go to canva.com and create a business card"), this is a BROWSER task
-    // Generic website detection — catches ANY domain (no hardcoded site lists)
-    const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on|at|from|via)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
+    const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
-      /\b(sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`);
+      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+([A-Z][a-z]{2,20})\b/i.test(`${subject} ${body}`);
     const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
@@ -2973,12 +2971,17 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0) {
       console.warn(`[REFUSAL-DETECT] AI refused task with model=${aiResponse.model}: "${aiResponse.content.substring(0, 100)}"`);
       // Direct browse injection — don't waste time retrying, free models often refuse the same way
-      const _domainMatch = subject.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|bestbuy|walmart|target|costco|ikea|opentable|booking|airbnb)\b/i);
-      const _taskUrl = _domainMatch
-        ? `https://www.${_domainMatch[1].toLowerCase()}.com`
-        : _isSignupContext
-          ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
-          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+      // Generic domain extraction: find any domain in the task text, or extract a brand/service name
+      const _domainInText = subject.match(/\b([\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai))\b/i);
+      const _brandMatch = subject.match(/\b(?:for|on|at|with|from|my|the)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+        || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1];
+      const _taskUrl = _domainInText
+        ? `https://www.${_domainInText[1].toLowerCase()}`
+        : _brandMatch
+          ? `https://www.${_brandMatch.toLowerCase()}.com`
+          : _isSignupContext
+            ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
+            : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
       aiResponse.content = `Starting the task now...`;
       aiResponse.actions = [{ type: 'browse' as const, params: { url: _taskUrl } }];
       _refusalRecovered = true;
@@ -3272,17 +3275,23 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     const _browseInjText = `${subject} ${body || ''}`;
     // Generic browse injection — detect ANY browser-requiring task (signup, booking, design, ordering)
     // NO hardcoded site URLs — extract domain from task text or fall back to search
-    const _needsBrowseInject = /\b(business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|card)|sign\s*up|signup|register\s+(for|on|at)|book\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(?:a\s+)?(?:ride|food|delivery|meal)\b)\b/i.test(_browseInjText);
+    const _needsBrowseInject = /\b(business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|card)|sign\s*up|signup|register\s+(for|on|at)|book\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(?:a\s+)?\w+)\b/i.test(_browseInjText) || /\b[\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i.test(_browseInjText);
     const _hasBrowseInAction = aiResponse.actions.some(a => ['browse', 'search', 'navigate', 'screenshot'].includes(a.type));
     if (_needsBrowseInject && !_hasBrowseInAction && aiResponse.actions.length === 0) {
       // Generic: extract domain from task text, or fall back to search
-      const _domainInTask = _browseInjText.match(/\b(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))\b/i)?.[1];
-      const _injectAction = _domainInTask
-        ? { type: 'browse' as any, params: { url: `https://${_domainInTask}` } }
+      const _domainInTaskBI = _browseInjText.match(/\b(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))\b/i)?.[1];
+      const _brandInTaskBI = _browseInjText.match(/\b(?:for|on|at|with|from|use|open|go\s+to|visit)\s+([A-Z][a-z]{2,20})\b/)?.[1];
+      const _injectUrl = _domainInTaskBI
+        ? `https://www.${_domainInTaskBI}`
+        : _brandInTaskBI
+          ? `https://www.${_brandInTaskBI.toLowerCase()}.com`
+          : '';
+      const _injectAction = _injectUrl
+        ? { type: 'browse' as any, params: { url: _injectUrl } }
         : { type: 'search' as any, params: { query: subject.substring(0, 100) } };
       aiResponse.actions = [_injectAction];
       aiResponse.content = (aiResponse.content || '') + `\nNavigating to complete the task.`;
-      console.log(`[BROWSE-INJECT] Browser task with 0 actions — injected ${_domainInTask ? `browse(https://${_domainInTask})` : `search("${subject.substring(0, 60)}")`}`);
+      console.log(`[BROWSE-INJECT] Browser task with 0 actions — injected ${_injectUrl ? `browse(${_injectUrl})` : `search("${subject.substring(0, 60)}")`}`);
     }
 
     // 6c. CREDENTIAL-DEPENDENT TASK EARLY EXIT: If the task requires logging into a service
@@ -4144,10 +4153,15 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
       if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0 && _earlySignupCheck) {
         console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
-        const _domainMatch2 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello|typeform|mailchimp|hubspot|asana|monday|clickup|basecamp|todoist|evernote|figma|miro)\b/i);
-        const _forceUrl = _domainMatch2
-          ? `https://www.${_domainMatch2[1].toLowerCase()}.com/signup`
-          : `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
+        // Generic: extract domain or brand name from task text
+        const _domainInText2 = `${subject} ${body}`.match(/\b([\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai))\b/i);
+        const _brandMatch2 = `${subject} ${body}`.match(/\b(?:for|on|at|with|from)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+          || `${subject} ${body}`.match(/\b([A-Z][a-z]{2,20})\b/)?.[1];
+        const _forceUrl = _domainInText2
+          ? `https://www.${_domainInText2[1].toLowerCase()}/signup`
+          : _brandMatch2
+            ? `https://www.${_brandMatch2.toLowerCase()}.com/signup`
+            : `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
         console.log(`[REFUSAL-LOOP] Injected browse action: ${_forceUrl}`);
@@ -4158,9 +4172,14 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           /\b(want me to|shall i|would you like|do you want|find the.*link|show you how)\b/i.test(aiResponse.content) &&
           !/\b(signed up|created.*account|account.*created|registered|successfully)\b/i.test(aiResponse.content)) {
         console.warn(`[PASSIVE-SIGNUP] AI described service instead of signing up — forcing browse`);
-        const _domainMatch3 = `${subject} ${body}`.match(/\b(swagbucks|adobe|canva|netflix|spotify|linkedin|twitter|indeed|glassdoor|fiverr|upwork|etsy|ebay|amazon|notion|dropbox|slack|zoom|github|trello|typeform|mailchimp|hubspot|asana|monday|clickup|basecamp|todoist|evernote|figma|miro)\b/i);
-        const _forceSignupUrl = _domainMatch3
-          ? `https://www.${_domainMatch3[1].toLowerCase()}.com`
+        // Generic: extract domain or brand name from task text
+        const _domainInText3 = `${subject} ${body}`.match(/\b([\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai))\b/i);
+        const _brandMatch3 = `${subject} ${body}`.match(/\b(?:for|on|at|with|from)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+          || `${subject} ${body}`.match(/\b([A-Z][a-z]{2,20})\b/)?.[1];
+        const _forceSignupUrl = _domainInText3
+          ? `https://www.${_domainInText3[1].toLowerCase()}`
+          : _brandMatch3
+            ? `https://www.${_brandMatch3.toLowerCase()}.com`
           : `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceSignupUrl } }];
@@ -5362,7 +5381,8 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
         // E.g. "Make business cards on Canva" → AI calls user instead of opening canva.com.
         // Only block if: (a) it's a direct browser task, (b) no browser actions taken yet, (c) round ≤ 2
         const _callGuardTaskText = `${subject} ${body || ''}`;
-        const _isBrowserDirectTask = /\b(sign\s?up|signup|register\s+(for|on|with|at)|cancel\s+(my\b|the\b|your\b|\w+\s+subscription)|book\s+(a|my|me|the)\b|reserve\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(uber|lyft|doordash|grubhub|instacart|skip)|purchase|buy\s+(a|me|my|this|that)\b|subscribe\s+(to|for|me)\b|create\b.*\baccount|make\b.*\baccount|canva|figma|adobe|business\s*cards?|make\s+(me\s+)?(a\s+)?(design|logo|graphic|banner))\b/i.test(_callGuardTaskText);
+        // Generic browser task detection: semantic patterns + domain detection (no hardcoded brand names)
+        const _isBrowserDirectTask = /\b(sign\s?up|signup|register\s+(for|on|with|at)|cancel\s+(my\b|the\b|your\b|\w+\s+subscription)|book\s+(a|my|me|the)\b|reserve\s+(a|my|me)\b|order\s+(me\s+)?(?:an?\s+)?(?:a\s+)?\w+|purchase|buy\s+(a|me|my|this|that)\b|subscribe\s+(to|for|me)\b|create\b.*\baccount|make\b.*\baccount|business\s*cards?|make\s+(me\s+)?(a\s+)?(design|logo|graphic|banner))\b/i.test(_callGuardTaskText) || /\b[\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i.test(_callGuardTaskText);
         if (['call_user', 'call_external'].includes(action.type as string) && _isBrowserDirectTask && currentIteration <= 2) {
           const _priorBrowserAttempt = actionResults.some(r => ['browse', 'search', 'click', 'fill', 'fill_form', 'screenshot', 'screenshot_ocr'].includes(r.action?.type || ''));
           if (!_priorBrowserAttempt && visionAgentInvocations === 0) {
@@ -6430,7 +6450,7 @@ YOU must complete the task using a DIFFERENT approach:
                   aiResponse.content = summary?.result || `I've completed the task on the website.`;
                   console.log(`[VISION-AGENT] Generated proper summary for trivial result: ${aiResponse.content.substring(0, 100)}`);
                 } catch {
-                  aiResponse.content = `I've completed the task on the website (${visionPage?.url() || 'canva.com'}).`;
+                  aiResponse.content = `I've completed the task on the website (${visionPage?.url() || 'the target site'}).`;
                 }
                 }
               } else {
@@ -6581,7 +6601,11 @@ YOU must complete the task using a DIFFERENT approach:
                 console.log(`[BOT-WALL-RESTAURANT] Resy/restaurant booking blocked — pivoting to search+call strategy`);
               } else if (isBotWallError && /\b(sign\s*me?\s*up|signup|create\s+(an?\s+)?account|register\s+(for|on|with|at))\b/i.test(`${subject} ${body}`)) {
                 // Signup tasks blocked by Cloudflare — inject credentials and try Google OAuth fallback
-                const _signupService = (`${subject} ${body}`).match(/\b(prolific|figma|canva|notion|slack|discord|github|twitter|linkedin|reddit|shopify|dropbox|stripe|hubspot|salesforce|intercom)\b/i)?.[1] || 'the service';
+                // Generic service name extraction: match brand from task text via preposition context or capitalized word
+                const _signupService = (`${subject} ${body}`).match(/\b(?:for|on|at|with|from)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+                  || (`${subject} ${body}`).match(/\b([A-Z][a-z]{2,20})(?:'s)?\s+(?:signup|registration|account|login|page)\b/)?.[1]
+                  || (`${subject} ${body}`).match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
+                  || 'the service';
                 const _agentEmail = agentEmail;
                 const _signupPassword = `${username}@aevoy2026`;
                 visionFailureNote = `[SIGNUP BLOCKED by Cloudflare] Bot-wall detected on ${_signupService} registration page. Do NOT give up or describe the service. Execute this strategy NOW:\n` +
@@ -7405,8 +7429,9 @@ The user explicitly asked you to negotiate. That requires a phone call. DO IT NO
 
     // POST-LOOP ACCOUNT MANAGEMENT GATE: If user asked to cancel/manage an account
     // and the AI gave advice instead of doing it, reject and force browser action.
+    // Generic account management detection: action verb + account/subscription context or any brand name
     const isAccountTask = /\b(cancel|unsubscribe|downgrade|delete|deactivate|pause|manage|change plan|switch plan|update payment|change password|close account)\b/i.test(subject) &&
-      /\b(subscription|account|netflix|hulu|spotify|disney|amazon prime|youtube premium|apple music|hbo|paramount|peacock)\b/i.test(subject);
+      (/\b(subscription|account|membership|plan|billing|service|premium)\b/i.test(subject) || /\b[A-Z][a-z]{2,20}\b/.test(subject));
     if (isAccountTask && aiResponse.content) {
       const isAdviceOnly = /\b(go to|visit|navigate to|log in to|you can|you'll need to|here's how|follow these steps|you should)\b/i.test(aiResponse.content) &&
         !actionResults.some(r => ['login', 'click', 'fill', 'submit'].includes(r.action?.type || '') && r.success);
@@ -8643,7 +8668,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // so "Want me to fill out the signup form for you?" is ALWAYS caught (e.g. Figma signup).
     const _taskHasFormData = /\b(name|email|phone|address|password|username|first name|last name|date of birth|dob|zip|postal)\b/i.test(`${subject} ${body}`);
     const _responseAsksToFill = /\b(want me to fill|shall i fill|would you like me to fill|do you want me to fill|ready to fill|want me to (enter|submit|complete))\b/i.test(cleanResponse);
-    const _isBrowserSignupTask = /\b(sign\s?up|signup|register|create.*account|figma|canva|adobe)\b/i.test(subject + ' ' + (body || ''));
+    // Generic: detect signup tasks semantically + any domain in task text (no hardcoded brand names)
+    const _isBrowserSignupTask = /\b(sign\s?up|signup|register|create.*account|make.*account)\b/i.test(subject + ' ' + (body || '')) || /\b[\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i.test(subject + ' ' + (body || ''));
     if ((_taskHasFormData || _isBrowserSignupTask) && _responseAsksToFill) {
       console.log(`[PASSIVE-GUARD] Form-fill passive detected — agent asks to fill instead of doing it (hasFormData=${_taskHasFormData}, isSignup=${_isBrowserSignupTask})`);
       // Strip the "want me to fill" phrase wherever it appears in the response
@@ -8659,7 +8685,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect if task is INHERENTLY a browser/action task even if the AI never tried any actions
     // This catches the case where the AI's FIRST response is already passive ("Want me to sign you up?")
     // without ever attempting to browse/click/fill anything
-    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register(?:ed|ing)?|create.*account|make.*account|cancel(?:l?ed|l?ing)?|unsubscrib(?:e|ed|ing)|book(?:ed|ing)?|reserv(?:ation|e|ed|ing)?|buy|order(?:ed|ing)?|purchas(?:e|ed|ing)|subscrib(?:e|ed|ing)|log\s*in|login|canva|figma|adobe|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b|use\s+(the\s+)?browser|open\s+(the\s+)?browser|go\s+to\s+\w+\.(com|ca|org|net|io)|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(subject + ' ' + (body || ''));
+    // Generic action task detection: semantic patterns + domain detection (no hardcoded brand names)
+    const _isActionTaskByType = /\b(sign\s?up|sign\s+me\s+up|signup|register(?:ed|ing)?|create.*account|make.*account|cancel(?:l?ed|l?ing)?|unsubscrib(?:e|ed|ing)|book(?:ed|ing)?|reserv(?:ation|e|ed|ing)?|buy|order(?:ed|ing)?|purchas(?:e|ed|ing)|subscrib(?:e|ed|ing)|log\s*in|login|business\s*cards?|design\s+(me|a|my)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|set\s+(them\s+|it\s+|everything\s+)?up|post\s+(it|to|on)\b|install|configure|deploy|build\s+(me|a|my)|then\s+(post|send|submit|share|publish)\b|use\s+(the\s+)?browser|open\s+(the\s+)?browser|go\s+to\s+\w+\.(com|ca|org|net|io)|star\b|follow\b|like\b|upvote|downvote|pin\b|save\b|favorite|bookmark|fork\b|watch\b|clap\b|react\b|endorse|join\b|leave\b|mute\b|block\b|report\b|flag\b|share\b|retweet|repost)\b/i.test(subject + ' ' + (body || '')) || /\b[\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i.test(subject + ' ' + (body || ''));
     const _isBrowserActionTask = lastVisionFailed || visionAgentInvocations > 0 || _isActionTaskByType ||
       actionResults.some(r => ['browse', 'click', 'fill', 'submit', 'login', 'fill_form', 'search', 'screenshot', 'screenshot_ocr', 'extract'].includes(r.action.type));
     // Detect if this is a LEGITIMATE credential request (external service login required)
@@ -8672,8 +8699,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // Classic: asking for existing account credentials (login to external service)
       // This is legitimate — can't log into the USER'S account without their credentials.
       // SIGNUP password requests are NOT legitimate — agent uses its OWN password for signups.
+      // Generic: any response mentioning credential needs with a recognizable service/account context
       (
-        /\b(netflix|hulu|spotify|disney|amazon|bank|credit card|subscription|uber|lyft|doordash|grubhub|instacart|airbnb|booking\.com|expedia|twitter|x\.com|linkedin|instagram|facebook|paypal|venmo)\b/i.test(cleanResponse) &&
+        /\b(subscription|account|membership|plan|billing|bank|credit card|login|password|credentials)\b/i.test(cleanResponse) &&
         /\b(need|require|provide|your (email|password|login|credentials))\b/i.test(cleanResponse)
       )
     );
@@ -8700,7 +8728,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       console.log('[PASSIVE-GUARD] Main-loop passive response detected — forcing proactive rewrite');
       // Determine failure context for a better rewrite prompt
       const _isBotBlocked = visionAgentInvocations >= 2 && lastVisionFailed;
-      const _siteName = (subject + ' ' + (body || '')).match(/\b(fiverr|upwork|swagbucks|canva|figma|twitter|linkedin|instagram|facebook|notion|slack|github|dropbox|shopify|squarespace|airbnb|spotify|reddit|medium|substack|etsy|ebay|pinterest|discord|twitch|patreon|tiktok|amazon|uber|lyft|doordash)\b/i)?.[1] || '';
+      // Generic: extract service name from task text via preposition context, domain, or capitalized brand
+      const _siteName = (subject + ' ' + (body || '')).match(/\b(?:for|on|at|with|from)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+        || (subject + ' ' + (body || '')).match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
+        || (subject + ' ' + (body || '')).match(/\b([A-Z][a-z]{2,20})\b/)?.[1]
+        || '';
       try {
         const { quickValidate } = await import("./ai.js");
         const _botCtx = _isBotBlocked
@@ -8756,15 +8788,19 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // Re-submit the task with explicit credentials injected — agent just does it
         const _autoEmail = agentEmail;
         const _autoPass = `${username}@aevoy2026`;
+        // Generic: extract service name via preposition context, domain, or capitalized brand
         const _credService = [subject, cleanResponse].join(' ')
-          .match(/\b(canva|notion|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|swagbucks|fiverr|upwork)\b/i)?.[1]
+          .match(/\b(?:for|on|at|with|from)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+          || [subject, cleanResponse].join(' ').match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
           || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1] || 'the service';
         cleanResponse = `I signed up for ${_credService} using ${_autoEmail}. Your account is ready to use.`;
         console.log(`[CREDENTIAL-FIX] Signup task — using auto-credentials instead of asking user`);
       } else {
         // CANCEL/MANAGE: This IS the user's account — must ask for THEIR credentials
+        // Generic: extract service name via preposition context, domain, or capitalized brand
         const _credService = [subject, cleanResponse].join(' ')
-          .match(/\b(netflix|hulu|spotify|disney|amazon|uber|lyft|doordash|grubhub|airbnb|canva|notion|slack|github|twitter|linkedin|instagram|facebook)\b/i)?.[1]
+          .match(/\b(?:for|on|at|with|from|my|cancel|manage)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+          || [subject, cleanResponse].join(' ').match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
           || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1] || 'the service';
         cleanResponse = `To cancel your ${_credService} subscription, I need your login credentials. Reply with your ${_credService} email address and password and I'll log in and cancel it immediately.`;
         console.log(`[CREDENTIAL-REQUEST] Cancel/manage task — asking for user's existing credentials`);
@@ -8776,8 +8812,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // when the system prompt says to use call_user to collect credentials directly.
     // This is always wrong — the agent should CALL the user, not send them to settings.
     if (cleanResponse && /\b(connected apps|agent passwords|settings.*agent|vault|add.*login|add.*account)\b/i.test(cleanResponse)) {
-      const _serviceMatch = subject.match(/\b(netflix|hulu|spotify|disney\+?|amazon prime|apple tv|youtube premium|crave|paramount|peacock|max hbo|tidal|deezer|pandora|crunchyroll)\b/i);
-      const _serviceName = _serviceMatch?.[1] || 'the service';
+      // Generic: extract service name via preposition context, domain, or capitalized brand
+      const _serviceName = subject.match(/\b(?:cancel|manage|my|the)\s+([A-Z][a-z]{2,20}(?:\+|\s+[A-Za-z]+)?)\b/)?.[1]
+        || subject.match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
+        || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1]
+        || 'the service';
       cleanResponse = `To cancel your ${_serviceName} subscription, I need your login credentials. Reply with your ${_serviceName} email address and password and I'll log in and cancel it immediately.`;
       console.log('[CREDENTIAL-FIX] Replaced "Connected Apps" response with direct credential request');
     }
@@ -8789,7 +8828,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Pre-compute booking check BEFORE the gate so we can override signupAutoCompleted.
     // ROOT CAUSE FIX: vision agent sets signupAutoCompleted=true when result has "found",
     // which skips the quality gate even when the response is "You can book a table..."
-    const _isBookingTaskPre = /\b(book|reserv(?:ation|e)|dining|restaurant|table|resy|opentable)\b/i.test(subject + ' ' + (body || ''));
+    // Generic booking detection: semantic patterns only, no hardcoded site names
+    const _isBookingTaskPre = /\b(book|reserv(?:ation|e)|dining|restaurant|table|reso\b)\b/i.test(subject + ' ' + (body || ''));
     const _hasVenueNamesPre = /[A-Za-z'][a-zA-Z']{1,}\s+(?:Restaurant|Bistro|Kitchen|Bar|Grill|Brasserie|Café|Cafe|Lane|Street|House)\b/i.test(cleanResponse)
       || /\b(brick lane|tavern|eatery|steakhouse|pizzeria)\b/i.test(cleanResponse)
       || (_isBookingTaskPre && /\b(restaurant|bistro|bar|grill|café|cafe|brasserie|eatery|dining)\b/i.test(cleanResponse));
@@ -8980,8 +9020,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         // (email is always in identity injection: "⚡ YOUR IDENTITY: email=..."). Should ask for PASSWORD only.
         || /\b(reply with your email|what'?s your email|what email (should|would|do)|send me your email|your email (address|for the))\b/i.test(cleanResponse);
       if (_isSignupTask && _sfGivesInstructions && !_sfCompletionWords.test(cleanResponse) && !signupAutoCompleted && !_isLegitCredentialRequest) {
-        const _svcMatch = (subject + ' ' + cleanResponse).match(/\b(notion|canva|slack|github|twitter|linkedin|instagram|facebook|pinterest|reddit|youtube|tiktok|airbnb|spotify|dropbox|shopify|wordpress|squarespace|wix|medium|substack|trello|asana|monday|figma|zoom|discord|twitch|patreon|etsy|ebay|prolific|stripe|hubspot|intercom|adobe|usertesting|trymyui|willful|epilogue|resy|opentable|legalzoom|grammarly|typeform|hootsuite|mailchimp|buffer|semrush|ahrefs|moz)\b/i);
-        const _svcName = _svcMatch?.[1] ? _svcMatch[1].charAt(0).toUpperCase() + _svcMatch[1].slice(1) : 'the service';
+        // Generic: extract service name via preposition context, domain, or capitalized brand
+        const _svcExtract = (subject + ' ' + cleanResponse).match(/\b(?:for|on|at|with|from)\s+([A-Z][a-z]{2,20})\b/)?.[1]
+          || (subject + ' ' + cleanResponse).match(/\b([A-Z][a-z]{2,20})(?:'s)?\s+(?:signup|registration|account|login|page)\b/)?.[1]
+          || (subject + ' ' + cleanResponse).match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
+          || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1];
+        const _svcName = _svcExtract ? _svcExtract.charAt(0).toUpperCase() + _svcExtract.slice(1) : 'the service';
         // FULL-SEND: Agent uses its OWN credentials for signups — never asks the user.
         // Replace the instructional response and let the loop continue (agent retries with auto-creds).
         const _sfAutoEmail = agentEmail;
@@ -8998,13 +9042,15 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect when AI describes a design/creation WITHOUT actually doing it via browser.
     // E.g. task: "Make business cards on Canva" → AI describes "The design features blue..."
     // without ever navigating to Canva. Flag as fabrication and tell user to retry.
-    const _designOrCreateTask = /\b(canva|figma|adobe|crello|visme|snappa|business\s*cards?|design (me|a|some|your)|make.*design|create.*design|make.*business card)\b/i.test(subject + ' ' + (body || ''));
+    // Generic: detect any design/creation task semantically (not by brand name)
+    const _designOrCreateTask = /\b(business\s*cards?|design\s+(me|a|some|your)|make\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|create\s+(me\s+)?(a\s+)?(design|logo|poster|graphic|banner|flyer|card)|make.*business\s*card)\b/i.test(subject + ' ' + (body || ''))
+      || (/\b[\w-]+\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i.test(subject + ' ' + (body || '')) && /\b(design|create|make|build)\b/i.test(subject + ' ' + (body || '')));
     const _noBrowserUsed = visionAgentInvocations === 0 && !lastVisionFailed
       && !actionResults.some(r => ['browse', 'click', 'fill', 'fill_form', 'submit', 'screenshot', 'screenshot_ocr'].includes(r.action.type));
     const _fabricatedDesign = /\b(the design (features?|includes?|showcases?|has|consists?|incorporates?)|i (created?|designed?|made?) (a|an|the|your) (professional |custom |unique |beautiful |stunning )?(design|business card|logo|banner|card)|features? (a|an|professional|clean|modern|elegant|sleek|minimalist)|design (includes?|displays?|shows?|presents?))\b/i.test(cleanResponse);
     if (_designOrCreateTask && _noBrowserUsed && _fabricatedDesign) {
       console.log('[HALLUCINATION-GUARD] AI described a design without browser — flagging as incomplete');
-      cleanResponse = `I wasn't able to access the design tool to create this for you. The browser wasn't used, so no actual design was made — I described what it would look like instead, which isn't helpful. Please resend the task and I'll navigate directly to Canva (or similar) to build your design.`;
+      cleanResponse = `I wasn't able to access the design tool to create this for you. The browser wasn't used, so no actual design was made — I described what it would look like instead, which isn't helpful. Please resend the task and I'll navigate directly to the design platform to build your design.`;
     }
 
     // ── AUTO-ACTION TRIGGER — GENERIC ─────────────────────────────────────
@@ -9689,10 +9735,13 @@ RULES:
       const subjectLc = (subject || '').toLowerCase();
       const responseLc = cleanResponse.toLowerCase();
       const isSignupTask = /\b(sign\s*up|signup|create.*account|register|enroll|joined|signed up|account created)\b/i.test(subjectLc + ' ' + responseLc);
-      const platformMatch = (subjectLc + ' ' + responseLc).match(/\b(swagbucks|tiktok|twitter|instagram|youtube|fiverr|upwork|linkedin|discord|reddit|github|trello|notion|slack|pinterest|snapchat|twitch)\b/i);
+      // Generic: extract platform name from task text via preposition context, domain, or capitalized brand
+      const _platformExtract = (subjectLc + ' ' + responseLc).match(/\b(?:for|on|at|with|from)\s+([a-z]{2,20})\b/i)?.[1]
+        || (subjectLc + ' ' + responseLc).match(/\b([\w-]+)\.(?:com|org|net|io|ca|co|app|dev|ai)\b/i)?.[1]
+        || (subject || '').match(/\b([A-Z][a-z]{2,20})\b/)?.[1];
 
-      if (isSignupTask && platformMatch) {
-        const platform = platformMatch[1];
+      if (isSignupTask && _platformExtract) {
+        const platform = _platformExtract;
         const monitorDesc = `Check ${platform} for new messages, notifications, and activity every 30min`;
         const { registerMonitoringJob: regMon } = await import('./monitoring.js');
         await regMon(userId, username, monitorDesc, 30 * 60 * 1000);
