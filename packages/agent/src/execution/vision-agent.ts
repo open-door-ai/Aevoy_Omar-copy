@@ -3357,8 +3357,14 @@ export async function runVisionAgent(
         }
 
         // Track progress — bail early when stuck in useless loop
+        // Also update DB so the adaptive timeout supervisor sees forward progress
         if (ok) {
           consecutiveNoProgress = 0;
+          if (taskId) {
+            void getSupabaseClient().from('tasks').update({
+              action_success_count: steps + 1
+            }).eq('id', taskId).then(() => {});
+          }
         } else {
           consecutiveNoProgress++;
           if (consecutiveNoProgress >= 8) {
