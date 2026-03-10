@@ -1752,6 +1752,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
       }
     }
 
+    // ── SIGNUP INTENT DETECTION (must run BEFORE fast paths to prevent bypass) ──
+    // When user says "Sign me up for X AND THEN do Y", fast paths must NOT steal the task.
+    const _fpFullText = `${subject} ${body || ''}`;
+    const _hasSignupIntent = /\b(sign\s*(?:\w+\s+)?up|signup|create\b.*\baccount|make\b.*\baccount|register\s+(?:for|on|at|with)|enroll|open\b.*\baccount)\b/i.test(_fpFullText);
+
     // Email sending fast path ("send email to X")
     const earlyEmailResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
     if (earlyEmailResult) {
@@ -1878,7 +1883,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const redditText0 = subject + ' ' + (body || '');
     const redditSubMatch = redditText0.match(/\br\/([a-zA-Z0-9_]+)\b/);
     const isRedditQuery = redditSubMatch && /\b(top|hot|new|trending|best|popular|posts?|front\s*page)\b/i.test(redditText0);
-    if (isRedditQuery && redditSubMatch?.[1]) {
+    if (isRedditQuery && redditSubMatch?.[1] && !_hasSignupIntent) {
+      // Note: _hasSignupIntent gates this — "sign me up AND find posts" goes to full pipeline
       const sub = redditSubMatch[1];
       const sortMatch = redditText0.match(/\b(hot|new|top|rising|controversial)\b/i);
       const sort = sortMatch?.[1]?.toLowerCase() || 'top';
@@ -2847,8 +2853,8 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // BUT: If user names a specific website ("go to canva.com and create a business card"), this is a BROWSER task
     const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
-      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa|opentable|swagbucks|bestbuy|amazon|ebay|etsy|shopify|wix|squarespace|wordpress)\b/i.test(`${subject} ${body}`);
-    const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
+      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(?:an?\s+|the\s+)?(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa|opentable|swagbucks|bestbuy|amazon|ebay|etsy|shopify|wix|squarespace|wordpress)\b/i.test(`${subject} ${body}`);
+    const _isDocumentAction = !_taskNamesWebsite && !_hasSignupIntent && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
     const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
