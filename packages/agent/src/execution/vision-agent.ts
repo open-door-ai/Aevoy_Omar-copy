@@ -2481,8 +2481,12 @@ export async function runVisionAgent(
       postSubmitStep = false; // reset; set again after submit action detected below
 
       // Evidence trail: full-quality screenshot every 5 steps (independent of vision)
+      // Cap at 5 screenshots to prevent memory bloat (each is ~50-80KB base64)
       if (steps === 0 || steps % 5 === 0) {
-        try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
+        try {
+          if (screenshots.length >= 5) screenshots.shift(); // drop oldest
+          screenshots.push(await takeScreenshot(activePage));
+        } catch { /* non-critical */ }
       }
 
       // Live screenshot upload to Supabase every 3 steps (fire-and-forget)
