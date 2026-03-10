@@ -1631,13 +1631,57 @@ async function buildPrompt(
     ? `\n🎯 CONFIRMATION PAGE DETECTED: You are on "${url}" — this is a result/success page. The task is DONE. Output: DONE "Summary of what you see (form data, order details, JSON keys, confirmation message)". Do NOT output any other action. Do NOT navigate back.\n`
     : '';
 
+  // ── AUTO-SUGGEST: Generate suggested actions from accessibility tree for cheap models ──
+  // Matches field labels to credentials dynamically. Works for ANY site — no hardcoding.
+  // This is the key to making cheap models work: give them the answer to confirm/modify.
+  let suggestedActions = '';
+  if (creds.email && !isErrorPage && !isConfirmationPage) {
+    const suggestions: string[] = [];
+    // Parse the snapshot to find textbox/input refs and match to credentials
+    const refLines = snapshot.split('\n');
+    for (const line of refLines) {
+      const refMatch = line.match(/\[(\d+)\]\s+(textbox|input|combobox)\s+"([^"]+)"/i);
+      if (!refMatch) continue;
+      const [, refNum, , fieldLabel] = refMatch;
+      const label = fieldLabel.toLowerCase();
+      // Match field labels to credentials
+      if (/\b(email|e-mail|work.?email|user.?name|login)\b/.test(label) && creds.email) {
+        suggestions.push(`FILL [${refNum}] "${creds.email}"`);
+      } else if (/\b(password|passwd|pass)\b/.test(label) && creds.password) {
+        suggestions.push(`FILL [${refNum}] "${creds.password}"`);
+      } else if (/\b(first.?name|given.?name|fname)\b/.test(label) && creds.name) {
+        suggestions.push(`FILL [${refNum}] "${creds.name.split(/\s+/)[0]}"`);
+      } else if (/\b(last.?name|surname|family|lname)\b/.test(label) && creds.name) {
+        const parts = creds.name.split(/\s+/);
+        suggestions.push(`FILL [${refNum}] "${parts.length > 1 ? parts[parts.length - 1] : creds.name}"`);
+      } else if (/\b(full.?name|your.?name|display.?name|name)\b/.test(label) && !/\b(company|org|user)\b/.test(label) && creds.name) {
+        suggestions.push(`FILL [${refNum}] "${creds.name}"`);
+      } else if (/\b(phone|tel|mobile|cell)\b/.test(label) && creds.phone) {
+        suggestions.push(`FILL [${refNum}] "${creds.phone}"`);
+      }
+    }
+    // Find submit/continue/create buttons
+    for (const line of refLines) {
+      const btnMatch = line.match(/\[(\d+)\]\s+button\s+"([^"]+)"/i);
+      if (!btnMatch) continue;
+      const [, refNum, btnLabel] = btnMatch;
+      if (/\b(sign\s*up|register|create|submit|continue|next|join|get\s*started|enroll|agree|accept)\b/i.test(btnLabel)) {
+        suggestions.push(`CLICK [${refNum}]`);
+        break; // Only suggest one submit button
+      }
+    }
+    if (suggestions.length >= 2) {
+      suggestedActions = `\n📋 SUGGESTED ACTIONS (output these or adjust as needed):\n${suggestions.join('\n')}\n`;
+    }
+  }
+
   return `TASK: ${task}
 URL: ${url}
 ${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}${confirmationNote}
 ACCESSIBILITY TREE (use [ref] numbers to target elements):
 ${snapshot}
-
-Output 3-5 actions using [ref] numbers from the tree above.`;
+${suggestedActions}
+Output actions using [ref] numbers. Example: FILL [3] "value" then CLICK [5]`;
 }
 
 // ══════════════════════════════════════════════════════════════════
