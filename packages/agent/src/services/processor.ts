@@ -3898,7 +3898,11 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               if (_bfpResult.success && _bfpResult.result && _bfpResult.result.length > 30) {
                 // Data extraction check: if task wants specific data but result is a trivial header, reject
                 const _bfpWantsData = /\b(price|deal|listing|link|rating|review|cost|address|phone|result|find|get me|get the|give me|tell me|show me|report|compare|cheapest|best|top \d|first \d|lowest|quotes?)\b/i.test(_bfpTaskText);
-                const _bfpIsTrivial = _bfpResult.result.trim().length < 60;
+                // Trivial = short AND no actual data values (numbers, prices, quantities).
+                // "Tipping the Velvet, £53.74" is short but CONTAINS data — NOT trivial.
+                // "First 3 quotes from quotes.toscrape.com:" is short and has NO data — trivial.
+                const _bfpHasDataValues = /[\$£€¥]\s*\d|\d+\.\d{2}|\b\d{3,}\b|"\s*[^"]{5,}\s*"/.test(_bfpResult.result);
+                const _bfpIsTrivial = _bfpResult.result.trim().length < 60 && !_bfpHasDataValues;
                 if (_bfpWantsData && _bfpIsTrivial) {
                   console.warn(`[BROWSER-FAST-PATH] TRIVIAL DATA REJECTED: Task wants data but got "${_bfpResult.result.substring(0, 60)}". Falling through to retry.`);
                   // Fall through to page data extraction (Strategy 1) or iteration loop
