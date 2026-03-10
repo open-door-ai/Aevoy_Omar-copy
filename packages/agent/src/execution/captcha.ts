@@ -344,9 +344,9 @@ async function solveWithCapSolver(
 
     const taskId = createResult.taskId;
 
-    // Poll for result (max 120 seconds, 5s intervals)
-    for (let i = 0; i < 24; i++) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
+    // Poll for result (max 30 seconds, 3s intervals — must not block the vision agent step loop)
+    for (let i = 0; i < 10; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       const getResponse = await fetch('https://api.capsolver.com/getTaskResult', {
         method: 'POST',
@@ -386,7 +386,7 @@ async function solveWithCapSolver(
       }
     }
 
-    return { success: false, error: 'CapSolver solve timed out after 120s' };
+    return { success: false, error: 'CapSolver solve timed out after 30s' };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: `CapSolver error: ${message}` };
@@ -504,9 +504,9 @@ async function solveWith2Captcha(
       return { success: false, error: '2captcha did not return task ID' };
     }
 
-    // Poll for result (max 120 seconds)
-    for (let i = 0; i < 24; i++) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
+    // Poll for result (max 30 seconds, 3s intervals)
+    for (let i = 0; i < 10; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       const getResponse = await fetch('https://api.2captcha.com/getTaskResult', {
         method: 'POST',
