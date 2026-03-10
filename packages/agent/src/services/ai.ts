@@ -2254,8 +2254,22 @@ export async function generateBrowserStepResponse(
   // Action-format validation: browser step responses MUST contain actual action commands.
   // Without this, dumb models return descriptions ("I see a page...") that pass the >10 char
   // check, preventing cascade to smarter models like Haiku.
-  const ACTION_PATTERN = /\b(CLICK|FILL|TYPE|SELECT|SCROLL|NAVIGATE|PRESS|DONE|FAIL|WAIT|HOVER|RIGHTCLICK)\b/;
+  // Case-insensitive: Gemini/DeepSeek may return lowercase "click [5]" — vision-agent parser
+  // already handles /i, so we just need to accept lowercase here.
+  const ACTION_PATTERN = /\b(CLICK|FILL|TYPE|SELECT|SCROLL|NAVIGATE|PRESS|DONE|FAIL|WAIT|HOVER|RIGHTCLICK|OPEN_TAB|SWITCH_TAB|CLOSE_TAB|READ_TAB|TABS)\b/i;
   const isValidBrowserAction = (content: string): boolean => ACTION_PATTERN.test(content);
+
+  // Extract action lines from verbose responses. Some models wrap actions in explanatory text:
+  // "I need to click the button\nCLICK [5]" → extract just "CLICK [5]"
+  const extractActionLines = (content: string): string => {
+    const lines = content.split('\n');
+    const actionLines = lines.filter(l => ACTION_PATTERN.test(l.trim()));
+    // If we found action lines embedded in verbose text, return just the action lines
+    if (actionLines.length > 0 && actionLines.length < lines.length) {
+      return actionLines.join('\n').trim();
+    }
+    return content; // Already clean or no actions found
+  };
 
   // ═══ PRIMARY: Gemini Flash 2.5 — cheap ($0.15/$0.60 per M), good at structured output ═══
   // 10-20x cheaper than Haiku. Good enough for browser step actions.
@@ -2269,7 +2283,8 @@ export async function generateBrowserStepResponse(
         messages,
       }), 12000);
       const rawContent = response.choices[0]?.message?.content || '';
-      const content = stripThinkTags(rawContent);
+      const stripped = stripThinkTags(rawContent);
+      const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
@@ -2277,8 +2292,8 @@ export async function generateBrowserStepResponse(
         console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "gemini", taskId, "browser-step").catch(() => {});
         return { content, cost };
-      } else if (content.length > 10) {
-        console.warn(`[AI] BrowserStep (Gemini Flash) rejected — no action command in: "${content.substring(0, 80)}"`);
+      } else if (stripped.length > 10) {
+        console.warn(`[AI] BrowserStep (Gemini Flash) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2295,7 +2310,8 @@ export async function generateBrowserStepResponse(
         messages,
       }), 12000);
       const rawContent = response.choices[0]?.message?.content || '';
-      const content = stripThinkTags(rawContent);
+      const stripped = stripThinkTags(rawContent);
+      const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
@@ -2303,8 +2319,8 @@ export async function generateBrowserStepResponse(
         console.log(`[AI] BrowserStep (DeepSeek-V3) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "deepseek-chat", inTok, outTok, cost, "deepseek", taskId, "browser-step").catch(() => {});
         return { content, cost };
-      } else if (content.length > 10) {
-        console.warn(`[AI] BrowserStep (DeepSeek) rejected — no action command in: "${content.substring(0, 80)}"`);
+      } else if (stripped.length > 10) {
+        console.warn(`[AI] BrowserStep (DeepSeek) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -2331,7 +2347,8 @@ export async function generateBrowserStepResponse(
         messages,
       }), 10000);
       const rawContent = response.choices[0]?.message?.content || '';
-      const content = stripThinkTags(rawContent);
+      const stripped = stripThinkTags(rawContent);
+      const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
@@ -2339,8 +2356,8 @@ export async function generateBrowserStepResponse(
         console.log(`[AI] BrowserStep (Llama-3.3-70B fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "meta-llama/llama-3.3-70b-instruct", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
         return { content, cost };
-      } else if (content.length > 10) {
-        console.warn(`[AI] BrowserStep (Llama-3.3-70B) rejected — no action command in: "${content.substring(0, 80)}"`);
+      } else if (stripped.length > 10) {
+        console.warn(`[AI] BrowserStep (Llama-3.3-70B) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Llama-3.3-70B) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2356,15 +2373,16 @@ export async function generateBrowserStepResponse(
         max_tokens: 512,
         messages,
       }), 8000);
-      const content = stripThinkTags(response.choices[0]?.message?.content || '');
+      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
+      const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         console.log(`[AI] BrowserStep (Groq Scout) | $0 | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
-      } else if (content.length > 10) {
-        console.warn(`[AI] BrowserStep (Groq Scout) rejected — no action command in: "${content.substring(0, 80)}"`);
+      } else if (stripped.length > 10) {
+        console.warn(`[AI] BrowserStep (Groq Scout) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2380,15 +2398,16 @@ export async function generateBrowserStepResponse(
         max_tokens: 512,
         messages,
       }), 5000);
-      const content = stripThinkTags(response.choices[0]?.message?.content || '');
+      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
+      const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0 | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "llama-3.1-8b-instant", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
-      } else if (content.length > 10) {
-        console.warn(`[AI] BrowserStep (Llama-8B) rejected — no action command in: "${content.substring(0, 80)}"`);
+      } else if (stripped.length > 10) {
+        console.warn(`[AI] BrowserStep (Llama-8B) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Groq Llama-8B) failed: ${error instanceof Error ? error.message : String(error)}`);
