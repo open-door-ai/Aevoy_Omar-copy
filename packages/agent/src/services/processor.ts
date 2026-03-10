@@ -3921,7 +3921,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                     const { generateForcedDirectAnswer } = await import("./ai.js");
                     const _bfpSummary = await generateForcedDirectAnswer(
                       _bfpTaskText,
-                      `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}\n\nExtract specific information. Include names, prices, ratings, addresses — real data only.`,
+                      `BROWSER DATA (from ${_bfpPageUrl}):\n${_bfpPageData.substring(0, 3000)}`,
                       username
                     );
                     if (_bfpSummary.content && _bfpSummary.content.length > 30) {
@@ -6509,7 +6509,7 @@ YOU must complete the task using a DIFFERENT approach:
                     const { generateForcedDirectAnswer } = await import("./ai.js");
                     const summary = await generateForcedDirectAnswer(
                       `${subject} ${body || ''}`,
-                      `BROWSER DATA (from ${visionPageUrl}):\n${visionPageData.substring(0, 3000)}\n\nExtract specific information the user asked for. List items with names, ratings, prices, links if available.`,
+                      `BROWSER DATA (from ${visionPageUrl}):\n${visionPageData.substring(0, 3000)}`,
                       username
                     );
                     if (summary.content && summary.content.length > 30) {
@@ -8005,7 +8005,7 @@ Extract the ACTUAL phone number from search results and call them:
               const { generateForcedDirectAnswer } = await import("./ai.js");
               const _qualSummary = await generateForcedDirectAnswer(
                 `${subject} ${body || ''}`,
-                `Search/action data:\n${successData.substring(0, 3000)}\n\nExtract specific information: names, prices, ratings, URLs, addresses. Present as a concise answer.`,
+                `Search/action data:\n${successData.substring(0, 3000)}`,
                 username, userId, taskId
               );
               if (_qualSummary.content && _qualSummary.content.length > 30) {
