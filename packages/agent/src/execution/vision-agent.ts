@@ -255,9 +255,11 @@ async function getAccessibilitySnapshot(page: Page): Promise<SnapshotResult> {
   try {
     const domResult = await extractDomElements(page);
 
-    // If main page has few interactive elements, check iframes for forms
-    // This catches signup modals rendered in cross-origin iframes (Canva, Google OAuth, etc.)
-    if (domResult.refs.size < 5) {
+    // Check iframes for forms if main page has few interactive elements OR no text inputs.
+    // This catches signup modals in cross-origin iframes (Canva, Google OAuth, etc.)
+    // Also catches pages with navbars (5+ links) but forms hidden in iframes.
+    const hasTextInputs = domResult.text && /\btextbox\b/i.test(domResult.text);
+    if (domResult.refs.size < 10 || !hasTextInputs) {
       try {
         const frames = page.frames().filter(f => f !== page.mainFrame() && f.url() && !f.url().startsWith('about:'));
         for (const frame of frames.slice(0, 3)) { // Check up to 3 iframes
@@ -1369,7 +1371,13 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
       }
 
       case 'wait': {
-        await page.waitForTimeout(2500);
+        // Wait for network to settle (SPA hydration, CAPTCHA solving, etc.)
+        try {
+          await page.waitForLoadState('networkidle', { timeout: 5000 });
+        } catch {
+          // networkidle timeout is fine — page may have persistent connections
+          await page.waitForTimeout(3000);
+        }
         return true;
       }
 
@@ -2322,6 +2330,18 @@ export async function runVisionAgent(
         const snapshotResult = await getAccessibilitySnapshot(activePage);
         snapshot = snapshotResult.text;
         currentRefs = snapshotResult.refs;
+
+        // SPA RETRY: If snapshot has very few interactive elements (< 3) on first few steps,
+        // the page may still be rendering (React/Vue/Angular hydration). Wait and retry.
+        if (currentRefs.size < 3 && steps < 5) {
+          await activePage.waitForTimeout(2000);
+          const retryResult = await getAccessibilitySnapshot(activePage);
+          if (retryResult.refs.size > currentRefs.size) {
+            console.log(`[BROWSER-AGENT] SPA retry: ${currentRefs.size} → ${retryResult.refs.size} refs after 2s wait`);
+            snapshot = retryResult.text;
+            currentRefs = retryResult.refs;
+          }
+        }
       } catch (err) {
         const pageData = await capturePageData(activePage);
         return { success: false, error: `Page read failed: ${err}`, steps, cost: totalCost, screenshots, pageData };
