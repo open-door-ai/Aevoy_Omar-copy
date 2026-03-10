@@ -487,75 +487,29 @@ async function fetchUserProfile(userId: string): Promise<{ displayName: string; 
 }
 
 /**
- * Human-like typing with VERIFICATION and React/Vue/Angular fallback.
- * Step 1: Keyboard events (stealthy, works on vanilla HTML forms)
- * Step 2: Verify input.value matches — if not, use JS injection with React native setter
- * Step 3: Last resort — locator.fill() (detectable but works everywhere)
+ * Fill a field using Playwright's native methods FIRST (they work everywhere).
+ * Step 1: locator.fill() — Playwright's built-in, works on React/Vue/Angular/everything
+ * Step 2: If .fill() fails (rare — shadow DOM, contenteditable), try keyboard typing
  */
 async function humanType(pg: Page, locator: any, text: string): Promise<void> {
-  await locator.click({ timeout: 2000 });
-  await pg.keyboard.press('Control+a');
-  await pg.keyboard.press('Backspace');
-  await pg.waitForTimeout(80 + Math.random() * 80);
-
-  // Step 1: Try keyboard typing (stealthy — works on vanilla forms)
-  for (const char of text) {
-    await pg.keyboard.type(char);
-    await pg.waitForTimeout(40 + Math.random() * 70);
-  }
-
-  // Step 2: Verify the field actually received the text
+  // Step 1: Use Playwright's .fill() — THIS IS WHAT PLAYWRIGHT IS FOR
+  // Works on every framework: React, Vue, Angular, vanilla HTML, Shadow DOM
   try {
-    const handle = await locator.elementHandle({ timeout: 1000 });
-    if (handle) {
-      const actual = await pg.evaluate((el: any) => {
-        return el.value ?? el.innerText ?? el.textContent ?? '';
-      }, handle);
-
-      if (actual === text) return; // keyboard typing worked
-
-      // Keyboard didn't work — use JavaScript injection with React native setter trick
-      // Click again to ensure focus, then use document.activeElement
-      console.log(`[humanType] Keyboard typing produced "${(actual || '').substring(0, 40)}", expected "${text.substring(0, 40)}" — using JS injection`);
-      await locator.click({ timeout: 1000 }).catch(() => {});
-      await pg.evaluate((val: string) => {
-        const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
-        if (!el || !('value' in el)) return;
-        // React overrides the value setter — use the native HTMLInputElement/HTMLTextAreaElement setter
-        const proto = el instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : HTMLInputElement.prototype;
-        const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (nativeSetter) {
-          nativeSetter.call(el, val);
-        } else {
-          el.value = val;
-        }
-        // Dispatch events that React/Vue/Angular listen to
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        // Also fire React-specific event for older React versions
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-      }, text);
-
-      // Verify JS injection worked
-      const afterJs = await pg.evaluate((el: any) => el.value ?? '', handle);
-      if (afterJs === text) {
-        console.log(`[humanType] ✓ JS injection succeeded`);
-        return;
-      }
-      console.log(`[humanType] JS injection produced "${(afterJs || '').substring(0, 40)}" — trying .fill()`);
-    }
+    await locator.fill(text, { timeout: 3000 });
+    return; // Done. That's it. Playwright handles everything.
   } catch (e) {
-    console.log(`[humanType] Verification failed: ${(e as Error).message?.substring(0, 60)}`);
+    console.log(`[humanType] .fill() failed: ${(e as Error).message?.substring(0, 60)} — trying keyboard`);
   }
 
-  // Step 3: Last resort — Playwright .fill() (detectable but works everywhere)
+  // Step 2: Keyboard fallback for edge cases (.fill() failed — contenteditable, custom components)
   try {
-    await locator.fill(text);
-    console.log(`[humanType] ✓ .fill() fallback succeeded`);
-  } catch {
-    // Already typed via keyboard — that's our best shot
+    await locator.click({ timeout: 2000 });
+    await pg.keyboard.press('Control+a');
+    await pg.keyboard.press('Backspace');
+    await pg.waitForTimeout(80);
+    await pg.keyboard.type(text, { delay: 30 });
+  } catch (e2) {
+    console.log(`[humanType] Keyboard also failed: ${(e2 as Error).message?.substring(0, 60)}`);
   }
 }
 
@@ -1269,34 +1223,16 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
                 } catch { continue; }
               }
             }
-            // Strategy 6: coordinate click to focus, then JS injection (most reliable if coords are fresh)
+            // Strategy 6: coordinate click to focus, then keyboard type (last resort if coords are fresh)
             if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
               try {
                 await page.mouse.click(resolved.entry.cx, resolved.entry.cy);
                 await page.waitForTimeout(300);
-                // Use JS injection to set value + trigger framework events (works on React/Vue/Angular)
-                const focusedFilled = await page.evaluate((val: string) => {
-                  const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
-                  if (!el || (!('value' in el))) return false;
-                  const proto = el instanceof HTMLTextAreaElement
-                    ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-                  const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-                  if (nativeSetter) nativeSetter.call(el, val);
-                  else el.value = val;
-                  el.dispatchEvent(new Event('input', { bubbles: true }));
-                  el.dispatchEvent(new Event('change', { bubbles: true }));
-                  return el.value === val;
-                }, action.value || '');
-                if (focusedFilled) {
-                  console.log(`[FILL] ✓ Strategy 6 (coordinate ${resolved.entry.cx},${resolved.entry.cy} + JS inject) for ref [${action.ref}]`);
-                  return true;
-                }
-                // Fallback: keyboard typing
                 await page.keyboard.press('Control+a');
                 await page.keyboard.press('Backspace');
                 await page.waitForTimeout(100);
                 await page.keyboard.type(action.value || '', { delay: 30 });
-                console.log(`[FILL] ✓ Strategy 6 (coordinate ${resolved.entry.cx},${resolved.entry.cy} + keyboard) for ref [${action.ref}]`);
+                console.log(`[FILL] ✓ Strategy 6 (coordinate ${resolved.entry.cx},${resolved.entry.cy}) for ref [${action.ref}]`);
                 return true;
               } catch (e6) {
                 console.warn(`[FILL] Strategy 6 (coordinate) failed: ${(e6 as Error).message?.substring(0, 80)}`);
