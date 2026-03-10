@@ -2369,58 +2369,10 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  // ═══ FALLBACK: Groq Scout — 30K TPM, good instruction following ═══
-  if (process.env.GROQ_API_KEY) {
-    try {
-      await paceModelCall("meta-llama/llama-4-scout-17b-16e-instruct");
-      const response = await withTimeout(getGroqClient().chat.completions.create({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        max_tokens: 512,
-        messages,
-      }), 8000);
-      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
-      const content = extractActionLines(stripped);
-      if (content.length > 10 && isValidBrowserAction(content)) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        console.log(`[AI] BrowserStep (Groq Scout) | $0 | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
-        return { content, cost: 0 };
-      } else if (stripped.length > 10) {
-        console.warn(`[AI] BrowserStep (Groq Scout) rejected — no action command in: "${stripped.substring(0, 120)}"`);
-      }
-    } catch (error) {
-      console.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // ═══ EMERGENCY FALLBACK: Groq Llama-8B — smallest, least rate-limited ═══
-  if (process.env.GROQ_API_KEY) {
-    try {
-      await paceModelCall("llama-3.1-8b-instant");
-      const response = await withTimeout(getGroqClient().chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        max_tokens: 512,
-        messages,
-      }), 5000);
-      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
-      const content = extractActionLines(stripped);
-      if (content.length > 10 && isValidBrowserAction(content)) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0 | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "llama-3.1-8b-instant", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
-        return { content, cost: 0 };
-      } else if (stripped.length > 10) {
-        console.warn(`[AI] BrowserStep (Llama-8B) rejected — no action command in: "${stripped.substring(0, 120)}"`);
-      }
-    } catch (error) {
-      console.warn(`[AI] BrowserStep (Groq Llama-8B) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // ═══ ABSOLUTE LAST RESORT: Haiku 4.5 — expensive but reliable ═══
-  // Only reached when ALL free/cheap models are rate-limited or unavailable
+  // ═══ FALLBACK: Haiku 4.5 — reliable, $0.006/step ═══
+  // Promoted above Scout/Llama-8B because those models return syntactically valid
+  // but semantically useless actions (describe page instead of filling forms).
+  // Haiku actually follows instructions and fills forms correctly.
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const response = await withTimeout(getAnthropicClient().messages.create({
@@ -2437,12 +2389,58 @@ export async function generateBrowserStepResponse(
         const cacheRead = usageAny?.cache_read_input_tokens || 0;
         const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
         const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] BrowserStep (Haiku LAST-RESORT) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step-lastresort").catch(() => {});
+        console.log(`[AI] BrowserStep (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ EMERGENCY: Groq Scout — free but weak at form fills ═══
+  if (process.env.GROQ_API_KEY) {
+    try {
+      await paceModelCall("meta-llama/llama-4-scout-17b-16e-instruct");
+      const response = await withTimeout(getGroqClient().chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        max_tokens: 512,
+        messages,
+      }), 8000);
+      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
+      const content = extractActionLines(stripped);
+      if (content.length > 10 && isValidBrowserAction(content)) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        console.log(`[AI] BrowserStep (Groq Scout) | $0 | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
+        return { content, cost: 0 };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ EMERGENCY: Groq Llama-8B — last free option ═══
+  if (process.env.GROQ_API_KEY) {
+    try {
+      await paceModelCall("llama-3.1-8b-instant");
+      const response = await withTimeout(getGroqClient().chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        max_tokens: 512,
+        messages,
+      }), 5000);
+      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
+      const content = extractActionLines(stripped);
+      if (content.length > 10 && isValidBrowserAction(content)) {
+        const inTok = response.usage?.prompt_tokens || 0;
+        const outTok = response.usage?.completion_tokens || 0;
+        console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0 | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "llama-3.1-8b-instant", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
+        return { content, cost: 0 };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Groq Llama-8B) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
