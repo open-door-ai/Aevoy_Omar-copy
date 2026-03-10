@@ -2251,6 +2251,12 @@ export async function generateBrowserStepResponse(
     { role: "user" as const, content: prompt }
   ];
 
+  // Action-format validation: browser step responses MUST contain actual action commands.
+  // Without this, dumb models return descriptions ("I see a page...") that pass the >10 char
+  // check, preventing cascade to smarter models like Haiku.
+  const ACTION_PATTERN = /\b(CLICK|FILL|TYPE|SELECT|SCROLL|NAVIGATE|PRESS|DONE|FAIL|WAIT|HOVER|RIGHTCLICK)\b/;
+  const isValidBrowserAction = (content: string): boolean => ACTION_PATTERN.test(content);
+
   // ═══ PRIMARY: Gemini Flash 2.5 — cheap ($0.15/$0.60 per M), good at structured output ═══
   // 10-20x cheaper than Haiku. Good enough for browser step actions.
   if (process.env.GOOGLE_API_KEY) {
@@ -2264,13 +2270,15 @@ export async function generateBrowserStepResponse(
       }), 12000);
       const rawContent = response.choices[0]?.message?.content || '';
       const content = stripThinkTags(rawContent);
-      if (content.length > 10) {
+      if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.075 + outTok * 0.30) / 1_000_000;
         console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "gemini", taskId, "browser-step").catch(() => {});
         return { content, cost };
+      } else if (content.length > 10) {
+        console.warn(`[AI] BrowserStep (Gemini Flash) rejected — no action command in: "${content.substring(0, 80)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2288,13 +2296,15 @@ export async function generateBrowserStepResponse(
       }), 12000);
       const rawContent = response.choices[0]?.message?.content || '';
       const content = stripThinkTags(rawContent);
-      if (content.length > 10) {
+      if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
         console.log(`[AI] BrowserStep (DeepSeek-V3) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "deepseek-chat", inTok, outTok, cost, "deepseek", taskId, "browser-step").catch(() => {});
         return { content, cost };
+      } else if (content.length > 10) {
+        console.warn(`[AI] BrowserStep (DeepSeek) rejected — no action command in: "${content.substring(0, 80)}"`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -2322,13 +2332,15 @@ export async function generateBrowserStepResponse(
       }), 10000);
       const rawContent = response.choices[0]?.message?.content || '';
       const content = stripThinkTags(rawContent);
-      if (content.length > 10) {
+      if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.10 + outTok * 0.13) / 1_000_000;
         console.log(`[AI] BrowserStep (Llama-3.3-70B fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "meta-llama/llama-3.3-70b-instruct", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
         return { content, cost };
+      } else if (content.length > 10) {
+        console.warn(`[AI] BrowserStep (Llama-3.3-70B) rejected — no action command in: "${content.substring(0, 80)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Llama-3.3-70B) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2345,12 +2357,14 @@ export async function generateBrowserStepResponse(
         messages,
       }), 8000);
       const content = stripThinkTags(response.choices[0]?.message?.content || '');
-      if (content.length > 10) {
+      if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         console.log(`[AI] BrowserStep (Groq Scout) | $0 | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
+      } else if (content.length > 10) {
+        console.warn(`[AI] BrowserStep (Groq Scout) rejected — no action command in: "${content.substring(0, 80)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2367,12 +2381,14 @@ export async function generateBrowserStepResponse(
         messages,
       }), 5000);
       const content = stripThinkTags(response.choices[0]?.message?.content || '');
-      if (content.length > 10) {
+      if (content.length > 10 && isValidBrowserAction(content)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0 | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "llama-3.1-8b-instant", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
+      } else if (content.length > 10) {
+        console.warn(`[AI] BrowserStep (Llama-8B) rejected — no action command in: "${content.substring(0, 80)}"`);
       }
     } catch (error) {
       console.warn(`[AI] BrowserStep (Groq Llama-8B) failed: ${error instanceof Error ? error.message : String(error)}`);
