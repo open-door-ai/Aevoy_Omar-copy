@@ -3881,7 +3881,10 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               // Generic: form fills, account creation, purchases, earning, bookings, signups
               const _bfpIsComplex = _bfpIsBooking || _bfpIsSignup ||
                 /\b(fill|submit|complete|earn|purchase|order|apply|make\s+money|sign\s+up|create\s+account)\b/i.test(_bfpTaskText);
-              const VISION_TIMEOUT_MS = _bfpIsComplex ? 720000 : 480000;
+              const _bfpBaseTimeout = _bfpIsComplex ? 720000 : 480000;
+              // Cap vision timeout at remaining master time to prevent outliving the master timer
+              const _bfpRemainingMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+              const VISION_TIMEOUT_MS = Math.min(_bfpBaseTimeout, _bfpRemainingMs);
               const _bfpResult = await runWithAdaptiveTimeout(
                 runVisionAgent(_bfpPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
                 taskId,
@@ -6357,7 +6360,10 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
           try {
             // Wrap vision agent — booking/signup get 12 min, others 8 min
             const _vaIsComplex = /\b(book|reserv|table|sign\s?up|signup|register|create.*account|fill.*form|submit.*form|earn|purchase|order|apply)\b/i.test(taskTextLower);
-            const VISION_TIMEOUT_MS = _vaIsComplex ? 720000 : 480000;
+            const _vaBaseTimeout = _vaIsComplex ? 720000 : 480000;
+            // Cap vision timeout at remaining master time to prevent outliving the master timer
+            const _vaRemainingMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+            const VISION_TIMEOUT_MS = Math.min(_vaBaseTimeout, _vaRemainingMs);
             const visionResult = await runWithAdaptiveTimeout(
               runVisionAgent(visionPage, visionTask, userId, taskId, username, userTwilioPhone),
               taskId,
