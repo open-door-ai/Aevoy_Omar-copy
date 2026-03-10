@@ -1912,6 +1912,8 @@ export async function runVisionAgent(
   let lastCheckedUrl = '';
   // Fix 5: empty/dead page detection — bail fast when DOM has 0 interactive refs
   let emptyPageCount = 0;
+  // Fix 6: consecutive no-progress counter — bail when stuck in useless loop
+  let consecutiveNoProgress = 0;
   let emptyPageTriedUrls = new Set<string>();
 
   // ── Action memory: don't try the same thing more than twice ──
@@ -3412,6 +3414,18 @@ export async function runVisionAgent(
 
         if (ok && (action.type === 'fill' || action.type === 'type' || action.type === 'select')) {
           hasFilledAnyField = true;
+        }
+
+        // Track progress — bail early when stuck in useless loop
+        if (ok) {
+          consecutiveNoProgress = 0;
+        } else {
+          consecutiveNoProgress++;
+          if (consecutiveNoProgress >= 8) {
+            console.warn(`[BROWSER-AGENT] ${consecutiveNoProgress} consecutive failed actions — breaking to avoid dead loop`);
+            const endPageData = await capturePageData(activePage);
+            return { success: false, error: `Stuck: ${consecutiveNoProgress} consecutive failed actions`, steps, cost: totalCost, screenshots, pageData: endPageData };
+          }
         }
 
         // ── SIGNUP URL GUARD: Prevent signup tasks from navigating to login pages ──
