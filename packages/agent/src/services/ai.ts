@@ -2273,7 +2273,7 @@ export async function generateBrowserStepResponse(
 
   // ═══ PRIMARY: Gemini Flash 2.5 — cheap ($0.15/$0.60 per M), good at structured output ═══
   // 10-20x cheaper than Haiku. Good enough for browser step actions.
-  if (process.env.GOOGLE_API_KEY) {
+  if (process.env.GOOGLE_API_KEY && Date.now() >= (rateLimitBackoff.get('gemini:gemini-2.5-flash') || 0)) {
     try {
       await paceModelCall("gemini-2.5-flash");
       const response = await withTimeout(getGeminiClient().chat.completions.create({
@@ -2296,7 +2296,12 @@ export async function generateBrowserStepResponse(
         console.warn(`[AI] BrowserStep (Gemini Flash) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
-      console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${errMsg}`);
+      // Back off Gemini 10min on 429 (daily quota) to avoid wasting time
+      if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
+        rateLimitBackoff.set('gemini:gemini-2.5-flash', Date.now() + 600000);
+      }
     }
   }
 
@@ -2634,9 +2639,9 @@ export async function generateVisionResponse(
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.warn(`[AI] Vision (Gemini Flash) failed: ${errMsg}`);
-      // Back off Gemini for 60s on rate limit, 30s on other errors
+      // Back off Gemini: 10min on 429 (daily quota likely hit), 30s on other errors
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
-        rateLimitBackoff.set(geminiBackoffKey, Date.now() + 60000);
+        rateLimitBackoff.set(geminiBackoffKey, Date.now() + 600000); // 10 min — don't waste time retrying exhausted quota
       }
       if (userId) trackApiCall(userId, `ERR:gemini-flash:${errMsg.substring(0, 60)}`, 0, 0, 0, "google", taskId, "vision-error").catch(() => {});
     }
