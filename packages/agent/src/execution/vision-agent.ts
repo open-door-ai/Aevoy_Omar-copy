@@ -1676,17 +1676,20 @@ async function buildPrompt(
   }
 
   // ── DATA EXTRACTION HINT: If the page already has the answer, suggest DONE ──
-  // For research/extraction tasks, check if the snapshot contains useful data
-  const isExtractTask = /\b(price|quote|find|what|how much|list|give me|show me|tell me|get me)\b/i.test(task);
-  if (isExtractTask && !isConfirmationPage && !isErrorPage && suggestedActions === '') {
-    // Check if the snapshot text itself contains data-like content (numbers, names, quotes)
+  // For research/extraction tasks, check if the snapshot contains useful data.
+  // This prevents the agent from clicking around when the answer is already visible.
+  const isExtractTask = /\b(price|quote|find|what|how much|list|give me|show me|tell me|get me|top \d|best \d)\b/i.test(task);
+  const isNotFormTask = !/\b(sign\s*up|signup|register|create\s+account|log\s*in|login)\b/i.test(task);
+  if (isExtractTask && isNotFormTask && !isConfirmationPage && !isErrorPage && suggestedActions === '') {
+    // Check if the snapshot text itself contains data-like content
     const hasDataContent = (
       /\$\d|£\d|€\d|\d+\.\d{2}/.test(snapshot) || // Prices
       /"[^"]{10,}"/.test(snapshot) || // Quoted text
-      /\b\d{1,3}(,\d{3})+\b/.test(snapshot) // Large numbers
+      /\b\d{1,3}(,\d{3})+\b/.test(snapshot) || // Large numbers
+      (snapshot.split('\n').filter(l => l.trim().length > 30).length >= 5) // Multiple content lines
     );
-    if (hasDataContent && snapshot.length > 200) {
-      suggestedActions = `\n📋 The page ALREADY contains the data you need. Output: DONE "extracted data here" with the specific information from the tree above.\n`;
+    if (hasDataContent && snapshot.length > 300) {
+      suggestedActions = `\n📋 The page ALREADY contains the data you need. Read it from the tree above. Output: DONE "extracted data here" with ALL the specific information requested. Do NOT navigate away or click any links — extract directly from what you see.\n`;
     }
   }
 
@@ -1756,6 +1759,7 @@ export async function runVisionAgent(
 
   let lastUrl = '';
   let sameUrlCount = 0;
+  let oauthStuckCount = 0;
   let captchaFailCount = 0;
 
   // Fix 2: track whether we have written a response — for the finally fallback
@@ -2432,29 +2436,50 @@ export async function runVisionAgent(
       }
 
       // ── OAuth stuck detection: redirect back to original site when stuck on Google/MS/Apple ──
-      // Generic: applies to any signup task that tries OAuth and gets stuck
-      if (isFormFillTask && sameUrlCount >= 3) {
+      // Generic: applies to any signup task that tries OAuth and gets stuck.
+      // Tracks consecutive steps on OAuth domains (not sameUrlCount, since OAuth URL changes between pages).
+      {
         try {
-          const oauthDomain = new URL(url).hostname.toLowerCase();
-          const isOnOAuth = /\b(accounts\.google|login\.microsoftonline|appleid\.apple|login\.live|auth0|okta|cognito)\b/.test(oauthDomain);
-          if (isOnOAuth) {
+          const currentHostname = new URL(url).hostname.toLowerCase();
+          const isOnOAuth = /\b(accounts\.google|login\.microsoftonline|appleid\.apple|login\.live|auth0|okta|cognito|login\.yahoo)\b/.test(currentHostname);
+          if (isOnOAuth && isFormFillTask) {
+            oauthStuckCount = (oauthStuckCount || 0) + 1;
+          } else {
+            oauthStuckCount = 0;
+          }
+          if (isOnOAuth && isFormFillTask && oauthStuckCount >= 3) {
             // Extract the original target domain from the task
-            const taskDomainMatch = task.match(/\b(?:for|on|at)\s+(\w[\w.-]+\.\w{2,})\b/i);
+            const taskDomainMatch = task.match(/\b(?:for|on|at|to)\s+(?:an?\s+)?(?:account\s+)?(?:on\s+)?(\w[\w.-]+\.\w{2,})\b/i) ||
+              task.match(/\b([\w-]+\.(?:com|org|net|io|co|dev|app|ai))\b/i);
             const taskDomain = taskDomainMatch?.[1];
-            if (taskDomain) {
-              console.warn(`[BROWSER-AGENT] Stuck on OAuth (${oauthDomain}) for ${sameUrlCount} steps — redirecting to ${taskDomain}`);
-              // Try email signup on the original site
-              const signupPaths = ['/signup', '/signup-email', '/register', '/sign-up', '/join', '/create-account'];
+            if (taskDomain && !isOnOAuth) {
+              // Already on target, skip
+            } else if (taskDomain) {
+              console.warn(`[BROWSER-AGENT] Stuck on OAuth (${currentHostname}) for ${oauthStuckCount} steps — redirecting to ${taskDomain}`);
+              const signupPaths = ['/signup', '/users/sign_up', '/signup-email', '/register', '/sign-up', '/join', '/create-account'];
+              let redirected = false;
               for (const path of signupPaths) {
                 try {
                   const resp = await activePage.goto(`https://${taskDomain}${path}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
-                  if (resp && resp.status() < 400) {
-                    history.push(`⚠️ OAuth stuck — redirected to email signup: https://${taskDomain}${path}`);
+                  const newHost = new URL(activePage.url()).hostname.toLowerCase();
+                  if (resp && resp.status() < 400 && !(/\b(accounts\.google|login\.microsoftonline|appleid\.apple)\b/.test(newHost))) {
+                    history.push(`⚠️ OAuth stuck on ${currentHostname} — redirected to email signup: https://${taskDomain}${path}`);
                     sameUrlCount = 0;
+                    oauthStuckCount = 0;
                     await activePage.waitForTimeout(2000);
+                    redirected = true;
                     break;
                   }
                 } catch { /* next */ }
+              }
+              if (!redirected) {
+                // Try the root signup page
+                try {
+                  await activePage.goto(`https://${taskDomain}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+                  history.push(`⚠️ OAuth stuck — went back to ${taskDomain} homepage`);
+                  sameUrlCount = 0;
+                  oauthStuckCount = 0;
+                } catch { /* */ }
               }
             }
           }
