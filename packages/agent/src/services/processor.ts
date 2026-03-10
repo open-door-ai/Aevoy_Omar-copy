@@ -3468,9 +3468,10 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
       // Also match brand names without explicit TLD (e.g. "on BestBuy", "for Swagbucks")
       const _brandMatch = !_forceDomainMatch && subject.match(/\b(?:on|for|at|from|to)\s+([A-Z][a-zA-Z0-9]+)\b/);
       const _forceDomain = _forceDomainMatch?.[1] || '';
-      const _forceDotCount = (_forceDomain.match(/\./g) || []).length;
+      // Don't blindly add www. — many sites (demoqa.com, herokuapp.com) don't support it.
+      // Only add www. for well-known domains that typically use it; otherwise just use https://
       const _forceUrl = _forceDomainMatch
-        ? `https://${_forceDotCount >= 2 ? '' : 'www.'}${_forceDomain}`
+        ? `https://${_forceDomain}`
         : _brandMatch
           ? `https://www.google.com/search?q=${encodeURIComponent(_brandMatch[1])} official site`
           : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
