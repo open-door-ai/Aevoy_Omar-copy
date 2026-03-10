@@ -1675,6 +1675,21 @@ async function buildPrompt(
     }
   }
 
+  // ── DATA EXTRACTION HINT: If the page already has the answer, suggest DONE ──
+  // For research/extraction tasks, check if the snapshot contains useful data
+  const isExtractTask = /\b(price|quote|find|what|how much|list|give me|show me|tell me|get me)\b/i.test(task);
+  if (isExtractTask && !isConfirmationPage && !isErrorPage && suggestedActions === '') {
+    // Check if the snapshot text itself contains data-like content (numbers, names, quotes)
+    const hasDataContent = (
+      /\$\d|£\d|€\d|\d+\.\d{2}/.test(snapshot) || // Prices
+      /"[^"]{10,}"/.test(snapshot) || // Quoted text
+      /\b\d{1,3}(,\d{3})+\b/.test(snapshot) // Large numbers
+    );
+    if (hasDataContent && snapshot.length > 200) {
+      suggestedActions = `\n📋 The page ALREADY contains the data you need. Output: DONE "extracted data here" with the specific information from the tree above.\n`;
+    }
+  }
+
   return `TASK: ${task}
 URL: ${url}
 ${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}${confirmationNote}
@@ -2414,6 +2429,36 @@ export async function runVisionAgent(
       } else {
         lastUrl = url;
         sameUrlCount = 0;
+      }
+
+      // ── OAuth stuck detection: redirect back to original site when stuck on Google/MS/Apple ──
+      // Generic: applies to any signup task that tries OAuth and gets stuck
+      if (isFormFillTask && sameUrlCount >= 3) {
+        try {
+          const oauthDomain = new URL(url).hostname.toLowerCase();
+          const isOnOAuth = /\b(accounts\.google|login\.microsoftonline|appleid\.apple|login\.live|auth0|okta|cognito)\b/.test(oauthDomain);
+          if (isOnOAuth) {
+            // Extract the original target domain from the task
+            const taskDomainMatch = task.match(/\b(?:for|on|at)\s+(\w[\w.-]+\.\w{2,})\b/i);
+            const taskDomain = taskDomainMatch?.[1];
+            if (taskDomain) {
+              console.warn(`[BROWSER-AGENT] Stuck on OAuth (${oauthDomain}) for ${sameUrlCount} steps — redirecting to ${taskDomain}`);
+              // Try email signup on the original site
+              const signupPaths = ['/signup', '/signup-email', '/register', '/sign-up', '/join', '/create-account'];
+              for (const path of signupPaths) {
+                try {
+                  const resp = await activePage.goto(`https://${taskDomain}${path}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
+                  if (resp && resp.status() < 400) {
+                    history.push(`⚠️ OAuth stuck — redirected to email signup: https://${taskDomain}${path}`);
+                    sameUrlCount = 0;
+                    await activePage.waitForTimeout(2000);
+                    break;
+                  }
+                } catch { /* next */ }
+              }
+            }
+          }
+        } catch { /* non-critical */ }
       }
 
       // ── Empty/dead page detection (0 interactive refs) ──
