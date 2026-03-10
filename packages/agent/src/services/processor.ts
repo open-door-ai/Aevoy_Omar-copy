@@ -1476,15 +1476,21 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     // 2b. FAST PATHS — detect and execute BEFORE expensive AI classification
     // This runs right after task creation so we have a taskId to update
 
+    // ── SIGNUP INTENT DETECTION (must run BEFORE all fast paths to prevent bypass) ──
+    // When user says "Sign me up for X AND THEN do Y", fast paths must NOT steal the task.
+    const _fpFullText0 = `${subject} ${body || ''}`;
+    const _hasSignupIntent = /\b(sign\s*(?:\w+\s+)?up|signup|create\b.*\baccount|make\b.*\baccount|register\s+(?:for|on|at|with)|enroll|open\b.*\baccount)\b/i.test(_fpFullText0);
+
     // ── BUSINESS CARD FAST PATH (top-level, before all other processing) ──
     // Business cards are structured visual documents — no AI needed at all.
     // Extract fields from task text and create the PDF directly with PDFKit vector drawing.
     // SKIP: If user names a specific website ("go to canva.com"), this is a BROWSER task.
+    // SKIP: If user wants to sign up first ("sign me up for Canva and create a business card")
     const _earlyBcText = `${subject} ${body || ''}`;
     const _earlyBcUsesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_earlyBcText) ||
       /\bhttps?:\/\/\S+/i.test(_earlyBcText) ||
-      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(_earlyBcText);
-    const _earlyIsBc = !_earlyBcUsesWebsite && /\b(business cards?)\b/i.test(_earlyBcText);
+      /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(?:an?\s+|the\s+)?(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa)\b/i.test(_earlyBcText);
+    const _earlyIsBc = !_earlyBcUsesWebsite && !_hasSignupIntent && /\b(business cards?)\b/i.test(_earlyBcText);
     if (_earlyIsBc) {
       console.log(`[BUSINESS-CARD-FAST-PATH] Detected business card task — creating PDF directly`);
       try {
@@ -1751,11 +1757,6 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // Fall through to normal processing
       }
     }
-
-    // ── SIGNUP INTENT DETECTION (must run BEFORE fast paths to prevent bypass) ──
-    // When user says "Sign me up for X AND THEN do Y", fast paths must NOT steal the task.
-    const _fpFullText = `${subject} ${body || ''}`;
-    const _hasSignupIntent = /\b(sign\s*(?:\w+\s+)?up|signup|create\b.*\baccount|make\b.*\baccount|register\s+(?:for|on|at|with)|enroll|open\b.*\baccount)\b/i.test(_fpFullText);
 
     // Email sending fast path ("send email to X")
     const earlyEmailResult = await tryEmailSendFastPath(userId, username, from, subject, body, task.inputChannel, taskId);
