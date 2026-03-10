@@ -1902,28 +1902,42 @@ export async function runVisionAgent(
         // Hard 30s timeout on pre-navigation — prevents WSS hangs from blocking the entire agent
         const preNavTimeout = new Promise<void>((_, rej) => setTimeout(() => rej(new Error('Pre-navigation timeout (30s)')), 30000));
         const preNavWork = (async () => {
-        // Generic signup URL discovery — try common signup paths instead of hardcoded per-site URLs
+        // Known signup URL overrides for platforms whose /signup redirects to homepage
+        const SIGNUP_URL_MAP: Record<string, string> = {
+          // Figma /signup redirects to Figma Make — use homepage and click "Get started for free"
+          'figma.com': 'https://www.figma.com',
+          'canva.com': 'https://www.canva.com/signup',
+          'prolific.com': 'https://app.prolific.com/register',
+          'prolific.co': 'https://app.prolific.com/register', // prolific uses .co TLD
+          'resy.com': 'https://resy.com/cities/van/venues', // search page, not homepage
+        };
         const isSignupTask = /\b(sign\s*(?:\w+\s+)?up|create.*account|register|enroll|join)\b/i.test(task);
-        if (isSignupTask && startUrl) {
-          try {
-            const startHost = new URL(startUrl).hostname.replace('www.', '');
-            const signupPaths = ['/signup', '/register', '/sign-up', '/join', '/create-account', '/users/sign_up'];
-            for (const path of signupPaths) {
-              try {
-                const testUrl = `https://${startHost}${path}`;
-                const testResp = await activePage.goto(testUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
-                if (testResp && testResp.status() < 400) {
-                  const finalHost = new URL(activePage.url()).hostname;
-                  // If it didn't redirect to OAuth or back to homepage
-                  if (!(/\b(accounts\.google|login\.microsoftonline|appleid\.apple)\b/.test(finalHost))) {
-                    console.log(`[BROWSER-AGENT] Generic signup discovery: ${startHost}${path} → ${activePage.url()}`);
-                    startUrl = activePage.url();
-                    break;
-                  }
-                }
-              } catch { /* try next path */ }
+        if (isSignupTask) {
+          for (const [domain, knownSignupUrl] of Object.entries(SIGNUP_URL_MAP)) {
+            const baseName = domain.split('.')[0]; // 'prolific' from 'prolific.com'
+            if (task.toLowerCase().includes(domain) || task.toLowerCase().includes(baseName)) {
+              console.log(`[BROWSER-AGENT] Known signup URL override: ${domain} → ${knownSignupUrl}`);
+              startUrl = knownSignupUrl;
+              break;
             }
-          } catch { /* non-critical, use original startUrl */ }
+          }
+        }
+
+        // BOOKING_URL_MAP: for reservation/booking tasks on platforms with non-obvious entry points.
+        // Resy's default homepage doesn't show Vancouver venues — go directly to the search page.
+        const BOOKING_URL_MAP: Record<string, string> = {
+          'resy.com': 'https://resy.com/cities/van/venues', // Vancouver venue search
+        };
+        const isBookingTaskForMap = /\b(book|reserv|restaurant|dining|dinner|table|resy)\b/i.test(task);
+        if (isBookingTaskForMap && !isSignupTask) {
+          for (const [domain, knownBookingUrl] of Object.entries(BOOKING_URL_MAP)) {
+            const baseName = domain.split('.')[0];
+            if (task.toLowerCase().includes(domain) || task.toLowerCase().includes(baseName)) {
+              console.log(`[BROWSER-AGENT] Known booking URL override: ${domain} → ${knownBookingUrl}`);
+              startUrl = knownBookingUrl;
+              break;
+            }
+          }
         }
 
         // For signup tasks, try /signup or /register first (direct navigation avoids homepages)
@@ -2531,39 +2545,23 @@ export async function runVisionAgent(
         lastSnapshotHash = snapshotHash;
       }
 
-      // SPA LOOP ESCAPE: If stuck 5 steps with no page change, try generic path walking (no hardcoded sites)
+      // SPA LOOP ESCAPE: If stuck 5 steps with no page change, force-navigate to a known URL for this domain
       if (noChangeCount === 5) {
         const currentDomain = (() => { try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; } })();
-        if (currentDomain) {
-          const isSignupGoal = /\b(sign\s*up|register|create.*account|enroll|join)\b/i.test(task);
-          const genericPaths = isSignupGoal
-            ? ['/signup', '/register', '/sign-up', '/join', '/create-account', '/users/sign_up']
-            : ['/', '/search', '/explore', '/browse', '/discover'];
-          let escaped = false;
-          for (const path of genericPaths) {
-            const tryUrl = `https://${currentDomain}${path}`;
-            if (tryUrl === url) continue;
-            try {
-              const resp = await activePage.goto(tryUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-              if (resp && resp.status() < 400) {
-                console.log(`[BROWSER-AGENT] SPA loop escape: ${currentDomain} → ${path}`);
-                history.push(`⚡ SPA stuck (${noChangeCount} steps) — navigated to ${tryUrl}`);
-                noChangeCount = 0;
-                sameUrlCount = 0;
-                escaped = true;
-                break;
-              }
-            } catch { /* try next path */ }
-          }
-          if (!escaped) {
-            // Last resort: go to domain homepage
-            try {
-              await activePage.goto(`https://${currentDomain}`, { waitUntil: 'domcontentloaded', timeout: 10000 });
-              history.push(`⚡ SPA stuck — reset to ${currentDomain} homepage`);
-              noChangeCount = 0;
-              sameUrlCount = 0;
-            } catch { /* non-critical */ }
-          }
+        const SPA_ESCAPE_MAP: Record<string, string> = {
+          'prolific.com': 'https://app.prolific.com/register',
+          'prolific.co': 'https://app.prolific.com/register', // prolific's actual TLD
+          'app.prolific.com': 'https://app.prolific.com/register',
+          'figma.com': 'https://www.figma.com',
+          'canva.com': 'https://www.canva.com/signup',
+        };
+        const escapeUrl = SPA_ESCAPE_MAP[currentDomain];
+        if (escapeUrl && escapeUrl !== url && isSafeUrl(escapeUrl)) {
+          console.log(`[BROWSER-AGENT] SPA loop on ${currentDomain} — force-navigating to ${escapeUrl}`);
+          history.push(`⚡ SPA navigation stuck (${noChangeCount} steps no change). Force-navigating to known URL: ${escapeUrl}`);
+          await activePage.goto(escapeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          noChangeCount = 0;
+          sameUrlCount = 0;
         }
       }
 
