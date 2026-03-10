@@ -11,15 +11,16 @@
 
 import { getSupabaseClient } from "../utils/supabase.js";
 
-// Domain category classification
+// Domain category classification — generic keywords only, NO brand names.
+// Matches domains by descriptive words (e.g. "mybank.com" matches "bank").
 const DOMAIN_CATEGORIES: Record<string, string[]> = {
-  finance: ["bank", "chase", "citi", "wells", "fidelity", "schwab", "paypal", "stripe", "venmo", "coinbase", "robinhood"],
-  travel: ["booking", "expedia", "kayak", "airbnb", "hotels", "airline", "delta", "united", "southwest", "tripadvisor"],
-  social: ["facebook", "twitter", "instagram", "linkedin", "tiktok", "reddit", "discord", "slack"],
-  shopping: ["amazon", "ebay", "walmart", "target", "bestbuy", "etsy", "shopify"],
-  healthcare: ["myhealth", "portal", "patient", "medical", "health", "doctor", "clinic"],
-  government: ["gov", "irs", "ssa", "dmv", "state", "city", "county"],
-  education: ["edu", "university", "college", "school", "canvas", "blackboard"],
+  finance: ["bank", "banking", "finance", "financial", "invest", "trading", "broker", "credit", "loan", "mortgage", "pay", "payment", "wallet", "money", "fund", "capital", "wealth", "stock", "crypto", "exchange", "insurance", "fintech"],
+  travel: ["travel", "trip", "tour", "hotel", "motel", "hostel", "flight", "airline", "airfare", "booking", "resort", "vacation", "cruise", "rental", "lodge", "destination", "ticket"],
+  social: ["social", "chat", "messenger", "forum", "community", "network", "feed", "post", "share", "connect", "friend", "follow", "message", "group"],
+  shopping: ["shop", "store", "buy", "cart", "market", "marketplace", "deal", "price", "product", "retail", "commerce", "ecommerce", "order", "sale", "merchant", "catalog"],
+  healthcare: ["health", "medical", "clinic", "hospital", "doctor", "patient", "pharmacy", "care", "wellness", "therapy", "dental", "nurse", "diagnosis", "telehealth", "prescription"],
+  government: [".gov", "government", "municipal", "federal", "state", "county", "city", "civic", "public", "tax", "permit", "license", "registration", "census", "court"],
+  education: [".edu", "university", "college", "school", "academy", "learn", "course", "class", "student", "teach", "tutor", "lecture", "campus", "syllabus", "enroll", "degree"],
 };
 
 interface DetectedPattern {

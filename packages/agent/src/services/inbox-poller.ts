@@ -944,7 +944,64 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     }
 
     case "new_task":
-    default:
+    default: {
+      // ── Auto-proceed reply detection (Email) ──
+      // Check if user has a task waiting for their reply before creating a new task
+      try {
+        const { data: awaitingTask } = await getSupabaseClient()
+          .from('tasks')
+          .select('id, input_text, email_subject, status, auto_proceed_at')
+          .eq('user_id', user.id)
+          .in('status', ['needs_review', 'pending_approval', 'awaiting_confirmation'])
+          .not('auto_proceed_at', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (awaitingTask) {
+          const emailText = `${email.subject} ${extractReplyText(email.body)}`.trim();
+          const emailLower = emailText.toLowerCase();
+          const isCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(emailLower);
+
+          if (isCancelRequest) {
+            await getSupabaseClient().from('tasks').update({
+              status: 'completed',
+              response_text: 'Task cancelled.',
+              auto_proceed_at: null,
+              auto_proceed_context: null,
+              completed_at: new Date().toISOString(),
+            }).eq('id', awaitingTask.id);
+
+            console.log(`[INBOX-POLLER] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
+            return;
+          }
+
+          // User provided an answer — clear timer and re-process with their reply
+          console.log(`[INBOX-POLLER] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
+
+          await getSupabaseClient().from('tasks').update({
+            status: 'processing',
+            auto_proceed_at: null,
+            auto_proceed_context: null,
+          }).eq('id', awaitingTask.id);
+
+          const { processTask } = await import('./processor.js');
+          await processTask({
+            userId: user.id,
+            username: user.username,
+            from: user.email,
+            subject: awaitingTask.email_subject || awaitingTask.input_text?.substring(0, 200) || email.subject,
+            body: `${awaitingTask.input_text || ''}\n\nUser reply: ${extractReplyText(email.body)}`,
+            taskId: awaitingTask.id,
+            inputChannel: "email",
+            responsePrefix: `You replied with additional info. Here's what I did:`,
+          });
+          return;
+        }
+      } catch {
+        // Non-critical — fall through to normal processing
+      }
+
       await processIncomingTask({
         userId: user.id,
         username: user.username,
@@ -954,6 +1011,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
         inputChannel: "email",
       });
       return;
+    }
   }
 }
 

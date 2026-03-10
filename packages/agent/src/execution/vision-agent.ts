@@ -1977,43 +1977,12 @@ export async function runVisionAgent(
         // Hard 30s timeout on pre-navigation — prevents WSS hangs from blocking the entire agent
         const preNavTimeout = new Promise<void>((_, rej) => setTimeout(() => rej(new Error('Pre-navigation timeout (30s)')), 30000));
         const preNavWork = (async () => {
-        // Known signup URL overrides for platforms whose /signup redirects to homepage
-        const SIGNUP_URL_MAP: Record<string, string> = {
-          // Figma /signup redirects to Figma Make — use homepage and click "Get started for free"
-          'figma.com': 'https://www.figma.com',
-          'canva.com': 'https://www.canva.com/signup',
-          'prolific.com': 'https://app.prolific.com/register',
-          'prolific.co': 'https://app.prolific.com/register', // prolific uses .co TLD
-          'resy.com': 'https://resy.com/cities/van/venues', // search page, not homepage
-        };
+        // Detect signup tasks — the generic /signup and /register fallback logic below
+        // will try common registration paths dynamically (no hardcoded site-specific URLs)
         const isSignupTask = /\b(sign\s*(?:\w+\s+)?up|create.*account|register|enroll|join)\b/i.test(task);
-        if (isSignupTask) {
-          for (const [domain, knownSignupUrl] of Object.entries(SIGNUP_URL_MAP)) {
-            const baseName = domain.split('.')[0]; // 'prolific' from 'prolific.com'
-            if (task.toLowerCase().includes(domain) || task.toLowerCase().includes(baseName)) {
-              console.log(`[BROWSER-AGENT] Known signup URL override: ${domain} → ${knownSignupUrl}`);
-              startUrl = knownSignupUrl;
-              break;
-            }
-          }
-        }
 
-        // BOOKING_URL_MAP: for reservation/booking tasks on platforms with non-obvious entry points.
-        // Resy's default homepage doesn't show Vancouver venues — go directly to the search page.
-        const BOOKING_URL_MAP: Record<string, string> = {
-          'resy.com': 'https://resy.com/cities/van/venues', // Vancouver venue search
-        };
-        const isBookingTaskForMap = /\b(book|reserv|restaurant|dining|dinner|table|resy)\b/i.test(task);
-        if (isBookingTaskForMap && !isSignupTask) {
-          for (const [domain, knownBookingUrl] of Object.entries(BOOKING_URL_MAP)) {
-            const baseName = domain.split('.')[0];
-            if (task.toLowerCase().includes(domain) || task.toLowerCase().includes(baseName)) {
-              console.log(`[BROWSER-AGENT] Known booking URL override: ${domain} → ${knownBookingUrl}`);
-              startUrl = knownBookingUrl;
-              break;
-            }
-          }
-        }
+        // For booking/reservation tasks, just navigate to the domain as-is.
+        // The vision agent will dynamically find the booking flow on the page.
 
         // For signup tasks, try /signup or /register first (direct navigation avoids homepages)
         const hasExplicitPath = startUrl.replace(/^https?:\/\/[^/]+/, '').length > 1; // has path beyond /
@@ -2639,18 +2608,44 @@ export async function runVisionAgent(
       // SPA LOOP ESCAPE: If stuck 5 steps with no page change, force-navigate to a known URL for this domain
       if (noChangeCount === 5) {
         const currentDomain = (() => { try { return new URL(url).hostname.replace('www.', ''); } catch { return ''; } })();
-        const SPA_ESCAPE_MAP: Record<string, string> = {
-          'prolific.com': 'https://app.prolific.com/register',
-          'prolific.co': 'https://app.prolific.com/register', // prolific's actual TLD
-          'app.prolific.com': 'https://app.prolific.com/register',
-          'figma.com': 'https://www.figma.com',
-          'canva.com': 'https://www.canva.com/signup',
-        };
-        const escapeUrl = SPA_ESCAPE_MAP[currentDomain];
-        if (escapeUrl && escapeUrl !== url && isSafeUrl(escapeUrl)) {
-          console.log(`[BROWSER-AGENT] SPA loop on ${currentDomain} — force-navigating to ${escapeUrl}`);
-          history.push(`⚡ SPA navigation stuck (${noChangeCount} steps no change). Force-navigating to known URL: ${escapeUrl}`);
-          await activePage.goto(escapeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        // Generic SPA escape: no hardcoded site-specific URLs.
+        // For signup tasks, try /signup or /register on the current domain.
+        // For all other tasks, reload the current page to break the loop.
+        const isSignupStuck = /\b(sign\s*(?:\w+\s+)?up|create.*account|register|enroll|join)\b/i.test(task);
+        const origin = (() => { try { return new URL(url).origin; } catch { return ''; } })();
+        if (origin) {
+          if (isSignupStuck) {
+            // Try /signup then /register as escape routes
+            const signupPaths = ['/signup', '/register', '/sign-up', '/join', '/create-account'];
+            let escaped = false;
+            for (const path of signupPaths) {
+              const escapeUrl = origin + path;
+              if (escapeUrl !== url && isSafeUrl(escapeUrl)) {
+                console.log(`[BROWSER-AGENT] SPA loop on ${currentDomain} — trying signup escape: ${escapeUrl}`);
+                history.push(`⚡ SPA navigation stuck (${noChangeCount} steps no change). Trying signup path: ${escapeUrl}`);
+                try {
+                  const resp = await activePage.goto(escapeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+                  const newUrl = activePage.url();
+                  // If we landed on a real page (not redirected back to where we were)
+                  if (resp && resp.status() < 400 && newUrl !== url) {
+                    escaped = true;
+                    break;
+                  }
+                } catch { /* try next path */ }
+              }
+            }
+            if (!escaped) {
+              // All signup paths failed — just reload to break the loop
+              console.log(`[BROWSER-AGENT] SPA loop on ${currentDomain} — reloading page`);
+              history.push(`⚡ SPA navigation stuck (${noChangeCount} steps no change). Reloading page.`);
+              await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+            }
+          } else {
+            // Non-signup task: reload the page to break the loop
+            console.log(`[BROWSER-AGENT] SPA loop on ${currentDomain} — reloading page`);
+            history.push(`⚡ SPA navigation stuck (${noChangeCount} steps no change). Reloading page.`);
+            await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+          }
           noChangeCount = 0;
           sameUrlCount = 0;
         }

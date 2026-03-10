@@ -12,6 +12,7 @@ import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } fro
 import { detectPatterns } from './pattern-detector.js';
 import { CronExpressionParser } from 'cron-parser';
 import { startMonitoringService } from './monitoring.js';
+import { startAutoProceedPoller, stopAutoProceedPoller } from './auto-proceed.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -76,6 +77,10 @@ export function startScheduler(): void {
   startMonitoringService();
   console.log('[SCHEDULER] Monitoring service started');
 
+  // Start auto-proceed poller (every 5 minutes) — re-triggers tasks where user didn't respond
+  startAutoProceedPoller();
+  console.log('[SCHEDULER] Auto-proceed poller started');
+
   // Daily Twilio cost reconciliation — runs 60s after startup, then every 24h
   setTimeout(async () => {
     try {
@@ -109,6 +114,7 @@ export function stopScheduler(): void {
     clearInterval(checkinInterval);
     checkinInterval = null;
   }
+  stopAutoProceedPoller();
   console.log('[SCHEDULER] Stopped');
 }
 

@@ -919,7 +919,74 @@ app.post("/task", taskLimiter, async (req, res) => {
       res.json({ status: "update_injected", message: `Got it — I'll factor that into "${activeTask.subject.substring(0, 60)}". Let me know if you meant to start a different task instead.` });
       return;
     }
-    // relevance === 'new_task' → fall through, process normally in parallel
+    // relevance === 'new_task' → fall through, check for awaiting-reply tasks before starting new
+  }
+
+  // ── Auto-proceed reply detection ──
+  // If user has a task in needs_review/pending_approval/awaiting_confirmation with auto_proceed_at set,
+  // it means the agent asked a question and is waiting for a reply. Handle the reply.
+  try {
+    const newMsg = ((task.subject || '') + ' ' + (task.body || '')).trim();
+    const { data: awaitingTask } = await getSupabaseClient()
+      .from('tasks')
+      .select('id, input_text, email_subject, status, auto_proceed_at, auto_proceed_context')
+      .eq('user_id', task.userId)
+      .in('status', ['needs_review', 'pending_approval', 'awaiting_confirmation'])
+      .not('auto_proceed_at', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (awaitingTask) {
+      const msgLower = newMsg.toLowerCase();
+      const isCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(msgLower);
+
+      if (isCancelRequest) {
+        // User wants to cancel the task
+        await getSupabaseClient().from('tasks').update({
+          status: 'completed',
+          response_text: 'Task cancelled.',
+          auto_proceed_at: null,
+          auto_proceed_context: null,
+          completed_at: new Date().toISOString(),
+        }).eq('id', awaitingTask.id);
+
+        console.log(`[AUTO-PROCEED-REPLY] User cancelled task ${awaitingTask.id.slice(0, 8)}`);
+        res.json({ status: "cancelled", message: "Got it — task cancelled." });
+        return;
+      }
+
+      // User provided an answer — clear auto-proceed timer and re-process with their answer
+      console.log(`[AUTO-PROCEED-REPLY] User replied to awaiting task ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 80)}"`);
+
+      await getSupabaseClient().from('tasks').update({
+        status: 'processing',
+        auto_proceed_at: null,
+        auto_proceed_context: null,
+      }).eq('id', awaitingTask.id);
+
+      res.json({ status: "update_received", message: "Got it — incorporating your reply and continuing." });
+
+      activeTasks++;
+      const { processTask: procTask } = await import("./services/processor.js");
+      procTask({
+        userId: task.userId,
+        username: task.username,
+        from: task.from,
+        subject: awaitingTask.email_subject || awaitingTask.input_text?.substring(0, 200) || task.subject,
+        body: `${awaitingTask.input_text || ''}\n\nUser reply: ${newMsg}`,
+        taskId: awaitingTask.id,
+        inputChannel: task.inputChannel,
+        responsePrefix: `You replied with additional info. Here's what I did:`,
+      }).then((result) => {
+        console.log(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} completed: success=${result.success}`);
+      }).catch((err) => {
+        console.error(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} failed:`, err);
+      }).finally(() => { activeTasks--; processQueuedTasks(); });
+      return;
+    }
+  } catch {
+    // Non-critical — fall through to normal processing
   }
 
   res.json({ status: "queued", message: "Task received and processing" });
@@ -2101,18 +2168,42 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
         })();
 
         if (profile) {
-          activeTasks++;
-          processIncomingTask({
-            userId: profile.userId,
-            username: profile.username,
-            from: profile.email,
-            subject: body.substring(0, 200),
-            body: "",
-            taskId: result.taskId,
-            inputChannel: "sms",
-          })
-            .catch(console.error)
-            .finally(() => { activeTasks--; });
+          if (result.isReplyToAwaiting) {
+            // User replied to an awaiting task — re-process with their answer
+            activeTasks++;
+            const { data: awTask } = await getSupabaseClient()
+              .from('tasks')
+              .select('id, input_text, email_subject')
+              .eq('id', result.taskId)
+              .single();
+
+            const { processTask: replyProcTask } = await import("./services/processor.js");
+            replyProcTask({
+              userId: profile.userId,
+              username: profile.username,
+              from: profile.email,
+              subject: awTask?.email_subject || body.substring(0, 200),
+              body: `${awTask?.input_text || ''}\n\nUser reply: ${body}`,
+              taskId: result.taskId,
+              inputChannel: "sms",
+              responsePrefix: `You replied with additional info. Here's what I did:`,
+            })
+              .catch(console.error)
+              .finally(() => { activeTasks--; });
+          } else {
+            activeTasks++;
+            processIncomingTask({
+              userId: profile.userId,
+              username: profile.username,
+              from: profile.email,
+              subject: body.substring(0, 200),
+              body: "",
+              taskId: result.taskId,
+              inputChannel: "sms",
+            })
+              .catch(console.error)
+              .finally(() => { activeTasks--; });
+          }
         }
       }
     } else {
@@ -2280,6 +2371,73 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+    }
+
+    // ── Auto-proceed reply detection (SMS) ──
+    // Check if user has a task waiting for their reply before creating a new task
+    try {
+      const { data: smsAwaitingTask } = await supabase
+        .from('tasks')
+        .select('id, input_text, email_subject, status, auto_proceed_at')
+        .eq('user_id', userId)
+        .in('status', ['needs_review', 'pending_approval', 'awaiting_confirmation'])
+        .not('auto_proceed_at', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (smsAwaitingTask) {
+        const smsLower = message.toLowerCase().trim();
+        const smsCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(smsLower);
+
+        if (smsCancelRequest) {
+          await supabase.from('tasks').update({
+            status: 'completed',
+            response_text: 'Task cancelled.',
+            auto_proceed_at: null,
+            auto_proceed_context: null,
+            completed_at: new Date().toISOString(),
+          }).eq('id', smsAwaitingTask.id);
+
+          console.log(`[SMS-AUTO-PROCEED] User cancelled task ${smsAwaitingTask.id.slice(0, 8)} via SMS`);
+          res.type("text/xml");
+          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Got it, task cancelled.</Message>
+</Response>`);
+        }
+
+        // User provided an answer — clear timer and re-process
+        console.log(`[SMS-AUTO-PROCEED] User replied to awaiting task ${smsAwaitingTask.id.slice(0, 8)} via SMS`);
+
+        await supabase.from('tasks').update({
+          status: 'processing',
+          auto_proceed_at: null,
+          auto_proceed_context: null,
+        }).eq('id', smsAwaitingTask.id);
+
+        const { processTask: smsProcTask } = await import("./services/processor.js");
+        smsProcTask({
+          userId,
+          username,
+          from: senderNumber,
+          subject: smsAwaitingTask.email_subject || smsAwaitingTask.input_text?.substring(0, 200) || message.substring(0, 200),
+          body: `${smsAwaitingTask.input_text || ''}\n\nUser reply: ${message}`,
+          taskId: smsAwaitingTask.id,
+          inputChannel: "sms",
+          responsePrefix: `You replied with additional info. Here's what I did:`,
+        }).catch((err: Error) => {
+          console.error(`[SMS-AUTO-PROCEED] Task ${smsAwaitingTask.id.slice(0, 8)} failed:`, err);
+        });
+
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Got it! Continuing with your task.</Message>
+</Response>`);
+      }
+    } catch {
+      // Non-critical — fall through to normal SMS processing
     }
 
     // Process SMS as task (sender is the account owner or no PIN set)

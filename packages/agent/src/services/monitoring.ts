@@ -252,8 +252,9 @@ export function extractMonitorTag(fact: string): string | null {
  */
 function needsRealCheck(description: string): boolean {
   const lc = description.toLowerCase();
+  // Generic: any monitoring description that mentions checking/tracking something on a platform
   return /\b(check|monitor|watch|track|inbox|message|notification|reply|response|new order|listing|post|follower|earning|point|balance|survey|video|view|comment|like)\b/.test(lc)
-    && /\b(swagbucks|tiktok|twitter|x\.com|instagram|youtube|reddit|fiverr|upwork|linkedin|facebook|discord|slack|notion|trello|github|gmail|outlook|indeed|craigslist)\b/.test(lc);
+    && (/\b[a-z]+\.(com|org|net|io|co|app)\b/.test(lc) || /\b(inbox|dashboard|account|profile|feed|messages|notifications)\b/.test(lc));
 }
 
 /**
@@ -264,26 +265,14 @@ function extractPlatformUrl(description: string): string | null {
   const urlMatch = description.match(/https?:\/\/[^\s)]+/);
   if (urlMatch) return urlMatch[0];
 
-  // Platform name → URL mapping
-  const platforms: Record<string, string> = {
-    swagbucks: 'https://www.swagbucks.com/account/summary',
-    tiktok: 'https://www.tiktok.com/notifications',
-    twitter: 'https://twitter.com/notifications',
-    'x.com': 'https://x.com/notifications',
-    instagram: 'https://www.instagram.com/accounts/activity/',
-    youtube: 'https://studio.youtube.com/',
-    fiverr: 'https://www.fiverr.com/inbox',
-    upwork: 'https://www.upwork.com/nx/messages',
-    linkedin: 'https://www.linkedin.com/messaging/',
-    discord: 'https://discord.com/channels/@me',
-    reddit: 'https://www.reddit.com/notifications',
-    github: 'https://github.com/notifications',
-  };
-
+  // Generic: extract platform name from description and construct URL dynamically
+  // No hardcoded platform→URL map — the agent navigates generically
   const lc = description.toLowerCase();
-  for (const [name, url] of Object.entries(platforms)) {
-    if (lc.includes(name)) return url;
-  }
+  const platformMatch = lc.match(/\b([a-z][a-z0-9]+)\.(com|org|net|io|co|app)\b/);
+  if (platformMatch) return `https://www.${platformMatch[1]}.${platformMatch[2]}`;
+  // Try to find a single capitalized word that looks like a platform name
+  const brandMatch = description.match(/\b([A-Z][a-zA-Z0-9]{2,})\b/);
+  if (brandMatch) return `https://www.${brandMatch[1].toLowerCase()}.com`;
   return null;
 }
 

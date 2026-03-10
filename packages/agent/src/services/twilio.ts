@@ -483,6 +483,7 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
   processed: boolean;
   taskId?: string;
   isVerificationCode?: boolean;
+  isReplyToAwaiting?: boolean;
 }> {
   try {
     // Find user by their Twilio number
@@ -554,6 +555,54 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
       } catch {
         // Non-critical
       }
+    }
+
+    // ── Auto-proceed reply detection ──
+    // Check if user has a task waiting for their reply (needs_review/pending_approval/awaiting_confirmation
+    // with auto_proceed_at set) before creating a new task
+    try {
+      const { data: awaitingTask } = await getSupabaseClient()
+        .from('tasks')
+        .select('id, input_text, email_subject, status, auto_proceed_at')
+        .eq('user_id', userId)
+        .in('status', ['needs_review', 'pending_approval', 'awaiting_confirmation'])
+        .not('auto_proceed_at', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (awaitingTask) {
+        const msgLower = data.body.toLowerCase().trim();
+        const isCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(msgLower);
+
+        if (isCancelRequest) {
+          // User wants to cancel
+          await getSupabaseClient().from('tasks').update({
+            status: 'completed',
+            response_text: 'Task cancelled.',
+            auto_proceed_at: null,
+            auto_proceed_context: null,
+            completed_at: new Date().toISOString(),
+          }).eq('id', awaitingTask.id);
+
+          console.log(`[TWILIO] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
+          return { processed: true, taskId: awaitingTask.id };
+        }
+
+        // User provided an answer — clear auto-proceed timer and re-process
+        console.log(`[TWILIO] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
+
+        await getSupabaseClient().from('tasks').update({
+          status: 'processing',
+          auto_proceed_at: null,
+          auto_proceed_context: null,
+        }).eq('id', awaitingTask.id);
+
+        // Re-process with user's answer (the caller in index.ts will route this)
+        return { processed: true, taskId: awaitingTask.id, isReplyToAwaiting: true };
+      }
+    } catch {
+      // Non-critical — fall through to create new task
     }
 
     // Otherwise, treat as a new task via SMS
