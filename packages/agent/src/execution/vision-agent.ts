@@ -2607,13 +2607,39 @@ export async function runVisionAgent(
         const extracted: string[] = [];
         const lower = cleanedResponse.toLowerCase();
         // Extract CLICK patterns: "click (on|the) [N]", "click element [N]", "press [N]"
+        // Also handles: "click the 'Create account' button [18]", "then click [5]"
         const clickMatches = cleanedResponse.matchAll(/\b(?:click|press|tap|hit)\s+(?:on\s+)?(?:the\s+)?(?:element\s+)?(?:button\s+)?(?:link\s+)?\[(\d+)\]/gi);
         for (const m of clickMatches) extracted.push(`CLICK [${m[1]}]`);
-        // Extract FILL/TYPE patterns: "type/enter/fill X in/into [N]" or "fill [N] with X"
+        // Broader click: "click on the X button [N]" or "I'll click [N]"
+        if (extracted.length === 0) {
+          const broadClickMatches = cleanedResponse.matchAll(/\b(?:click|press|tap|hit|select|check)\b.{0,60}?\[(\d+)\]/gi);
+          for (const m of broadClickMatches) {
+            // Don't extract if it looks like a fill pattern (has value after ref)
+            if (!/\bfill\b/i.test(m[0])) extracted.push(`CLICK [${m[1]}]`);
+          }
+        }
+        // Extract FILL/TYPE patterns — multiple strategies for cheap model output:
+        // Strategy 1: "type/enter/fill VALUE in/into [N]"
         const fillMatches1 = cleanedResponse.matchAll(/\b(?:type|enter|input|fill|put)\s+["']?([^"'\[\]]{2,60})["']?\s+(?:in(?:to)?|on)\s+(?:the\s+)?(?:field\s+)?\[(\d+)\]/gi);
         for (const m of fillMatches1) extracted.push(`FILL [${m[2]}] "${m[1].trim()}"`);
+        // Strategy 2: "fill [N] with VALUE"
         const fillMatches2 = cleanedResponse.matchAll(/\bfill\s+\[(\d+)\]\s+(?:with\s+)?["']?([^"'\n]{2,60})["']?/gi);
         for (const m of fillMatches2) extracted.push(`FILL [${m[1]}] "${m[2].trim()}"`);
+        // Strategy 3: "fill the email field [N] with VALUE" (value AFTER ref)
+        const fillMatches3 = cleanedResponse.matchAll(/\b(?:fill|type|enter|input)\b.{0,40}?\[(\d+)\].{0,20}?(?:with|=|:)\s*["']?([^"'\n]{2,60})["']?/gi);
+        for (const m of fillMatches3) {
+          // Don't duplicate if already extracted by fillMatches2
+          if (!extracted.some(e => e.includes(`[${m[1]}]`))) {
+            extracted.push(`FILL [${m[1]}] "${m[2].trim()}"`);
+          }
+        }
+        // Strategy 4: "[N] = VALUE" or "[N]: VALUE" (direct assignment syntax)
+        const assignMatches = cleanedResponse.matchAll(/\[(\d+)\]\s*(?:=|→|->|:)\s*["']?([^"'\n\[\]]{2,60})["']?/gi);
+        for (const m of assignMatches) {
+          if (!extracted.some(e => e.includes(`[${m[1]}]`))) {
+            extracted.push(`FILL [${m[1]}] "${m[2].trim()}"`);
+          }
+        }
         // Extract SCROLL
         if (/\bscroll\s+(down|up)\b/i.test(lower)) {
           extracted.push(`SCROLL ${/\bscroll\s+up\b/i.test(lower) ? 'up' : 'down'}`);
