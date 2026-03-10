@@ -2608,8 +2608,11 @@ export async function generateVisionResponse(
   }
 
   // ═══ 1. Gemini Flash — cheap, fast, different rate pool, supports images ═══
-  if (process.env.GOOGLE_API_KEY) {
+  // CRITICAL: paceModelCall prevents burst-induced 429s on free tier (10 RPM)
+  const geminiBackoffKey = 'gemini:gemini-2.5-flash';
+  if (process.env.GOOGLE_API_KEY && Date.now() >= (rateLimitBackoff.get(geminiBackoffKey) || 0)) {
     try {
+      await paceModelCall("gemini-2.5-flash"); // Prevent burst-induced 429s — free tier is 10 RPM
       const response = await withTimeout(getGeminiClient().chat.completions.create({
         model: "gemini-2.5-flash",
         max_tokens: 1024,
@@ -2629,7 +2632,13 @@ export async function generateVisionResponse(
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] Vision (Gemini Flash) failed: ${error instanceof Error ? error.message : String(error)}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`[AI] Vision (Gemini Flash) failed: ${errMsg}`);
+      // Back off Gemini for 60s on rate limit, 30s on other errors
+      if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
+        rateLimitBackoff.set(geminiBackoffKey, Date.now() + 60000);
+      }
+      if (userId) trackApiCall(userId, `ERR:gemini-flash:${errMsg.substring(0, 60)}`, 0, 0, 0, "google", taskId, "vision-error").catch(() => {});
     }
   }
 
