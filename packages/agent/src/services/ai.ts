@@ -350,35 +350,38 @@ interface ModelConfig {
 // Rate limit backoff (NEW): 429 → skip model for 60-120s instead of retrying
 // This eliminates the 152-Gemini-429-failures-per-6-hours problem.
 // ROUTING_TABLE — model chains per task type.
-// STRATEGY: Claude Haiku 4.5 first — best reasoning for unexpected situations.
-// Free models as fallbacks when Haiku is unavailable/rate-limited.
+// STRATEGY: FREE/CHEAP models FIRST. Paid models only as last resort.
+// Gemini Flash for vision (cheapest good vision model). Kimi K2 + Scout for reasoning (free on Groq).
+// Haiku is LAST RESORT only — costs 10-20x more than Gemini Flash.
 const ROUTING_TABLE: Record<TaskType, ModelConfig[]> = {
-  // Haiku first for all reasoning tasks — reliable, vision-capable, ~6¢/browser session
   understand: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
-    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60 },
     { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 }, // last resort
   ],
   plan: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60 },
     { provider: 'groq', model: 'qwen/qwen3-32b', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 }, // last resort
   ],
   reason: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
-    { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
-    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0 },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60 },
+    { provider: 'groq', model: 'groq/compound-mini', costPerMInput: 0, costPerMOutput: 0 },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.27, costPerMOutput: 1.10 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 }, // last resort
   ],
   vision: [
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 },
-    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0.11, costPerMOutput: 0.34 },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60 },
+    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0.11, costPerMOutput: 0.34 },
+    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00 }, // last resort
   ],
   validate: [
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0 },
@@ -2248,34 +2251,8 @@ export async function generateBrowserStepResponse(
     { role: "user" as const, content: prompt }
   ];
 
-  // ═══ PRIMARY: Haiku 4.5 — vision-capable, best instruction following for browser actions ═══
-  // $1.00/$5 per M (cache reads $0.10/M). Reliable, fast, no rate limit cascade issues.
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const response = await withTimeout(getAnthropicClient().messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 512,
-        system: systemPrompt,
-        messages: [{ role: "user", content: prompt }],
-      }), 12000);
-      const content = response.content[0].type === "text" ? response.content[0].text : "";
-      if (content.length > 10) {
-        const inTok = response.usage?.input_tokens || 0;
-        const outTok = response.usage?.output_tokens || 0;
-        const usageAny = response.usage as unknown as Record<string, number>;
-        const cacheRead = usageAny?.cache_read_input_tokens || 0;
-        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
-        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] BrowserStep (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out${cacheRead ? ` (${cacheRead} cached)` : ''}`);
-        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step").catch(() => {});
-        return { content, cost };
-      }
-    } catch (error) {
-      console.warn(`[AI] BrowserStep (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // ═══ FALLBACK 1B: Gemini Flash — free, good at structured output ═══
+  // ═══ PRIMARY: Gemini Flash 2.5 — cheap ($0.15/$0.60 per M), good at structured output ═══
+  // 10-20x cheaper than Haiku. Good enough for browser step actions.
   if (process.env.GOOGLE_API_KEY) {
     try {
       await paceModelCall("gemini-2.5-flash");
@@ -2398,9 +2375,35 @@ export async function generateBrowserStepResponse(
     }
   }
 
+  // ═══ ABSOLUTE LAST RESORT: Haiku 4.5 — expensive but reliable ═══
+  // Only reached when ALL free/cheap models are rate-limited or unavailable
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const response = await withTimeout(getAnthropicClient().messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      }), 12000);
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      if (content.length > 10) {
+        const inTok = response.usage?.input_tokens || 0;
+        const outTok = response.usage?.output_tokens || 0;
+        const usageAny = response.usage as unknown as Record<string, number>;
+        const cacheRead = usageAny?.cache_read_input_tokens || 0;
+        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
+        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
+        console.log(`[AI] BrowserStep (Haiku LAST-RESORT) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step-lastresort").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   // All models exhausted — throw so vision-agent's consecutiveAiErrors counter fires
-  // (returning empty string causes silent infinite loop on parse-fail)
-  throw new Error("ALL_BROWSER_STEP_MODELS_FAILED: Haiku/DeepSeek/OpenRouter/Groq all unavailable or rate-limited");
+  throw new Error("ALL_BROWSER_STEP_MODELS_FAILED: Gemini/DeepSeek/OpenRouter/Groq/Haiku all unavailable or rate-limited");
 }
 
 /**
@@ -2440,38 +2443,6 @@ export async function generateVisionResponse(
           { type: "text", text: prompt }
         ]
       : [{ type: "text", text: prompt }];
-
-  // ═══ PRIMARY: Haiku 4.5 — handles both screenshots and text, best instruction following ═══
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      const haikusContent: Anthropic.MessageParam["content"] = hasImage
-        ? [
-            { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } },
-            { type: "text", text: prompt }
-          ]
-        : prompt;
-      const response = await withTimeout(getAnthropicClient().messages.create({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 1024,
-        ...(systemPrompt ? { system: systemPrompt } : {}),
-        messages: [{ role: "user", content: haikusContent }],
-      }), 15000);
-      const content = response.content[0].type === "text" ? response.content[0].text : "";
-      if (content.length > 10) {
-        const inTok = response.usage?.input_tokens || 0;
-        const outTok = response.usage?.output_tokens || 0;
-        const usageAny = response.usage as unknown as Record<string, number>;
-        const cacheRead = usageAny?.cache_read_input_tokens || 0;
-        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
-        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] Vision (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out${cacheRead ? ` (${cacheRead} cached)` : ''} | ${hasImage ? 'with screenshot' : 'text-only'}`);
-        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "vision").catch(() => {});
-        return { content, cost };
-      }
-    } catch (error) {
-      console.warn(`[AI] Vision (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
 
   // ═══ FAST TEXT SHORTCUT — skip vision cascade for text-only prompts ═══
   // 4 Groq models on separate rate-limit buckets → effective 150 RPM combined:
@@ -2772,6 +2743,38 @@ export async function generateVisionResponse(
       }
     } catch (error) {
       console.warn(`[AI] Vision (Groq text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // ═══ ABSOLUTE LAST RESORT: Haiku 4.5 — expensive but reliable ═══
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const haikusContent: Anthropic.MessageParam["content"] = hasImage
+        ? [
+            { type: "image", source: { type: "base64", media_type: mediaType as "image/jpeg" | "image/png", data: imageBase64 } },
+            { type: "text", text: prompt }
+          ]
+        : prompt;
+      const response = await withTimeout(getAnthropicClient().messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        messages: [{ role: "user", content: haikusContent }],
+      }), 15000);
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      if (content.length > 10) {
+        const inTok = response.usage?.input_tokens || 0;
+        const outTok = response.usage?.output_tokens || 0;
+        const usageAny = response.usage as unknown as Record<string, number>;
+        const cacheRead = usageAny?.cache_read_input_tokens || 0;
+        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
+        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
+        console.log(`[AI] Vision (Haiku LAST-RESORT) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${hasImage ? 'with screenshot' : 'text-only'}`);
+        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "vision-lastresort").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] Vision (Haiku last-resort) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
