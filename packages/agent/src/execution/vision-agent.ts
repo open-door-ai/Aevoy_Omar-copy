@@ -111,6 +111,7 @@ interface ElementRef {
   nthOfKind: number; // 0-based index among elements with same role+name on page
   cx?: number;       // center X coordinate (for fallback coordinate click)
   cy?: number;       // center Y coordinate (for fallback coordinate click)
+  selector?: string; // unique CSS selector for direct element targeting (most reliable)
 }
 
 type ElementRefMap = Map<number, ElementRef>;
@@ -131,7 +132,7 @@ async function extractDomElements(page: Page | Frame): Promise<{ text: string; r
   try {
     const elements = await Promise.race([
       page.evaluate(() => {
-        const items: { tag: string; role: string; name: string; type: string; nth: number; cx: number; cy: number; formContext: string }[] = [];
+        const items: { tag: string; role: string; name: string; type: string; nth: number; cx: number; cy: number; formContext: string; selector: string }[] = [];
         const tagCounts = new Map<string, number>();
         const multiForm = document.querySelectorAll('form').length >= 2;
         const selectors = ['a', 'button', 'input', 'select', 'textarea',
@@ -203,7 +204,25 @@ async function extractDomElements(page: Page | Frame): Promise<{ text: string; r
                 tagCounts.set(tag + role + name, nth + 1);
                 const cx = Math.round(rect.left + rect.width / 2);
                 const cy = Math.round(rect.top + rect.height / 2);
-                items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy, formContext });
+                // Build a unique CSS selector for direct element targeting.
+                // Priority: #id > [name] > [data-testid] > tag[type][placeholder] > nth-child path
+                let selector = '';
+                if (elId) {
+                  selector = `#${CSS.escape(elId)}`;
+                } else if (el.getAttribute('name')) {
+                  selector = `${tag}[name="${el.getAttribute('name')}"]`;
+                } else if (el.getAttribute('data-testid')) {
+                  selector = `[data-testid="${el.getAttribute('data-testid')}"]`;
+                } else {
+                  // Build a path selector: combine tag + type + placeholder for uniqueness
+                  const parts = [tag];
+                  if (el.getAttribute('type')) parts.push(`[type="${el.getAttribute('type')}"]`);
+                  if (el.getAttribute('placeholder')) parts.push(`[placeholder="${el.getAttribute('placeholder')}"]`);
+                  if (el.getAttribute('aria-label')) parts.push(`[aria-label="${el.getAttribute('aria-label')}"]`);
+                  if (el.getAttribute('href') && tag === 'a') parts.push(`[href="${el.getAttribute('href')?.substring(0, 100)}"]`);
+                  selector = parts.join('');
+                }
+                items.push({ tag, role, name, type: el.getAttribute('type') || '', nth, cx, cy, formContext, selector });
               });
             } catch { /* selector may be invalid in shadow DOM */ }
           }
@@ -239,7 +258,7 @@ async function extractDomElements(page: Page | Frame): Promise<{ text: string; r
       const roleNameKey = `${el.role}:${el.name}`;
       const nthOfKind = roleNameCounts.get(roleNameKey) || 0;
       roleNameCounts.set(roleNameKey, nthOfKind + 1);
-      refs.set(refId, { role: el.role, name: el.name, nthOfKind, cx: el.cx, cy: el.cy });
+      refs.set(refId, { role: el.role, name: el.name, nthOfKind, cx: el.cx, cy: el.cy, selector: el.selector });
       const typeStr = el.type ? ` type="${el.type}"` : '';
       const finalName = el.formContext && el.name ? `${el.name} (form: ${el.formContext})` : el.name;
       lines.push(`[${refId}] ${el.role} "${sanitizeElementName(finalName)}"${typeStr}`);
@@ -905,6 +924,16 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.ref !== undefined) {
           const resolved = resolveByRef(action.ref);
           if (resolved) {
+            // Strategy 0: CSS selector (MOST RELIABLE — direct element targeting)
+            // Uses the unique CSS selector stored during DOM extraction (#id, [name], [data-testid], etc.)
+            if (resolved.entry.selector) {
+              try {
+                const cssEl = page.locator(resolved.entry.selector).first();
+                await cssEl.waitFor({ state: 'visible', timeout: 2000 });
+                await humanClick(cssEl);
+                return true;
+              } catch { /* try next */ }
+            }
             // Strategy 1: Playwright role+name locator (exact)
             try {
               await resolved.locator.waitFor({ state: 'visible', timeout: 2000 });
@@ -1010,6 +1039,9 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.ref !== undefined) {
           const resolved = resolveByRef(action.ref);
           if (resolved) {
+            if (resolved.entry.selector) {
+              try { await page.locator(resolved.entry.selector).first().hover({ timeout }); return true; } catch { /* fall through */ }
+            }
             await resolved.locator.hover({ timeout });
             return true;
           }
@@ -1042,6 +1074,14 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.ref !== undefined) {
           const resolved = resolveByRef(action.ref);
           if (resolved) {
+            // CSS selector first
+            if (resolved.entry.selector) {
+              try {
+                const cssEl = page.locator(resolved.entry.selector).first();
+                await cssEl.click({ button: 'right', timeout });
+                return true;
+              } catch { /* fall through */ }
+            }
             try {
               await resolved.locator.click({ button: 'right', timeout });
               return true;
@@ -1106,6 +1146,17 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
           if (resolved) {
             const _fillName = resolved.entry.name;
             const _fillRole = resolved.entry.role;
+            // Strategy 0: CSS selector (MOST RELIABLE — direct element targeting)
+            if (resolved.entry.selector) {
+              try {
+                const cssEl = page.locator(resolved.entry.selector).first();
+                await humanType(page, cssEl, action.value!);
+                console.log(`[FILL] ✓ Strategy 0 (CSS selector: ${resolved.entry.selector}) for ref [${action.ref}]`);
+                return true;
+              } catch (e0) {
+                console.log(`[FILL] Strategy 0 (CSS) failed for ref [${action.ref}]: ${(e0 as Error).message?.substring(0, 80)}`);
+              }
+            }
             // Strategy 1: exact role+name locator
             try {
               await humanType(page, resolved.locator, action.value);
@@ -1294,6 +1345,10 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
         if (action.ref !== undefined) {
           const resolved = resolveByRef(action.ref);
           if (resolved) {
+            // CSS selector first
+            if (resolved.entry.selector) {
+              try { await page.locator(resolved.entry.selector).first().selectOption(action.value, { timeout }); return true; } catch { /* fall through */ }
+            }
             try {
               await resolved.locator.selectOption(action.value, { timeout });
               return true;
