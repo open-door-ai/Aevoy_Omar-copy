@@ -3458,13 +3458,13 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
     // FORCE BROWSER for tasks that clearly need it — even if AI generated no browse actions.
     // This prevents the AI from faking "I navigated to..." text responses with 0 actions.
     const _taskText = `${subject} ${body || ''}`;
-    const _hasExplicitDomainCheck = /\b(go\s+to|navigate\s+to|open|visit|use|browse|on|at|from|via|through)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_taskText) || /\bhttps?:\/\/\S+/i.test(_taskText);
-    const _isBrowserRequiredTask = _hasExplicitDomainCheck || /\b(sign\s?up|signup|create\b.*\baccount|book\s+(a|my|the)\b|add\s+to\s+cart|order\s+(me\s+)?(?:an?\s+)?|buy\s+(a|me)|purchase|subscribe|register\s+(for|on|at)|use\s+(the\s+)?browser|go\s+on\s+(the\s+)?(web|internet|browser))\b/i.test(_taskText);
+    const _hasExplicitDomainCheck = /\b(go\s+to|navigate\s+to|open|visit|use|browse|on|at|from|via|through)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(_taskText) || /\bhttps?:\/\/\S+/i.test(_taskText) || /\b[\w][\w.-]*\.(com|ca|org|net|io|co|app)\/\S+/i.test(_taskText);
+    const _isBrowserRequiredTask = _hasExplicitDomainCheck || /\b(sign\s?up|signup|create\b.*\baccount|book\s+(a|my|the)\b|add\s+to\s+cart|order\s+(me\s+)?(?:an?\s+)?|buy\s+(a|me)|purchase|subscribe|register\s+(for|on|at)|use\s+(the\s+)?browser|go\s+on\s+(the\s+)?(web|internet|browser)|fill\s*(out|in|the)?\b|complete\s+(the\s+)?form|submit\s+(the\s+)?form)\b/i.test(_taskText);
     const _hasBrowserAction = aiResponse.actions.some(a => BROWSER_ACTION_TYPES.includes(a.type));
     if (!needsBrowser && _isBrowserRequiredTask && !_hasBrowserAction) {
       // Browser-required task but AI only generated non-browser actions (search, etc.) or no actions.
       // Force a browse action to the target domain.
-      const _forceDomainMatch = subject.match(/\b(\S+\.(com|ca|org|net|io|co|app))\b/i);
+      const _forceDomainMatch = _taskText.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app)(\/[\w./?=&#%-]*)?)/i);
       // Also match brand names without explicit TLD (e.g. "on BestBuy", "for Swagbucks")
       const _brandMatch = !_forceDomainMatch && subject.match(/\b(?:on|for|at|from|to)\s+([A-Z][a-zA-Z0-9]+)\b/);
       const _forceDomain = _forceDomainMatch?.[1] || '';
@@ -6737,7 +6737,7 @@ DO NOT attempt another browser action. Use search → call_external now.`;
       // If everything succeeded perfectly and task seems done, stop
       // Exception: if there's meaningful action data (e.g. read_email results), let AI synthesize it
       const hasActionData = iterationResults.some(r => r.success && r.result && typeof r.result === 'string' && r.result.length > 30);
-      if (failedActions.length === 0 && !needsBrowser && !hasActionData && !needsSynthesis) {
+      if (failedActions.length === 0 && !needsBrowser && !hasActionData && !needsSynthesis && !_isBrowserRequiredTask) {
         console.log('[ITERATE] All actions succeeded (non-browser, no data), task complete');
         isTaskComplete = true;
         break;
@@ -8215,8 +8215,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // QUALITY GATE: Never auto-pass if the task explicitly mentions a website/domain AND no browser was used.
     // "Go to opentable.com and book a table" completing with "I'm processing..." is a FAILURE, not a pass.
     const _taskMentionsDomain = /\b(go\s+to|navigate\s+to|open|visit|use|browse)\s+\S+\.(com|ca|org|net|io|co|app|dev|ai)\b/i.test(`${subject} ${body}`) ||
-      /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`);
-    const _taskNeedsBrowserAction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe)\b/i.test(`${subject} ${body}`);
+      /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
+      /\b[\w][\w.-]*\.(com|ca|org|net|io|co|app|dev|ai)(\/\S*)?/i.test(`${subject} ${body}`);
+    const _taskNeedsBrowserAction = /\b(add\s+to\s+cart|checkout|book\s+(a|my|the)|reserv|sign\s?up|signup|register|create\b.*\baccount|fill|apply|order|buy|purchase|subscribe|cancel|unsubscribe|fill\s*(out|in)?\b|complete\s+(the\s+)?form|submit\s+(the\s+)?form)\b/i.test(`${subject} ${body}`);
     const _domainTaskButNoBrowser = _taskMentionsDomain && _taskNeedsBrowserAction && noBrowserUsed;
 
     // PLACEHOLDER DETECTION: Reject "I'm processing..." / "taking longer than expected" as final responses.
@@ -8299,7 +8300,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           evidence: `All ${actionResults.length} actions failed — task did not complete successfully`
         };
       }
-    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier && !_taskMentionsDomain) || (signupAutoCompleted && !/\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|apply)\b/i.test(taskTextLower)) || _awaitingCredentials) && aiResponse.content) {
+    } else if (((noBrowserUsed || hasNoActions) || (isSearchOnly && isResearchTier && !_taskMentionsDomain) || (signupAutoCompleted && !/\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|apply)\b/i.test(taskTextLower)) || _awaitingCredentials) && aiResponse.content && !_browserRequiredButMissing) {
       // NOTE: search-only auto-pass is BLOCKED when task mentions a specific domain ("Go to X.com")
       // because those tasks require actual browser interaction, not just search results.
       // ANTI-HALLUCINATION: signupAutoCompleted does NOT auto-pass browser action tasks
