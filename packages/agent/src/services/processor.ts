@@ -3798,10 +3798,12 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
       const _bfpFromAction = !_bfpUrlMatch ? aiResponse.actions.find(a => a.type === 'browse')?.params?.url : null;
       const _bfpRawDomain = _bfpUrlMatch?.[1] || _bfpUrlMatch?.[0] || (_bfpFromAction as string) || '';
       const _bfpCleanDomain = _bfpRawDomain.replace(/[,;!?)\]]+$/, '');
-      // Don't add www. if domain already has subdomains (2+ dots like books.toscrape.com)
-      const _bfpDotCount = (_bfpCleanDomain.match(/\./g) || []).length;
+      // Don't add www. if domain already has subdomains (2+ dots) or uses non-www TLDs
+      const _bfpDomainOnly = _bfpCleanDomain.split('/')[0]; // Strip path for dot counting
+      const _bfpDotCount = (_bfpDomainOnly.match(/\./g) || []).length;
+      const _bfpNeedsWww = _bfpDotCount === 1 && /\.(com|ca|net)$/i.test(_bfpDomainOnly);
       const _bfpTargetUrl = _bfpRawDomain
-        ? (_bfpRawDomain.startsWith('http') ? _bfpRawDomain : `https://${_bfpDotCount >= 2 ? '' : 'www.'}${_bfpCleanDomain}`)
+        ? (_bfpRawDomain.startsWith('http') ? _bfpRawDomain : `https://${_bfpNeedsWww ? 'www.' : ''}${_bfpCleanDomain}`)
         : '';
 
       if (_bfpTargetUrl) {
@@ -3989,7 +3991,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                     const { generateForcedDirectAnswer } = await import("./ai.js");
                     const _bfpTimeoutSummary = await generateForcedDirectAnswer(
                       _bfpTaskText,
-                      `BROWSER DATA (from ${_bfpLiveUrl2} — partial, timed out after working on page):\n${_bfpLiveText2.substring(0, 3000)}\n\nExtract what was found. Include names, prices, ratings, addresses.`,
+                      `BROWSER DATA (from ${_bfpLiveUrl2} — partial, timed out after working on page):\n${_bfpLiveText2.substring(0, 3000)}`,
                       username
                     ).catch(() => null);
                     if (_bfpTimeoutSummary?.content && _bfpTimeoutSummary.content.length > 30) {
