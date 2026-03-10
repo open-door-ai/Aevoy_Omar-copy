@@ -2836,7 +2836,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
       /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(canva|figma|adobe|photoshop|illustrator|visme|crello|snappa|opentable|swagbucks|bestbuy|amazon|ebay|etsy|shopify|wix|squarespace|wordpress)\b/i.test(`${subject} ${body}`);
-    const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv)\b/i.test(`${subject} ${body}`);
+    const _isDocumentAction = !_taskNamesWebsite && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
     const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
