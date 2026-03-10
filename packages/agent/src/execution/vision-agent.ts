@@ -2978,7 +2978,7 @@ export async function runVisionAgent(
           const hasFactualData = /\d{2,}/.test(doneResult) && doneResult.length > 15;
           // Detect give-up language: agent reporting failure in DONE instead of data
           const isGiveUp = /\b(got stuck|couldn't|couldn.t|couldn.t complete|couldn.t find|could not|unable to|hit a snag|ran into|wasn.t working|got confused|I.m unable|unable to (access|find|complete|navigate)|may require a different|no longer accessible|the site (may|might)|try again|different approach|stuck after \d|stuck on the|couldn.t proceed|couldn.t access)\b/i.test(doneResult);
-          const isInfoTask = /\b(tell me|what is|list|find|how much|how many|population|price|cost|address|rating|show me|what are|name the)\b/i.test(task);
+          const isInfoTask = /\b(tell me|what is|list|find|get me|get the|how much|how many|population|price|cost|address|rating|show me|what are|name the|first \d|top \d|quotes?|reviews?)\b/i.test(task);
           if (hasFactualData && isInfoTask && !isGiveUp) {
             // Skip all rejection — this has real data for an info task
           } else if (isGiveUp) {

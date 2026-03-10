@@ -6419,7 +6419,7 @@ YOU must complete the task using a DIFFERENT approach:
                 // DATA-WANTING TASK REJECTION: If the task asks for specific data (prices, listings,
                 // ratings, links) and vision returned trivial garbage, don't generate a fake summary.
                 // Treat as failure so the processor can retry with vision or fall back to search.
-                const _taskWantsDataP = /\b(price|deal|listing|link|rating|review|cost|address|phone|result|find|give me|tell me|show me|report|compare|cheapest|best|top|lowest)\b/i.test(subject);
+                const _taskWantsDataP = /\b(price|deal|listing|link|rating|review|cost|address|phone|result|find|get me|get the|give me|tell me|show me|report|compare|cheapest|best|top \d|first \d|lowest|quotes?)\b/i.test(subject);
                 if (isTrivialResult && _taskWantsDataP) {
                   console.warn(`[VISION-VERIFY] TRIVIAL RESULT REJECTED: Task wants data but vision returned "${rawVisionResult.substring(0, 60)}". Treating as failure.`);
                   lastVisionFailed = true;
@@ -8786,9 +8786,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // Detect responses that tell the user to "add to Connected Apps" or "go to Settings"
     // when the system prompt says to use call_user to collect credentials directly.
     // This is always wrong — the agent should CALL the user, not send them to settings.
-    if (cleanResponse && /\b(connected apps|agent passwords|settings.*agent|vault|add.*login|add.*account)\b/i.test(cleanResponse)) {
+    if (!_isSignupTask && cleanResponse && /\b(connected apps|agent passwords|settings.*agent|vault|add.*login|add.*account)\b/i.test(cleanResponse)) {
       const _serviceMatch = subject.match(/\b(netflix|hulu|spotify|disney\+?|amazon prime|apple tv|youtube premium|crave|paramount|peacock|max hbo|tidal|deezer|pandora|crunchyroll)\b/i);
-      const _serviceName = _serviceMatch?.[1] || 'the service';
+      const _serviceName = _serviceMatch?.[1] || 'your service';
       cleanResponse = `To cancel your ${_serviceName} subscription, I need your login credentials. Reply with your ${_serviceName} email address and password and I'll log in and cancel it immediately.`;
       console.log('[CREDENTIAL-FIX] Replaced "Connected Apps" response with direct credential request');
     }
