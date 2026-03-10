@@ -1519,6 +1519,8 @@ IDENTITY & SIGNUPS:
 - Use YOUR credentials from ⚡ CREDENTIALS for all signups/forms.
 - Try OAuth buttons first ("Continue with Google", "Sign in with Apple"). Fall back to email form.
 - "verify your email/phone" → WAIT (codes auto-read).
+- SIGNUP vs LOGIN: If the task says "sign up" or "create account", NEVER click "Log in" or "Sign in" links. Stay on SIGNUP pages. If you land on a login page, look for "Sign up" or "Create account" links.
+- If form fields are ALREADY FILLED (email/password show values), just CLICK the submit/continue button.
 
 SHOPPING: Search → product → Add to Cart → DONE with price.
 BOOKING: Date/time/party → Search → Pick slot → Fill contact → Confirm.
@@ -2010,7 +2012,7 @@ export async function runVisionAgent(
         autoFillCompleted = true;
         hasFilledAnyField = true;
         console.log(`[BROWSER-AGENT] AUTO-FILL (pre-loop): ${autoFillResult.filled.join(', ')}`);
-        history.push(`✅ Auto-filled signup form: ${autoFillResult.filled.join(', ')}`);
+        history.push(`✅ Form fields ALREADY FILLED: ${autoFillResult.filled.join(', ')}. Now CLICK the submit/continue/create button. Do NOT re-fill or navigate away.`);
         if (autoFillResult.submitted) {
           await activePage.waitForTimeout(3000);
           console.log(`[BROWSER-AGENT] AUTO-FILL post-submit URL: ${activePage.url()}`);
@@ -3118,6 +3120,36 @@ export async function runVisionAgent(
 
         if (ok && (action.type === 'fill' || action.type === 'type' || action.type === 'select')) {
           hasFilledAnyField = true;
+        }
+
+        // ── SIGNUP URL GUARD: Prevent signup tasks from navigating to login pages ──
+        // If the task is a signup/register task and the agent clicked a link that took us
+        // to a login page, redirect back to the signup page.
+        if (ok && isFormFillTask && (action.type === 'click' || action.type === 'navigate')) {
+          try {
+            const postUrl = activePage.url();
+            const postPath = new URL(postUrl).pathname.toLowerCase();
+            const isOnLoginPage = /\/(login|signin|sign-in|log-in)(\b|$)/i.test(postPath);
+            const taskWantsSignup = /\b(sign\s*up|signup|register|create.*account|join)\b/i.test(task);
+            if (isOnLoginPage && taskWantsSignup) {
+              console.warn(`[BROWSER-AGENT] Signup task landed on login page — redirecting back to signup`);
+              const origin = new URL(postUrl).origin;
+              // Try common signup paths
+              for (const signupPath of ['/signup', '/register', '/sign-up', '/join', '/signup-email', '/create-account']) {
+                try {
+                  const resp = await activePage.goto(`${origin}${signupPath}`, { waitUntil: 'domcontentloaded', timeout: 8000 });
+                  const newUrl = activePage.url();
+                  const newPath = new URL(newUrl).pathname.toLowerCase();
+                  if (resp && resp.status() < 400 && !/\/(login|signin|sign-in|log-in)/.test(newPath)) {
+                    console.log(`[BROWSER-AGENT] Redirected to: ${newUrl.substring(0, 80)}`);
+                    history.push(`⚠️ Redirected from login back to signup: ${newUrl.substring(0, 60)}`);
+                    await activePage.waitForTimeout(1500);
+                    break;
+                  }
+                } catch { /* next path */ }
+              }
+            }
+          } catch { /* non-critical */ }
         }
 
         // ── POST-FILL GUARD: Fix password-in-email corruption ──
