@@ -3893,6 +3893,13 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               console.log(`[BROWSER-FAST-PATH] Vision agent result: success=${_bfpResult.success}, steps=${_bfpResult.steps}, cost=$${_bfpResult.cost.toFixed(4)}`);
 
               if (_bfpResult.success && _bfpResult.result && _bfpResult.result.length > 30) {
+                // Data extraction check: if task wants specific data but result is a trivial header, reject
+                const _bfpWantsData = /\b(price|deal|listing|link|rating|review|cost|address|phone|result|find|get me|get the|give me|tell me|show me|report|compare|cheapest|best|top \d|first \d|lowest|quotes?)\b/i.test(_bfpTaskText);
+                const _bfpIsTrivial = _bfpResult.result.trim().length < 60;
+                if (_bfpWantsData && _bfpIsTrivial) {
+                  console.warn(`[BROWSER-FAST-PATH] TRIVIAL DATA REJECTED: Task wants data but got "${_bfpResult.result.substring(0, 60)}". Falling through to retry.`);
+                  // Fall through to page data extraction (Strategy 1) or iteration loop
+                } else {
                 // Vision agent succeeded — use its result directly
                 aiResponse.content = _bfpResult.result;
                 isTaskComplete = true;
@@ -3904,6 +3911,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                   signupAutoCompleted = true;
                 }
                 console.log(`[BROWSER-FAST-PATH] SUCCESS (steps=${_bfpResult.steps}, browserAction=${_bfpIsBrowserActionTask}) — ${_bfpIsBrowserActionTask ? 'will verify' : 'auto-pass'}`);
+              } // end data-check else
               } else {
                 // Vision agent failed — construct a meaningful response from what happened.
                 // NEVER fall through to generic "I worked on your request" — always explain the outcome.
