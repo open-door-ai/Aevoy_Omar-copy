@@ -1661,14 +1661,14 @@ async function buildPrompt(
         suggestions.push(`FILL [${refNum}] "${creds.phone}"`);
       }
     }
-    // Find submit/continue/create buttons
+    // Find submit/continue/create buttons AND signup links
     for (const line of refLines) {
-      const btnMatch = line.match(/\[(\d+)\]\s+button\s+"([^"]+)"/i);
+      const btnMatch = line.match(/\[(\d+)\]\s+(button|link)\s+"([^"]+)"/i);
       if (!btnMatch) continue;
-      const [, refNum, btnLabel] = btnMatch;
-      if (/\b(sign\s*up|register|create|submit|continue|next|join|get\s*started|enroll|agree|accept)\b/i.test(btnLabel)) {
+      const [, refNum, , btnLabel] = btnMatch;
+      if (/\b(sign\s*up|register|create\s*account|submit|continue|next|join|get\s*started|enroll|agree|accept|get\s*it\s*free|start\s*free|try\s*free|try\s*it|free\s*trial|start\s*now)\b/i.test(btnLabel)) {
         suggestions.push(`CLICK [${refNum}]`);
-        break; // Only suggest one submit button
+        break; // Only suggest one submit/signup element
       }
     }
     if (suggestions.length >= 2) {

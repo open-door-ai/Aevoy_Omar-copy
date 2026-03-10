@@ -3794,7 +3794,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
       // Extract target URL — from task text OR from the injected browse action
       const _bfpTaskText = `${subject} ${body || ''}`;
       const _bfpUrlMatch = _bfpTaskText.match(/\bhttps?:\/\/[^\s,)]+/) ||
-        _bfpTaskText.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on|via|through|from)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai))/i);
+        _bfpTaskText.match(/\b(?:go\s+to|navigate\s+to|open|visit|use|head\s+to|check\s+out|browse|at|on|via|through|from)\s+(\S+\.(?:com|ca|org|net|io|co|app|dev|ai)(?:\/\S*)?)/i);
       const _bfpFromAction = !_bfpUrlMatch ? aiResponse.actions.find(a => a.type === 'browse')?.params?.url : null;
       const _bfpRawDomain = _bfpUrlMatch?.[1] || _bfpUrlMatch?.[0] || (_bfpFromAction as string) || '';
       const _bfpCleanDomain = _bfpRawDomain.replace(/[,;!?)\]]+$/, '');
