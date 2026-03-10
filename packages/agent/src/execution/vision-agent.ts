@@ -3193,14 +3193,19 @@ export async function runVisionAgent(
         // ── AUTO-FILL after navigate/click lands on a signup page with visible form fields ──
         if (ok && !autoFillCompleted && isFormFillTask && taskCreds.email &&
             (action.type === 'navigate' || action.type === 'click')) {
-          // Wait for SPA rendering
-          await activePage.waitForTimeout(1500);
-          const afResult = await tryAutoFillForm(activePage, taskCreds, true);
+          // Wait for SPA rendering — heavy React bundles (Typeform, Notion) need 3s+
+          await activePage.waitForTimeout(3000);
+          let afResult = await tryAutoFillForm(activePage, taskCreds, true);
+          // Retry with longer wait for heavy SPAs
+          if (afResult.filled.length === 0) {
+            await activePage.waitForTimeout(3000);
+            afResult = await tryAutoFillForm(activePage, taskCreds, true);
+          }
           if (afResult.filled.length > 0) {
             autoFillCompleted = true;
             hasFilledAnyField = true;
             console.log(`[BROWSER-AGENT] AUTO-FILL (in-loop step ${steps + 1}): ${afResult.filled.join(', ')}`);
-            history.push(`✅ Auto-filled form: ${afResult.filled.join(', ')}`);
+            history.push(`✅ Form fields ALREADY FILLED: ${afResult.filled.join(', ')}. Now CLICK the submit/continue/create button. Do NOT re-fill or navigate away.`);
             if (afResult.submitted) {
               await activePage.waitForTimeout(3000);
             }
