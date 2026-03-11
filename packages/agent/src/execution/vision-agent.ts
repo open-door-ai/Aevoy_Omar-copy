@@ -1775,7 +1775,9 @@ ${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSectio
 ACCESSIBILITY TREE (use [ref] numbers to target elements):
 ${snapshot}
 ${suggestedActions}
-Output actions using [ref] numbers. Example: FILL [3] "value" then CLICK [5]`;
+⚠️ OUTPUT ONLY ACTION COMMANDS. No text. No descriptions.
+If form visible → FILL fields. If button visible → CLICK it. If unsure → SCROLL down.
+Example: FILL [3] "value" then CLICK [5]`;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2329,11 +2331,11 @@ export async function runVisionAgent(
           console.log(`[BROWSER-AGENT] Bot wall at ${wallUrl} (attempt ${botWallCount})`);
           if (botWallCount <= 2) {
             // Longer wait for JS challenges (Cloudflare executes JS, then loads Turnstile)
-            await activePage.waitForTimeout(botWallCount === 1 ? 8000 : 5000);
+            await activePage.waitForTimeout(botWallCount === 1 ? 3000 : 5000);
             // Reload after wait — Cloudflare often presents Turnstile after first reload
             if (botWallCount === 1) {
-              await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-              await activePage.waitForTimeout(3000);
+              await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+              await activePage.waitForTimeout(2000);
             }
             try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
           } else if (botWallCount >= BOT_WALL_MAX) {
@@ -2753,7 +2755,7 @@ export async function runVisionAgent(
         history.push(`Step ${steps + 1}: AI error (not counted)`);
         consecutiveAiErrors++;
         // Exponential backoff: 3s, 6s, 12s, 24s, 30s max — prevents hammering 429'd APIs
-        const backoffMs = Math.min(3000 * Math.pow(2, consecutiveAiErrors - 1), 30000);
+        const backoffMs = Math.min(1500 * Math.pow(2, consecutiveAiErrors - 1), 10000);
         console.warn(`[BROWSER-AGENT] Consecutive AI errors: ${consecutiveAiErrors}, backoff ${backoffMs / 1000}s`);
         // Bail out after 10 consecutive AI errors — rate limits won't clear soon enough
         if (consecutiveAiErrors >= 10) {

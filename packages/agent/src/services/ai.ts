@@ -476,7 +476,7 @@ const MODEL_MIN_INTERVAL: Record<string, number> = {
   'qwen/qwen3-32b': 30000,                            // 6K TPM — tightest, 2 calls/min max
   'groq/compound-mini': 20000,                          // 70K TPM, no TPD limit
   'llama-3.1-8b-instant': 8000,                        // 6K TPM but ~2K per call, browser workhorse
-  'gemini-2.5-flash': 7000,                             // free tier 10 RPM (6s/req) — 7s gives safety margin
+  'gemini-2.5-flash': 5000,                             // free tier 10 RPM (6s/req) — 5s tight but avoids wasting time
 };
 
 async function paceModelCall(model: string): Promise<void> {
@@ -2311,14 +2311,48 @@ export async function generateBrowserStepResponse(
 
   // Extract action lines from verbose responses. Some models wrap actions in explanatory text:
   // "I need to click the button\nCLICK [5]" → extract just "CLICK [5]"
+  // Also handles: "I'll click on element [5]" → "CLICK [5]" (smart extraction)
   const extractActionLines = (content: string): string => {
     const lines = content.split('\n');
     const actionLines = lines.filter(l => ACTION_PATTERN.test(l.trim()));
-    // If we found action lines embedded in verbose text, return just the action lines
+    // If we found clean action lines embedded in verbose text, return just them
     if (actionLines.length > 0 && actionLines.length < lines.length) {
       return actionLines.join('\n').trim();
     }
-    return content; // Already clean or no actions found
+    // Smart extraction: parse action intent from verbose text
+    // This prevents cascading to expensive models when Gemini outputs "I'll click [5]"
+    const extracted: string[] = [];
+    // CLICK: "click (on) [N]", "press [N]", "I'll click [5]"
+    for (const m of content.matchAll(/\b(?:click|press|tap|hit)\s+(?:on\s+)?(?:the\s+)?(?:element\s+)?(?:button\s+)?(?:link\s+)?\[(\d+)\]/gi)) {
+      extracted.push(`CLICK [${m[1]}]`);
+    }
+    // FILL: "fill [N] with/= VALUE" or "type VALUE in [N]"
+    for (const m of content.matchAll(/\bfill\s+\[(\d+)\]\s+(?:with\s+)?["']?([^"'\n]{2,60})["']?/gi)) {
+      if (!extracted.some(e => e.includes(`[${m[1]}]`))) extracted.push(`FILL [${m[1]}] "${m[2].trim()}"`);
+    }
+    for (const m of content.matchAll(/\b(?:type|enter|input)\s+["']?([^"'\[\]]{2,60})["']?\s+(?:in(?:to)?|on)\s+\[(\d+)\]/gi)) {
+      if (!extracted.some(e => e.includes(`[${m[2]}]`))) extracted.push(`FILL [${m[2]}] "${m[1].trim()}"`);
+    }
+    // FILL: "fill the X field [N] with VALUE"
+    for (const m of content.matchAll(/\b(?:fill|type|enter)\b.{0,40}?\[(\d+)\].{0,20}?(?:with|=|:)\s*["']?([^"'\n]{2,60})["']?/gi)) {
+      if (!extracted.some(e => e.includes(`[${m[1]}]`))) extracted.push(`FILL [${m[1]}] "${m[2].trim()}"`);
+    }
+    // SCROLL
+    if (/\bscroll\s+(down|up)\b/i.test(content)) {
+      extracted.push(`SCROLL ${/\bscroll\s+up\b/i.test(content) ? 'up' : 'down'}`);
+    }
+    // NAVIGATE
+    const navMatch = content.match(/\b(?:navigate|go)\s+to\s+(https?:\/\/\S+)/i);
+    if (navMatch) extracted.push(`NAVIGATE "${navMatch[1]}"`);
+    // DONE
+    if (/\b(?:done|complete|finished|task\s+(?:is\s+)?(?:complete|done))\b/i.test(content) && content.length < 200) {
+      const summary = content.replace(/\b(done|complete|finished)\b/gi, '').trim();
+      extracted.push(`DONE "${summary.substring(0, 100) || 'Task completed'}"`);
+    }
+    if (extracted.length > 0) {
+      return extracted.join('\n');
+    }
+    return content; // No actions found — return as-is for validation
   };
 
   // ═══ PRIMARY: Gemini Flash 2.5 — cheap ($0.15/$0.60 per M), good at structured output ═══
