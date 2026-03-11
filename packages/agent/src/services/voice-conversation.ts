@@ -17,6 +17,52 @@ import { loadMemory, saveWorkingMemory, appendDailyLog } from "./memory.js";
 import { sanitizeTaskInput } from "../security/validator.js";
 import { getUnreadMessages, getRecentMessages, isEmailConnected } from "./inbox.js";
 
+// ---- Daily Voice Spend Tracking ----
+
+let dailyVoiceSpend = 0;
+let dailyVoiceSpendDate = new Date().toDateString();
+const DAILY_VOICE_SPEND_CAP = 10.0; // $10/day cap
+const VOICE_SPEND_ALERT_THRESHOLD = 5.0; // Alert at $5
+
+function trackVoiceSpend(costUsd: number): boolean {
+  const today = new Date().toDateString();
+  if (today !== dailyVoiceSpendDate) {
+    dailyVoiceSpend = 0;
+    dailyVoiceSpendDate = today;
+  }
+  dailyVoiceSpend += costUsd;
+
+  // Send alert at threshold
+  if (dailyVoiceSpend >= VOICE_SPEND_ALERT_THRESHOLD && dailyVoiceSpend - costUsd < VOICE_SPEND_ALERT_THRESHOLD) {
+    sendSpendAlert(dailyVoiceSpend).catch(() => {});
+  }
+
+  // Return false if over cap
+  return dailyVoiceSpend < DAILY_VOICE_SPEND_CAP;
+}
+
+async function sendSpendAlert(amount: number): Promise<void> {
+  const alertNumber = process.env.ALERT_PHONE_NUMBER || '+16474245161';
+  try {
+    const config = getTwilioConfig();
+    if (!config) return;
+    const fromNumber = process.env.TWILIO_PHONE_NUMBER || '';
+    if (!fromNumber) return;
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Messages.json`;
+    const auth = Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64');
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        To: alertNumber,
+        From: fromNumber,
+        Body: `Aevoy voice spend alert: $${amount.toFixed(2)} today. Daily cap: $${DAILY_VOICE_SPEND_CAP}. Check active calls.`,
+      }).toString(),
+    });
+    console.log(`[VOICE] Spend alert sent: $${amount.toFixed(2)}`);
+  } catch (e) { console.warn('[VOICE] Failed to send spend alert:', e); }
+}
+
 // ---- Twilio Call Termination ----
 
 /**
@@ -129,6 +175,10 @@ setInterval(() => {
     if (now - session.startedAt > timeout) {
       const mins = Math.round((now - session.startedAt) / 60000);
       console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
+      // Track voice spend for the timed-out session
+      const durationMin = (now - session.startedAt) / 60000;
+      const estimatedCost = durationMin * 0.10; // ~$0.10/min (Twilio voice + ElevenLabs)
+      trackVoiceSpend(estimatedCost);
       // Force-terminate the Twilio call FIRST to stop billing immediately
       forceHangupCall(session.callSid).catch(() => {});
       try {
@@ -155,6 +205,15 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
   if (activeSessions.size >= MAX_SESSIONS) {
     console.warn("[VOICE-WS] Max sessions reached, rejecting connection");
     ws.send(JSON.stringify({ type: "text", token: "I'm sorry, all lines are busy right now. Please try again in a few minutes.", last: true }));
+    ws.send(JSON.stringify({ type: "end" }));
+    ws.close();
+    return;
+  }
+
+  // Daily voice spend cap — reject new calls if over budget
+  if (dailyVoiceSpend >= DAILY_VOICE_SPEND_CAP) {
+    console.warn(`[VOICE-WS] Daily voice spend cap reached ($${dailyVoiceSpend.toFixed(2)}), rejecting call`);
+    ws.send(JSON.stringify({ type: "text", token: "I'm temporarily unavailable. Please try again later or reach me by email or text.", last: true }));
     ws.send(JSON.stringify({ type: "end" }));
     ws.close();
     return;
@@ -219,6 +278,10 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       }
       const duration = Math.round((Date.now() - session.startedAt) / 1000);
       console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} closed after ${duration}s (${session.conversationHistory.length} exchanges)`);
+      // Track voice spend on every session close
+      const closeDurationMin = duration / 60;
+      const closeEstimatedCost = closeDurationMin * 0.10; // ~$0.10/min (Twilio voice + ElevenLabs)
+      trackVoiceSpend(closeEstimatedCost);
       logCallHistory(session, duration);
       // Save conversation to memory (async, non-blocking)
       saveConversationToMemory(session).catch(() => {});
@@ -454,6 +517,10 @@ RULES:
               last: true,
             }));
             ws.send(JSON.stringify({ type: "end" }));
+            ws.close();
+            // Force-terminate the Twilio call on PIN lockout
+            forceHangupCall(callSid || '').catch(() => {});
+            cleanupSession(sessionId);
             return;
           }
           needsPin = true;
@@ -502,10 +569,16 @@ RULES:
   console.log(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
 
   // ── SILENCE WATCHDOG ──────────────────────────────────────────────────────
-  // Check every 5s for dead air. External calls get a tighter 15s timeout;
-  // all other call types get 25s. Two consecutive warnings with no user
-  // response trigger a graceful hang-up.
-  const SILENCE_TIMEOUT_MS = session.callType === 'external_call' ? 15_000 : 25_000;
+  // Check every 30s for dead air. Thresholds vary by call type:
+  //   External calls: 30s warning, 45s hangup (short — we're calling businesses)
+  //   Demo calls:     45s warning, 60s hangup
+  //   User calls:     60s warning, 90s hangup
+  const SILENCE_WARN_MS = session.callType === 'external_call' ? 30_000
+    : (session.callType === 'demo' || session.callType === 'demo_interview') ? 45_000
+    : 60_000;
+  const SILENCE_HANGUP_MS = session.callType === 'external_call' ? 45_000
+    : (session.callType === 'demo' || session.callType === 'demo_interview') ? 60_000
+    : 90_000;
   session.silenceWatchdog = setInterval(() => {
     const currentSession = activeSessions.get(sessionId);
     if (!currentSession || currentSession.ws.readyState !== WebSocket.OPEN) {
@@ -514,31 +587,32 @@ RULES:
       return;
     }
     const silentFor = Date.now() - currentSession.lastActivityAt;
-    if (silentFor > SILENCE_TIMEOUT_MS) {
-      if (currentSession.silenceWarnings >= 2) {
-        // Two warnings already sent with no response — hang up gracefully
-        console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE HANG-UP after ${currentSession.silenceWarnings} warnings`);
-        try {
-          const farewell = currentSession.callType === 'external_call'
-            ? "No response detected. Ending the call. Goodbye."
-            : "I haven't heard from you in a while, so I'll let you go. Talk soon!";
-          currentSession.ws.send(JSON.stringify({ type: "text", token: farewell, last: true }));
-          currentSession.ws.send(JSON.stringify({ type: "end" }));
-          currentSession.ws.close();
-        } catch { /* ignore */ }
-        clearInterval(session.silenceWatchdog!);
-        session.silenceWatchdog = null;
-      } else {
-        // First / second warning — prompt the user
-        currentSession.silenceWarnings++;
-        currentSession.lastActivityAt = Date.now(); // Reset timer so next check is fresh
-        console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE WARNING ${currentSession.silenceWarnings} (silent ${Math.round(silentFor / 1000)}s)`);
-        try {
-          currentSession.ws.send(JSON.stringify({ type: "text", token: "Are you still there?", last: true }));
-        } catch { /* ignore */ }
-      }
+
+    if (silentFor >= SILENCE_HANGUP_MS) {
+      // Hangup threshold reached — end the call
+      console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE HANG-UP (${Math.round(silentFor / 1000)}s silent, type=${currentSession.callType})`);
+      try {
+        const farewell = currentSession.callType === 'external_call'
+          ? "No response detected. Ending the call. Goodbye."
+          : "I'll hang up since it seems like you're busy. Call me anytime!";
+        currentSession.ws.send(JSON.stringify({ type: "text", token: farewell, last: true }));
+        currentSession.ws.send(JSON.stringify({ type: "end" }));
+        currentSession.ws.close();
+      } catch { /* ignore */ }
+      // Force-terminate the Twilio call to stop billing
+      forceHangupCall(currentSession.callSid).catch(() => {});
+      clearInterval(session.silenceWatchdog!);
+      session.silenceWatchdog = null;
+      cleanupSession(sessionId);
+    } else if (silentFor >= SILENCE_WARN_MS && currentSession.silenceWarnings === 0) {
+      // Warning threshold reached — prompt the user once
+      currentSession.silenceWarnings = 1;
+      console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE WARNING (${Math.round(silentFor / 1000)}s silent)`);
+      try {
+        currentSession.ws.send(JSON.stringify({ type: "text", token: "Hey, you still there?", last: true }));
+      } catch { /* ignore */ }
     }
-  }, 5_000);
+  }, 30_000);
 
   if (needsPin) {
     ws.send(JSON.stringify({
@@ -567,7 +641,12 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     if (session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(JSON.stringify({ type: "text", token: budgetFarewell, last: true }));
       session.ws.send(JSON.stringify({ type: "end" }));
-      setTimeout(() => { try { session.ws.close(); } catch { /* ignore */ } }, 4000);
+      setTimeout(() => {
+        try { session.ws.close(); } catch { /* ignore */ }
+        // Force-terminate the Twilio call to stop billing
+        forceHangupCall(session.callSid).catch(() => {});
+        cleanupSession(session.sessionId);
+      }, 4000);
     }
     return;
   }
@@ -786,6 +865,9 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
             session.ws.close();
           }
         } catch { /* ignore */ }
+        // Force-terminate the Twilio call to stop billing
+        forceHangupCall(session.callSid).catch(() => {});
+        cleanupSession(session.sessionId);
       }, 3000);
     }
 
@@ -837,6 +919,9 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
   if (!session.userId) {
     session.ws.send(JSON.stringify({ type: "text", token: "I couldn't verify your identity. Goodbye.", last: true }));
     session.ws.send(JSON.stringify({ type: "end" }));
+    session.ws.close();
+    forceHangupCall(session.callSid).catch(() => {});
+    cleanupSession(session.sessionId);
     return;
   }
 
@@ -873,6 +958,9 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
         last: true,
       }));
       session.ws.send(JSON.stringify({ type: "end" }));
+      // Force-terminate the Twilio call on PIN lockout
+      forceHangupCall(session.callSid).catch(() => {});
+      cleanupSession(session.sessionId);
     } else {
       session.ws.send(JSON.stringify({
         type: "text",
