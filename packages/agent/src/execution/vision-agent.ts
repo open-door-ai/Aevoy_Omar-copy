@@ -295,7 +295,47 @@ async function getAccessibilitySnapshot(page: Page): Promise<SnapshotResult> {
     }
 
     if (domResult.refs.size > 0) {
-      return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}`, refs: domResult.refs };
+      // Extract visible error/alert/status messages so the AI can see form validation failures,
+      // CAPTCHA walls, and other non-interactive feedback that would otherwise be invisible.
+      let statusMessages = '';
+      try {
+        const messages = await Promise.race([
+          page.evaluate(() => {
+            const msgs: string[] = [];
+            // Error banners, alerts, validation messages, flash messages
+            const errorSelectors = [
+              '[role="alert"]', '[class*="error"]', '[class*="Error"]',
+              '[class*="flash"]', '[class*="warning"]', '[class*="Warning"]',
+              '[class*="invalid"]', '[class*="validation"]', '[class*="message"]',
+              '[class*="notice"]', '[class*="banner"]', '[class*="captcha"]',
+              '[class*="challenge"]', '[class*="verify"]',
+              '.alert', '.error', '.flash', '.notice',
+            ];
+            const seen = new Set<string>();
+            for (const sel of errorSelectors) {
+              try {
+                document.querySelectorAll(sel).forEach(el => {
+                  const text = (el as HTMLElement).innerText?.trim();
+                  if (text && text.length > 3 && text.length < 200 && !seen.has(text)) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) { // Only visible messages
+                      seen.add(text);
+                      msgs.push(text);
+                    }
+                  }
+                });
+              } catch { /* selector may be invalid */ }
+            }
+            return msgs.slice(0, 5); // Max 5 messages to avoid noise
+          }),
+          new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 2000)),
+        ]);
+        if (messages.length > 0) {
+          statusMessages = `\n\n⚠️ PAGE MESSAGES (errors/alerts/status):\n${messages.map(m => `- ${m}`).join('\n')}`;
+        }
+      } catch { /* non-critical */ }
+
+      return { text: `INTERACTIVE ELEMENTS:\n${domResult.text}${statusMessages}`, refs: domResult.refs };
     }
     const text = await Promise.race([
       page.textContent('body').catch(() => ''),
@@ -2667,9 +2707,34 @@ export async function runVisionAgent(
         }
       }
 
+      // ── FORM LOOP DETECTION ──
+      // Detect when agent fills the same form and clicks submit repeatedly without progress.
+      // This catches the pattern: fill email → fill password → click submit → same page → fill email again...
+      // The snapshot hash changes (filled values differ), so noChangeCount doesn't catch it.
+      let formLoopHint = '';
+      if (steps >= 6 && sameUrlCount >= 3) {
+        const recentFills = actionMemory.slice(-15).filter(a => a.ok && /^fill/i.test(a.raw));
+        const recentSubmits = actionMemory.slice(-15).filter(a => a.ok && /^click/i.test(a.raw) && /submit|create|sign.?up|register|continue|next/i.test(a.raw));
+        // If we've filled 3+ fields AND clicked submit 2+ times on same URL, we're looping
+        if (recentFills.length >= 3 && recentSubmits.length >= 2) {
+          const formLoopCount = history.filter(h => h.includes('FORM LOOP')).length;
+          if (formLoopCount === 0) {
+            formLoopHint = `🔄 FORM LOOP DETECTED: You have filled and submitted this form multiple times but the page hasn't progressed. The form submission is FAILING — there may be error messages on the page, a CAPTCHA, or bot detection. CHECK for error messages, try a COMPLETELY DIFFERENT approach (OAuth/social login buttons, different URL, or searching for alternatives). DO NOT fill the same form again.`;
+            history.push('FORM LOOP detected — forced strategy change');
+            console.log(`[BROWSER-AGENT] Form loop detected at step ${steps + 1}: ${recentFills.length} fills, ${recentSubmits.length} submits on same URL`);
+          } else if (formLoopCount === 1) {
+            formLoopHint = `🔄 FORM LOOP (2nd warning): You are STILL trying the same form. THIS IS NOT WORKING. Try: (1) Click OAuth/social login buttons instead, (2) NAVIGATE to a completely different URL, (3) Search for this task on DuckDuckGo to find an alternative way. DO NOT fill this form again.`;
+            history.push('FORM LOOP 2nd warning — OAuth or alternative required');
+          } else if (formLoopCount >= 2) {
+            formLoopHint = `🚨 FORM LOOP (FINAL): This form is BLOCKED. You MUST try something entirely different NOW or FAIL with a clear explanation of why (bot detection, CAPTCHA, etc.).`;
+            history.push('FORM LOOP final warning');
+          }
+        }
+      }
+
       // Stuck hint
-      let stuckHint = '';
-      if (noChangeCount >= 3) {
+      let stuckHint = formLoopHint || '';
+      if (!stuckHint && noChangeCount >= 3) {
         stuckHint = `⚠️ ${noChangeCount} actions with no page change. Your previous approach is NOT working. Do something COMPLETELY DIFFERENT: try a different element, SCROLL to reveal hidden content, WAIT for dynamic loading, or NAVIGATE to a different URL path.`;
       } else if (sameUrlCount >= 3 && sameUrlCount < 7) {
         // Rotate through different strategies based on how long we've been stuck
