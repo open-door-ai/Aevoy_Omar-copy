@@ -2657,11 +2657,22 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         const successText = successApiResults.map(r => `Done: ${JSON.stringify(r.result)}`).join("\n");
 
         // Update task record — use needs_review (not failed) so users always see a response
+        // AUTO-PROCEED: If partial failure, set auto-proceed so agent retries autonomously
+        const _apiPlanTaskText = `${subject} ${body || ''}`;
+        const _apiPlanAutoProceed = !allSuccess ? {
+          auto_proceed_at: getAutoProceedAt(_apiPlanTaskText),
+          auto_proceed_context: buildAutoProceedContext(
+            'Some steps failed. Should I try a different approach?',
+            _apiPlanTaskText,
+            getDelayMinutes(_apiPlanTaskText),
+          ),
+        } : {};
         await getSupabaseClient().from("tasks").update({
           status: allSuccess ? "completed" : "needs_review",
           completed_at: new Date().toISOString(),
           execution_time_ms: Date.now() - startTime,
           cost_usd: plan.estimatedCost,
+          ..._apiPlanAutoProceed,
         }).eq("id", taskId);
 
         let responseText: string;
@@ -9370,7 +9381,8 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // FINAL PASSIVE SAFETY NET: Strip any trailing "Want me to X?" that leaked through
     // (e.g. reintroduced by proactive follow-up generator before we added the success check)
-    if (cleanResponse) {
+    // Only strip for COMPLETED tasks — needs_review tasks have genuine questions
+    if (cleanResponse && dbVerificationPassed !== false) {
       const _finalStrip = cleanResponse
         .replace(/\n+[^\n]*\b(want me to|shall i|would you like me to|do you want me to)\b[^\n]*[?!.]?\s*$/i, '')
         .trim();
@@ -9387,10 +9399,25 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       console.warn(`[SAFETY-NET] cleanResponse was empty/null for task ${taskId} — injected fallback`);
     }
 
+    // AUTO-PROCEED: If task goes to needs_review and response contains a question,
+    // set auto_proceed_at so the poller can pick it up if user doesn't reply
+    const _isNeedsReview = dbVerificationPassed === false;
+    const _responseHasQuestion = cleanResponse && /\?\s*$/.test(cleanResponse.trim());
+    const _finalTaskText = `${subject} ${body || ''}`;
+    const _autoProceedUpdate = (_isNeedsReview && _responseHasQuestion) ? {
+      auto_proceed_at: getAutoProceedAt(_finalTaskText),
+      auto_proceed_context: buildAutoProceedContext(
+        // Extract the last question from the response
+        (cleanResponse.match(/[^.!?\n]*\?\s*$/)?.[0] || cleanResponse).trim(),
+        _finalTaskText,
+        getDelayMinutes(_finalTaskText),
+      ),
+    } : {};
+
     await getSupabaseClient()
       .from("tasks")
       .update({
-        status: dbVerificationPassed === false ? "needs_review" : "completed",
+        status: _isNeedsReview ? "needs_review" : "completed",
         completed_at: new Date().toISOString(),
         tokens_used: aiResponse.tokensUsed,
         cost_usd: totalCost,
@@ -9410,9 +9437,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           evidence: verificationResult.evidence,
           ...((verificationResult as VerificationResult & { _strikeData?: Record<string, unknown> })._strikeData || {}),
         } : null,
+        ..._autoProceedUpdate,
       })
       .eq("id", taskId);
-    
+
+    if (_isNeedsReview && _responseHasQuestion) {
+      console.log(`[AUTO-PROCEED] Set for task ${taskId.slice(0, 8)} — will proceed in ${getDelayMinutes(_finalTaskText)} min if no reply`);
+    }
+
     console.log(`[COST] Task cost: $${totalCost.toFixed(6)} (from ai_cost_log, billed incl. 1.2x markup)`);
 
     // Update execution plan status
