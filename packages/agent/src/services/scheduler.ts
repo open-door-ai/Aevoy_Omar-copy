@@ -13,6 +13,7 @@ import { detectPatterns } from './pattern-detector.js';
 import { CronExpressionParser } from 'cron-parser';
 import { startMonitoringService } from './monitoring.js';
 import { startAutoProceedPoller, stopAutoProceedPoller } from './auto-proceed.js';
+import { schedulerHeartbeat } from '../utils/scheduler-heartbeat.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -34,6 +35,7 @@ export function startScheduler(): void {
   schedulerInterval = setInterval(async () => {
     try {
       await runDueScheduledTasks();
+      schedulerHeartbeat.record('scheduler');
     } catch (error) {
       console.error('[SCHEDULER] Error running scheduled tasks:', error);
     }
@@ -73,9 +75,12 @@ export function startScheduler(): void {
     console.error('[SCHEDULER] Could not start inbox manager:', error);
   });
 
-  // Start persistent task heartbeat monitor (every 15 minutes)
-  startMonitoringService();
-  console.log('[SCHEDULER] Monitoring service started');
+  // MONITORING SERVICE DISABLED — was the #1 cost burner.
+  // It auto-loaded monitoring jobs from user_memory on startup and ran them
+  // every 15 minutes, each making AI calls + Twilio sends.
+  // Monitoring must be explicitly user-requested, not background.
+  // startMonitoringService();
+  console.log('[SCHEDULER] Monitoring service DISABLED (cost control)');
 
   // Start auto-proceed poller (every 5 minutes) — re-triggers tasks where user didn't respond
   startAutoProceedPoller();
@@ -715,6 +720,24 @@ async function tryDirectActionExecution(
         body: message,
       });
       console.log(`[SCHEDULER-DIRECT] send_email: sent to ${email}`);
+      return true;
+    }
+
+    // phone_number_fee — recurring monthly billing for dedicated Twilio numbers
+    const isPhoneNumberFee = lower.startsWith('phone_number_fee:');
+    if (isPhoneNumberFee) {
+      const parts = taskText.split(':');
+      const phoneNumber_ = parts[1] || '';
+      const billedAmount = parseFloat(parts[2] || '0');
+      if (billedAmount > 0) {
+        const { MONTHLY_LOCAL_NUMBER_COST, PHONE_NUMBER_MARKUP } = await import('../utils/cost-calculator.js');
+        const { trackServiceCost: trackPhoneFee } = await import('./ai.js');
+        // Pass RAW cost — trackServiceCost applies COST_SAFETY_MARGIN × BILLING_MARKUP × PHONE_NUMBER_MARKUP
+        await trackPhoneFee(userId, 'twilio', 'phone_number_monthly', MONTHLY_LOCAL_NUMBER_COST, 'phone_number', undefined, PHONE_NUMBER_MARKUP);
+        console.log(`[SCHEDULER-DIRECT] phone_number_fee: billed $${billedAmount.toFixed(4)} for ${phoneNumber_} user=${userId.slice(0, 8)}`);
+      } else {
+        console.warn(`[SCHEDULER-DIRECT] phone_number_fee: invalid amount for ${phoneNumber_}`);
+      }
       return true;
     }
 

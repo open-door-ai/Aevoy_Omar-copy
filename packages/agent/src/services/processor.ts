@@ -26,6 +26,62 @@ import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, Strik
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+// ── Thorough HTML sanitization (prevents XSS via entities, event handlers, malformed tags) ──
+function sanitizeHtml(input: string): string {
+  let text = input;
+  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  text = text.replace(/<\/?[a-z][^>]*>/gi, ' ');
+  text = text.replace(/<[^>]*on\w+\s*=[^>]*>/gi, ' ');
+  text = text
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
+    .replace(/&apos;/g, "'").replace(/&#x2F;/g, '/').replace(/&#x5C;/g, '\\')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_m: string, code: string) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  text = text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text;
+}
+
+// ── ATOMIC RESPONSE DELIVERY ──
+// Sends the response to the user FIRST, then updates the DB.
+// If delivery fails, the task stays 'processing' so the watchdog can retry.
+// This prevents the "completed but user got nothing" ghost-task scenario.
+async function atomicCompleteTask(
+  taskId: string,
+  channel: InputChannel | undefined,
+  userId: string,
+  from: string,
+  aevoyFrom: string,
+  subject: string,
+  responseText: string,
+  dbUpdate: Record<string, unknown>,
+  opts?: { suppressEmail?: boolean }
+): Promise<void> {
+  // 1. Send response to user FIRST
+  if (!opts?.suppressEmail) {
+    try {
+      await sendViaChannel(channel, userId, from, aevoyFrom, `Re: ${subject}`, responseText);
+    } catch (sendErr) {
+      console.error(`[ATOMIC-DELIVERY] sendViaChannel failed for task ${taskId?.slice(0, 8)} — keeping status as processing:`, sendErr);
+      // Mark with stuck_reason so watchdog can pick it up, but do NOT mark completed
+      await getSupabaseClient().from('tasks').update({
+        stuck_reason: `[DELIVERY-FAIL] ${sendErr instanceof Error ? sendErr.message : 'unknown'}`,
+      }).eq('id', taskId);
+      throw sendErr; // Propagate so caller knows delivery failed
+    }
+  }
+  // 2. Only mark completed AFTER successful delivery
+  await getSupabaseClient().from('tasks').update({
+    ...dbUpdate,
+    response_text: responseText,
+  }).eq('id', taskId);
+}
+
 // ── Secure fallback password generator (replaces hardcoded fallback) ──
 function _generateSecureFallback(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -2989,17 +3045,20 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
 
           const _agentEmail = agentEmail;
           const _signupPass = _autoPassword || '{primary_password}';
+          // SECURITY: Do NOT put plaintext credentials in effectiveBody — it goes to external AI APIs.
+          // The vision agent will receive credentials separately via extractTaskCredentials when
+          // the processor constructs the vision agent task string.
           effectiveBody = `${effectiveBody}\n\n[MANDATORY EXECUTION — DO NOT DESCRIBE, DO NOT ADVISE, DO NOT ASK PERMISSION]
 You MUST create this account RIGHT NOW. Steps:
 1. [ACTION:browse("website URL")] — Navigate to the signup/registration page
-2. Fill the form: email="${_agentEmail}", password="${_signupPass}", name="${senderName || username}"
+2. Fill the signup form — your agent credentials (email, password, name) are provided automatically to the browser agent
 3. Click "Sign Up" / "Create Account" / "Continue" button
 4. If OAuth available (Google/Apple): click "Continue with Google" instead
 5. Wait for verification email if needed — auto-read it from inbox
-6. Report: "Signed up for [service] using ${_agentEmail}"
+6. Report: "Signed up for [service] using agent email"
 
 NEVER say "want me to sign up?" — DO IT NOW. NEVER describe the service. NEVER say "you can sign up at...".
-Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthorized.`;
+You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
           console.log(`[FULL-SEND] Aggressive signup execution context injected (email=${_agentEmail})`);
 
       } catch (fsErr) {
@@ -4561,10 +4620,12 @@ DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices
                 const vgName = senderName || username;
                 const vgPhone = userTwilioPhone;
                 const vgTask = `${subject} ${body}. Fill the signup form using: email=${vgEmail}, password=${vgPw}, name=${vgName}, last_name=Aevoy${vgPhone ? `, phone=${vgPhone}` : ''}. Submit the form.`;
-                const VG_TIMEOUT_MS = 480000; // 8 minutes — same as main vision timeout
+                // Sync with master timeout: use remaining time minus 60s buffer, capped at 8 minutes
+                const _vgRemainingMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+                const VG_TIMEOUT_MS = Math.min(480000, _vgRemainingMs - 60000);
                 const vgResult = await Promise.race([
                   runVisionAgent(signupPage, vgTask, userId, taskId, username, userTwilioPhone),
-                  new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Vision agent signup timeout after 8 minutes')), VG_TIMEOUT_MS)),
+                  new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Vision agent signup timeout after ${Math.round(VG_TIMEOUT_MS / 1000)}s`)), VG_TIMEOUT_MS)),
                 ]);
                 totalAiCost += vgResult.cost || 0; // Track vision agent costs for billing
                 if (vgResult.success) {
@@ -6718,12 +6779,12 @@ YOU must complete the task using a DIFFERENT approach:
                 // Signup tasks blocked by Cloudflare — inject credentials and try Google OAuth fallback
                 // Generic: extract service name from task text (no hardcoded list)
                 const _signupService = subject.match(/\b(?:for|on|at|with|up\s+for)\s+([A-Z][a-zA-Z0-9]+)\b/i)?.[1] || subject.match(/\b([A-Z][a-z]{2,20})\b/)?.[1] || 'the service';
-                const _agentEmail = agentEmail;
-                const _signupPassword = `${username}@aevoy2026`;
+                // SECURITY: Do NOT put plaintext credentials in visionFailureNote — it goes to AI APIs.
+                // Credentials are provided automatically by the browser agent via credential references.
                 visionFailureNote = `[SIGNUP BLOCKED by Cloudflare] Bot-wall detected on ${_signupService} registration page. Do NOT give up or describe the service. Execute this strategy NOW:\n` +
                   `1. NAVIGATE to the service's Google OAuth login button (look for "Continue with Google" on the login/signup page)\n` +
                   `2. If Google OAuth unavailable, try DIRECT API: search for "${_signupService} API create account" or "${_signupService} REST API signup"\n` +
-                  `3. Fill email field with ${_agentEmail} and password field with ${_signupPassword}\n` +
+                  `3. Fill the signup form — agent credentials are provided automatically to the browser\n` +
                   `4. If still blocked, report: "I hit Cloudflare bot protection on ${_signupService}. Please visit [signup URL] to complete registration."\n` +
                   `NEVER just say "you can sign up at [URL]" — you must actually attempt the registration.`;
                 console.log(`[BOT-WALL-SIGNUP] ${_signupService} signup blocked by Cloudflare — injecting OAuth+credential fallback`);
@@ -7665,10 +7726,12 @@ DO the task. DO NOT describe the task. DO NOT give URLs for the user to visit.`;
                   const agName = senderName || username;
                   const agPhoneCtx = userTwilioPhone ? `, phone=${userTwilioPhone}` : '';
                   const agTask = `${subject} ${body}. If filling forms use: email=${agEmail}, password=${agPw}, name=${agName}, last_name=Aevoy${agPhoneCtx}. Complete the task fully.`;
-                  const AG_TIMEOUT_MS = 480000; // 8 minutes
+                  // Sync with master timeout: use remaining time minus 60s buffer, capped at 8 minutes
+                  const _agRemainingMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+                  const AG_TIMEOUT_MS = Math.min(480000, _agRemainingMs - 60000);
                   const agResult = await Promise.race([
                     runVisionAgent(advGatePage, agTask, userId, taskId, username, userTwilioPhone),
-                    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Vision agent advice-gate timeout after 8 minutes')), AG_TIMEOUT_MS)),
+                    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Vision agent advice-gate timeout after ${Math.round(AG_TIMEOUT_MS / 1000)}s`)), AG_TIMEOUT_MS)),
                   ]);
                   totalAiCost += agResult.cost || 0; // Track vision agent costs for billing
                   if (agResult.success) {
@@ -8691,14 +8754,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           cleanResponse = summary.content || (lastVisionPageData
             ? `Here's what I found:\n\n${lastVisionPageData.substring(0, 1000)}`
             : searchResults
-              ? `Here's what I found:\n\n${searchResults.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').substring(0, 1500)}`
+              ? `Here's what I found:\n\n${sanitizeHtml(searchResults).substring(0, 1500)}`
               : `I attempted "${subject.substring(0, 60)}" but couldn't fully complete it. The site may have blocked automated access or the task requires manual steps.`);
         } catch {
           // Rate-limit-proof fallback: use raw page data / search data when ALL AI providers fail
           cleanResponse = lastVisionPageData
             ? `Here's what I found:\n\n${lastVisionPageData.substring(0, 1000)}`
             : searchResults
-              ? `Here's what I found:\n\n${searchResults.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').substring(0, 1500)}`
+              ? `Here's what I found:\n\n${sanitizeHtml(searchResults).substring(0, 1500)}`
               : `I attempted "${subject.substring(0, 60)}" but couldn't extract the results. The site may require manual access.`;
         }
       } else {
@@ -9846,25 +9909,9 @@ RULES:
       // Non-critical — extra-mile is bonus
     }
 
-    // 18. AUTO-MONITOR: If the agent signed up for a platform, auto-register monitoring
-    // so it keeps checking for messages, notifications, earnings, etc.
-    try {
-      const subjectLc = (subject || '').toLowerCase();
-      const responseLc = cleanResponse.toLowerCase();
-      const isSignupTask = /\b(sign\s*up|signup|create.*account|register|enroll|joined|signed up|account created)\b/i.test(subjectLc + ' ' + responseLc);
-      // Generic: extract platform name from task text (no hardcoded list)
-      const platformMatch = subjectLc.match(/\b(?:for|on|at|with|up\s+for)\s+([a-z][a-z0-9]+)\b/i) || subjectLc.match(/\b([A-Z][a-z]{2,20})\b/);
-
-      if (isSignupTask && platformMatch) {
-        const platform = platformMatch[1];
-        const monitorDesc = `Check ${platform} for new messages, notifications, and activity every 30min`;
-        const { registerMonitoringJob: regMon } = await import('./monitoring.js');
-        await regMon(userId, username, monitorDesc, 30 * 60 * 1000);
-        console.log(`[AUTO-MONITOR] Registered monitoring for ${platform} after signup`);
-      }
-    } catch {
-      // Non-critical
-    }
+    // 18. AUTO-MONITOR: DISABLED — was auto-registering 30-min monitoring jobs after
+    // every signup, burning hundreds of dollars via Twilio/AI API calls.
+    // Monitoring must be EXPLICITLY requested by the user, never automatic.
 
     return {
       taskId,
