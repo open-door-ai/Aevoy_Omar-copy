@@ -2819,6 +2819,16 @@ export async function runVisionAgent(
         aiResponse = result.content;
         stepCost = result.cost;
         totalCost += stepCost;
+
+        // ── COST GUARD: Bail if browser task is burning money without progress ──
+        // $0.30 cap = ~75 Haiku calls. If spending this much, the task is likely stuck.
+        // Prevents expensive loops on anti-bot blocked sites.
+        const BROWSER_COST_CAP = 0.30;
+        if (totalCost >= BROWSER_COST_CAP && sameUrlCount >= 3) {
+          console.warn(`[BROWSER-AGENT] COST GUARD: $${totalCost.toFixed(4)} spent, stuck on same URL for ${sameUrlCount} steps — bailing`);
+          const pageData = await capturePageData(activePage);
+          return { success: false, error: `Cost limit reached ($${totalCost.toFixed(2)}) while stuck on ${url}. The site may be blocking automated access.`, steps: steps + 1, cost: totalCost, screenshots, pageData };
+        }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const isRateLimit = errMsg.includes('429') || /rate.?limit/i.test(errMsg) || errMsg.includes('Too Many Requests');
