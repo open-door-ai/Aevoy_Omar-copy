@@ -201,6 +201,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
       MachineDetection: 'DetectMessageEnd',
       AsyncAmdStatusCallback: `${callbackBase}/webhook/voice/amd-status`,
       AsyncAmdStatusCallbackMethod: 'POST',
+      TimeLimit: '600', // 10 minutes max — prevents runaway billing
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -270,6 +271,7 @@ export async function callExternal(
       MachineDetection: 'DetectMessageEnd',
       AsyncAmdStatusCallback: `${callbackBase}/webhook/voice/amd-status`,
       AsyncAmdStatusCallbackMethod: 'POST',
+      TimeLimit: '300', // 5 minutes max — prevents runaway billing
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -394,7 +396,7 @@ export async function sendSms(request: SmsRequest): Promise<{
   // Test mode: use fake SMS server
   if (isTestMode()) {
     const config = getTwilioConfig();
-    const from = config?.phoneNumber || '+17789008951';
+    const from = config?.phoneNumber || '+16043321466';
     const messageId = fakeEmailServer.sendSMS(from, request.to, request.body);
     console.log(`[TWILIO-TEST] SMS sent: ${messageId}`);
     return { success: true, messageSid: messageId };

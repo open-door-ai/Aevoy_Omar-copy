@@ -2132,10 +2132,10 @@ export default function SettingsPage() {
                 Call or text{" "}
                 <button
                   type="button"
-                  onClick={() => handleCopyPhone("+17789008951")}
+                  onClick={() => handleCopyPhone("+16043321466")}
                   className="inline-flex items-center gap-1 font-mono font-semibold hover:text-primary transition-colors"
                 >
-                  +1 (778) 900-8951
+                  +1 (604) 332-1466
                   {copiedPhone ? (
                     <Check className="w-3 h-3 text-green-500 transition-all" />
                   ) : (

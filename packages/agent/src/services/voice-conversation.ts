@@ -10,12 +10,34 @@ import { WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import { getSupabaseClient } from "../utils/supabase.js";
 import { generatePersonalizedGreeting, generateVoiceResponse } from "./voice-prompts.js";
-import { verifyVoicePin } from "./twilio.js";
+import { verifyVoicePin, getTwilioConfig } from "./twilio.js";
 import { trackServiceCost } from "./ai.js";
 import { calculateVoiceCost } from "../utils/cost-calculator.js";
 import { loadMemory, saveWorkingMemory, appendDailyLog } from "./memory.js";
 import { sanitizeTaskInput } from "../security/validator.js";
 import { getUnreadMessages, getRecentMessages, isEmailConnected } from "./inbox.js";
+
+// ---- Twilio Call Termination ----
+
+/**
+ * Force-terminate a Twilio call via REST API.
+ * Used when WebSocket close alone is insufficient (voicemail, session timeout).
+ * Without this, closing the WebSocket leaves the Twilio call leg active and billing.
+ */
+async function forceHangupCall(callSid: string): Promise<void> {
+  try {
+    const config = getTwilioConfig();
+    if (!config || !callSid) return;
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls/${callSid}.json`;
+    const auth = Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64');
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'Status=completed',
+    });
+    console.log(`[VOICE] Force-hangup: call ${callSid} terminated`);
+  } catch (e) { console.warn(`[VOICE] Force-hangup failed for ${callSid}:`, e); }
+}
 
 // ---- Types ----
 
@@ -107,6 +129,8 @@ setInterval(() => {
     if (now - session.startedAt > timeout) {
       const mins = Math.round((now - session.startedAt) / 60000);
       console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
+      // Force-terminate the Twilio call FIRST to stop billing immediately
+      forceHangupCall(session.callSid).catch(() => {});
       try {
         if (session.callType === 'demo_interview' || session.callType === 'onboarding_setup') {
           // Save interview data before closing
@@ -1174,13 +1198,15 @@ function handleAmdVoicemail(callSid: string): void {
 
   try {
     session.ws.send(JSON.stringify({ type: "text", token: voicemailMsg, last: true }));
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         if (session.ws.readyState === WebSocket.OPEN) {
           session.ws.send(JSON.stringify({ type: "end" }));
           session.ws.close();
         }
       } catch { /* ignore */ }
+      // Force-terminate the Twilio call to stop billing — WebSocket close alone is insufficient
+      await forceHangupCall(callSid);
     }, 5000);
   } catch { /* ignore */ }
 }

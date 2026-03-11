@@ -102,7 +102,7 @@ export async function POST(request: Request) {
     // Initiate the call via Twilio — use the demo-outbound endpoint (same as "Call Me Now")
     // CRITICAL: Use hardcoded Railway URL for Twilio callback (Twilio can't reach localhost)
     const callbackBase = process.env.TWILIO_CALLBACK_URL || 'https://agent-production-1339.up.railway.app';
-    const demoNumber = process.env.DEMO_PHONE_NUMBER || '+17789008951';
+    const demoNumber = process.env.DEMO_PHONE_NUMBER || '+16043321466';
     const callbackUrl = new URL(`${callbackBase}/webhook/voice/demo-outbound`);
     callbackUrl.searchParams.set('userId', user.id);
 

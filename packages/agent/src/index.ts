@@ -1312,7 +1312,7 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 
 // ---- Demo Number Config ----
 // The website "Call Me Now" demo number — allows ANY caller to talk to Aevoy AI
-const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+17789008951";
+const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+16043321466";
 const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an account (set on Railway)
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
 const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
