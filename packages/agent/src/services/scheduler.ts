@@ -291,13 +291,81 @@ async function runProactiveChecks(): Promise<void> {
     console.error('[SCHEDULER] Capability expansion error:', error);
   }
 
-  // PROACTIVE PROBLEM DETECTION: DISABLED
-  // Was sending hourly "budget running low" emails with no deduplication.
-  // Re-enable once deduplication is added (track last notification time per user per problem type).
-  // try {
-  //   const { detectProblemsForUser, autoFixProblems, formatProblemsForNotification } = await import("./proactive-problem-detector.js");
-  //   ...
-  // }
+  // PROACTIVE PROBLEM DETECTION: Scan for issues (hourly), notify max once per 24h per user
+  try {
+    const { detectProblemsForUser, autoFixProblems, formatProblemsForNotification } = await import("./proactive-problem-detector.js");
+
+    // Get all active users (with tasks in last 7 days)
+    const { data: recentUsers } = await getSupabaseClient()
+      .from("tasks")
+      .select("user_id")
+      .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+      .limit(100);
+
+    if (recentUsers && recentUsers.length > 0) {
+      const uniqueUserIds = [...new Set(recentUsers.map(u => u.user_id))];
+      console.log(`[SCHEDULER] Running proactive problem detection for ${uniqueUserIds.length} active users`);
+
+      for (const userId of uniqueUserIds.slice(0, 50)) {
+        try {
+          const problems = await detectProblemsForUser(userId);
+          if (problems.length > 0) {
+            await autoFixProblems(userId, problems);
+
+            // Only notify for critical problems, max once per 24h per user
+            const criticalProblems = problems.filter(p => p.severity === "critical");
+            if (criticalProblems.length > 0) {
+              // 24h dedup: check if we already notified this user today
+              const dedupeKey = `proactive_notify_${userId}`;
+              const { data: lastNotify } = await getSupabaseClient()
+                .from("distributed_locks")
+                .select("locked_at")
+                .eq("lock_name", dedupeKey)
+                .single();
+
+              const lastNotifyTime = lastNotify?.locked_at ? new Date(lastNotify.locked_at).getTime() : 0;
+              const hoursSinceLastNotify = (Date.now() - lastNotifyTime) / (1000 * 60 * 60);
+
+              if (hoursSinceLastNotify >= 24) {
+                const { data: profile } = await getSupabaseClient()
+                  .from("profiles")
+                  .select("email, username")
+                  .eq("id", userId)
+                  .single();
+
+                if (profile && profile.email) {
+                  const { sendResponse } = await import("./email.js");
+                  await sendResponse({
+                    to: profile.email,
+                    from: `${profile.username}@aevoy.com`,
+                    subject: "[Aevoy] Action Required",
+                    body: formatProblemsForNotification(criticalProblems),
+                  });
+
+                  // Record notification time for dedup
+                  await getSupabaseClient()
+                    .from("distributed_locks")
+                    .upsert({
+                      lock_name: dedupeKey,
+                      locked_at: new Date().toISOString(),
+                      locked_by: "proactive-detector",
+                    }, { onConflict: "lock_name" });
+
+                  console.log(`[SCHEDULER] Proactive alert sent to ${profile.email} (next in 24h)`);
+                }
+              } else {
+                console.log(`[SCHEDULER] Skipping proactive notify for ${userId.slice(0, 8)} — last sent ${hoursSinceLastNotify.toFixed(1)}h ago`);
+              }
+            }
+          }
+        } catch {
+          // Non-critical, continue to next user
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[SCHEDULER] Proactive problem detection error:', error);
+  }
 
   // Refresh expiring OAuth tokens
   try {
