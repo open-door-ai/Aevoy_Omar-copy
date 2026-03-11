@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     let query = supabase
       .from("profiles")
       .select(
-        "id, username, email, display_name, timezone, subscription_tier, created_at, last_active_at, onboarding_completed, messages_used, messages_limit",
+        "id, username, email, display_name, timezone, subscription_tier, created_at, last_active_at, onboarding_completed, messages_used, messages_limit, phone_number",
         { count: "exact" },
       );
 

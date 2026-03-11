@@ -7,7 +7,7 @@ import {
   Search, ChevronRight, ChevronLeft, Clock, CheckCircle, XCircle,
   AlertTriangle, User, Mail, Phone, Calendar, Globe, ArrowUpDown,
   Loader2, Send, Package, RefreshCw, Eye, Ban, Unlock, X,
-  BarChart3, TrendingUp,
+  BarChart3, TrendingUp, Trash2, PhoneOff, PhoneCall, Wifi,
 } from "lucide-react";
 
 /* ─────────────────────────── Types ─────────────────────────── */
@@ -17,6 +17,7 @@ interface UserRow {
   last_active_at: string | null; onboarding_completed: boolean;
   messages_used: number; messages_limit: number;
   task_count: number; total_cost_usd: number;
+  phone_number: string | null;
 }
 
 interface TaskRow {
@@ -47,6 +48,12 @@ interface CostData {
 }
 
 interface CommandResult { type: "success" | "error" | "info" | "data"; message: string; data?: unknown }
+
+interface AgentHealth {
+  activeVoiceSessions: number;
+  status: string;
+  uptime?: number;
+}
 
 type Tab = "overview" | "users" | "tasks" | "costs" | "terminal" | "killswitch";
 
@@ -134,6 +141,17 @@ export default function AdminDashboard() {
   // Overview stats
   const [overviewStats, setOverviewStats] = useState<CostData | null>(null);
 
+  // Agent health / active calls
+  const [agentHealth, setAgentHealth] = useState<AgentHealth | null>(null);
+
+  // Delete confirmation
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<{ id: string; username: string; email: string } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Twilio disconnect
+  const [twilioDisconnectUser, setTwilioDisconnectUser] = useState<{ id: string; username: string } | null>(null);
+  const [twilioDisconnectLoading, setTwilioDisconnectLoading] = useState(false);
+
   /* ─── API helper ─── */
   const api = useCallback(async (path: string, opts?: RequestInit) => {
     const res = await fetch(path, opts);
@@ -192,15 +210,34 @@ export default function AdminDashboard() {
     if (data) setKsStatus(data);
   }, [api]);
 
+  const loadAgentHealth = useCallback(async () => {
+    try {
+      const agentUrl = process.env.NEXT_PUBLIC_AGENT_URL || "https://agent-production-1339.up.railway.app";
+      const res = await fetch(`${agentUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const data = await res.json();
+        setAgentHealth({
+          activeVoiceSessions: data.activeVoiceSessions || 0,
+          status: data.status || "unknown",
+          uptime: data.uptime,
+        });
+      } else {
+        setAgentHealth({ activeVoiceSessions: 0, status: "unreachable" });
+      }
+    } catch {
+      setAgentHealth({ activeVoiceSessions: 0, status: "unreachable" });
+    }
+  }, []);
+
   /* ─── Effects ─── */
   useEffect(() => {
-    if (tab === "overview") loadOverview();
+    if (tab === "overview") { loadOverview(); loadAgentHealth(); }
     if (tab === "users") loadUsers();
     if (tab === "tasks") loadTasks();
     if (tab === "costs") loadCosts();
     if (tab === "killswitch") loadKillswitch();
     if (tab === "terminal") setTimeout(() => termInputRef.current?.focus(), 100);
-  }, [tab, loadUsers, loadTasks, loadCosts, loadOverview, loadKillswitch]);
+  }, [tab, loadUsers, loadTasks, loadCosts, loadOverview, loadKillswitch, loadAgentHealth]);
 
   useEffect(() => { if (tab === "users") loadUsers(); }, [usersPage, usersSortBy, usersSortDir]);
   useEffect(() => { if (tab === "tasks") loadTasks(); }, [tasksPage, tasksStatus, tasksChannel]);
@@ -278,6 +315,31 @@ export default function AdminDashboard() {
       });
     }
     loadUsers();
+  };
+
+  /* ─── Delete User ─── */
+  const handleDeleteUser = async (userId: string) => {
+    setDeleteLoading(true);
+    const data = await api(`/api/admin/users/${userId}`, { method: "DELETE" });
+    setDeleteLoading(false);
+    setDeleteConfirmUser(null);
+    if (data?.success) {
+      setSelectedUser(null);
+      setSelectedUserId(null);
+      loadUsers();
+    }
+  };
+
+  /* ─── Disconnect Twilio ─── */
+  const handleDisconnectTwilio = async (userId: string) => {
+    setTwilioDisconnectLoading(true);
+    const data = await api(`/api/admin/users/${userId}/twilio`, { method: "DELETE" });
+    setTwilioDisconnectLoading(false);
+    setTwilioDisconnectUser(null);
+    if (data?.success && selectedUser) {
+      setSelectedUser({ ...selectedUser, phone: null });
+      loadUsers();
+    }
   };
 
   /* ─── Logout ─── */
@@ -361,6 +423,56 @@ export default function AdminDashboard() {
                           <p className="text-2xl font-bold">{s.value}</p>
                         </div>
                       ))}
+                    </div>
+
+                    {/* Active Calls + Twilio Status */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-medium text-white/60">Active Voice Sessions</h3>
+                          <button onClick={loadAgentHealth} className="p-1 rounded hover:bg-white/5 transition-colors">
+                            <RefreshCw className="h-3 w-3 text-white/20" />
+                          </button>
+                        </div>
+                        {agentHealth ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-3">
+                              <PhoneCall className={`h-6 w-6 ${agentHealth.activeVoiceSessions > 0 ? "text-emerald-400" : "text-white/20"}`} />
+                              <span className="text-3xl font-bold">{agentHealth.activeVoiceSessions}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className={`w-2 h-2 rounded-full ${agentHealth.status === "ok" || agentHealth.status === "healthy" ? "bg-emerald-400" : "bg-red-400"}`} />
+                              <span className="text-white/40">Agent: {agentHealth.status}</span>
+                              {agentHealth.uptime !== undefined && (
+                                <span className="text-white/20 ml-2">Uptime: {Math.floor(agentHealth.uptime / 3600)}h {Math.floor((agentHealth.uptime % 3600) / 60)}m</span>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-white/20 text-xs">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+                        <h3 className="text-sm font-medium text-white/60 mb-3">Twilio Configuration</h3>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Phone className="h-4 w-4 text-blue-400" />
+                            <span className="text-sm font-mono text-white/70">+16043321466</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">Demo Line</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-white/30">
+                            <Wifi className="h-3 w-3" />
+                            <span>ElevenLabs TTS (Sarah voice)</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-white/30">
+                            <Globe className="h-3 w-3" />
+                            <span>Callback: agent-production-1339.up.railway.app</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
                     {/* Cost chart - simple bar representation */}
@@ -467,27 +579,28 @@ export default function AdminDashboard() {
                     <thead>
                       <tr className="border-b border-white/[0.06] text-xs text-white/30">
                         <th className="text-left px-4 py-3 font-medium">User</th>
+                        <th className="text-left px-4 py-3 font-medium">Phone</th>
                         <th className="text-left px-4 py-3 font-medium">Tier</th>
                         <th className="text-left px-4 py-3 font-medium">Tasks</th>
                         <th className="text-left px-4 py-3 font-medium">Cost</th>
                         <th className="text-left px-4 py-3 font-medium">Last Active</th>
                         <th className="text-left px-4 py-3 font-medium">Signed Up</th>
-                        <th className="w-10"></th>
+                        <th className="text-left px-4 py-3 font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {users.map(u => (
                         <tr
                           key={u.id}
-                          onClick={() => loadUserDetail(u.id)}
-                          className="border-b border-white/[0.03] hover:bg-white/[0.03] cursor-pointer transition-colors"
+                          className="border-b border-white/[0.03] hover:bg-white/[0.03] transition-colors"
                         >
-                          <td className="px-4 py-3">
+                          <td className="px-4 py-3 cursor-pointer" onClick={() => loadUserDetail(u.id)}>
                             <div>
                               <p className="text-sm font-medium">{u.display_name || u.username}</p>
                               <p className="text-xs text-white/30">{u.email}</p>
                             </div>
                           </td>
+                          <td className="px-4 py-3 text-xs text-white/40 font-mono">{u.phone_number || "—"}</td>
                           <td className="px-4 py-3">
                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${tierBadge(u.subscription_tier)}`}>
                               {u.subscription_tier}
@@ -497,11 +610,38 @@ export default function AdminDashboard() {
                           <td className="px-4 py-3 text-sm font-mono text-white/60">${u.total_cost_usd.toFixed(4)}</td>
                           <td className="px-4 py-3 text-xs text-white/30">{timeAgo(u.last_active_at)}</td>
                           <td className="px-4 py-3 text-xs text-white/30">{new Date(u.created_at).toLocaleDateString()}</td>
-                          <td className="px-4 py-3"><ChevronRight className="h-4 w-4 text-white/10" /></td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); loadUserDetail(u.id); }}
+                                title="View details"
+                                className="p-1.5 rounded-lg hover:bg-white/5 text-white/20 hover:text-white/50 transition-colors"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleBlockUser(u.id, u.subscription_tier !== "blocked");
+                                }}
+                                title={u.subscription_tier === "blocked" ? "Unblock user" : "Block user"}
+                                className={`p-1.5 rounded-lg transition-colors ${u.subscription_tier === "blocked" ? "hover:bg-emerald-500/10 text-emerald-400/40 hover:text-emerald-400" : "hover:bg-red-500/10 text-white/20 hover:text-red-400"}`}
+                              >
+                                {u.subscription_tier === "blocked" ? <Unlock className="h-3.5 w-3.5" /> : <Ban className="h-3.5 w-3.5" />}
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDeleteConfirmUser({ id: u.id, username: u.username, email: u.email }); }}
+                                title="Delete account"
+                                className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/20 hover:text-red-400 transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                       {users.length === 0 && !loading && (
-                        <tr><td colSpan={7} className="px-4 py-12 text-center text-white/20 text-sm">No users found</td></tr>
+                        <tr><td colSpan={8} className="px-4 py-12 text-center text-white/20 text-sm">No users found</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -566,6 +706,20 @@ export default function AdminDashboard() {
                               <Ban className="h-3 w-3" /> Block
                             </button>
                           )}
+                          {selectedUser.phone && (
+                            <button
+                              onClick={() => setTwilioDisconnectUser({ id: String(selectedUser.profile.id), username: String(selectedUser.profile.username) })}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-400 text-xs font-medium hover:bg-amber-500/20 transition-colors"
+                            >
+                              <PhoneOff className="h-3 w-3" /> Disconnect Twilio
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setDeleteConfirmUser({ id: String(selectedUser.profile.id), username: String(selectedUser.profile.username), email: String(selectedUser.profile.email) })}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 text-xs font-medium hover:bg-red-500/20 transition-colors"
+                          >
+                            <Trash2 className="h-3 w-3" /> Delete
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1031,6 +1185,122 @@ export default function AdminDashboard() {
           </motion.div>
         </AnimatePresence>
       </div>
+
+      {/* ═══════════════ DELETE CONFIRMATION MODAL ═══════════════ */}
+      <AnimatePresence>
+        {deleteConfirmUser && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => !deleteLoading && setDeleteConfirmUser(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-[#141414] border border-white/[0.08] rounded-2xl p-6 max-w-md w-full mx-4 space-y-4"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+                  <AlertTriangle className="h-5 w-5 text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Delete Account</h3>
+                  <p className="text-xs text-white/30">This action cannot be undone</p>
+                </div>
+              </div>
+
+              <div className="bg-red-500/5 border border-red-500/10 rounded-xl p-4 text-xs text-white/50 space-y-1.5">
+                <p>This will permanently delete:</p>
+                <ul className="list-disc list-inside space-y-0.5 text-white/40">
+                  <li>User profile for <span className="text-white/60 font-medium">{deleteConfirmUser.username}</span> ({deleteConfirmUser.email})</li>
+                  <li>All tasks and task history</li>
+                  <li>AI cost logs</li>
+                  <li>Scheduled tasks</li>
+                  <li>Credit wallet</li>
+                  <li>User settings</li>
+                  <li>Twilio phone number assignment</li>
+                  <li>OAuth connections</li>
+                </ul>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDeleteConfirmUser(null)}
+                  disabled={deleteLoading}
+                  className="flex-1 py-2.5 rounded-xl bg-white/5 text-white/50 text-sm font-medium hover:bg-white/10 disabled:opacity-30 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleDeleteUser(deleteConfirmUser.id)}
+                  disabled={deleteLoading}
+                  className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  {deleteLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  Delete Forever
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══════════════ TWILIO DISCONNECT CONFIRMATION MODAL ═══════════════ */}
+      <AnimatePresence>
+        {twilioDisconnectUser && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+            onClick={() => !twilioDisconnectLoading && setTwilioDisconnectUser(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-[#141414] border border-white/[0.08] rounded-2xl p-6 max-w-md w-full mx-4 space-y-4"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                  <PhoneOff className="h-5 w-5 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Disconnect Twilio Number</h3>
+                  <p className="text-xs text-white/30">Remove dedicated phone number for {twilioDisconnectUser.username}</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-white/40">
+                This will remove the Twilio phone number assignment for this user. They will no longer be able to receive calls or SMS on their dedicated number. The number itself is not released from Twilio.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setTwilioDisconnectUser(null)}
+                  disabled={twilioDisconnectLoading}
+                  className="flex-1 py-2.5 rounded-xl bg-white/5 text-white/50 text-sm font-medium hover:bg-white/10 disabled:opacity-30 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleDisconnectTwilio(twilioDisconnectUser.id)}
+                  disabled={twilioDisconnectLoading}
+                  className="flex-1 py-2.5 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  {twilioDisconnectLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <PhoneOff className="h-4 w-4" />}
+                  Disconnect
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

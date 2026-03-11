@@ -144,3 +144,55 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return secureError("internal_error", 500);
   }
 }
+
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireAdmin(request);
+    if ("error" in auth) return auth.error;
+
+    const supabase = getAdminClient();
+    const { id } = await params;
+
+    if (!UUID_RE.test(id)) return secureError("invalid_id", 400);
+
+    // Verify user exists before deleting
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, username, email")
+      .eq("id", id)
+      .single();
+
+    if (!profile) return secureError("not_found", 404);
+
+    // Delete associated data in order (foreign key safe)
+    const deletions = [
+      supabase.from("user_twilio_numbers").delete().eq("user_id", id),
+      supabase.from("ai_cost_log").delete().eq("user_id", id),
+      supabase.from("scheduled_tasks").delete().eq("user_id", id),
+      supabase.from("oauth_connections").delete().eq("user_id", id),
+      supabase.from("credit_wallets").delete().eq("user_id", id),
+      supabase.from("user_settings").delete().eq("user_id", id),
+      supabase.from("tasks").delete().eq("user_id", id),
+    ];
+
+    const results = await Promise.all(deletions);
+    const errors = results.filter(r => r.error);
+    if (errors.length > 0) {
+      console.error("Admin delete partial errors:", errors.map(e => e.error?.message));
+    }
+
+    // Delete the profile last
+    const { error: profileErr } = await supabase.from("profiles").delete().eq("id", id);
+    if (profileErr) {
+      console.error("Admin delete profile error:", profileErr.message);
+      return secureError("delete_failed", 500);
+    }
+
+    await logAdminAction(auth.session.id, "delete_user", "user", id, `Deleted user: ${profile.username} (${profile.email})`);
+
+    return secureResponse({ success: true, deleted: { username: profile.username, email: profile.email } });
+  } catch (err) {
+    console.error("Admin user delete error:", err instanceof Error ? err.message : "unknown");
+    return secureError("internal_error", 500);
+  }
+}
