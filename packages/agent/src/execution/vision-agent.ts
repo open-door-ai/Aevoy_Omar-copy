@@ -1615,6 +1615,16 @@ BAD: "The page shows a signup form. Let me click the button."
 BAD: "I should navigate to the signup page."
 If unsure what to do → SCROLL down. If form visible → FILL it. If button visible → CLICK it.
 
+PROBLEM-SOLVING — THINK LIKE A RESOURCEFUL HUMAN:
+You are a human sitting at a computer. You don't give up. You don't report failure after one try.
+- Can't find what you need? EXPLORE: SCROLL, CLICK things, try different elements. Pages have hidden content, dynamic elements, and multi-step flows.
+- Something didn't work? TRY SOMETHING DIFFERENT. Never repeat the same failed action. Change your approach completely.
+- Page seems static or empty? It might be loading. WAIT, then SCROLL. Content often appears after interaction.
+- Blocked or stuck? Think creatively: try a different URL path on the same domain, try OAuth/social login, try the page's navigation menu, try Tab key to discover hidden elements.
+- Error after submitting? READ the error message and fix the specific problem, don't start over.
+- Multiple pages/steps? Complete each one fully before moving on. Don't rush.
+- NEVER output DONE or FAIL until you have genuinely exhausted multiple different approaches.
+
 OUTPUT FORMAT: ONLY action lines. No text. No reasoning. No <think> tags. No descriptions.
 
 EXAMPLES:
@@ -2369,13 +2379,17 @@ export async function runVisionAgent(
         snapshot = snapshotResult.text;
         currentRefs = snapshotResult.refs;
 
-        // SPA RETRY: If snapshot has very few interactive elements (< 3) on first few steps,
-        // the page may still be rendering (React/Vue/Angular hydration). Wait and retry.
-        if (currentRefs.size < 3 && steps < 5) {
-          await activePage.waitForTimeout(2000);
+        // SPA RETRY: If snapshot has very few interactive elements (< 5) on first few steps,
+        // the page may still be rendering (React/Vue/Angular hydration). Wait for network idle + retry.
+        if (currentRefs.size < 5 && steps < 8) {
+          // Wait for network to settle — SPA frameworks fetch data/components after initial load
+          try {
+            await activePage.waitForLoadState('networkidle', { timeout: 3000 });
+          } catch { /* timeout is fine — page may have persistent connections */ }
+          await activePage.waitForTimeout(1000); // Extra 1s for JS rendering after network
           const retryResult = await getAccessibilitySnapshot(activePage);
           if (retryResult.refs.size > currentRefs.size) {
-            console.log(`[BROWSER-AGENT] SPA retry: ${currentRefs.size} → ${retryResult.refs.size} refs after 2s wait`);
+            console.log(`[BROWSER-AGENT] SPA retry: ${currentRefs.size} → ${retryResult.refs.size} refs after networkidle+1s wait`);
             snapshot = retryResult.text;
             currentRefs = retryResult.refs;
           }
@@ -2656,11 +2670,18 @@ export async function runVisionAgent(
       // Stuck hint
       let stuckHint = '';
       if (noChangeCount >= 3) {
-        stuckHint = `⚠️ POSSIBLE BOT DETECTION: ${noChangeCount} actions with no page change. Try: (1) a completely different element, (2) SCROLL first, (3) WAIT 3 seconds, (4) try a different URL or approach.`;
+        stuckHint = `⚠️ ${noChangeCount} actions with no page change. Your previous approach is NOT working. Do something COMPLETELY DIFFERENT: try a different element, SCROLL to reveal hidden content, WAIT for dynamic loading, or NAVIGATE to a different URL path.`;
       } else if (sameUrlCount >= 3 && sameUrlCount < 7) {
-        stuckHint = `⚡ STUCK ${sameUrlCount} steps on same page. Try a completely different approach. SCROLL down, use a search bar, or NAVIGATE to a different URL.`;
+        // Rotate through different strategies based on how long we've been stuck
+        const stuckStrategies = [
+          'SCROLL down — there may be content below the fold you haven\'t seen.',
+          'Try CLICKing any element you haven\'t tried yet — buttons, links, navigation items.',
+          'PRESS Tab repeatedly to discover hidden/off-screen interactive elements.',
+          'NAVIGATE to a different path on this domain — try adding /signup, /register, /join, /start to the base URL.',
+        ];
+        stuckHint = `⚡ STUCK ${sameUrlCount} steps. ${stuckStrategies[(sameUrlCount - 3) % stuckStrategies.length]}`;
       } else if (sameUrlCount >= 7) {
-        stuckHint = `🚨 CRITICALLY STUCK (${sameUrlCount} steps). Try: PRESS Tab to cycle elements, NAVIGATE to a sub-page, or SCROLL to find hidden content.`;
+        stuckHint = `🚨 CRITICALLY STUCK (${sameUrlCount} steps). Everything you've tried has FAILED. You MUST do something radically different: NAVIGATE to a completely different URL, use OAuth/social login, try the mobile site (m.domain.com), or search for the task on DuckDuckGo.`;
       }
 
       // ── AUTO EMAIL VERIFICATION DETECTION ──
@@ -3070,14 +3091,22 @@ export async function runVisionAgent(
           if (hasFactualData && isInfoTask && !isGiveUp) {
             // Skip all rejection — this has real data for an info task
           } else if (isGiveUp) {
-            // Agent is reporting failure in DONE — force it to keep trying
+            // Agent is reporting failure in DONE — force it to keep trying with strategy rotation
             const rejectGiveUpCount = history.filter(h => h.includes('GIVEUP rejected')).length;
-            if (rejectGiveUpCount >= 3) {
-              // Truly stuck after 3 rejections — fall through to normal DONE handling
+            if (rejectGiveUpCount >= 5) {
+              // Truly stuck after 5 rejections — fall through to normal DONE handling
               console.log('[BROWSER-AGENT] DONE with give-up language rejected ' + rejectGiveUpCount + ' times — accepting to avoid loop');
             } else {
               console.log('[BROWSER-AGENT] Rejected GIVEUP DONE: "' + doneResult.substring(0, 80) + '"');
-              history.push('GIVEUP rejected: DO NOT give up. You have not tried all strategies yet. SCROLL down, try CLICK on visible elements, or NAVIGATE to a different path. Keep going — task: "' + task.substring(0, 100) + '".');
+              // Strategy rotation: each rejection forces a DIFFERENT approach
+              const strategies = [
+                `GIVEUP rejected (#1): SCROLL down to explore the page. There may be content below the fold. Then try CLICKing any interactive elements you find. Task: "${task.substring(0, 80)}"`,
+                `GIVEUP rejected (#2): Try a COMPLETELY different approach. NAVIGATE to a different path on this domain (add /signup, /register, /join, /login, /start to the base URL). Or try using the site's search/navigation. Task: "${task.substring(0, 80)}"`,
+                `GIVEUP rejected (#3): Look for OAuth or social login options (Google, Apple, Facebook buttons). Try PRESS Tab to cycle through hidden elements. Try CLICKing ANY button or link on the page. Task: "${task.substring(0, 80)}"`,
+                `GIVEUP rejected (#4): Open a NEW TAB and search for "${task.substring(0, 60)}" on DuckDuckGo to find an alternative approach or URL. Then NAVIGATE to what you find. Task: "${task.substring(0, 80)}"`,
+                `GIVEUP rejected (#5): Last attempt. Try the mobile version of the site (m.domain.com), or try WAIT then SCROLL, or try every visible link/button one by one. Task: "${task.substring(0, 80)}"`,
+              ];
+              history.push(strategies[Math.min(rejectGiveUpCount, strategies.length - 1)]);
               break; // break action loop, continue main loop
             }
           } else {
@@ -3230,7 +3259,19 @@ export async function runVisionAgent(
               break; // break action loop, continue main loop
             }
           }
-          console.log(`[BROWSER-AGENT] FAIL: ${action.result}`);
+          // FAIL REJECTION: Don't accept FAIL until agent has tried multiple approaches
+          const failRejectCount = history.filter(h => h.includes('FAIL rejected')).length;
+          if (failRejectCount < 3 && steps < 35) {
+            console.log(`[BROWSER-AGENT] FAIL rejected (#${failRejectCount + 1}): "${(action.result || '').substring(0, 80)}"`);
+            const failStrategies = [
+              `FAIL rejected: DO NOT give up. Try a COMPLETELY different approach: SCROLL the page, try different elements, NAVIGATE to a different URL path on this domain. The task is: "${task.substring(0, 80)}"`,
+              `FAIL rejected: You haven't exhausted all options. Try: (1) OAuth/social login buttons, (2) NAVIGATE to /signup, /register, /join, /start, (3) Use a search engine to find the right page, (4) PRESS Tab to find hidden elements.`,
+              `FAIL rejected: LAST CHANCE. Open a new tab, search for how to do this task, and try the approach you find. Or try the mobile site. Or try ANY untried element on the page.`,
+            ];
+            history.push(failStrategies[failRejectCount]);
+            break; // break action loop, continue main loop
+          }
+          console.log(`[BROWSER-AGENT] FAIL accepted after ${failRejectCount} rejections: ${action.result}`);
           return { success: false, error: action.result, steps: steps + 1, cost: totalCost, screenshots };
         }
 

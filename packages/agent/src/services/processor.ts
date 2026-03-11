@@ -4577,7 +4577,12 @@ DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices
                   aiResponse.content = `Navigated to the signup page but couldn't complete registration. ${vgResult.error || 'The form may require manual completion.'}`;
                 }
               } catch (vgErr) {
-                aiResponse.content = `I navigated to the signup page but couldn't locate the email input field. The site may require JavaScript interaction or use a non-standard form.`;
+                const vgErrMsg = vgErr instanceof Error ? vgErr.message : String(vgErr);
+                console.warn(`[SIGNUP-GATE] Vision agent error: ${vgErrMsg}`);
+                // Don't return a generic hardcoded message — let the outer loop retry with a different approach
+                aiResponse.content = '';
+                aiResponse.actions = [];
+                // Continue to next iteration — the main loop will re-engage the vision agent or try other strategies
               }
             }
           }
