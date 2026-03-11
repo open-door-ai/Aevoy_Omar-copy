@@ -2382,9 +2382,10 @@ export async function generateBrowserStepResponse(
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${errMsg}`);
-      // Back off Gemini 10min on 429 (daily quota) to avoid wasting time
+      // Back off Gemini briefly on 429 — just skip 1-2 steps, not the whole task.
+      // Previously 10 min caused ALL remaining steps to cascade to Haiku ($0.005/call).
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
-        rateLimitBackoff.set('gemini:gemini-2.5-flash', Date.now() + 600000);
+        rateLimitBackoff.set('gemini:gemini-2.5-flash', Date.now() + 15000); // 15s = skip ~1 step
       }
     }
   }
@@ -2721,9 +2722,9 @@ export async function generateVisionResponse(
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       console.warn(`[AI] Vision (Gemini Flash) failed: ${errMsg}`);
-      // Back off Gemini: 10min on 429 (daily quota likely hit), 30s on other errors
+      // Back off Gemini briefly on 429 — 15s (skip 1-2 steps), not 10 min
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
-        rateLimitBackoff.set(geminiBackoffKey, Date.now() + 600000); // 10 min — don't waste time retrying exhausted quota
+        rateLimitBackoff.set(geminiBackoffKey, Date.now() + 15000);
       }
       if (userId) trackApiCall(userId, `ERR:gemini-flash:${errMsg.substring(0, 60)}`, 0, 0, 0, "google", taskId, "vision-error").catch(() => {});
     }
