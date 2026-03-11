@@ -291,56 +291,13 @@ async function runProactiveChecks(): Promise<void> {
     console.error('[SCHEDULER] Capability expansion error:', error);
   }
 
-  // PROACTIVE PROBLEM DETECTION: Scan for issues (hourly)
-  try {
-    const { detectProblemsForUser, autoFixProblems, formatProblemsForNotification } = await import("./proactive-problem-detector.js");
-
-    // Get all active users (with tasks in last 7 days)
-    const { data: recentUsers } = await getSupabaseClient()
-      .from("tasks")
-      .select("user_id")
-      .gte("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-      .limit(100);
-
-    if (recentUsers && recentUsers.length > 0) {
-      const uniqueUserIds = [...new Set(recentUsers.map(u => u.user_id))];
-      console.log(`[SCHEDULER] Running proactive problem detection for ${uniqueUserIds.length} active users`);
-
-      for (const userId of uniqueUserIds.slice(0, 50)) { // Limit to 50/hour to avoid overload
-        try {
-          const problems = await detectProblemsForUser(userId);
-          if (problems.length > 0) {
-            await autoFixProblems(userId, problems);
-            console.log(`[SCHEDULER] Detected ${problems.length} problems for user ${userId.slice(0, 8)}, auto-fixing applied`);
-
-            // Notify user about detected problems
-            const criticalProblems = problems.filter(p => p.severity === "critical");
-            if (criticalProblems.length > 0) {
-              const { data: profile } = await getSupabaseClient()
-                .from("profiles")
-                .select("email, username")
-                .eq("id", userId)
-                .single();
-
-              if (profile && profile.email) {
-                const { sendResponse } = await import("./email.js");
-                await sendResponse({
-                  to: profile.email,
-                  from: `${profile.username}@aevoy.com`,
-                  subject: "[Aevoy] Action Required",
-                  body: formatProblemsForNotification(criticalProblems),
-                });
-              }
-            }
-          }
-        } catch {
-          // Non-critical, continue to next user
-        }
-      }
-    }
-  } catch (error) {
-    console.error('[SCHEDULER] Proactive problem detection error:', error);
-  }
+  // PROACTIVE PROBLEM DETECTION: DISABLED
+  // Was sending hourly "budget running low" emails with no deduplication.
+  // Re-enable once deduplication is added (track last notification time per user per problem type).
+  // try {
+  //   const { detectProblemsForUser, autoFixProblems, formatProblemsForNotification } = await import("./proactive-problem-detector.js");
+  //   ...
+  // }
 
   // Refresh expiring OAuth tokens
   try {
