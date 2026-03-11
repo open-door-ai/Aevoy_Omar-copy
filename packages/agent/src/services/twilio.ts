@@ -575,7 +575,14 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
         const msgLower = data.body.toLowerCase().trim();
         const isCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(msgLower);
 
-        if (isCancelRequest) {
+        // Distinguish replies from new tasks (same heuristic as web endpoint)
+        const _smsLooksLikeNewTask = data.body.trim().length > 80
+          || /\b(create|make|build|find|search|sign\s?up|book\s+(?:me\s+)?a|write|send|get\s+me|order\s+me|help\s+me|tell\s+me|show\s+me|set\s+up|look\s+up|check\s+(?:my|if|on)|how\s+(?:to|do|can)|what\s+is|who\s+is)\b/i.test(msgLower);
+
+        if (_smsLooksLikeNewTask && !isCancelRequest) {
+          console.log(`[TWILIO] SMS looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${data.body.slice(0, 60)}"`);
+          // Fall through to create new task
+        } else if (isCancelRequest) {
           // User wants to cancel
           await getSupabaseClient().from('tasks').update({
             status: 'completed',
@@ -587,19 +594,19 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
 
           console.log(`[TWILIO] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
           return { processed: true, taskId: awaitingTask.id };
+        } else {
+          // User provided an answer — clear auto-proceed timer and re-process
+          console.log(`[TWILIO] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
+
+          await getSupabaseClient().from('tasks').update({
+            status: 'processing',
+            auto_proceed_at: null,
+            auto_proceed_context: null,
+          }).eq('id', awaitingTask.id);
+
+          // Re-process with user's answer (the caller in index.ts will route this)
+          return { processed: true, taskId: awaitingTask.id, isReplyToAwaiting: true };
         }
-
-        // User provided an answer — clear auto-proceed timer and re-process
-        console.log(`[TWILIO] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
-
-        await getSupabaseClient().from('tasks').update({
-          status: 'processing',
-          auto_proceed_at: null,
-          auto_proceed_context: null,
-        }).eq('id', awaitingTask.id);
-
-        // Re-process with user's answer (the caller in index.ts will route this)
-        return { processed: true, taskId: awaitingTask.id, isReplyToAwaiting: true };
       }
     } catch {
       // Non-critical — fall through to create new task

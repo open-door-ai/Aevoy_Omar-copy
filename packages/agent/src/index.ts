@@ -941,7 +941,16 @@ app.post("/task", taskLimiter, async (req, res) => {
       const msgLower = newMsg.toLowerCase();
       const isCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(msgLower);
 
-      if (isCancelRequest) {
+      // Distinguish replies from new independent tasks:
+      // - Short messages (< 80 chars) without action verbs → likely a reply ("2 people", "7pm", "yes")
+      // - Long messages or messages with task verbs → new independent task
+      const _looksLikeNewTask = newMsg.length > 80
+        || /\b(create|make|build|find|search|sign\s?up|book\s+(?:me\s+)?a|write|send|get\s+me|order\s+me|help\s+me|tell\s+me|show\s+me|set\s+up|look\s+up|check\s+(?:my|if|on)|how\s+(?:to|do|can)|what\s+is|who\s+is)\b/i.test(msgLower);
+
+      if (_looksLikeNewTask && !isCancelRequest) {
+        // This is a new task, not a reply — fall through to normal task processing
+        console.log(`[AUTO-PROCEED-REPLY] Message looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 60)}"`);
+      } else if (isCancelRequest) {
         // User wants to cancel the task
         await getSupabaseClient().from('tasks').update({
           status: 'completed',
@@ -954,36 +963,36 @@ app.post("/task", taskLimiter, async (req, res) => {
         console.log(`[AUTO-PROCEED-REPLY] User cancelled task ${awaitingTask.id.slice(0, 8)}`);
         res.json({ status: "cancelled", message: "Got it — task cancelled." });
         return;
+      } else {
+        // User provided an answer — clear auto-proceed timer and re-process with their answer
+        console.log(`[AUTO-PROCEED-REPLY] User replied to awaiting task ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 80)}"`);
+
+        await getSupabaseClient().from('tasks').update({
+          status: 'processing',
+          auto_proceed_at: null,
+          auto_proceed_context: null,
+        }).eq('id', awaitingTask.id);
+
+        res.json({ status: "update_received", message: "Got it — incorporating your reply and continuing." });
+
+        activeTasks++;
+        const { processTask: procTask } = await import("./services/processor.js");
+        procTask({
+          userId: task.userId,
+          username: task.username,
+          from: task.from,
+          subject: awaitingTask.email_subject || awaitingTask.input_text?.substring(0, 200) || task.subject,
+          body: `${awaitingTask.input_text || ''}\n\nUser reply: ${newMsg}`,
+          taskId: awaitingTask.id,
+          inputChannel: task.inputChannel,
+          responsePrefix: `You replied with additional info. Here's what I did:`,
+        }).then((result) => {
+          console.log(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} completed: success=${result.success}`);
+        }).catch((err) => {
+          console.error(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} failed:`, err);
+        }).finally(() => { activeTasks--; processQueuedTasks(); });
+        return;
       }
-
-      // User provided an answer — clear auto-proceed timer and re-process with their answer
-      console.log(`[AUTO-PROCEED-REPLY] User replied to awaiting task ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 80)}"`);
-
-      await getSupabaseClient().from('tasks').update({
-        status: 'processing',
-        auto_proceed_at: null,
-        auto_proceed_context: null,
-      }).eq('id', awaitingTask.id);
-
-      res.json({ status: "update_received", message: "Got it — incorporating your reply and continuing." });
-
-      activeTasks++;
-      const { processTask: procTask } = await import("./services/processor.js");
-      procTask({
-        userId: task.userId,
-        username: task.username,
-        from: task.from,
-        subject: awaitingTask.email_subject || awaitingTask.input_text?.substring(0, 200) || task.subject,
-        body: `${awaitingTask.input_text || ''}\n\nUser reply: ${newMsg}`,
-        taskId: awaitingTask.id,
-        inputChannel: task.inputChannel,
-        responsePrefix: `You replied with additional info. Here's what I did:`,
-      }).then((result) => {
-        console.log(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} completed: success=${result.success}`);
-      }).catch((err) => {
-        console.error(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} failed:`, err);
-      }).finally(() => { activeTasks--; processQueuedTasks(); });
-      return;
     }
   } catch {
     // Non-critical — fall through to normal processing

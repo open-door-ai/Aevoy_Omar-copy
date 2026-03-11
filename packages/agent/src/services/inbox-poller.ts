@@ -963,7 +963,14 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
           const emailLower = emailText.toLowerCase();
           const isCancelRequest = /\b(cancel|stop|forget it|nevermind|never mind|ignore|scratch that|abort|don't|dont)\b/i.test(emailLower);
 
-          if (isCancelRequest) {
+          // Distinguish replies from new tasks
+          const _emailLooksLikeNewTask = emailText.length > 80
+            || /\b(create|make|build|find|search|sign\s?up|book\s+(?:me\s+)?a|write|send|get\s+me|order\s+me|help\s+me|tell\s+me|show\s+me|set\s+up|look\s+up|check\s+(?:my|if|on)|how\s+(?:to|do|can)|what\s+is|who\s+is)\b/i.test(emailLower);
+
+          if (_emailLooksLikeNewTask && !isCancelRequest) {
+            console.log(`[INBOX-POLLER] Email looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${emailText.slice(0, 60)}"`);
+            // Fall through to create new task
+          } else if (isCancelRequest) {
             await getSupabaseClient().from('tasks').update({
               status: 'completed',
               response_text: 'Task cancelled.',
@@ -974,29 +981,29 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
 
             console.log(`[INBOX-POLLER] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
             return;
+          } else {
+            // User provided an answer — clear timer and re-process with their reply
+            console.log(`[INBOX-POLLER] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
+
+            await getSupabaseClient().from('tasks').update({
+              status: 'processing',
+              auto_proceed_at: null,
+              auto_proceed_context: null,
+            }).eq('id', awaitingTask.id);
+
+            const { processTask } = await import('./processor.js');
+            await processTask({
+              userId: user.id,
+              username: user.username,
+              from: user.email,
+              subject: awaitingTask.email_subject || awaitingTask.input_text?.substring(0, 200) || email.subject,
+              body: `${awaitingTask.input_text || ''}\n\nUser reply: ${extractReplyText(email.body)}`,
+              taskId: awaitingTask.id,
+              inputChannel: "email",
+              responsePrefix: `You replied with additional info. Here's what I did:`,
+            });
+            return;
           }
-
-          // User provided an answer — clear timer and re-process with their reply
-          console.log(`[INBOX-POLLER] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
-
-          await getSupabaseClient().from('tasks').update({
-            status: 'processing',
-            auto_proceed_at: null,
-            auto_proceed_context: null,
-          }).eq('id', awaitingTask.id);
-
-          const { processTask } = await import('./processor.js');
-          await processTask({
-            userId: user.id,
-            username: user.username,
-            from: user.email,
-            subject: awaitingTask.email_subject || awaitingTask.input_text?.substring(0, 200) || email.subject,
-            body: `${awaitingTask.input_text || ''}\n\nUser reply: ${extractReplyText(email.body)}`,
-            taskId: awaitingTask.id,
-            inputChannel: "email",
-            responsePrefix: `You replied with additional info. Here's what I did:`,
-          });
-          return;
         }
       } catch {
         // Non-critical — fall through to normal processing
