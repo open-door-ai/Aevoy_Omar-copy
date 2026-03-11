@@ -15,6 +15,7 @@
 
 import { getSupabaseClient } from "../utils/supabase.js";
 import { BILLING_MARKUP, COST_SAFETY_MARGIN } from "../utils/cost-calculator.js";
+import { schedulerHeartbeat } from "../utils/scheduler-heartbeat.js";
 
 // Module-level correction factor — adjusts future estimates based on past reconciliation.
 // If yesterday we estimated 1.5x actual, this becomes 1/1.5 = 0.667 for today.
@@ -214,12 +215,16 @@ let reconciliationInterval: NodeJS.Timeout | null = null;
 export function startReconciliationScheduler(): void {
   // Run 30s after startup (give systems time to initialize)
   setTimeout(() => {
-    reconcileAll().catch(e => console.error(`[RECONCILIATION] Startup run failed: ${e}`));
+    reconcileAll()
+      .then(() => schedulerHeartbeat.record('reconciliation'))
+      .catch(e => console.error(`[RECONCILIATION] Startup run failed: ${e}`));
   }, 30000);
 
   // Then every 24 hours
   reconciliationInterval = setInterval(() => {
-    reconcileAll().catch(e => console.error(`[RECONCILIATION] Scheduled run failed: ${e}`));
+    reconcileAll()
+      .then(() => schedulerHeartbeat.record('reconciliation'))
+      .catch(e => console.error(`[RECONCILIATION] Scheduled run failed: ${e}`));
   }, 24 * 60 * 60 * 1000);
 
   console.log('[RECONCILIATION] Scheduler started (30s initial + every 24h)');

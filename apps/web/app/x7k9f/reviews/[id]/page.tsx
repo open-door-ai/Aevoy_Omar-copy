@@ -10,7 +10,7 @@ export default function ReviewDetailPage() {
   useEffect(() => {
     // For now, redirect to admin dashboard
     // Full code viewer with inline annotations will be added when real code submissions flow in
-    router.push("/admin/dashboard");
+    router.push("/x7k9f/dashboard");
   }, [id, router]);
 
   return (

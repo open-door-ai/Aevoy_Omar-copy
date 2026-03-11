@@ -12,6 +12,7 @@ import { getUnreadMessages, sendViaUserEmail, isEmailConnected, deleteMessage } 
 import { isNylasConnected, getUnreadMessages as getNylasUnread, sendEmail as sendNylasEmail } from "./nylas-email.js";
 import { sendResponse } from "./email.js";
 import { processVoiceCall } from "./twilio.js";
+import { schedulerHeartbeat } from "../utils/scheduler-heartbeat.js";
 
 // Configuration
 // Global tick every 15 minutes; per-user interval respected via lastChecked map
@@ -63,9 +64,9 @@ export function startInboxManager(): void {
   );
 
   managerInterval = setInterval(() => {
-    processAllInboxes().catch((err) =>
-      console.error("[INBOX-MANAGER] Poll error:", err)
-    );
+    processAllInboxes()
+      .then(() => schedulerHeartbeat.record('inbox_manager'))
+      .catch((err) => console.error("[INBOX-MANAGER] Poll error:", err));
   }, POLL_INTERVAL_MS);
 }
 

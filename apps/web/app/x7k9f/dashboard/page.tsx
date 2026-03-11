@@ -155,7 +155,7 @@ export default function AdminDashboard() {
   /* ─── API helper ─── */
   const api = useCallback(async (path: string, opts?: RequestInit) => {
     const res = await fetch(path, opts);
-    if (res.status === 401) { router.push("/admin"); return null; }
+    if (res.status === 401) { router.push("/x7k9f"); return null; }
     return res.json();
   }, [router]);
 
@@ -167,7 +167,7 @@ export default function AdminDashboard() {
       sort: usersSortBy, dir: usersSortDir,
       ...(usersSearch && { search: usersSearch }),
     });
-    const data = await api(`/api/admin/users?${params}`);
+    const data = await api(`/api/x7k9f/users?${params}`);
     if (data) { setUsers(data.users); setUsersTotal(data.total); }
     setLoading(false);
   }, [api, usersPage, usersSortBy, usersSortDir, usersSearch]);
@@ -175,7 +175,7 @@ export default function AdminDashboard() {
   const loadUserDetail = useCallback(async (id: string) => {
     setUserDetailLoading(true);
     setSelectedUserId(id);
-    const data = await api(`/api/admin/users/${id}`);
+    const data = await api(`/api/x7k9f/users/${id}`);
     if (data) setSelectedUser(data);
     setUserDetailLoading(false);
   }, [api]);
@@ -188,25 +188,25 @@ export default function AdminDashboard() {
       ...(tasksChannel && { channel: tasksChannel }),
       ...(tasksSearch && { search: tasksSearch }),
     });
-    const data = await api(`/api/admin/tasks?${params}`);
+    const data = await api(`/api/x7k9f/tasks?${params}`);
     if (data) { setTasks(data.tasks); setTasksTotal(data.total); }
     setLoading(false);
   }, [api, tasksPage, tasksStatus, tasksChannel, tasksSearch]);
 
   const loadCosts = useCallback(async () => {
     setLoading(true);
-    const data = await api(`/api/admin/costs?days=${costDays}`);
+    const data = await api(`/api/x7k9f/costs?days=${costDays}`);
     if (data) setCostData(data);
     setLoading(false);
   }, [api, costDays]);
 
   const loadOverview = useCallback(async () => {
-    const data = await api(`/api/admin/costs?days=30`);
+    const data = await api(`/api/x7k9f/costs?days=30`);
     if (data) setOverviewStats(data);
   }, [api]);
 
   const loadKillswitch = useCallback(async () => {
-    const data = await api("/api/admin/killswitch");
+    const data = await api("/api/x7k9f/killswitch");
     if (data) setKsStatus(data);
   }, [api]);
 
@@ -248,7 +248,7 @@ export default function AdminDashboard() {
     const cmd = termInput.trim();
     setTermInput("");
     setTermLoading(true);
-    const data = await api("/api/admin/command", {
+    const data = await api("/api/x7k9f/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: cmd }),
@@ -264,7 +264,7 @@ export default function AdminDashboard() {
     setKsError("");
 
     if (action === "deactivate") {
-      const data = await api("/api/admin/killswitch", {
+      const data = await api("/api/x7k9f/killswitch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "deactivate", password: ksPassword }),
@@ -281,7 +281,7 @@ export default function AdminDashboard() {
       return;
     }
 
-    const data = await api("/api/admin/killswitch", {
+    const data = await api("/api/x7k9f/killswitch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -303,7 +303,7 @@ export default function AdminDashboard() {
 
   /* ─── Block/Unblock User ─── */
   const toggleBlockUser = async (userId: string, block: boolean) => {
-    await api(`/api/admin/users/${userId}`, {
+    await api(`/api/x7k9f/users/${userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ blocked: block }),
@@ -320,7 +320,7 @@ export default function AdminDashboard() {
   /* ─── Delete User ─── */
   const handleDeleteUser = async (userId: string) => {
     setDeleteLoading(true);
-    const data = await api(`/api/admin/users/${userId}`, { method: "DELETE" });
+    const data = await api(`/api/x7k9f/users/${userId}`, { method: "DELETE" });
     setDeleteLoading(false);
     setDeleteConfirmUser(null);
     if (data?.success) {
@@ -333,7 +333,7 @@ export default function AdminDashboard() {
   /* ─── Disconnect Twilio ─── */
   const handleDisconnectTwilio = async (userId: string) => {
     setTwilioDisconnectLoading(true);
-    const data = await api(`/api/admin/users/${userId}/twilio`, { method: "DELETE" });
+    const data = await api(`/api/x7k9f/users/${userId}/twilio`, { method: "DELETE" });
     setTwilioDisconnectLoading(false);
     setTwilioDisconnectUser(null);
     if (data?.success && selectedUser) {
@@ -344,8 +344,8 @@ export default function AdminDashboard() {
 
   /* ─── Logout ─── */
   const handleLogout = async () => {
-    await fetch("/api/admin/logout", { method: "POST" });
-    router.push("/admin");
+    await fetch("/api/x7k9f/logout", { method: "POST" });
+    router.push("/x7k9f");
   };
 
   /* ─── Sidebar nav items ─── */

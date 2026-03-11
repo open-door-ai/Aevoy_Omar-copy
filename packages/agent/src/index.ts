@@ -244,6 +244,9 @@ app.use(globalLimiter);
 // Files are served at /files/word/name.docx, /files/excel/name.xlsx, etc.
 app.use('/files', express.static(path.join('/tmp', 'aevoy-files'), {
   setHeaders: (res, filePath) => {
+    // Security headers — prevent MIME sniffing and restrict resource loading
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
     // Force download for Office documents
     if (filePath.endsWith('.docx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     else if (filePath.endsWith('.xlsx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -318,6 +321,58 @@ let activeTasks = 0;
 const MAX_CONCURRENT_TASKS = 10;
 const MAX_CONCURRENT_BROWSER_TASKS = 6; // Temporarily raised for parallel AGI testing (was 3)
 const taskQueue: Array<{ task: TaskRequest; resolve: (v: TaskResult) => void; reject: (e: Error) => void }> = [];
+
+// ---- Webhook idempotency: prevent duplicate task creation from repeated webhooks ----
+// Stores hash(userId + subject + 30s-bucket) → taskId for 60 seconds
+const recentTaskFingerprints = new Map<string, { taskId: string; timestamp: number }>();
+const DEDUP_WINDOW_MS = 30_000; // 30 seconds
+
+function getTaskFingerprint(userId: string, subject: string): string {
+  // Round timestamp to nearest 30-second bucket for fuzzy dedup
+  const bucket = Math.floor(Date.now() / DEDUP_WINDOW_MS);
+  const raw = `${userId}:${subject.trim().toLowerCase()}:${bucket}`;
+  return crypto.createHash('sha256').update(raw).digest('hex').substring(0, 16);
+}
+
+function checkAndRecordFingerprint(userId: string, subject: string, taskId?: string): string | null {
+  const fp = getTaskFingerprint(userId, subject);
+  const existing = recentTaskFingerprints.get(fp);
+  if (existing && Date.now() - existing.timestamp < DEDUP_WINDOW_MS * 2) {
+    return existing.taskId; // Duplicate — return existing task ID
+  }
+  // Also check the previous bucket (covers boundary cases)
+  const prevBucket = Math.floor(Date.now() / DEDUP_WINDOW_MS) - 1;
+  const prevRaw = `${userId}:${subject.trim().toLowerCase()}:${prevBucket}`;
+  const prevFp = crypto.createHash('sha256').update(prevRaw).digest('hex').substring(0, 16);
+  const prevExisting = recentTaskFingerprints.get(prevFp);
+  if (prevExisting && Date.now() - prevExisting.timestamp < DEDUP_WINDOW_MS * 2) {
+    return prevExisting.taskId;
+  }
+  // Record this fingerprint
+  recentTaskFingerprints.set(fp, { taskId: taskId || 'pending', timestamp: Date.now() });
+  return null;
+}
+
+// Cleanup stale fingerprints every 2 minutes
+setInterval(() => {
+  const cutoff = Date.now() - DEDUP_WINDOW_MS * 4;
+  for (const [key, val] of recentTaskFingerprints) {
+    if (val.timestamp < cutoff) recentTaskFingerprints.delete(key);
+  }
+}, 120_000);
+
+// ---- Scheduler health tracking: when each background job last ran successfully ----
+export const lastSchedulerRuns: Record<string, number> = {
+  scheduler: 0,
+  inbox_manager: 0,
+  reconciliation: 0,
+  watchdog: 0,
+  webhook_healer: 0,
+};
+
+export function recordSchedulerRun(name: string): void {
+  lastSchedulerRuns[name] = Date.now();
+}
 
 function canProcessTask(needsBrowser: boolean): boolean {
   if (activeTasks >= MAX_CONCURRENT_TASKS) return false;
@@ -416,7 +471,8 @@ app.get("/task/:taskId/status", async (req, res) => {
       } : null,
     });
   } catch (err) {
-    res.status(500).json({ error: "internal", message: String(err) });
+    console.error("[TASK-STATUS] Error:", err);
+    res.status(500).json({ error: "internal", message: "Internal error" });
   }
 });
 
@@ -449,14 +505,24 @@ app.get("/tasks/active", async (req, res) => {
     });
     res.json({ active: tasks, count: tasks.length });
   } catch (err) {
-    res.status(500).json({ error: "internal", message: String(err) });
+    console.error("[TASKS-ACTIVE] Error:", err);
+    res.status(500).json({ error: "internal", message: "Internal error" });
   }
 });
 
+// Minimal public health check for load balancers
 app.get("/health", async (_req, res) => {
-  // SECURITY: Only check critical subsystems, don't leak API key configuration
-  let supabaseStatus = "ok";
+  res.status(200).json({ status: "ok", uptime: process.uptime() });
+});
 
+// Detailed health check — requires webhook secret
+app.get("/health/detailed", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  let supabaseStatus = "ok";
   try {
     const sb = getSupabaseClient();
     const { error } = await sb.from("profiles").select("id").limit(1);
@@ -467,9 +533,30 @@ app.get("/health", async (_req, res) => {
 
   const allOk = supabaseStatus === "ok";
 
+  // Scheduler health: check if each background job ran within 2x its expected interval
+  const now = Date.now();
+  const schedulerIntervals: Record<string, number> = {
+    scheduler: 60_000,        // runs every ~1 min
+    inbox_manager: 300_000,   // runs every 5 min
+    reconciliation: 86_400_000, // runs daily
+    watchdog: 300_000,        // runs every 5 min
+    webhook_healer: 1_800_000, // runs every 30 min
+  };
+  const schedulerHealth: Record<string, string> = {};
+  for (const [name, interval] of Object.entries(schedulerIntervals)) {
+    const lastRun = lastSchedulerRuns[name] || 0;
+    if (lastRun === 0) {
+      schedulerHealth[name] = "never_ran";
+    } else if (now - lastRun > interval * 2) {
+      schedulerHealth[name] = `stale (last: ${Math.round((now - lastRun) / 1000)}s ago)`;
+    } else {
+      schedulerHealth[name] = "ok";
+    }
+  }
+
   res.status(allOk ? 200 : 503).json({
     status: allOk ? "healthy" : "degraded",
-    version: "2.0.0-agi-v24",
+    version: "2.0.0-agi-v25",
     gitSha: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) || "local",
     timestamp: new Date().toISOString(),
     activeTasks: Math.max(0, activeTasks),
@@ -480,6 +567,7 @@ app.get("/health", async (_req, res) => {
     maxBrowserConcurrent: MAX_CONCURRENT_BROWSER_TASKS,
     conversationRelay: USE_CONVERSATION_RELAY,
     database: supabaseStatus,
+    schedulers: schedulerHealth,
     capsolver: !!process.env.CAPSOLVER_API_KEY,
     groqApi: !!process.env.GROQ_API_KEY,
     deepseekApi: !!process.env.DEEPSEEK_API_KEY,
@@ -491,6 +579,7 @@ app.get("/health", async (_req, res) => {
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
     remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
     brightData: process.env.BRIGHT_DATA_BROWSER_WS ? "configured" : "not configured",
+    dedupMapSize: recentTaskFingerprints.size,
   });
 });
 
@@ -518,8 +607,12 @@ app.post("/takeover/validate-token", async (req, res) => {
   }
 });
 
-// ---- Engine registry status (for dashboard) ----
-app.get("/engines", async (_req, res) => {
+// ---- Engine registry status (for dashboard) — requires webhook secret ----
+app.get("/engines", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
   try {
     const { getRegistrySize } = await import('./utils/task-engine-registry.js');
     return res.json({ activeEngines: getRegistrySize() });
@@ -815,6 +908,14 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
     timestamp: new Date().toISOString(),
   });
 
+  // ── Webhook idempotency: reject duplicate tasks within 30s window ──
+  const taskSubjectV2 = sanitizedV2.subject || sanitizedV2.body || '';
+  const existingTaskIdV2 = checkAndRecordFingerprint(userId, taskSubjectV2);
+  if (existingTaskIdV2) {
+    console.log(`[DEDUP] Duplicate V2 task rejected for user ${String(userId).substring(0, 8)}: "${taskSubjectV2.substring(0, 60)}"`);
+    return res.json({ status: "duplicate", taskId: existingTaskIdV2, message: "Task already received and processing" });
+  }
+
   activeTasks++;
 
   try {
@@ -883,6 +984,13 @@ app.post("/task", taskLimiter, async (req, res) => {
     userId: task.userId.substring(0, 8),
     timestamp: new Date().toISOString(),
   });
+
+  // ── Webhook idempotency: reject duplicate tasks within 30s window ──
+  const existingTaskId = checkAndRecordFingerprint(task.userId, task.subject || '', task.taskId);
+  if (existingTaskId) {
+    console.log(`[DEDUP] Duplicate task rejected for user ${task.userId.substring(0, 8)}: "${(task.subject || '').substring(0, 60)}" (existing: ${existingTaskId.substring(0, 8)})`);
+    return res.json({ status: "duplicate", taskId: existingTaskId, message: "Task already received and processing" });
+  }
 
   // Gate concurrency — queue if at capacity
   if (activeTasks >= MAX_CONCURRENT_TASKS) {
@@ -1222,8 +1330,8 @@ app.post("/api/verify-pin", taskLimiter, async (req, res) => {
   const { userId, pin } = req.body;
   const secret = req.headers["x-webhook-secret"];
 
-  if (secret !== process.env.AGENT_WEBHOOK_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
   }
 
   if (!userId || !pin) {
@@ -2238,6 +2346,12 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
   console.log(`[SMS] Incoming from ${maskPhone(senderNumber)}: "${message.slice(0, 50)}..."`);
 
+  // Track inbound SMS cost for the resolved user (called once per request)
+  const { SMS_MARKUP: smsMarkupIncoming, TWILIO_RATES: twilioRatesIncoming } = await import('./utils/cost-calculator.js');
+  const trackInboundSmsCost = (userId: string) => {
+    trackServiceCost(userId, 'twilio', 'sms_inbound', twilioRatesIncoming.SMS_INBOUND_NA, 'sms_inbound', undefined, smsMarkupIncoming).catch(() => {});
+  };
+
   try {
     const supabase = getSupabaseClient();
 
@@ -2256,6 +2370,60 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
   <Message>Sorry, this number is not in service. Visit aevoy.com for more information.</Message>
 </Response>`);
       }
+
+      // ── Intercept verification codes from automated senders (website 2FA) ──
+      // Before PIN check: if sender looks automated and message has a code, store it
+      const incomingCodeMatch = message.match(
+        /(?:verification|confirm|verify|auth|code|pin|otp|token|security)\s*(?:is|:)?\s*[:\-–—]?\s*(\d{4,8})\b/i
+      ) || message.match(
+        /\b(\d{4,8})\s*(?:is your|is the)\s*(?:verification|confirm|auth|code|pin|otp)/i
+      ) || message.match(
+        /(?:enter|use|type)\s+(?:this\s+)?(?:code|pin|otp)[:\s]+(\d{4,8})\b/i
+      ) || message.match(
+        /\bcode[:\s]+(\d{4,8})\b/i
+      ) || (message.trim().match(/^\d{4,8}$/) ? message.trim().match(/^(\d{4,8})$/) : null);
+
+      const senderLooksAutomated = /^\+?\d{4,6}$/.test(senderNumber) || senderNumber.length <= 8 || /\b(verify|code|otp|confirm)\b/i.test(message);
+
+      if (incomingCodeMatch?.[1] && senderLooksAutomated) {
+        const verifCode = incomingCodeMatch[1];
+        console.log(`[SMS] Verification code "${verifCode}" intercepted from ${maskPhone(senderNumber)} for user ${recipientUser.userId.slice(0, 8)}`);
+        try {
+          const { storeTfaCode } = await import("./services/tfa.js");
+          await storeTfaCode(recipientUser.userId, null, verifCode, "sms");
+        } catch { /* non-critical */ }
+
+        // Resume any task stuck waiting for verification
+        try {
+          const { data: stuckTask } = await supabase
+            .from("tasks")
+            .select("id, structured_intent")
+            .eq("user_id", recipientUser.userId)
+            .eq("status", "awaiting_user_input")
+            .eq("stuck_reason", "verification_code")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .single();
+
+          if (stuckTask) {
+            await supabase.from("tasks").update({
+              status: "processing",
+              stuck_reason: null,
+              structured_intent: {
+                ...(stuckTask.structured_intent as Record<string, unknown> || {}),
+                verification_code: verifCode,
+              },
+            }).eq("id", stuckTask.id);
+            console.log(`[SMS] Resumed stuck task ${stuckTask.id.slice(0, 8)} with verification code`);
+          }
+        } catch { /* non-critical */ }
+
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+      }
+
+      // Track inbound SMS cost for the recipient user (Twilio charges us per inbound SMS)
+      trackInboundSmsCost(recipientUser.userId);
 
       // Found the user — check if PIN is required
       const { hasPin: smsHasPin, verifyUnifiedPin: smsVerifyPin, getRemainingAttempts: smsGetRemaining } = await import("./utils/pin-auth.js");
@@ -2320,6 +2488,9 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     const userId = resolved.userId;
     const username = resolved.username;
     console.log(`[SMS] Recognized user: ${username} (${userId.slice(0, 8)})`);
+
+    // Track inbound SMS cost (Twilio charges us per inbound SMS)
+    trackInboundSmsCost(userId);
 
     // Check if sender is the registered phone number or needs PIN
     const { isRegisteredPhone, hasPin: userHasPin, verifyUnifiedPin } = await import("./utils/pin-auth.js");
@@ -2735,17 +2906,78 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
 
   console.log(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${maskPhone(from)}: "${smsBody.slice(0, 50)}..."`);
 
+  // Track inbound SMS cost for premium number (Twilio charges us per inbound SMS)
+  {
+    const { SMS_MARKUP: smsMarkupPrem, TWILIO_RATES: twilioRatesPrem } = await import('./utils/cost-calculator.js');
+    trackServiceCost(userId, 'twilio', 'sms_inbound', twilioRatesPrem.SMS_INBOUND_NA, 'sms_inbound', undefined, smsMarkupPrem).catch(() => {});
+  }
+
   try {
     const supabase = getSupabaseClient();
     const { data: profile } = await supabase
       .from("profiles")
-      .select("username")
+      .select("username, phone_number")
       .eq("id", userId)
       .single();
 
     // Check if sender is the registered phone owner
     const { isRegisteredPhone: isPremiumOwner, hasPin: premiumHasPin, verifyUnifiedPin: premiumVerifyPin, getRemainingAttempts: premiumGetRemaining } = await import("./utils/pin-auth.js");
     const callerIsOwner = from ? await isPremiumOwner(userId, from) : false;
+
+    // ── Intercept verification codes from non-user senders (e.g. website SMS 2FA) ──
+    // If the sender is NOT the user and the message looks like a verification code,
+    // store it in tfa_codes for the browser agent to pick up. Don't require PIN.
+    if (!callerIsOwner && from) {
+      const verificationCodeMatch = smsBody.match(
+        /(?:verification|confirm|verify|auth|code|pin|otp|token|security)\s*(?:is|:)?\s*[:\-–—]?\s*(\d{4,8})\b/i
+      ) || smsBody.match(
+        /\b(\d{4,8})\s*(?:is your|is the)\s*(?:verification|confirm|auth|code|pin|otp)/i
+      ) || smsBody.match(
+        /(?:enter|use|type)\s+(?:this\s+)?(?:code|pin|otp)[:\s]+(\d{4,8})\b/i
+      ) || smsBody.match(
+        /\bcode[:\s]+(\d{4,8})\b/i
+      ) || (smsBody.trim().match(/^\d{4,8}$/) ? smsBody.trim().match(/^(\d{4,8})$/) : null);
+
+      // Also detect messages that are clearly automated verification (short codes, service numbers)
+      const isLikelyAutomated = /^\+?\d{4,6}$/.test(from) || from.length <= 8 || /\b(verify|code|otp|confirm)\b/i.test(smsBody);
+
+      if (verificationCodeMatch?.[1] && isLikelyAutomated) {
+        const code = verificationCodeMatch[1];
+        console.log(`[SMS-PREMIUM] Verification code "${code}" intercepted from ${maskPhone(from)} for user ${userId.slice(0, 8)}`);
+        try {
+          const { storeTfaCode } = await import("./services/tfa.js");
+          await storeTfaCode(userId, null, code, "sms");
+        } catch { /* non-critical */ }
+
+        // Also resume any task stuck waiting for a verification code
+        try {
+          const { data: stuckTask } = await supabase
+            .from("tasks")
+            .select("id, structured_intent")
+            .eq("user_id", userId)
+            .eq("status", "awaiting_user_input")
+            .eq("stuck_reason", "verification_code")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .single();
+
+          if (stuckTask) {
+            await supabase.from("tasks").update({
+              status: "processing",
+              stuck_reason: null,
+              structured_intent: {
+                ...(stuckTask.structured_intent as Record<string, unknown> || {}),
+                verification_code: code,
+              },
+            }).eq("id", stuckTask.id);
+            console.log(`[SMS-PREMIUM] Resumed stuck task ${stuckTask.id.slice(0, 8)} with verification code`);
+          }
+        } catch { /* non-critical */ }
+
+        res.type("text/xml");
+        return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+      }
+    }
 
     if (!callerIsOwner && from) {
       const hasPinSet = await premiumHasPin(userId);
@@ -3405,21 +3637,37 @@ app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) =>
       .eq('phone_number', phoneToSearch)
       .single();
 
-    const userId = numberRecord?.user_id;
+    let userId = numberRecord?.user_id;
+
+    // Fallback: if not found in user_twilio_numbers, check call_history for this CallSid
+    if (!userId && CallSid) {
+      const { data: callRecord } = await supabase
+        .from('call_history')
+        .select('user_id')
+        .eq('call_sid', CallSid)
+        .not('user_id', 'is', null)
+        .single();
+      if (callRecord?.user_id) {
+        userId = callRecord.user_id;
+        console.log(`[CALL-END] Found user via call_history: ${maskUserId(userId)}`);
+      }
+    }
+
     if (!userId) {
-      console.log(`[CALL-END] No user found for phone ${maskPhone(phoneToSearch)} — demo/platform call`);
+      // Demo/platform call — log as platform cost (no user to bill)
+      console.log(`[CALL-END] No user found for phone ${maskPhone(phoneToSearch)} — demo/platform call (${durationSeconds}s, unbilled)`);
       return;
     }
 
-    // Calculate real cost based on actual duration
-    const { calculateVoiceCost } = await import('./utils/cost-calculator.js');
+    // Calculate real cost based on actual duration (raw cost, no markup)
+    const { calculateVoiceCost, VOICE_MARKUP: voiceMarkup } = await import('./utils/cost-calculator.js');
     const direction: 'inbound' | 'outbound' = Direction?.includes('inbound') ? 'inbound' : 'outbound';
     const realCost = calculateVoiceCost(durationSeconds, direction);
 
-    // Log the actual cost
-    await trackServiceCost(userId, 'twilio', `voice_${direction}_actual`, realCost, `voice_${direction}`);
+    // Log the actual cost with VOICE_MARKUP (1.5×) on top of base 1.296× = 1.944× total
+    await trackServiceCost(userId, 'twilio', `voice_${direction}_actual`, realCost, `voice_${direction}`, undefined, voiceMarkup);
 
-    console.log(`[CALL-END] Logged real cost $${realCost.toFixed(4)} for ${durationSeconds}s ${direction} call (user ${maskUserId(userId)})`);
+    console.log(`[CALL-END] Logged real cost $${(realCost * 1.944).toFixed(4)} (billed) for ${durationSeconds}s ${direction} call (user ${maskUserId(userId)})`);
   } catch (err) {
     console.error('[CALL-END] Failed to log call cost:', err);
   }
@@ -3615,6 +3863,7 @@ server.listen(PORT, async () => {
 
         console.log(`[WATCHDOG] Resolved ${stuckTasks.length} stuck task(s)`);
       }
+      recordSchedulerRun('watchdog');
     } catch (e) {
       console.error('[WATCHDOG] Error in task watchdog:', e);
     }
@@ -3683,6 +3932,7 @@ server.listen(PORT, async () => {
           console.error(`[WEBHOOK-HEALER] Error checking ${maskPhone(num.phone_number)}:`, err);
         }
       }
+      recordSchedulerRun('webhook_healer');
     } catch (e) {
       console.error('[WEBHOOK-HEALER] Error:', e);
     }
@@ -3697,6 +3947,14 @@ server.listen(PORT, async () => {
   startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)
   startReconciliationScheduler(); // Daily billing reconciliation (Anthropic Admin API)
   // startInboxPoller(); // Disabled: Using Cloudflare Email Routing instead
+
+  // Wire scheduler health tracking via shared heartbeat module
+  try {
+    const { schedulerHeartbeat } = await import("./utils/scheduler-heartbeat.js");
+    schedulerHeartbeat.onBeat = (name: string) => { recordSchedulerRun(name); };
+  } catch {
+    console.warn('[HEALTH] Could not wire scheduler heartbeat — health check will show never_ran');
+  }
 
   // Seed default skills (idempotent)
   try {

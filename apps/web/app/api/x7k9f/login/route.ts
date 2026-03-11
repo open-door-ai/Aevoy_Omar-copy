@@ -4,9 +4,10 @@ import { getClientIP, hashToken, logAdminAction, secureResponse, secureError } f
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 
-const MAX_ATTEMPTS = 4;
-const LOCKOUT_HOURS = 24;
+const MAX_ATTEMPTS = 3;
+const LOCKOUT_HOURS = 48;
 const SESSION_DURATION_MS = 30 * 60 * 1000;
+const GLOBAL_MAX_ATTEMPTS = 15; // Total failed attempts from ALL IPs in window → full lockdown
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,21 +40,29 @@ export async function POST(request: NextRequest) {
       return secureError("unauthorized", 401);
     }
 
-    // Check lockout
+    // Check lockout — per-IP and global
     const lockoutStart = new Date(Date.now() - LOCKOUT_HOURS * 3600000).toISOString();
-    const { count: failCount } = await supabase
-      .from("admin_login_attempts")
-      .select("*", { count: "exact", head: true })
-      .eq("ip_address", ip)
-      .eq("success", false)
-      .gte("attempted_at", lockoutStart);
+    const [{ count: failCount }, { count: globalFailCount }] = await Promise.all([
+      supabase
+        .from("admin_login_attempts")
+        .select("*", { count: "exact", head: true })
+        .eq("ip_address", ip)
+        .eq("success", false)
+        .gte("attempted_at", lockoutStart),
+      supabase
+        .from("admin_login_attempts")
+        .select("*", { count: "exact", head: true })
+        .eq("success", false)
+        .gte("attempted_at", new Date(Date.now() - 3600000).toISOString()), // 1hr window for global
+    ]);
 
     const remaining = MAX_ATTEMPTS - (failCount || 0);
+    const globalLocked = (globalFailCount || 0) >= GLOBAL_MAX_ATTEMPTS;
 
     // V18 fix: Always run bcrypt even if locked out to normalize timing
     const isValid = await bcrypt.compare(password, adminHash);
 
-    if (remaining <= 0) {
+    if (remaining <= 0 || globalLocked) {
       return secureResponse({
         error: "locked",
         message: "Access locked. Try again later.",
@@ -112,7 +121,7 @@ export async function POST(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
       maxAge: SESSION_DURATION_MS / 1000,
-      path: "/", // Cookie needs to reach both /admin and /api/admin routes
+      path: "/",
     });
 
     return response;

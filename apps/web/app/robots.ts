@@ -6,7 +6,7 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow: "/",
-        disallow: ["/dashboard/", "/api/", "/admin/"],
+        disallow: ["/dashboard/", "/api/"],
       },
     ],
     sitemap: "https://www.aevoy.com/sitemap.xml",

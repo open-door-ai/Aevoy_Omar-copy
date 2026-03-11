@@ -108,6 +108,7 @@ export async function POST(request: Request) {
       Method: 'POST',
       StatusCallback: `${TWILIO_CALLBACK_BASE}/webhook/voice/status`,
       StatusCallbackEvent: 'initiated ringing answered completed',
+      TimeLimit: '300', // 5 min hard cap — demo calls are free, prevent runaway billing
     });
 
     const res = await fetch(

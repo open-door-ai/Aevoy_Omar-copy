@@ -14,7 +14,7 @@ import { getSupabaseClient } from "../utils/supabase.js";
 import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData } from "../types/index.js";
 import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
 import { trackServiceCost } from "./ai.js";
-import { calculateSMSCost } from "../utils/cost-calculator.js";
+import { calculateSMSCost, SMS_MARKUP, VOICE_MARKUP, TWILIO_RATES } from "../utils/cost-calculator.js";
 
 // ---- Security: Input Sanitization ----
 
@@ -148,7 +148,8 @@ export async function twilioRequest(
 
 /**
  * Get the user's dedicated Twilio number (if they purchased one).
- * Falls back to the shared number if no dedicated number exists.
+ * Returns empty string if the user has no dedicated number.
+ * The demo/shared number is NEVER used as fallback — it's only for website "Call Me Now".
  */
 async function getUserFromNumber(userId: string): Promise<string> {
   try {
@@ -160,10 +161,9 @@ async function getUserFromNumber(userId: string): Promise<string> {
       .limit(1)
       .single();
     if (data?.phone_number) return data.phone_number;
-  } catch { /* fall through to default */ }
+  } catch { /* no dedicated number */ }
 
-  const config = getTwilioConfig();
-  return config?.phoneNumber || '';
+  return '';
 }
 
 // ---- Outbound Voice Calls ----
@@ -181,8 +181,12 @@ export async function callUser(request: VoiceCallRequest): Promise<{
   if (!config) return { success: false, error: "Twilio not configured" };
 
   try {
-    // Use user's dedicated number if available, otherwise shared number
+    // User MUST have a dedicated number — demo number is never used for user tasks
     const fromNumber = await getUserFromNumber(request.userId);
+    if (!fromNumber) {
+      console.warn(`[TWILIO] callUser blocked: user ${request.userId.slice(0, 8)} has no dedicated number`);
+      return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
+    }
     const agentUrl = process.env.AGENT_URL || '';
 
     // Use a URL-based approach: Twilio fetches TwiML from our server
@@ -192,7 +196,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     const callbackBase = process.env.TWILIO_CALLBACK_URL || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
     const params = new URLSearchParams({
       To: request.to,
-      From: fromNumber || config.phoneNumber,
+      From: fromNumber,
       Url: callbackUrl,
       Method: 'POST',
       StatusCallback: `${callbackBase}/webhook/voice/call-end`,
@@ -216,8 +220,9 @@ export async function callUser(request: VoiceCallRequest): Promise<{
 
     // Track usage
     await trackVoiceUsage(request.userId, 1);
-    // Preliminary estimate (~2 min) — will be corrected by /webhook/voice/call-end StatusCallback
-    trackServiceCost(request.userId, "twilio", "voice_outbound_estimate", 0.10, "voice_outbound").catch(() => {});
+    // Preliminary estimate (~2 min raw cost) — will be corrected by /webhook/voice/call-end StatusCallback
+    // Raw cost: 2min × $0.0585/min = $0.117. VOICE_MARKUP applied on top of base 1.296×.
+    trackServiceCost(request.userId, "twilio", "voice_outbound_estimate", 0.117, "voice_outbound", undefined, VOICE_MARKUP).catch(() => {});
 
     console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
     return { success: true, callSid: data.sid };
@@ -241,6 +246,10 @@ export async function callExternal(
   const config = getTwilioConfig();
   if (!config) return { success: false, error: "Twilio not configured" };
   const fromNumber = await getUserFromNumber(userId);
+  if (!fromNumber) {
+    console.warn(`[TWILIO] callExternal blocked: user ${userId.slice(0, 8)} has no dedicated number`);
+    return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
+  }
 
   try {
     // Generate a unique context key for this call
@@ -262,7 +271,7 @@ export async function callExternal(
     const callbackBase = process.env.TWILIO_CALLBACK_URL || process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
     const params = new URLSearchParams({
       To: to,
-      From: fromNumber || config.phoneNumber,
+      From: fromNumber,
       Url: twimlUrl,
       Method: 'POST',
       StatusCallback: `${callbackBase}/webhook/voice/call-end`,
@@ -282,8 +291,8 @@ export async function callExternal(
 
     const data = await response.json() as { sid: string };
     await trackVoiceUsage(userId, 1);
-    // Preliminary estimate (~2 min) — will be corrected by /webhook/voice/call-end StatusCallback
-    trackServiceCost(userId, "twilio", "voice_outbound_estimate", 0.10, "voice_outbound").catch(() => {});
+    // Preliminary estimate (~2 min raw cost) — will be corrected by /webhook/voice/call-end StatusCallback
+    trackServiceCost(userId, "twilio", "voice_outbound_estimate", 0.117, "voice_outbound", undefined, VOICE_MARKUP).catch(() => {});
 
     console.log(`[CALL-EXTERNAL] ConversationRelay call placed: to=${to}, from=${fromNumber || config.phoneNumber}, sid=${data.sid}, business=${businessName || 'unknown'}`);
     return { success: true, callSid: data.sid };
@@ -447,12 +456,16 @@ export async function sendSms(request: SmsRequest): Promise<{
     const sanitizedBody = sanitizeSmsBody(request.body);
     const sanitizedTo = sanitizePhoneNumber(request.to);
 
-    // Use user's dedicated number if available
+    // User MUST have a dedicated number — demo number is never used for user SMS
     const fromNumber = await getUserFromNumber(request.userId);
+    if (!fromNumber) {
+      console.warn(`[TWILIO] sendSms blocked: user ${request.userId.slice(0, 8)} has no dedicated number`);
+      return { success: false, error: "You need a dedicated phone number to send SMS. Visit your dashboard to get one." };
+    }
 
     const params = new URLSearchParams({
       To: sanitizedTo,
-      From: fromNumber || config.phoneNumber,
+      From: fromNumber,
       Body: sanitizedBody,
     });
 
@@ -465,10 +478,10 @@ export async function sendSms(request: SmsRequest): Promise<{
 
     const data = await response.json() as { sid: string };
 
-    // Track usage count + dollar cost
+    // Track usage count + dollar cost (SMS_MARKUP = 2.0× on top of base 1.296× = 2.592× total)
     await trackSmsUsage(request.userId, 1);
     const smsCost = calculateSMSCost(request.to, request.body?.length || 160);
-    trackServiceCost(request.userId, "twilio", "sms", smsCost, "sms").catch(() => {});
+    trackServiceCost(request.userId, "twilio", "sms_outbound", smsCost, "sms_outbound", undefined, SMS_MARKUP).catch(() => {});
 
     console.log(`[TWILIO] SMS sent: ${data.sid}`);
     return { success: true, messageSid: data.sid };
@@ -502,9 +515,9 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
 
     const userId = profile.id;
 
-    // Track inbound SMS cost ($0.0083/message Twilio inbound)
+    // Track inbound SMS cost ($0.0083/message Twilio raw rate, 2.592× total markup)
     if (userId) {
-      trackServiceCost(userId, "twilio", "sms_inbound", 0.0083, "sms_inbound").catch(() => {});
+      trackServiceCost(userId, "twilio", "sms_inbound", TWILIO_RATES.SMS_INBOUND_NA, "sms_inbound", undefined, SMS_MARKUP).catch(() => {});
     }
 
     // Check if there's a task waiting for verification code
@@ -637,6 +650,116 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
     console.error("[TWILIO] Error handling SMS:", error);
     return { processed: false };
   }
+}
+
+/**
+ * Extract SMS verification code for a user.
+ *
+ * Two-pronged approach:
+ *   1. Check `tfa_codes` table (codes stored by our SMS webhook).
+ *   2. Fall back to Twilio REST API (lists recent inbound messages).
+ *
+ * Returns the first 4-8 digit code found, or null.
+ */
+export async function extractSMSVerificationCode(
+  userId: string,
+  phoneNumber: string,
+  timeWindowMs: number = 120000 // 2 minutes
+): Promise<string | null> {
+  // ── 1. Check tfa_codes table (fastest — already parsed by webhook) ──
+  try {
+    const since = new Date(Date.now() - timeWindowMs).toISOString();
+    const { data: codes } = await getSupabaseClient()
+      .from("tfa_codes")
+      .select("code, created_at")
+      .eq("user_id", userId)
+      .eq("source", "sms")
+      .eq("used", false)
+      .gt("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (codes && codes.length > 0) {
+      const code = codes[0].code;
+      // Mark as used to prevent reuse
+      await getSupabaseClient()
+        .from("tfa_codes")
+        .update({ used: true })
+        .eq("user_id", userId)
+        .eq("code", code)
+        .eq("source", "sms")
+        .eq("used", false);
+      console.log(`[TWILIO] Found SMS verification code from tfa_codes for user ${userId.slice(0, 8)}`);
+      return code;
+    }
+  } catch (e) {
+    console.warn("[TWILIO] tfa_codes lookup failed:", e);
+  }
+
+  // ── 2. Fall back to Twilio REST API ──
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken || !phoneNumber) return null;
+
+  try {
+    const since = new Date(Date.now() - timeWindowMs);
+    const params = new URLSearchParams({
+      To: phoneNumber,
+      DateSent: `>${since.toISOString().split("T")[0]}`,
+      PageSize: "5",
+    });
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json?${params}`;
+    const resp = await fetch(url, {
+      headers: {
+        Authorization:
+          "Basic " +
+          Buffer.from(`${accountSid}:${authToken}`).toString("base64"),
+      },
+    });
+    if (!resp.ok) return null;
+
+    const data = (await resp.json()) as {
+      messages?: {
+        from: string;
+        body: string;
+        date_sent: string;
+        direction: string;
+      }[];
+    };
+
+    const inbound = (data.messages || []).filter(
+      (m) =>
+        m.direction === "inbound" &&
+        new Date(m.date_sent).getTime() > since.getTime()
+    );
+
+    // Extract 4-8 digit verification code from the most recent inbound message
+    for (const msg of inbound) {
+      const codeMatch = msg.body.match(
+        /(?:verification|confirm|verify|auth|code|pin|otp|token)\s*(?:is|:)?\s*[:\-–—]?\s*(\d{4,8})\b/i
+      ) ||
+        msg.body.match(/\b(\d{4,8})\s*(?:is your|is the)\s*(?:verification|confirm|auth|code|pin|otp)/i) ||
+        msg.body.match(/(?:enter|use|type)\s+(?:this\s+)?(?:code|pin|otp)[:\s]+(\d{4,8})\b/i) ||
+        msg.body.match(/\bcode[:\s]+(\d{4,8})\b/i) ||
+        msg.body.match(/\b(\d{6})\b/); // Fallback: standalone 6-digit number
+
+      if (codeMatch?.[1]) {
+        console.log(
+          `[TWILIO] Found SMS verification code via REST API from ${msg.from}`
+        );
+        // Store it in tfa_codes so subsequent lookups are faster
+        try {
+          const { storeTfaCode } = await import("./tfa.js");
+          await storeTfaCode(userId, null, codeMatch[1], "sms");
+        } catch { /* non-critical */ }
+        return codeMatch[1];
+      }
+    }
+  } catch (e) {
+    console.warn("[TWILIO] Twilio REST API SMS lookup failed:", e);
+  }
+
+  return null;
 }
 
 /**
@@ -841,18 +964,19 @@ export async function provisionPhoneNumber(
     }
 
     // Log initial monthly fee and schedule recurring billing
+    // Raw cost passed to trackServiceCost; PHONE_NUMBER_MARKUP (1.5×) applied on top of base 1.296× = 1.944× total
     try {
-      const { TWILIO_RATES, BILLING_MARKUP } = await import('../utils/cost-calculator.js');
-      const { trackServiceCost } = await import('./ai.js');
-      const monthlyFee = TWILIO_RATES.LOCAL_NUMBER_MONTHLY * BILLING_MARKUP;
-      // Log first month immediately
-      trackServiceCost(userId, 'twilio', 'phone_number_monthly', monthlyFee, 'phone_number').catch(() => {});
+      const { MONTHLY_LOCAL_NUMBER_COST, PHONE_NUMBER_MARKUP, calculatePhoneNumberMonthlyCost } = await import('../utils/cost-calculator.js');
+      const { trackServiceCost: trackPhoneCost } = await import('./ai.js');
+      // Pass RAW cost — trackServiceCost applies all markup layers
+      trackPhoneCost(userId, 'twilio', 'phone_number_monthly', MONTHLY_LOCAL_NUMBER_COST, 'phone_number', undefined, PHONE_NUMBER_MARKUP).catch(() => {});
+      const billedMonthlyFee = calculatePhoneNumberMonthlyCost('local');
       // Schedule recurring monthly fee on the 1st of every month at 9am
       const nextFirstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1, 9, 0, 0);
       await getSupabaseClient().from('scheduled_tasks').insert({
         user_id: userId,
         description: `Monthly phone number fee for ${phoneNumber}`,
-        task_template: `phone_number_fee:${phoneNumber}:${monthlyFee}`,
+        task_template: `phone_number_fee:${phoneNumber}:${billedMonthlyFee.toFixed(4)}`,
         cron_expression: '0 9 1 * *',
         next_run_at: nextFirstOfMonth.toISOString(),
         is_active: true,

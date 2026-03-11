@@ -45,6 +45,67 @@ export interface VisionAgentResult {
 // SECURITY
 // ══════════════════════════════════════════════════════════════════
 
+// ── CREDENTIAL REFERENCE SYSTEM ──
+// Credentials are NEVER sent to external AI APIs. Instead, we use
+// opaque references like [CRED_EMAIL], [CRED_PASS] in prompts.
+// The execution layer resolves references back to actual values
+// LOCALLY before executing FILL/TYPE actions.
+
+const CRED_REFS = {
+  EMAIL: '[CRED_EMAIL]',
+  PASS: '[CRED_PASS]',
+  NAME: '[CRED_NAME]',
+  FIRST_NAME: '[CRED_FIRST_NAME]',
+  LAST_NAME: '[CRED_LAST_NAME]',
+  PHONE: '[CRED_PHONE]',
+} as const;
+
+class CredentialStore {
+  private credentials: Map<string, string> = new Map();
+
+  set(ref: string, value: string): void {
+    this.credentials.set(ref, value);
+  }
+
+  get(ref: string): string | undefined {
+    return this.credentials.get(ref);
+  }
+
+  /** Load credentials from the creds object */
+  loadFromCreds(creds: { email: string; password: string; name: string; phone: string }): void {
+    if (creds.email) this.credentials.set(CRED_REFS.EMAIL, creds.email);
+    if (creds.password) this.credentials.set(CRED_REFS.PASS, creds.password);
+    if (creds.name) {
+      this.credentials.set(CRED_REFS.NAME, creds.name);
+      const parts = creds.name.split(/\s+/);
+      this.credentials.set(CRED_REFS.FIRST_NAME, parts[0] || creds.name);
+      this.credentials.set(CRED_REFS.LAST_NAME, parts.length > 1 ? parts[parts.length - 1] : creds.name);
+    }
+    if (creds.phone) this.credentials.set(CRED_REFS.PHONE, creds.phone);
+  }
+
+  /** Resolve credential references in a string. Returns the string with [CRED_*] replaced by actual values. */
+  resolve(text: string): string {
+    if (!text) return text;
+    let resolved = text;
+    for (const [ref, value] of this.credentials) {
+      const escaped = ref.replace(/[[\]]/g, '\\$&');
+      resolved = resolved.replace(new RegExp(escaped, 'gi'), value);
+    }
+    return resolved;
+  }
+
+  /** Check if a string contains any credential references */
+  hasRefs(text: string): boolean {
+    return /\[CRED_\w+\]/i.test(text);
+  }
+
+  /** Clear all credentials (call after task completes) */
+  clear(): void {
+    this.credentials.clear();
+  }
+}
+
 const BLOCKED_URL_SCHEMES = /^(javascript|data|blob|file|chrome|devtools|about|mailto|tel):/i;
 const PRIVATE_IP_REGEX = /^https?:\/\/(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.0\.0\.0|localhost)/i;
 
@@ -823,13 +884,19 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
   const clickRef = line.match(/^CLICK\s+\[(\d+)\]/i);
   if (clickRef) return { type: 'click', ref: parseInt(clickRef[1], 10), raw: line };
 
-  // FILL [12] "value" — fill by ref ID
+  // FILL [12] "value" or FILL [12] [CRED_EMAIL] — fill by ref ID
   const fillRef = line.match(/^FILL\s+\[(\d+)\]\s+"((?:[^"\\]|\\.)*)"/i);
   if (fillRef) return { type: 'fill', ref: parseInt(fillRef[1], 10), value: fillRef[2], raw: line };
+  // FILL [12] [CRED_*] — credential reference without quotes
+  const fillCredRef = line.match(/^FILL\s+\[(\d+)\]\s+(\[CRED_\w+\])/i);
+  if (fillCredRef) return { type: 'fill', ref: parseInt(fillCredRef[1], 10), value: fillCredRef[2], raw: line };
 
-  // TYPE [12] "value" — type by ref ID
+  // TYPE [12] "value" or TYPE [12] [CRED_*] — type by ref ID
   const typeRef = line.match(/^TYPE\s+\[(\d+)\]\s+"((?:[^"\\]|\\.)*)"/i);
   if (typeRef) return { type: 'type', ref: parseInt(typeRef[1], 10), value: typeRef[2], raw: line };
+  // TYPE [12] [CRED_*] — credential reference without quotes
+  const typeCredRef = line.match(/^TYPE\s+\[(\d+)\]\s+(\[CRED_\w+\])/i);
+  if (typeCredRef) return { type: 'type', ref: parseInt(typeCredRef[1], 10), value: typeCredRef[2], raw: line };
 
   // HOVER [42] — hover by ref ID
   const hoverRef = line.match(/^HOVER\s+\[(\d+)\]/i);
@@ -855,13 +922,19 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
   const hoverText = line.match(/^HOVER\s+"((?:[^"\\]|\\.)*)"/i);
   if (hoverText) return { type: 'hover', name: hoverText[1], raw: line };
 
-  // FILL "Email" "test@example.com" — fill by label/name
+  // FILL "Email" "test@example.com" or FILL "Email" [CRED_EMAIL] — fill by label/name
   const fill = line.match(/^FILL\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"/i);
   if (fill) return { type: 'fill', name: fill[1], value: fill[2], raw: line };
+  // FILL "Email" [CRED_*] — credential reference
+  const fillNameCred = line.match(/^FILL\s+"((?:[^"\\]|\\.)*)"\s+(\[CRED_\w+\])/i);
+  if (fillNameCred) return { type: 'fill', name: fillNameCred[1], value: fillNameCred[2], raw: line };
 
-  // TYPE "Search" "query" — type character by character
+  // TYPE "Search" "query" or TYPE "Search" [CRED_*] — type character by character
   const typeMatch = line.match(/^TYPE\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"/i);
   if (typeMatch) return { type: 'type', name: typeMatch[1], value: typeMatch[2], raw: line };
+  // TYPE "Label" [CRED_*] — credential reference
+  const typeNameCred = line.match(/^TYPE\s+"((?:[^"\\]|\\.)*)"\s+(\[CRED_\w+\])/i);
+  if (typeNameCred) return { type: 'type', name: typeNameCred[1], value: typeNameCred[2], raw: line };
 
   // SELECT "Country" "Canada"
   const selectMatch = line.match(/^SELECT\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"/i);
@@ -1597,7 +1670,7 @@ You are the Aevoy AI agent — you have your OWN identity shown in ⚡ CREDENTIA
 ACTIONS — use [ref] numbers for precise targeting:
 CLICK [5]                             — click element by ref number (PREFERRED)
 RIGHTCLICK [5]                        — right-click element (context menu)
-FILL [12] "test@example.com"          — fill input by ref number
+FILL [12] "text" or FILL [12] [CRED_EMAIL] — fill input by ref number (use [CRED_*] for credentials)
 TYPE [12] "query"                     — type character-by-character (live search)
 SELECT [8] "Canada"                   — select dropdown option by ref
 HOVER [5]                             — hover element by ref
@@ -1693,6 +1766,18 @@ async function buildPrompt(
   triedAndFailed: string, stuckHint: string,
   userProfile?: { displayName: string; email: string; phone: string; timezone: string; location: string } | null
 ): Promise<string> {
+  // ── SECURITY: Strip plaintext credentials from task text ──
+  // Credentials are provided via [CRED_*] references in the credNote section.
+  // Remove email=value, password=value, etc. from the task text to prevent leaking to AI APIs.
+  let safeTask = task;
+  if (creds.email) safeTask = safeTask.replace(new RegExp(`email=${creds.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), 'email=[CRED_EMAIL]');
+  if (creds.password) safeTask = safeTask.replace(new RegExp(`password=${creds.password.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), 'password=[CRED_PASS]');
+  if (creds.name) safeTask = safeTask.replace(new RegExp(`name=${creds.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), 'name=[CRED_NAME]');
+  if (creds.phone) safeTask = safeTask.replace(new RegExp(`phone=${creds.phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi'), 'phone=[CRED_PHONE]');
+  // Also strip any quoted credential values (e.g., email="user@test.com")
+  if (creds.email) safeTask = safeTask.replace(new RegExp(`"${creds.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'gi'), '[CRED_EMAIL]');
+  if (creds.password) safeTask = safeTask.replace(new RegExp(`"${creds.password.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'gi'), '[CRED_PASS]');
+
   // Extract domain for hive mind lookup
   let domain = 'general';
   try {
@@ -1713,7 +1798,7 @@ async function buildPrompt(
   const hiveMindLearnings = await getHiveMindLearnings(domain, taskType).catch(() => [] as string[]);
 
   const credNote = creds.email
-    ? `\n⚡ CREDENTIALS (USE THESE): email=${creds.email}${creds.password ? ` | password=${creds.password}` : ''}${creds.name ? ` | name=${creds.name}` : ''}${creds.phone ? ` | phone=${creds.phone}` : ''}\n`
+    ? `\n⚡ CREDENTIALS (use these references in FILL actions — they resolve automatically):\n${CRED_REFS.EMAIL} — account email\n${creds.password ? `${CRED_REFS.PASS} — account password\n` : ''}${creds.name ? `${CRED_REFS.NAME} — full name | ${CRED_REFS.FIRST_NAME} — first name | ${CRED_REFS.LAST_NAME} — last name\n` : ''}${creds.phone ? `${CRED_REFS.PHONE} — phone number\n` : ''}Use FILL [ref] [CRED_EMAIL] (without quotes) for credential fields.\n`
     : '';
 
   // Build user identity note — includes email + phone so agent can auto-fill signup/booking forms
@@ -1769,20 +1854,19 @@ async function buildPrompt(
       if (!refMatch) continue;
       const [, refNum, , fieldLabel] = refMatch;
       const label = fieldLabel.toLowerCase();
-      // Match field labels to credentials
+      // Match field labels to credential references (NEVER send actual values to AI)
       if (/\b(email|e-mail|work.?email|user.?name|login)\b/.test(label) && creds.email) {
-        suggestions.push(`FILL [${refNum}] "${creds.email}"`);
+        suggestions.push(`FILL [${refNum}] ${CRED_REFS.EMAIL}`);
       } else if (/\b(password|passwd|pass)\b/.test(label) && creds.password) {
-        suggestions.push(`FILL [${refNum}] "${creds.password}"`);
+        suggestions.push(`FILL [${refNum}] ${CRED_REFS.PASS}`);
       } else if (/\b(first.?name|given.?name|fname)\b/.test(label) && creds.name) {
-        suggestions.push(`FILL [${refNum}] "${creds.name.split(/\s+/)[0]}"`);
+        suggestions.push(`FILL [${refNum}] ${CRED_REFS.FIRST_NAME}`);
       } else if (/\b(last.?name|surname|family|lname)\b/.test(label) && creds.name) {
-        const parts = creds.name.split(/\s+/);
-        suggestions.push(`FILL [${refNum}] "${parts.length > 1 ? parts[parts.length - 1] : creds.name}"`);
+        suggestions.push(`FILL [${refNum}] ${CRED_REFS.LAST_NAME}`);
       } else if (/\b(full.?name|your.?name|display.?name|name)\b/.test(label) && !/\b(company|org|user)\b/.test(label) && creds.name) {
-        suggestions.push(`FILL [${refNum}] "${creds.name}"`);
+        suggestions.push(`FILL [${refNum}] ${CRED_REFS.NAME}`);
       } else if (/\b(phone|tel|mobile|cell)\b/.test(label) && creds.phone) {
-        suggestions.push(`FILL [${refNum}] "${creds.phone}"`);
+        suggestions.push(`FILL [${refNum}] ${CRED_REFS.PHONE}`);
       }
     }
     // Find submit/continue/create buttons AND signup links
@@ -1818,7 +1902,7 @@ async function buildPrompt(
     }
   }
 
-  return `TASK: ${task}
+  return `TASK: ${safeTask}
 URL: ${url}
 ${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}${confirmationNote}
 ACCESSIBILITY TREE (use [ref] numbers to target elements):
@@ -1826,7 +1910,7 @@ ${snapshot}
 ${suggestedActions}
 ⚠️ OUTPUT ONLY ACTION COMMANDS. No text. No descriptions.
 If form visible → FILL fields. If button visible → CLICK it. If unsure → SCROLL down.
-Example: FILL [3] "value" then CLICK [5]`;
+Example: FILL [3] [CRED_EMAIL] then CLICK [5]`;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1976,6 +2060,11 @@ export async function runVisionAgent(
   if (taskCreds.email) {
     console.log(`[BROWSER-AGENT] Credentials: email=${maskEmail(taskCreds.email || '')}, password=${taskCreds.password ? '***' : '(none)'}${taskCreds.phone ? `, phone=${maskPhone(taskCreds.phone)}` : ''}`);
   }
+
+  // ── Initialize credential reference store ──
+  // Credentials stay LOCAL — only opaque [CRED_*] refs go to AI APIs
+  const credStore = new CredentialStore();
+  credStore.loadFromCreds(taskCreds);
 
   // ── Pre-planning for complex tasks (fast text model, not vision cascade) ──
   let taskPlan = '';
@@ -2793,6 +2882,58 @@ export async function runVisionAgent(
         }
       }
 
+      // ── AUTO SMS VERIFICATION DETECTION ──
+      // Automatically detect "verify your phone" / "we sent a text" walls and auto-fill code
+      const SMS_WALL_PHRASES = /verify your phone|confirm your phone|we sent.*(?:text|sms|code.*phone)|enter.*code.*(?:text|sms|phone)|sent.*verification.*(?:text|sms|phone)|phone.*verification|mobile.*verification|sms.*code.*sent|text message.*code|we.?ve texted you/i;
+      if (SMS_WALL_PHRASES.test(snapshot) && taskCreds.phone && userId && !history.some(h => h.includes('auto-sms-check:') && h.includes(url.substring(0, 40)))) {
+        console.log(`[BROWSER-AGENT] SMS verification wall detected at ${url} — auto-checking for codes`);
+        let autoSmsFound = false;
+        try {
+          await activePage.waitForTimeout(15000); // wait for SMS delivery
+          const { extractSMSVerificationCode } = await import('../services/twilio.js');
+          const smsCode = await extractSMSVerificationCode(userId, taskCreds.phone, 180000);
+          if (smsCode) {
+            console.log(`[BROWSER-AGENT] Auto-filling SMS verification code: ${smsCode}`);
+            const filled = await (async () => {
+              for (const finder of [
+                () => activePage.getByRole('textbox', { name: /code|otp|token|verify|sms/i }).first(),
+                () => activePage.locator('input[name*="code"], input[name*="otp"], input[type="number"], input[inputmode="numeric"], input[type="tel"]').first(),
+              ]) {
+                try { await finder().fill(smsCode!, { timeout: 3000 }); return true; } catch { continue; }
+              }
+              return false;
+            })();
+            history.push(`auto-sms-check: ${url.substring(0, 40)} — ${filled ? `filled code "${smsCode}"` : `found code "${smsCode}" but couldn't fill field`}`);
+            autoSmsFound = true;
+          } else {
+            // Also try direct Twilio REST fallback
+            const smsMessages = await fetchRecentSms(taskCreds.phone, 5, 5);
+            for (const sms of smsMessages) {
+              const extracted = extractVerificationCode(sms.body);
+              if (extracted.code) {
+                console.log(`[BROWSER-AGENT] Auto-filling SMS code (REST fallback): ${extracted.code}`);
+                const filled = await (async () => {
+                  for (const finder of [
+                    () => activePage.getByRole('textbox', { name: /code|otp|token|verify|sms/i }).first(),
+                    () => activePage.locator('input[name*="code"], input[name*="otp"], input[type="number"], input[inputmode="numeric"], input[type="tel"]').first(),
+                  ]) {
+                    try { await finder().fill(extracted.code!, { timeout: 3000 }); return true; } catch { continue; }
+                  }
+                  return false;
+                })();
+                history.push(`auto-sms-check: ${url.substring(0, 40)} — ${filled ? `filled code "${extracted.code}"` : `found code "${extracted.code}" but couldn't fill field`}`);
+                autoSmsFound = true;
+                break;
+              }
+            }
+          }
+          if (!autoSmsFound) {
+            history.push(`auto-sms-check: ${url.substring(0, 40)} — no SMS verification code found yet`);
+            console.log(`[BROWSER-AGENT] No SMS verification code found yet`);
+          }
+        } catch (e) { console.warn(`[BROWSER-AGENT] Auto SMS-wall check failed: ${e}`); }
+      }
+
       // ── Ask AI ──
       const prompt = await buildPrompt(snapshot, url, task, history, taskCreds, triedText, stuckHint, userProfile);
 
@@ -3059,6 +3200,15 @@ export async function runVisionAgent(
 
       const actionLines = cleanedResponse.split('\n').map(l => l.trim()).filter(l => l.length > 0);
       const parsedActions = actionLines.map(parsePlaywrightAction).filter((a): a is PlaywrightAction => a !== null);
+
+      // ── CREDENTIAL REFERENCE RESOLUTION ──
+      // Resolve [CRED_*] references to actual values LOCALLY before execution.
+      // This ensures credentials NEVER appear in AI prompts/responses — only opaque refs do.
+      for (const action of parsedActions) {
+        if (action.value && credStore.hasRefs(action.value)) {
+          action.value = credStore.resolve(action.value);
+        }
+      }
 
       if (parsedActions.length === 0) {
         consecutiveInvalidOutputs++;
@@ -3403,34 +3553,49 @@ export async function runVisionAgent(
             console.log(`[BROWSER-AGENT] Checking SMS verification codes on ${maskPhone(taskCreds.phone || '')}`);
             if (!isEmailVerification) await activePage.waitForTimeout(15000); // wait for SMS delivery
             try {
-              const smsMessages = await fetchRecentSms(taskCreds.phone, 5, 5);
-              for (const sms of smsMessages) {
-                const extracted = extractVerificationCode(sms.body);
-                if (extracted.code) {
-                  console.log(`[BROWSER-AGENT] Found SMS verification code: ${extracted.code} from ${sms.from}`);
-                  const filled = await (async () => {
-                    for (const finder of [
-                      () => activePage.getByRole('textbox', { name: /code|otp|token|verify|sms/i }).first(),
-                      () => activePage.locator('input[name*="code"], input[name*="otp"], input[type="number"], input[inputmode="numeric"], input[type="tel"]').first(),
-                    ]) {
-                      try {
-                        await finder().fill(extracted.code!, { timeout: 3000 });
-                        return true;
-                      } catch { continue; }
-                    }
-                    return false;
-                  })();
-                  if (filled) {
-                    history.push(`Verification code "${extracted.code}" auto-filled from SMS. Click Submit/Verify.`);
-                  } else {
-                    history.push(`Verification code found from SMS: "${extracted.code}". FILL the code field with it.`);
+              // Primary: use extractSMSVerificationCode (checks tfa_codes DB + Twilio REST API)
+              let smsCode: string | null = null;
+              if (userId) {
+                const { extractSMSVerificationCode } = await import('../services/twilio.js');
+                smsCode = await extractSMSVerificationCode(userId, taskCreds.phone, 180000); // 3 min window
+              }
+
+              // Fallback: direct Twilio REST API scan (if no userId or primary missed it)
+              if (!smsCode) {
+                const smsMessages = await fetchRecentSms(taskCreds.phone, 5, 5);
+                for (const sms of smsMessages) {
+                  const extracted = extractVerificationCode(sms.body);
+                  if (extracted.code) {
+                    smsCode = extracted.code;
+                    console.log(`[BROWSER-AGENT] Found SMS verification code via REST fallback: ${smsCode} from ${sms.from}`);
+                    break;
                   }
-                  codeFound = true;
-                  break;
+                }
+                if (!smsCode && smsMessages.length === 0) {
+                  console.log(`[BROWSER-AGENT] No SMS found yet on ${maskPhone(taskCreds.phone || '')} — will retry on next WAIT`);
                 }
               }
-              if (!codeFound && smsMessages.length === 0) {
-                console.log(`[BROWSER-AGENT] No SMS found yet on ${maskPhone(taskCreds.phone || '')} — will retry on next WAIT`);
+
+              if (smsCode) {
+                console.log(`[BROWSER-AGENT] Found SMS verification code: ${smsCode}`);
+                const filled = await (async () => {
+                  for (const finder of [
+                    () => activePage.getByRole('textbox', { name: /code|otp|token|verify|sms/i }).first(),
+                    () => activePage.locator('input[name*="code"], input[name*="otp"], input[type="number"], input[inputmode="numeric"], input[type="tel"]').first(),
+                  ]) {
+                    try {
+                      await finder().fill(smsCode!, { timeout: 3000 });
+                      return true;
+                    } catch { continue; }
+                  }
+                  return false;
+                })();
+                if (filled) {
+                  history.push(`Verification code "${smsCode}" auto-filled from SMS. Click Submit/Verify.`);
+                } else {
+                  history.push(`Verification code found from SMS: "${smsCode}". FILL the code field with it.`);
+                }
+                codeFound = true;
               }
             } catch (e) { console.warn(`[BROWSER-AGENT] SMS check failed: ${e}`); }
           }
@@ -3670,6 +3835,9 @@ export async function runVisionAgent(
       pageData: partialHistory,
     };
   }
+  // ── SECURITY: Clear credential store after task completes ──
+  credStore.clear();
+
   // Guaranteed non-null result
   return agentResult ?? {
     success: false,

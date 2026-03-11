@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Lock, Eye, EyeOff, Loader2, AlertTriangle, Shield } from "lucide-react";
 import { useRouter } from "next/navigation";
 
-export default function AdminLoginPage() {
+export default function PortalLoginPage() {
   const router = useRouter();
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -25,7 +25,7 @@ export default function AdminLoginPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/admin/login", {
+      const res = await fetch("/api/x7k9f/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
@@ -34,7 +34,7 @@ export default function AdminLoginPage() {
       const data = await res.json();
 
       if (res.ok) {
-        router.push("/admin/dashboard");
+        router.push("/x7k9f/dashboard");
       } else if (data.error === "locked") {
         setLocked(true);
         setAttemptsRemaining(0);
@@ -57,7 +57,7 @@ export default function AdminLoginPage() {
           <div className="w-16 h-16 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Shield className="h-8 w-8 text-white/70" />
           </div>
-          <h1 className="text-xl font-semibold text-white">Admin Access</h1>
+          <h1 className="text-xl font-semibold text-white">Access Portal</h1>
           <p className="text-xs text-white/30 mt-1">Authorized personnel only</p>
         </div>
 

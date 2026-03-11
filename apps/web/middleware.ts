@@ -1,7 +1,11 @@
-import { type NextRequest } from 'next/server'
+import { type NextRequest, NextResponse } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
 export async function middleware(request: NextRequest) {
+  // Block old /admin path — return generic 404 (no hints it ever existed)
+  if (request.nextUrl.pathname.startsWith('/admin')) {
+    return new NextResponse(null, { status: 404 });
+  }
   return await updateSession(request)
 }
 

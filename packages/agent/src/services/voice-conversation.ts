@@ -12,7 +12,7 @@ import { getSupabaseClient } from "../utils/supabase.js";
 import { generatePersonalizedGreeting, generateVoiceResponse } from "./voice-prompts.js";
 import { verifyVoicePin, getTwilioConfig } from "./twilio.js";
 import { trackServiceCost } from "./ai.js";
-import { calculateVoiceCost } from "../utils/cost-calculator.js";
+import { calculateVoiceCost, VOICE_MARKUP } from "../utils/cost-calculator.js";
 import { loadMemory, saveWorkingMemory, appendDailyLog } from "./memory.js";
 import { sanitizeTaskInput } from "../security/validator.js";
 import { getUnreadMessages, getRecentMessages, isEmailConnected } from "./inbox.js";
@@ -1302,9 +1302,10 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
       .then(() => {}, (e: any) => console.error("[VOICE-WS] Call history insert failed:", e));
 
     // Track voice call cost (Twilio + ElevenLabs TTS + Deepgram STT bundled)
+    // VOICE_MARKUP (1.5×) on top of base 1.296× = 1.944× total
     if (durationSeconds > 0) {
       const voiceCost = calculateVoiceCost(durationSeconds, false);
-      trackServiceCost(session.userId, "twilio", "voice_call", voiceCost, "voice_call").catch(() => {});
+      trackServiceCost(session.userId, "twilio", "voice_call", voiceCost, "voice_call", undefined, VOICE_MARKUP).catch(() => {});
     }
   } catch { /* non-critical */ }
 }

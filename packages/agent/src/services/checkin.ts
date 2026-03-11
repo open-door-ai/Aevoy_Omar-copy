@@ -19,9 +19,21 @@ export async function makeCheckinCall(
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const apiKeySid = process.env.TWILIO_API_KEY_SID;
   const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
-  const twilioNumber = process.env.TWILIO_PHONE_NUMBER || "";
+
+  // Look up user's dedicated Twilio number — never use the demo/shared number
+  let twilioNumber = "";
+  try {
+    const { data } = await supabase
+      .from('user_twilio_numbers')
+      .select('phone_number')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .limit(1)
+      .single();
+    if (data?.phone_number) twilioNumber = data.phone_number;
+  } catch { /* no dedicated number */ }
   if (!twilioNumber) {
-    console.error("[CHECKIN] TWILIO_PHONE_NUMBER env var not set, cannot make check-in call");
+    console.warn(`[CHECKIN] User ${userId.slice(0, 8)} has no dedicated number, skipping check-in call`);
     return;
   }
   const agentUrl = process.env.AGENT_URL || "http://localhost:3001";
@@ -63,6 +75,7 @@ export async function makeCheckinCall(
         To: phoneNumber,
         Url: `${agentUrl}/webhook/checkin/${userId}?type=${callType}`,
         Method: "POST",
+        TimeLimit: '300', // 5 min hard cap for check-in calls
       }),
     });
 

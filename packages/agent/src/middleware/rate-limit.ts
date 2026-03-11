@@ -239,7 +239,7 @@ export function checkBackoff(identifier: string): { blocked: boolean; retryAfter
 // WEBHOOK TIMESTAMP VALIDATION (prevent replay attacks)
 // ============================================================================
 
-const WEBHOOK_TIMESTAMP_TOLERANCE = 5 * 60 * 1000; // 5 minutes
+const WEBHOOK_TIMESTAMP_TOLERANCE = 90 * 1000; // 90 seconds
 
 /**
  * Validate webhook timestamp to prevent replay attacks
