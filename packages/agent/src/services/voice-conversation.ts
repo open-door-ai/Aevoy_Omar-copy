@@ -119,6 +119,10 @@ interface VoiceSession {
   callBudgetUsd: number;
   // Whether the 80% budget warning has already been injected
   budgetWarned: boolean;
+  // Whether the close was intentional (goodbye, timeout, silence hangup, budget, PIN lockout)
+  intentionalClose: boolean;
+  // Whether an auto-callback has already been sent for this session (prevent loops)
+  autoCallbackSent: boolean;
 }
 
 const activeSessions = new Map<string, VoiceSession>();
@@ -175,6 +179,8 @@ setInterval(() => {
     if (now - session.startedAt > timeout) {
       const mins = Math.round((now - session.startedAt) / 60000);
       console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
+      // Mark as intentional close (timeout)
+      session.intentionalClose = true;
       // Track voice spend for the timed-out session
       const durationMin = (now - session.startedAt) / 60000;
       const estimatedCost = durationMin * 0.10; // ~$0.10/min (Twilio voice + ElevenLabs)
@@ -289,6 +295,43 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       if (session.callType === "demo_interview" || session.callType === "onboarding_setup") {
         saveInterviewFromConversation(session).catch(() => {});
       }
+
+      // Auto-callback on unexpected disconnect — only for user calls and checkin calls
+      // (NOT demo, external_call, demo_interview, or onboarding_setup)
+      const callbackEligibleTypes = ['task', 'callback', 'checkin', 'user'];
+      const isCallbackEligible = callbackEligibleTypes.includes(session.callType) || !session.callType;
+      if (
+        !session.intentionalClose &&
+        !session.autoCallbackSent &&
+        session.conversationHistory.length >= 2 &&
+        session.userId &&
+        isCallbackEligible
+      ) {
+        session.autoCallbackSent = true;
+        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} UNEXPECTED DISCONNECT — scheduling callback in 5s`);
+        // Capture session data before cleanup
+        const capturedUserId = session.userId;
+        const capturedSessionId = session.sessionId;
+        const capturedHistory = session.conversationHistory.slice(-2);
+        setTimeout(async () => {
+          try {
+            const { callUser } = await import('./twilio.js');
+            const supabase = (await import('../utils/supabase.js')).getSupabaseClient();
+            const { data: profile } = await supabase.from('profiles').select('phone_number').eq('id', capturedUserId).single();
+            if (profile?.phone_number) {
+              const lastTopic = capturedHistory.map(h => h.content).join(' ').slice(0, 200);
+              await callUser({
+                userId: capturedUserId,
+                to: profile.phone_number,
+                message: `Hey, sorry about that — we got disconnected. You were telling me about: ${lastTopic}. What were you saying?`,
+              });
+              console.log(`[VOICE-WS] ${capturedSessionId.slice(0, 8)} Auto-callback initiated to ${profile.phone_number}`);
+            }
+          } catch (e) {
+            console.warn(`[VOICE-WS] Auto-callback failed:`, e);
+          }
+        }, 5000); // 5 second delay to let things settle
+      }
     }
     cleanupSession(sessionId);
   });
@@ -325,6 +368,8 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     silenceWatchdog: null, silenceWarnings: 0,
     callBudgetUsd: callType === 'demo' ? 2.0 : callType === 'external_call' ? 1.0 : 5.0,
     budgetWarned: false,
+    intentionalClose: false,
+    autoCallbackSent: false,
   };
   activeSessions.set(sessionId, placeholderSession);
 
@@ -511,6 +556,8 @@ RULES:
         if (hasPinSet && callerPhone !== userPhone && !skipPin) {
           // Check lockout (unified: 5 attempts, 1 hour)
           if (profile.pin_locked_until && new Date(profile.pin_locked_until) > new Date()) {
+            // Mark as intentional close (PIN lockout)
+            placeholderSession.intentionalClose = true;
             ws.send(JSON.stringify({
               type: "text",
               token: "This number is temporarily locked due to too many incorrect PIN attempts. Please try again in about an hour.",
@@ -590,6 +637,8 @@ RULES:
 
     if (silentFor >= SILENCE_HANGUP_MS) {
       // Hangup threshold reached — end the call
+      // Mark as intentional close (silence hangup)
+      currentSession.intentionalClose = true;
       console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE HANG-UP (${Math.round(silentFor / 1000)}s silent, type=${currentSession.callType})`);
       try {
         const farewell = currentSession.callType === 'external_call'
@@ -636,6 +685,8 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   const estimatedCostUsd = elapsedMinutes * 0.0525; // Full ConversationRelay bundle rate
   if (estimatedCostUsd > session.callBudgetUsd) {
     // Over budget — send farewell and hang up
+    // Mark as intentional close (budget exceeded)
+    session.intentionalClose = true;
     console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET EXCEEDED ($${estimatedCostUsd.toFixed(3)} > $${session.callBudgetUsd}) — hanging up`);
     const budgetFarewell = "I need to wrap up now — we've been on a while. It was great chatting! Talk soon.";
     if (session.ws.readyState === WebSocket.OPEN) {
@@ -857,6 +908,8 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     const userGoodbye = /(bye|goodbye|good night|take care|talk (to you |ya |u )?later|gotta go|i('ll| will) let you go|have a (good|great|nice)|that('s| is) all|thanks,? that('s| is) all)/i.test(voicePrompt);
     const aiGoodbye = /(bye|goodbye|take care|talk (to you |ya )?soon|have a (good|great|nice)|pleasure|it was (great|nice) (talking|speaking|chatting))/i.test(cleanedResponse);
     if (userGoodbye && aiGoodbye) {
+      // Mark as intentional close (goodbye)
+      session.intentionalClose = true;
       console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Conversation-end detected — hanging up in 3s`);
       setTimeout(() => {
         try {
@@ -917,6 +970,8 @@ async function handleDtmf(session: VoiceSession, message: any): Promise<void> {
 
 async function verifyPinAndTransition(session: VoiceSession, pin: string): Promise<void> {
   if (!session.userId) {
+    // Mark as intentional close (PIN identity failure)
+    session.intentionalClose = true;
     session.ws.send(JSON.stringify({ type: "text", token: "I couldn't verify your identity. Goodbye.", last: true }));
     session.ws.send(JSON.stringify({ type: "end" }));
     session.ws.close();
@@ -943,6 +998,8 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
   } else {
     session.pinAttempts++;
     if (session.pinAttempts >= 5) {
+      // Mark as intentional close (PIN lockout after 5 attempts)
+      session.intentionalClose = true;
       // Lock the account (unified: 1 hour lockout)
       await getSupabaseClient()
         .from("profiles")
@@ -1272,6 +1329,8 @@ function handleAmdVoicemail(callSid: string): void {
   const session = targetSession;
   if (session.ws.readyState !== WebSocket.OPEN) return;
 
+  // Mark as intentional close (voicemail detected)
+  session.intentionalClose = true;
   console.log(`[AMD] Voicemail detected for session ${session.sessionId.slice(0, 8)} — leaving message and hanging up`);
 
   let voicemailMsg: string;
