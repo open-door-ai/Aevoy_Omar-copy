@@ -20,7 +20,7 @@ import { verifyTask, quickVerify, getQualityTier, QUALITY_TIERS } from "./task-v
 import { detectWorkflow, createWorkflow } from "./workflow.js";
 import { requiresAutonomousPlanning, handleAutonomousWorkflow } from "./autonomous-integration.js";
 import { clearFailurePatterns, loadFailurePatternsFromDB, persistFailurePatterns, buildRetryEnforcementMessage, recordFailedAttempt, getRetryGuidance } from "./retry-intelligence.js";
-import { getAutoProceedAt, buildAutoProceedContext, isImportantTask, NORMAL_DELAY_MS, IMPORTANT_DELAY_MS } from "./auto-proceed.js";
+import { getAutoProceedAt, buildAutoProceedContext, getDelayMinutes } from "./auto-proceed.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { TaskRequest, TaskResult, Action, ActionResult, InputChannel, StrikeContext, StrikeRecord, VerificationResult } from "../types/index.js";
 import { readFileSync } from 'fs';
@@ -887,7 +887,7 @@ export async function processIncomingTask(task: TaskRequest): Promise<TaskResult
     const _clarifyTaskText = `${subject} ${body || ''}`;
     const _clarifyAutoProceedAt = clarified.needsConfirmation ? getAutoProceedAt(_clarifyTaskText) : null;
     const _clarifyDelayMin = clarified.needsConfirmation
-      ? (isImportantTask(_clarifyTaskText) ? Math.round(IMPORTANT_DELAY_MS / 60000) : Math.round(NORMAL_DELAY_MS / 60000))
+      ? (getDelayMinutes(_clarifyTaskText))
       : 0;
     const _clarifyAutoProceedCtx = clarified.needsConfirmation
       ? buildAutoProceedContext(
@@ -2605,7 +2605,7 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
         // AUTO-PROCEED: Plan approval uses needs_review with auto-proceed
         const _planTaskText = `${subject} ${body || ''}`;
         const _planAutoProceedAt = getAutoProceedAt(_planTaskText);
-        const _planDelayMin = isImportantTask(_planTaskText) ? Math.round(IMPORTANT_DELAY_MS / 60000) : Math.round(NORMAL_DELAY_MS / 60000);
+        const _planDelayMin = getDelayMinutes(_planTaskText);
         const _planAutoProceedCtx = buildAutoProceedContext(approvalMessage, _planTaskText, _planDelayMin);
 
         await getSupabaseClient().from("tasks").update({
@@ -3388,7 +3388,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
         // AUTO-PROCEED: Set needs_review with auto-proceed timer instead of completed
         const _credTaskText = `${subject} ${body || ''}`;
         const _credAutoProceedAt = getAutoProceedAt(_credTaskText);
-        const _credDelayMin = isImportantTask(_credTaskText) ? Math.round(IMPORTANT_DELAY_MS / 60000) : Math.round(NORMAL_DELAY_MS / 60000);
+        const _credDelayMin = getDelayMinutes(_credTaskText);
         const _credAutoProceedCtx = buildAutoProceedContext(credResponse, _credTaskText, _credDelayMin);
 
         await getSupabaseClient().from("tasks").update({
@@ -3428,7 +3428,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
         // AUTO-PROCEED: Set needs_review with auto-proceed timer
         const _addrTaskText = `${subject} ${body || ''}`;
         const _addrAutoProceedAt = getAutoProceedAt(_addrTaskText);
-        const _addrDelayMin = isImportantTask(_addrTaskText) ? Math.round(IMPORTANT_DELAY_MS / 60000) : Math.round(NORMAL_DELAY_MS / 60000);
+        const _addrDelayMin = getDelayMinutes(_addrTaskText);
         const _addrAutoProceedCtx = buildAutoProceedContext(addressReq, _addrTaskText, _addrDelayMin);
 
         await getSupabaseClient().from("tasks").update({
@@ -3472,7 +3472,7 @@ Your email ${_agentEmail} is YOUR OWN REAL EMAIL. This is NOT fake, NOT unauthor
         // AUTO-PROCEED: Booking is important — 20 min timeout
         const _bookTaskText = `${subject} ${body || ''}`;
         const _bookAutoProceedAt = getAutoProceedAt(_bookTaskText);
-        const _bookDelayMin = isImportantTask(_bookTaskText) ? Math.round(IMPORTANT_DELAY_MS / 60000) : Math.round(NORMAL_DELAY_MS / 60000);
+        const _bookDelayMin = getDelayMinutes(_bookTaskText);
         const _bookAutoProceedCtx = buildAutoProceedContext(bookingAsk, _bookTaskText, _bookDelayMin);
 
         await getSupabaseClient().from("tasks").update({
@@ -5438,7 +5438,7 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
                 // AUTO-PROCEED: Set auto-proceed timer for mid-task confirmation
                 const _midConfirmTaskText = `${subject} ${body || ''}`;
                 const _midConfirmAutoProceedAt = getAutoProceedAt(_midConfirmTaskText);
-                const _midConfirmDelayMin = isImportantTask(_midConfirmTaskText) ? Math.round(IMPORTANT_DELAY_MS / 60000) : Math.round(NORMAL_DELAY_MS / 60000);
+                const _midConfirmDelayMin = getDelayMinutes(_midConfirmTaskText);
                 const _midConfirmAutoProceedCtx = buildAutoProceedContext(_confirmMsg, _midConfirmTaskText, _midConfirmDelayMin);
 
                 await getSupabaseClient().from('tasks').update({

@@ -19,44 +19,112 @@ let autoProceedInterval: NodeJS.Timeout | null = null;
 /** How often to check for auto-proceed tasks (ms) */
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-/** Normal task auto-proceed delay */
-export const NORMAL_DELAY_MS = 60 * 60 * 1000; // 1 hour
+/**
+ * Dynamic auto-proceed delays based on task complexity and risk:
+ * - Time-sensitive (bookings, orders): 20 min — then proceed with best option
+ * - Simple missing detail (which restaurant?): 20 min — then pick top 2-3 and do them all
+ * - Normal tasks (signup, research): 1 hour — then proceed with best judgment
+ * - Complex/risky (financial, career, irreversible): 4 hours — then proceed carefully
+ */
+export const URGENT_DELAY_MS = 20 * 60 * 1000;      // 20 minutes
+export const NORMAL_DELAY_MS = 60 * 60 * 1000;       // 1 hour
+export const COMPLEX_DELAY_MS = 4 * 60 * 60 * 1000;  // 4 hours
 
-/** Important task auto-proceed delay (bookings, financial, orders, signups) */
-export const IMPORTANT_DELAY_MS = 20 * 60 * 1000; // 20 minutes
+// Keep old name for backwards compatibility
+export const IMPORTANT_DELAY_MS = URGENT_DELAY_MS;
 
 /**
- * Detect whether a task is "important" (time-sensitive) based on its text.
- * Important tasks get a shorter auto-proceed window (20 min vs 1 hour).
+ * Classify task urgency level for dynamic auto-proceed timing.
+ * Returns: 'urgent' (20min), 'normal' (1h), 'complex' (4h)
  */
+export function classifyTaskUrgency(taskText: string): 'urgent' | 'normal' | 'complex' {
+  const lower = taskText.toLowerCase();
+
+  // Complex/risky: financial decisions, career moves, irreversible actions, large purchases
+  if (/\b(invest|stock|crypto|mortgage|loan|insurance|retire|career|quit|resign|contract|legal|lawsuit|medical|surgery|relocat|move to|immigration|visa|tax|divorce|marriage)\b/i.test(lower)) {
+    return 'complex';
+  }
+
+  // Urgent: time-sensitive, bookings, orders, active signups
+  if (/\b(book|reserv|order|buy|purchase|cancel|urgent|asap|time.?sensitive|tonight|today|right now|immediately|hurry|sign\s?up|signup|register)\b/i.test(lower)) {
+    return 'urgent';
+  }
+
+  return 'normal';
+}
+
+// Keep old function for backwards compatibility
 export function isImportantTask(taskText: string): boolean {
-  return /\b(book|reserv|order|buy|purchase|cancel|financial|payment|transfer|urgent|asap|time.?sensitive|sign\s?up|signup|register)\b/i.test(taskText);
+  return classifyTaskUrgency(taskText) === 'urgent';
 }
 
 /**
  * Calculate the auto-proceed timestamp for a task.
  */
 export function getAutoProceedAt(taskText: string): string {
-  const delayMs = isImportantTask(taskText) ? IMPORTANT_DELAY_MS : NORMAL_DELAY_MS;
+  const urgency = classifyTaskUrgency(taskText);
+  const delayMs = urgency === 'urgent' ? URGENT_DELAY_MS
+    : urgency === 'complex' ? COMPLEX_DELAY_MS
+    : NORMAL_DELAY_MS;
   return new Date(Date.now() + delayMs).toISOString();
 }
 
 /**
- * Build the auto-proceed context string that tells the AI what to do.
+ * Get delay in minutes for display purposes.
+ */
+export function getDelayMinutes(taskText: string): number {
+  const urgency = classifyTaskUrgency(taskText);
+  return urgency === 'urgent' ? 20 : urgency === 'complex' ? 240 : 60;
+}
+
+/**
+ * Build smart auto-proceed context that tells the AI WHAT to do, not just "proceed."
+ * Context is tailored to the type of question that was asked.
  */
 export function buildAutoProceedContext(
   originalQuestion: string,
   originalTaskText: string,
   delayMinutes: number,
 ): string {
+  const lower = originalTaskText.toLowerCase();
+  const questionLower = originalQuestion.toLowerCase();
+
+  // Determine smart auto-proceed strategy based on what was asked
+  let strategy: string;
+
+  if (/\b(which restaurant|where|which place|which one|pick|choose|prefer)\b/i.test(questionLower)) {
+    // Missing preference → pick multiple options
+    strategy = `STRATEGY: The user didn't specify a preference. Pick the top 2-3 highest-rated options and execute on ALL of them. For bookings, book the #1 rated option. For orders, pick the most popular. Report what you chose and why.`;
+  } else if (/\b(address|delivery|location|where.*deliver|where.*send|where.*ship)\b/i.test(questionLower)) {
+    // Missing address → check profile, use default, or skip
+    strategy = `STRATEGY: The user didn't provide an address. Check their profile for a saved address. If none found, pick the nearest/default option that doesn't require delivery (e.g., pickup instead of delivery, digital instead of physical).`;
+  } else if (/\b(credential|password|login|email.*password|log\s*in)\b/i.test(questionLower)) {
+    // Missing credentials → use agent's own or skip
+    strategy = `STRATEGY: The user didn't provide credentials. If this is a NEW account signup, use the agent's own email and auto-generated password. If this requires the USER's existing login (cancel/manage), report what you attempted and ask them to provide credentials when they're free.`;
+  } else if (/\b(time|date|when|what day|what time|party size|how many|guests)\b/i.test(questionLower)) {
+    // Missing booking details → pick sensible defaults
+    strategy = `STRATEGY: The user didn't specify details. Use smart defaults: party size=2, time=7:00 PM tonight (or tomorrow if past 5 PM), pick the first available slot. Book it and tell the user what you booked — they can always change it.`;
+  } else if (/\b(confirm|approve|go ahead|proceed|permission)\b/i.test(questionLower)) {
+    // Waiting for confirmation → just do it
+    strategy = `STRATEGY: The user was asked to confirm but didn't respond. They likely want it done. Proceed with the action as described. If it's reversible, just do it. If irreversible (delete account, large purchase), do everything EXCEPT the final irreversible step and report.`;
+  } else if (/\b(skill|experience|background|what.*do you|what.*can you|specialty)\b/i.test(questionLower)) {
+    // Missing user skills for money-making → pick universally applicable approach
+    strategy = `STRATEGY: The user didn't share their skills. Pick the most universally accessible income approach: sign up for survey/micro-task sites, apply to entry-level freelance writing/data entry gigs, or create content. Execute on 3 different platforms. Report results.`;
+  } else {
+    // Generic fallback
+    strategy = `STRATEGY: Make the decision a smart, resourceful human would make. Pick the most reasonable default, execute it, and tell the user what you did and why. If multiple good options exist, pick the best one. Don't overthink — just act.`;
+  }
+
   return [
     `AUTO-PROCEED: The user was asked the following question but did not respond within ${delayMinutes} minutes:`,
     `"${originalQuestion}"`,
     ``,
     `Original task: "${originalTaskText}"`,
     ``,
-    `Proceed with the most reasonable default. Make the decision a smart, resourceful human would make.`,
-    `Do NOT ask the user again — they already didn't reply. Just pick the best option and execute.`,
+    strategy,
+    ``,
+    `Do NOT ask the user again — they already didn't reply. Just execute the strategy above.`,
+    `Report what you did clearly so the user can adjust if needed.`,
   ].join('\n');
 }
 
