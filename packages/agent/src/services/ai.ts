@@ -790,7 +790,11 @@ async function trackApiCall(
 
 /**
  * Track non-AI service costs (voice, SMS, images, browser sessions).
- * Applies 20% platform markup and logs to ai_cost_log.
+ * Applies full markup stack: rawCost × COST_SAFETY_MARGIN × BILLING_MARKUP × serviceMarkup.
+ *
+ * @param serviceMarkup - Optional per-service multiplier (e.g. SMS_MARKUP=2.0, VOICE_MARKUP=1.5).
+ *                        Applied ON TOP of the base COST_SAFETY_MARGIN × BILLING_MARKUP.
+ *                        Default 1.0 (no extra service markup — used for AI, browser, images, etc.)
  */
 export async function trackServiceCost(
   userId: string,
@@ -798,11 +802,12 @@ export async function trackServiceCost(
   model: string,
   rawCostUsd: number,
   purpose: string,
-  taskId?: string
+  taskId?: string,
+  serviceMarkup: number = 1.0
 ): Promise<void> {
   if (!userId || rawCostUsd <= 0) return;
   try {
-    const billedCost = rawCostUsd * COST_SAFETY_MARGIN * BILLING_MARKUP;
+    const billedCost = rawCostUsd * COST_SAFETY_MARGIN * BILLING_MARKUP * serviceMarkup;
     const costCents = Math.round(billedCost * 100); // No artificial minimum — actual cost only
 
     // Always log to ai_cost_log (source of truth for task cost queries)

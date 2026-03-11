@@ -3,6 +3,15 @@
  *
  * Centralized cost calculation for all billable services.
  * All costs include a 20% platform markup applied at log time.
+ *
+ * Markup stack (applied in trackServiceCost):
+ *   rawCost × COST_SAFETY_MARGIN × BILLING_MARKUP × SERVICE_MARKUP
+ *
+ * Service-specific markups ensure the platform NEVER loses money:
+ *   AI:    1.08 × 1.20 = 1.296× (default, no service markup)
+ *   SMS:   1.08 × 1.20 × 2.0 = 2.592× (SMS is expensive relative to value)
+ *   Voice: 1.08 × 1.20 × 1.5 = 1.944× (covers ConversationRelay + TTS + STT infrastructure)
+ *   Phone: 1.08 × 1.20 × 1.5 = 1.944× (monthly number rental markup)
  */
 
 // Platform billing markup (cost + 20%)
@@ -12,6 +21,16 @@ export const BILLING_MARKUP = 1.20;
 // Applied BEFORE billing markup. Total customer multiplier = SAFETY_MARGIN × BILLING_MARKUP.
 // With 1.08 × 1.20 = 1.296, customer pays ~30% over raw provider cost.
 export const COST_SAFETY_MARGIN = 1.08;
+
+// Service-specific markups — ON TOP of COST_SAFETY_MARGIN × BILLING_MARKUP
+// These cover infrastructure overhead, support costs, and profit margin per service type.
+export const SMS_MARKUP = 2.0;     // SMS: 2.592× total (SMS is expensive, low value per message)
+export const VOICE_MARKUP = 1.5;   // Voice: 1.944× total (ConversationRelay + ElevenLabs + Deepgram)
+export const PHONE_NUMBER_MARKUP = 1.5; // Phone number monthly: 1.944× total
+
+// Phone number monthly costs (raw Twilio cost)
+export const MONTHLY_LOCAL_NUMBER_COST = 1.15;
+export const MONTHLY_TOLL_FREE_COST = 2.15;
 
 // Twilio pricing (domestic North America)
 export const TWILIO_RATES = {
@@ -73,6 +92,10 @@ export const CAPTCHA_COSTS = {
   },
 } as const;
 
+/**
+ * Calculate RAW voice cost (what Twilio charges us, no markup).
+ * Markup is applied later by trackServiceCost with VOICE_MARKUP.
+ */
 export function calculateVoiceCost(durationSeconds: number, direction: 'inbound' | 'outbound' | boolean = 'inbound'): number {
   const durationMinutes = Math.ceil(durationSeconds / 60); // Twilio rounds up to nearest minute
   // Support legacy boolean isInternational param (treated as outbound if true)
@@ -86,24 +109,41 @@ export function calculateVoiceCost(durationSeconds: number, direction: 'inbound'
     // 'inbound' or false (legacy isInternational=false)
     ratePerMin = TWILIO_RATES.FULL_BUNDLE_INBOUND_PER_MIN;
   }
-  return durationMinutes * ratePerMin * BILLING_MARKUP;
+  // Return RAW cost — no markup applied here (trackServiceCost handles all markup)
+  return durationMinutes * ratePerMin;
 }
 
+/**
+ * Calculate RAW outbound SMS cost (what Twilio charges us, no markup).
+ * Markup is applied later by trackServiceCost with SMS_MARKUP.
+ */
 export function calculateSMSCost(to: string, messageLength: number = 160): number {
   const isInternational = !to.startsWith('+1');
   const segments = Math.ceil(messageLength / 160);
   const ratePerSegment = isInternational ? 0.0075 : TWILIO_RATES.SMS_OUTBOUND_NA;
+  // Return RAW cost — no markup applied here (trackServiceCost handles all markup)
   return segments * ratePerSegment;
 }
 
 /**
- * Calculate SMS cost by direction (for cost tracking).
+ * Calculate RAW SMS cost by direction (what Twilio charges us, no markup).
+ * Markup is applied later by trackServiceCost with SMS_MARKUP.
  * @param direction - 'inbound' or 'outbound'
  * @param count - number of SMS messages
  */
 export function calculateSMSCostByDirection(direction: 'inbound' | 'outbound' = 'outbound', count: number = 1): number {
   const rate = direction === 'inbound' ? TWILIO_RATES.SMS_INBOUND_NA : TWILIO_RATES.SMS_OUTBOUND_NA;
-  return rate * count * BILLING_MARKUP;
+  // Return RAW cost — no markup applied here (trackServiceCost handles all markup)
+  return rate * count;
+}
+
+/**
+ * Calculate billed monthly phone number cost (with full markup stack).
+ * Use this to show users what they'll be charged for their dedicated number.
+ */
+export function calculatePhoneNumberMonthlyCost(type: 'local' | 'toll_free'): number {
+  const rawCost = type === 'toll_free' ? MONTHLY_TOLL_FREE_COST : MONTHLY_LOCAL_NUMBER_COST;
+  return rawCost * COST_SAFETY_MARGIN * BILLING_MARKUP * PHONE_NUMBER_MARKUP;
 }
 
 export const BROWSER_SESSION_COSTS = {
