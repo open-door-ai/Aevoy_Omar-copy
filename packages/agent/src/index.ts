@@ -1438,7 +1438,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
       <Parameter name="callerNumber" value="${callerNumber}" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escGreeting}</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`;
 
     console.log(`[VOICE-DEMO] Outbound TwiML: ${effectiveCallType}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
@@ -1496,7 +1496,7 @@ app.post("/webhook/voice/outbound-twiml", twilioLimiter, validateTwilioSignature
       <Parameter name="fullMessage" value="${escFullMessage}" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escGreeting}</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`;
 
   console.log(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}, voice=${voiceId}`);
@@ -1647,7 +1647,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       <Parameter name="callerNumber" value="${callerNumber}" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(effectiveGreeting)}</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`);
       }
 
@@ -1847,10 +1847,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       <Parameter name="callType" value="task" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(greeting)}</Say>
-  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
-  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`);
     }
 
@@ -1986,10 +1983,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
       <Parameter name="callType" value="task" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(greeting)}</Say>
-  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
-  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`);
     }
 
@@ -2706,10 +2700,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
       <Parameter name="callType" value="task" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">Hey! What can I help you with?</Say>
-  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
-  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`);
     }
 
@@ -3085,10 +3076,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
       <Parameter name="callType" value="${checkinCallType}" />
     </ConversationRelay>
   </Connect>
-  <Say voice="Polly.Joanna-Neural">${escapeXml(greeting)}</Say>
-  <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
-    action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
-  <Say voice="Polly.Joanna-Neural">I didn't catch that. Please try calling back.</Say>
+  <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
 </Response>`);
     }
 
