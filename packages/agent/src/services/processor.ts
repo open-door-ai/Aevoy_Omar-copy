@@ -3819,15 +3819,48 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
           ? _dfpInitial
           : await generateResponse(memory, subject, _dfpExcelPrompt, username, "generate", userId, taskId, senderName).then(r => (r.content || '').trim());
         if (_dfpRaw && _dfpRaw.length > 100) {
-          // Parse markdown into sections
-          const _dfpSecs = _dfpRaw.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
-            const t = s.trim().replace(/^\*+|\*+$/g, '').trim();
-            const h1 = t.match(/^#{1}\s+(.+)/); if (h1) return { type: 'heading', text: h1[1].trim(), level: 1 };
-            const h2 = t.match(/^#{2}\s+(.+)/); if (h2) return { type: 'heading', text: h2[1].trim(), level: 2 };
-            const h3 = t.match(/^#{3,}\s+(.+)/); if (h3) return { type: 'heading', text: h3[1].trim(), level: 3 };
-            if (t.length < 80 && !t.endsWith('.') && !t.endsWith(',') && /^[A-Z\d]/.test(t)) return { type: 'heading', text: t, level: 2 };
-            return { type: 'paragraph', text: t };
-          });
+          // Parse markdown into structured PDF sections
+          const _dfpSecs: { type: string; text?: string; items?: string[]; level?: number }[] = [];
+          const _dfpLines = _dfpRaw.split('\n');
+          let _bulletBuffer: string[] = [];
+          const _flushBullets = () => {
+            if (_bulletBuffer.length > 0) {
+              _dfpSecs.push({ type: 'bullet', items: [..._bulletBuffer] });
+              _bulletBuffer = [];
+            }
+          };
+          // Strip markdown bold/italic: **text** → text, *text* → text
+          const _stripMd = (s: string) => s.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1').replace(/^#+\s*/, '').trim();
+          for (const line of _dfpLines) {
+            const trimmed = line.trim();
+            if (!trimmed) { _flushBullets(); continue; }
+            // Headings: # H1, ## H2, ### H3
+            const hMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+            if (hMatch) {
+              _flushBullets();
+              _dfpSecs.push({ type: 'heading', text: _stripMd(hMatch[2]), level: hMatch[1].length });
+              continue;
+            }
+            // Bold-only lines as headings: **Section Title**
+            const boldLine = trimmed.match(/^\*\*([^*]+)\*\*\s*$/);
+            if (boldLine && trimmed.length < 100) {
+              _flushBullets();
+              _dfpSecs.push({ type: 'heading', text: boldLine[1].trim(), level: 2 });
+              continue;
+            }
+            // Bullet items: - text, * text, • text
+            const bulletMatch = trimmed.match(/^[-*•]\s+(.+)/);
+            if (bulletMatch) {
+              _bulletBuffer.push(_stripMd(bulletMatch[1]));
+              continue;
+            }
+            // Regular paragraph
+            _flushBullets();
+            if (trimmed.length > 5) {
+              _dfpSecs.push({ type: 'paragraph', text: _stripMd(trimmed) });
+            }
+          }
+          _flushBullets();
           // Create the file directly
           let _dfpResult: { success: boolean; filepath?: string; url?: string; error?: string } = { success: false, error: 'Unknown type' };
           if (_dfpAct === 'create_word') {
@@ -3866,8 +3899,8 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
             for (const s of _dfpSecs) {
               if (s.type === 'heading' && (s.level ?? 3) <= 2) {
                 if (_pptCurrTitle && _pptCurrBullets.length > 0) _pptSlides.push({ title: _pptCurrTitle, bullets: [..._pptCurrBullets], layout: 'content' });
-                _pptCurrTitle = s.text; _pptCurrBullets.length = 0;
-              } else if (_pptCurrTitle) { _pptCurrBullets.push(s.text.substring(0, 120)); }
+                _pptCurrTitle = s.text || ''; _pptCurrBullets.length = 0;
+              } else if (_pptCurrTitle) { _pptCurrBullets.push((s.text || '').substring(0, 120)); }
             }
             if (_pptCurrTitle) _pptSlides.push({ title: _pptCurrTitle, bullets: _pptCurrBullets.length ? _pptCurrBullets : undefined, layout: 'content' });
             _dfpResult = await createPowerPoint({ filename: _dfpFile, slides: _pptSlides.slice(0, 15) });
