@@ -1676,12 +1676,14 @@ OPEN_TAB "label" "url"             — new tab (max 5) / SWITCH_TAB "label" / CL
 DONE "result"                      — task complete with concrete outcome
 FAIL "reason"                      — truly impossible after 3+ different approaches
 
-COMPLETION MEANS THE OUTCOME EXISTS:
-- Booking → confirmation number or "thank you" page. Finding a restaurant is NOT done.
-- Signup → account created (welcome/dashboard/verify email). Finding the signup page is NOT done.
-- Data request → the actual data (prices, names, numbers). Page description is NOT done.
-- Form fill → form submitted and accepted. Listing the fields is NOT done.
-If the answer is already visible on the page, output DONE with the data. Don't click around.
+WHEN IS THE TASK DONE? Only when THE ACTION IS COMPLETE:
+- "Add to cart" → item is IN the cart (click "Add to basket/cart" button first!)
+- "Book/reserve" → confirmation number or "thank you" page (not just finding the restaurant)
+- "Sign up" → account created, welcome/dashboard page (not just the signup form)
+- "Order/buy" → order placed, confirmation received (not just the product page)
+- "Fill form" → form submitted and accepted (not just listing the fields)
+- "Find data" → output DONE with the actual data (prices, names, numbers). Only for pure info tasks.
+RULE: If the task says DO something (add, book, sign up, buy, fill), you must CLICK the button. Finding the page is step 1, not the end.
 
 PROBLEM-SOLVING — YOU ARE A RESOURCEFUL HUMAN:
 - Stuck? Try something different. Never repeat a failed action.
@@ -3344,11 +3346,12 @@ export async function runVisionAgent(
             /\bcan be (cancel|book|reserv|subscrib|access|complet)\w*\b/i.test(doneResult)
           );
 
-          // Order-incomplete rejection
-          const isOrderTask = /\b(order|purchase|buy|checkout|add to cart|get me)\b/i.test(task);
-          const isOrderIncomplete = isOrderTask && !isPassive && !isAdvice && (
-            /\$\d+|\bcosts?\b|\bpric(e|ed|ing)\b/i.test(doneResult) &&
-            !/\b(order(ed|.*confirm)|receipt|added to cart|in.*cart|placed|transaction)\b/i.test(doneResult)
+          // Order-incomplete rejection — catches "add to cart", "add it to my cart", "put in basket" etc.
+          const isOrderTask = /\b(order|purchase|buy|checkout|add\b.*\b(cart|basket)|put\b.*\b(cart|basket)|get me)\b/i.test(task);
+          const hasOrderConfirmation = /\b(order(ed|.*confirm)|receipt|added to (cart|basket)|in\s*(the\s*)?(cart|basket)|placed|transaction|cart.*item|item.*cart)\b/i.test(doneResult);
+          const isOrderIncomplete = isOrderTask && !isPassive && !isAdvice && !hasOrderConfirmation && (
+            /\b(found|located|navigated|browsed|price|product page|listing)\b/i.test(doneResult) ||
+            /\bdid not add\b/i.test(doneResult)
           );
 
           // Data-missing rejection — only for tasks explicitly asking for numeric/contact data
@@ -3377,8 +3380,8 @@ export async function runVisionAgent(
 
           // Page-description rejection: DONE describes WHAT IS ON the page, not WHAT WAS ACCOMPLISHED
           // Only for action tasks (signup/book/order) — not for research/info tasks
-          const isActionTask = /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|form|fill|submit|apply)\b/i.test(task);
-          const completionWords = /\b(created|signed up|registered|confirmed|completed|submitted|booked|reserved|filled|cancelled|purchased|ordered|set up|setup)\b/i;
+          const isActionTask = /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|form|fill|submit|apply|add\b.*\b(cart|basket)|put\b.*\b(cart|basket)|log\s*in|login)\b/i.test(task);
+          const completionWords = /\b(created|signed up|registered|confirmed|completed|submitted|booked|reserved|filled|cancelled|purchased|ordered|set up|setup|added to (cart|basket)|in\s*(the\s*)?(cart|basket)|logged in)\b/i;
           const isPageDescription = isActionTask && !isInfoTask && !completionWords.test(doneResult) && (
             /\b(?:homepage|landing page|page|website|site)\s+(?:showcases?|features?|displays?|shows?|includes?|offers?|highlights?|presents?|has|contains?)\b/i.test(doneResult) ||
             /\bno specific (?:prices?|ratings?|details?|information|data)\s+(?:are|is)\s+(?:displayed|shown|available)/i.test(doneResult) ||
