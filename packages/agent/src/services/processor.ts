@@ -9383,7 +9383,7 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       const QUAL_EVAL_COST_CAP = 0.01; // $0.01 max for quality eval loop
 
       // ── HARD PRE-CHECK: Catch obvious failures before spending on model evaluation ──
-      const _admitsFailure = /\b(not\s+(obtained|confirmed|completed|successful|able|done|created|signed|booked|reserved|placed|cancelled)|could\s+not|unable\s+to|did\s+not\s+(complete|finish|book|sign|create|cancel)|no\s+(booking|reservation|confirmation|account|signup)\s+(was|were|has)\b|failed\s+to)\b/i.test(cleanResponse);
+      const _admitsFailure = /\b(not\s+(obtained|confirmed|completed|successful|able|done|created|signed|booked|reserved|placed|cancelled|provided|retrieved|found)|could\s+not|unable\s+to|did\s+not\s+(complete|finish|book|sign|create|cancel|succeed|manage)|no\s+(booking|reservation|confirmation|account|signup)\s+(was|were|has)\b|failed\s+to|wasn.t\s+(able|successful|completed|obtained))\b/i.test(cleanResponse);
       const _isActionType = ['booking', 'signup', 'purchase', 'cancellation'].includes(_qualTaskType);
       let _precheckFailed = false;
       if (_admitsFailure && _isActionType) {
