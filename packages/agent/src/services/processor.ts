@@ -4960,9 +4960,10 @@ For "${subject}":
               visionFailureNote = 'AI gave advice instead of acting. Try a completely different approach: browse a different website, search with different keywords, or call the business.';
             }
             // Fall through to execute the new actions
-          } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
+          } else if (_isDocumentAction && !_compoundResearchDoc && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
             // DOCUMENT ACTION GATE (rounds 1-2): AI completed without calling create action.
             // AI can't reliably produce [ACTION:create_word(...)] tags — bypass and synthesize directly:
+            // SKIP for compound research+document tasks — those need to browse/search first.
             // 1. Use generate task type to get plain document content from the AI
             // 2. Inject the create action directly into aiResponse.actions (no action tag parsing needed)
             console.warn(`[DOC-ACTION-GATE] REJECTED: AI completed without calling create action (round ${currentIteration}). Synthesizing action directly.`);
@@ -5014,7 +5015,7 @@ For "${subject}":
         } else if (!hasRealActions) {
           // DOCUMENT ACTION GATE (rounds 3+): same direct synthesis approach.
           const _hasDocActionLate = actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || ''));
-          if (_isDocumentAction && !_hasDocActionLate && aiResponse.model !== 'fallback') {
+          if (_isDocumentAction && !_compoundResearchDoc && !_hasDocActionLate && aiResponse.model !== 'fallback') {
             console.warn(`[DOC-ACTION-GATE] Late round ${currentIteration}: Synthesizing doc action directly.`);
             const _docActL = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
               : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
@@ -5266,9 +5267,10 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
               break;
             }
             // Fall through to execute the phone actions
-          } else if (_isDocumentAction && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
+          } else if (_isDocumentAction && !_compoundResearchDoc && !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || '')) && aiResponse.model !== 'fallback') {
             // DOCUMENT ACTION GATE (no-actions path): AI returned no actions for a doc task.
             // Synthesize the create action directly — bypasses action tag parsing entirely.
+            // SKIP for compound research+document tasks — those need to browse/search first.
             console.warn(`[DOC-ACTION-GATE] No-action path (round ${currentIteration}): Synthesizing document action directly.`);
             const _docActN = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
               : /\b(powerpoint|pptx|presentation slides?)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
@@ -9374,7 +9376,19 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         : 'action';
       let qualEvalCost = 0;
       const QUAL_EVAL_COST_CAP = 0.01; // $0.01 max for quality eval loop
-      for (let qualAttempt = 0; qualAttempt < 2 && qualEvalCost < QUAL_EVAL_COST_CAP; qualAttempt++) {
+
+      // ── HARD PRE-CHECK: Catch obvious failures before spending on model evaluation ──
+      const _admitsFailure = /\b(not\s+(obtained|confirmed|completed|successful|able|done|created|signed|booked|reserved|placed|cancelled)|could\s+not|unable\s+to|did\s+not\s+(complete|finish|book|sign|create|cancel)|no\s+(booking|reservation|confirmation|account|signup)\s+(was|were|has)\b|failed\s+to)\b/i.test(cleanResponse);
+      const _isActionType = ['booking', 'signup', 'purchase', 'cancellation'].includes(_qualTaskType);
+      let _precheckFailed = false;
+      if (_admitsFailure && _isActionType) {
+        // Response explicitly admits the action wasn't completed — auto-fail, mark needs_review
+        console.log(`[QUALITY-PRECHECK] Auto-FAIL: response admits failure for ${_qualTaskType} task`);
+        await getSupabaseClient().from('tasks').update({ status: 'needs_review' }).eq('id', taskId);
+        _precheckFailed = true;
+      }
+
+      for (let qualAttempt = 0; !_precheckFailed && qualAttempt < 2 && qualEvalCost < QUAL_EVAL_COST_CAP; qualAttempt++) {
         try {
           const { evaluateResponseQuality } = await import("./ai.js");
           const evalResult = await evaluateResponseQuality(
