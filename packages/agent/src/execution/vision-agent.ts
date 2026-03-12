@@ -1731,12 +1731,15 @@ BAD: "The page shows a signup form. Let me click the button."
 BAD: "I should navigate to the signup page."
 If unsure what to do → SCROLL down. If form visible → FILL it. If button visible → CLICK it.
 
+SEARCH: Use DuckDuckGo (duckduckgo.com), NOT Google. Google blocks automated browsers. NAVIGATE to https://duckduckgo.com/?q=your+search+terms.
+
 PROBLEM-SOLVING — THINK LIKE A RESOURCEFUL HUMAN:
 You are a human sitting at a computer. You don't give up. You don't report failure after one try.
 - Can't find what you need? EXPLORE: SCROLL, CLICK things, try different elements. Pages have hidden content, dynamic elements, and multi-step flows.
 - Something didn't work? TRY SOMETHING DIFFERENT. Never repeat the same failed action. Change your approach completely.
 - Page seems static or empty? It might be loading. WAIT, then SCROLL. Content often appears after interaction.
 - Blocked or stuck? Think creatively: try a different URL path on the same domain, try OAuth/social login, try the page's navigation menu, try Tab key to discover hidden elements.
+- CAPTCHA or "verify you're human"? WAIT (solved automatically). If still blocked after waiting, OPEN_TAB to try a different site or approach.
 - Error after submitting? READ the error message and fix the specific problem, don't start over.
 - Multiple pages/steps? Complete each one fully before moving on. Don't rush.
 - NEVER output DONE or FAIL until you have genuinely exhausted multiple different approaches.
@@ -2465,6 +2468,33 @@ export async function runVisionAgent(
           new Promise<{ isBotWall: false; hasCaptcha: false }>((resolve) => setTimeout(() => resolve({ isBotWall: false, hasCaptcha: false }), 5000)),
         ]);
 
+        // ── Google CAPTCHA/sorry page → auto-switch to DuckDuckGo ──
+        const _currentUrl = activePage.url();
+        if (/google\.com\/sorry/i.test(_currentUrl) || (/google\.com/.test(_currentUrl) && pageCheck.hasCaptcha)) {
+          try {
+            // Extract original search query from the sorry URL
+            const _sorryMatch = _currentUrl.match(/[?&](?:q|continue)=([^&]+)/);
+            let _origQuery = '';
+            if (_sorryMatch) {
+              const _decoded = decodeURIComponent(_sorryMatch[1]);
+              const _qMatch = _decoded.match(/[?&]q=([^&]+)/);
+              _origQuery = _qMatch ? decodeURIComponent(_qMatch[1]).replace(/\+/g, ' ') : '';
+            }
+            if (!_origQuery) {
+              // Fallback: extract from task description
+              _origQuery = (task || '').replace(/\b(book|find|search|get|look up)\b/gi, '').trim().substring(0, 100);
+            }
+            if (_origQuery) {
+              console.log(`[BROWSER-AGENT] Google CAPTCHA detected — switching to DuckDuckGo for: "${_origQuery}"`);
+              history.push(`🔄 Google blocked with CAPTCHA — auto-switching to DuckDuckGo`);
+              await activePage.goto(`https://duckduckgo.com/?q=${encodeURIComponent(_origQuery)}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+              await activePage.waitForTimeout(2000);
+              captchaFailCount = 0; // Reset — we escaped the CAPTCHA
+              continue; // Skip to next step with fresh DuckDuckGo results
+            }
+          } catch { /* fallthrough to normal CAPTCHA handling */ }
+        }
+
         // Handle bot wall
         if (pageCheck.isBotWall) {
           const wallUrl = activePage.url();
@@ -2492,6 +2522,16 @@ export async function runVisionAgent(
           if (!solved) {
             captchaFailCount++;
             if (captchaFailCount >= 3) {
+              // Before giving up, try DuckDuckGo if we were on any search engine
+              if (/google|bing|yahoo/.test(_currentUrl)) {
+                try {
+                  const _fallbackQuery = (task || '').substring(0, 100);
+                  console.log(`[BROWSER-AGENT] CAPTCHA failed 3x on search engine — trying DuckDuckGo`);
+                  await activePage.goto(`https://duckduckgo.com/?q=${encodeURIComponent(_fallbackQuery)}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+                  captchaFailCount = 0;
+                  continue;
+                } catch { /* fall through to failure */ }
+              }
               const pageData = await capturePageData(activePage);
               return { success: false, result: `Blocked by CAPTCHA at ${activePage.url()}`, error: 'captcha_blocked', steps, cost: totalCost, screenshots, pageData };
             }

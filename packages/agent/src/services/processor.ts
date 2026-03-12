@@ -3084,8 +3084,8 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       // Direct browse injection — don't waste time retrying, free models often refuse the same way
       // Generic: search for the service name from the task text — no hardcoded brand lists
       const _taskUrl = _isSignupContext
-          ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
-          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+          ? `https://duckduckgo.com/?q=${encodeURIComponent(subject + ' signup')}`
+          : `https://duckduckgo.com/?q=${encodeURIComponent(subject)}`;
       aiResponse.content = `Starting the task now...`;
       aiResponse.actions = [{ type: 'browse' as const, params: { url: _taskUrl } }];
       _refusalRecovered = true;
@@ -3589,8 +3589,8 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       const _forceUrl = _forceDomainMatch
         ? `https://${_forceDomain}`
         : _brandMatch
-          ? `https://www.google.com/search?q=${encodeURIComponent(_brandMatch[1])} official site`
-          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+          ? `https://duckduckgo.com/?q=${encodeURIComponent(_brandMatch[1])} official site`
+          : `https://duckduckgo.com/?q=${encodeURIComponent(subject)}`;
       // Replace any search-only actions with a browse action
       aiResponse.actions = [{ type: 'browse' as any, params: { url: _forceUrl } }];
       aiResponse.content = `Starting browser task...`;
@@ -3785,7 +3785,15 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
     // with a simple pre-loop execution that always works.
     // Business card fast path was moved to top-level (section 2b) for reliability
 
-    if (_isDocumentAction && !_isBusinessCard && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && aiResponse.model !== 'fallback') {
+    // COMPOUND TASK CHECK: If the task requires REAL-WORLD research (find/search/look up)
+    // AND a document, skip DOC-FAST-PATH — let the browser find real data first.
+    // e.g. "Find 5 coffee shops and create Excel" needs browser, not AI hallucination.
+    // Pure document tasks like "Create a budget spreadsheet" still use fast path.
+    const _compoundResearchDoc = /\b(find|search|look\s*up|get|list|discover|identify|research|check|browse|go\s*to)\b/i.test(`${subject} ${body}`) &&
+      /\b(excel|spreadsheet|word|powerpoint|pdf|document|file)\b/i.test(`${subject} ${body}`) &&
+      /\b(and|then|,|with|into|in\s*a)\b/i.test(`${subject} ${body}`);
+
+    if (_isDocumentAction && !_isBusinessCard && !_compoundResearchDoc && !aiResponse.actions.some(a => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(a.type)) && aiResponse.model !== 'fallback') {
       console.log('[DOC-FAST-PATH] Document task detected — generating content and creating file directly (bypass iteration loop)');
       try {
         const _dfpAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
@@ -3797,9 +3805,14 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
         // Use initial AI response content if it's substantive (avoids second model call + rate limits)
         // The initial response is typically 200-500+ chars of relevant narration we can use as content
         const _dfpInitial = (aiResponse.content || '').replace(/\[TASK_COMPLETE\]/g, '').trim();
-        const _dfpRaw = _dfpInitial.length > 100
+        // For Excel: ask AI to produce a markdown table so the parser extracts proper columns
+        const _dfpIsExcel = _dfpAct === 'create_excel';
+        const _dfpExcelPrompt = _dfpIsExcel
+          ? `Create the data for: "${subject}". Output ONLY a markdown table with appropriate column headers and rows. No explanation, no headings — just the table. Example format:\n| Name | Address | Phone |\n|------|---------|-------|\n| Acme | 123 Main | 555-0100 |`
+          : `Write detailed, complete content for: "${subject}". Include all relevant sections with comprehensive information. Format with clear headings using ## for sections and ### for subsections.`;
+        const _dfpRaw = (_dfpInitial.length > 100 && (!_dfpIsExcel || _dfpInitial.includes('|')))
           ? _dfpInitial
-          : await generateResponse(memory, subject, `Write detailed, complete content for: "${subject}". Include all relevant sections with comprehensive information. Format with clear headings using ## for sections and ### for subsections.`, username, "generate", userId, taskId, senderName).then(r => (r.content || '').trim());
+          : await generateResponse(memory, subject, _dfpExcelPrompt, username, "generate", userId, taskId, senderName).then(r => (r.content || '').trim());
         if (_dfpRaw && _dfpRaw.length > 100) {
           // Parse markdown into sections
           const _dfpSecs = _dfpRaw.split(/\n{2,}/).filter((s: string) => s.trim().length > 10).slice(0, 25).map((s: string) => {
@@ -4051,10 +4064,27 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                     let _bfpDocResult: any;
                     if (_bfpWantsDoc === 'create_excel') {
                       const { createExcelFile } = await import('../execution/actions/create-excel.js');
-                      // Parse extracted data into rows
-                      const _bfpLines = _bfpResult.result.split(/\d+\.\s+/).filter((l: string) => l.trim().length > 3);
-                      const _bfpRows = _bfpLines.map((l: string) => l.trim().replace(/,?\s*$/, '').split(/\s*[-–—]\s*|\s*:\s*/));
-                      _bfpDocResult = await createExcelFile({ filename: _bfpDocFile, sheets: [{ name: 'Data', headers: ['Item', 'Details'], data: _bfpRows.length > 0 ? _bfpRows : [[_bfpResult.result]] }] });
+                      // Use AI to structure extracted data into a proper markdown table
+                      let _bfpXlHeaders: string[] = ['Item', 'Details'];
+                      let _bfpXlData: (string | number | null)[][] = [];
+                      try {
+                        const { generateForcedDirectAnswer: _bfpGenTable } = await import("./ai.js");
+                        const _bfpTablePrompt = `Convert this data into a markdown table with appropriate columns based on the task "${subject}".\nData:\n${_bfpResult.result}\n\nOutput ONLY the markdown table. No explanation.`;
+                        const _bfpTableResult = await _bfpGenTable(_bfpTablePrompt, 'format_data', username || 'user', userId, taskId);
+                        const _bfpTableMatch = _bfpTableResult.content.match(/\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)+)/);
+                        if (_bfpTableMatch) {
+                          _bfpXlHeaders = _bfpTableMatch[1].split('|').map((h: string) => h.trim()).filter(Boolean);
+                          _bfpXlData = _bfpTableMatch[2].trim().split('\n').map((row: string) =>
+                            row.split('|').map((c: string) => c.trim()).filter(Boolean)
+                          );
+                        }
+                      } catch { /* fall through to primitive parsing */ }
+                      // Fallback: primitive parsing if AI structuring failed
+                      if (_bfpXlData.length === 0) {
+                        const _bfpLines = _bfpResult.result.split(/\d+\.\s+/).filter((l: string) => l.trim().length > 3);
+                        _bfpXlData = _bfpLines.map((l: string) => l.trim().replace(/,?\s*$/, '').split(/\s*[-–—]\s*|\s*:\s*/));
+                      }
+                      _bfpDocResult = await createExcelFile({ filename: _bfpDocFile, sheets: [{ name: 'Data', headers: _bfpXlHeaders, data: _bfpXlData.length > 0 ? _bfpXlData : [[_bfpResult.result]] }] });
                     } else if (_bfpWantsDoc === 'create_powerpoint') {
                       const { createPowerPoint } = await import('../execution/actions/create-powerpoint.js');
                       _bfpDocResult = await createPowerPoint({ filename: _bfpDocFile, slides: [{ title: subject, content: _bfpResult.result }] });
@@ -4327,7 +4357,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
         console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
         // Generic: Google search for signup — no hardcoded brand lists
-        const _forceUrl = `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
+        const _forceUrl = `https://duckduckgo.com/?q=${encodeURIComponent(subject + ' create account')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
         console.log(`[REFUSAL-LOOP] Injected browse action: ${_forceUrl}`);
@@ -4339,7 +4369,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           !/\b(signed up|created.*account|account.*created|registered|successfully)\b/i.test(aiResponse.content)) {
         console.warn(`[PASSIVE-SIGNUP] AI described service instead of signing up — forcing browse`);
         // Generic: Google search for signup — no hardcoded brand lists
-        const _forceSignupUrl = `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
+        const _forceSignupUrl = `https://duckduckgo.com/?q=${encodeURIComponent(subject + ' signup page')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceSignupUrl } }];
       }
@@ -10969,7 +10999,7 @@ async function executeAction(
       // Strategy 2b: If Bing also failed, try Google
       if (isGarbageText(pageText) || pageText.length < 200) {
         console.log(`[SEARCH] Bing also ${isGarbageText(pageText) ? 'garbage' : 'too short'}, trying Google...`);
-        const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en`;
+        const googleUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
         const googleResult = await executionEngine.executeSteps([
           { action: 'navigate', params: { url: googleUrl } },
           { action: 'wait', params: { ms: 2000 } },
