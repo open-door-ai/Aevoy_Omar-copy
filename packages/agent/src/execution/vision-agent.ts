@@ -1948,7 +1948,10 @@ export async function runVisionAgent(
 
   // ── Task classification ──
   const isBookingTask = /\b(order|reserve|book|pickup|delivery|reservation|get.*food|get.*pizza|get.*coffee)\b/i.test(task);
-  const isComplexTask = /\b(sign\s*up|register|create.*account|book|reserve|order|purchase|checkout|apply|subscribe|fill\s*(out|in|the)?\s*(a\s+)?form|submit\s*(a\s+|the\s+)?form|complete\s*(the\s+)?form)\b/i.test(task);
+  // Complex = multi-step tasks needing Haiku (signup, booking, form fill).
+  // Explicitly EXCLUDE simple tasks (login, navigate, extract, find).
+  const isSimpleTask = /\b(log\s*in|login|sign\s*in|navigate|go\s+to|visit|open|extract|scrape|find|tell\s+me|what\s+is|price\s+of)\b/i.test(task);
+  const isComplexTask = !isSimpleTask && /\b(sign\s*up|register|create\s+(a|an|my)\s+account|book|reserve|order|purchase|checkout|apply|subscribe|fill\s*(out|in|the)?\s*(a\s+)?form|submit\s*(a\s+|the\s+)?form|complete\s*(the\s+)?form)\b/i.test(task);
   const isFormFillTask = /\b(sign\s*up|signup|register|create.*account|apply|fill.*form|submit.*form|probate|intake|legal.*form|contact.*form)\b/i.test(task);
   const effectiveMaxSteps = isBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS;
   let dynamicMaxSteps = effectiveMaxSteps;
@@ -2267,6 +2270,14 @@ export async function runVisionAgent(
       if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
         const pageData = await capturePageData(activePage);
         return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots, pageData };
+      }
+
+      // ── Cost guard: stop runaway sessions ──
+      const COST_LIMIT = isComplexTask ? 0.10 : 0.03; // $0.10 complex, $0.03 simple
+      if (totalCost > COST_LIMIT) {
+        console.warn(`[BROWSER-AGENT] Cost guard: $${totalCost.toFixed(3)} > $${COST_LIMIT} limit — stopping`);
+        const pageData = await capturePageData(activePage);
+        return { success: false, error: `Cost limit ($${COST_LIMIT}) exceeded after ${steps} steps`, steps, cost: totalCost, screenshots, pageData };
       }
 
       // Yield to user takeover — pause while user has browser control
