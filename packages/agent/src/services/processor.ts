@@ -3089,8 +3089,8 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       // Direct browse injection — don't waste time retrying, free models often refuse the same way
       // Generic: search for the service name from the task text — no hardcoded brand lists
       const _taskUrl = _isSignupContext
-          ? `https://duckduckgo.com/?q=${encodeURIComponent(subject + ' signup')}`
-          : `https://duckduckgo.com/?q=${encodeURIComponent(subject)}`;
+          ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
+          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
       aiResponse.content = `Starting the task now...`;
       aiResponse.actions = [{ type: 'browse' as const, params: { url: _taskUrl } }];
       _refusalRecovered = true;
@@ -3594,8 +3594,8 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       const _forceUrl = _forceDomainMatch
         ? `https://${_forceDomain}`
         : _brandMatch
-          ? `https://duckduckgo.com/?q=${encodeURIComponent(_brandMatch[1])} official site`
-          : `https://duckduckgo.com/?q=${encodeURIComponent(subject)}`;
+          ? `https://www.google.com/search?q=${encodeURIComponent(_brandMatch[1])} official site`
+          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
       // Replace any search-only actions with a browse action
       aiResponse.actions = [{ type: 'browse' as any, params: { url: _forceUrl } }];
       aiResponse.content = `Starting browser task...`;
@@ -4400,7 +4400,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
         console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
         // Generic: Google search for signup — no hardcoded brand lists
-        const _forceUrl = `https://duckduckgo.com/?q=${encodeURIComponent(subject + ' create account')}`;
+        const _forceUrl = `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
         console.log(`[REFUSAL-LOOP] Injected browse action: ${_forceUrl}`);
@@ -4412,7 +4412,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           !/\b(signed up|created.*account|account.*created|registered|successfully)\b/i.test(aiResponse.content)) {
         console.warn(`[PASSIVE-SIGNUP] AI described service instead of signing up — forcing browse`);
         // Generic: Google search for signup — no hardcoded brand lists
-        const _forceSignupUrl = `https://duckduckgo.com/?q=${encodeURIComponent(subject + ' signup page')}`;
+        const _forceSignupUrl = `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceSignupUrl } }];
       }
@@ -11115,20 +11115,20 @@ async function executeAction(
         return { action, success: false, error: "Search failed: no browser available and API search returned no results" };
       }
 
-      // Strategy 1: DuckDuckGo Lite via browser (lighter, less rate-limited than html endpoint)
-      const ddgUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-      const ddgResult = await executionEngine.executeSteps([
-        { action: 'navigate', params: { url: ddgUrl } },
+      // Strategy 1: Google via browser (most reliable, CAPTCHA auto-solved)
+      const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+      const googleResult1 = await executionEngine.executeSteps([
+        { action: 'navigate', params: { url: googleSearchUrl } },
         { action: 'wait', params: { ms: 1500 } },
         { action: 'extract', params: { selector: 'body' } }
       ]);
 
-      let pageText = typeof ddgResult.data === 'string' ? ddgResult.data : JSON.stringify(ddgResult.data || '');
-      let usedEngine = 'duckduckgo';
+      let pageText = typeof googleResult1.data === 'string' ? googleResult1.data : JSON.stringify(googleResult1.data || '');
+      let usedEngine = 'google';
 
-      // Strategy 2: If DDG failed or returned garbage, try Bing
-      if (!ddgResult.success || isGarbageText(pageText) || pageText.length < 200) {
-        console.log(`[SEARCH] DDG ${!ddgResult.success ? 'failed' : isGarbageText(pageText) ? 'error page' : 'too short'}, trying Bing...`);
+      // Strategy 2: If Google failed or returned garbage, try Bing
+      if (!googleResult1.success || isGarbageText(pageText) || pageText.length < 200) {
+        console.log(`[SEARCH] Google ${!googleResult1.success ? 'failed' : isGarbageText(pageText) ? 'error page' : 'too short'}, trying Bing...`);
         const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
         const bingResult = await executionEngine.executeSteps([
           { action: 'navigate', params: { url: bingUrl } },
@@ -11143,19 +11143,19 @@ async function executeAction(
         }
       }
 
-      // Strategy 2b: If Bing also failed, try Google
+      // Strategy 2b: If Bing also failed, try Brave Search
       if (isGarbageText(pageText) || pageText.length < 200) {
-        console.log(`[SEARCH] Bing also ${isGarbageText(pageText) ? 'garbage' : 'too short'}, trying Google...`);
-        const googleUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}`;
-        const googleResult = await executionEngine.executeSteps([
-          { action: 'navigate', params: { url: googleUrl } },
+        console.log(`[SEARCH] Bing also ${isGarbageText(pageText) ? 'garbage' : 'too short'}, trying Brave...`);
+        const braveUrl = `https://search.brave.com/search?q=${encodeURIComponent(query)}`;
+        const braveResult = await executionEngine.executeSteps([
+          { action: 'navigate', params: { url: braveUrl } },
           { action: 'wait', params: { ms: 2000 } },
           { action: 'extract', params: { selector: 'body' } }
         ]);
-        const googleText = typeof googleResult.data === 'string' ? googleResult.data : JSON.stringify(googleResult.data || '');
-        if (googleResult.success && !isGarbageText(googleText) && googleText.length > 200) {
-          pageText = googleText;
-          usedEngine = 'google';
+        const braveText = typeof braveResult.data === 'string' ? braveResult.data : JSON.stringify(braveResult.data || '');
+        if (braveResult.success && !isGarbageText(braveText) && braveText.length > 200) {
+          pageText = braveText;
+          usedEngine = 'brave';
         }
       }
 
