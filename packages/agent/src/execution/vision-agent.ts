@@ -2272,12 +2272,14 @@ export async function runVisionAgent(
         return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots, pageData };
       }
 
-      // ── Cost guard: stop runaway sessions ──
-      const COST_LIMIT = isComplexTask ? 0.10 : 0.03; // $0.10 complex, $0.03 simple
-      if (totalCost > COST_LIMIT) {
-        console.warn(`[BROWSER-AGENT] Cost guard: $${totalCost.toFixed(3)} > $${COST_LIMIT} limit — stopping`);
+      // ── Cost guard + step guard: stop runaway sessions ──
+      const COST_LIMIT = isComplexTask ? 0.10 : 0.03;
+      const STEP_LIMIT = isComplexTask ? dynamicMaxSteps : Math.min(dynamicMaxSteps, 20);
+      if (totalCost > COST_LIMIT || steps >= STEP_LIMIT) {
+        const reason = totalCost > COST_LIMIT ? `cost $${totalCost.toFixed(3)} > $${COST_LIMIT}` : `${steps} steps > ${STEP_LIMIT} limit`;
+        console.warn(`[BROWSER-AGENT] Guard triggered: ${reason} — stopping`);
         const pageData = await capturePageData(activePage);
-        return { success: false, error: `Cost limit ($${COST_LIMIT}) exceeded after ${steps} steps`, steps, cost: totalCost, screenshots, pageData };
+        return { success: false, error: `Session guard (${reason}) after ${steps} steps`, steps, cost: totalCost, screenshots, pageData };
       }
 
       // Yield to user takeover — pause while user has browser control
