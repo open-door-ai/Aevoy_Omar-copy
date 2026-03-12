@@ -1771,7 +1771,8 @@ async function buildPrompt(
   snapshot: string, url: string, task: string, history: string[],
   creds: { email: string; password: string; name: string; phone: string },
   triedAndFailed: string, stuckHint: string,
-  userProfile?: { displayName: string; email: string; phone: string; timezone: string; location: string } | null
+  userProfile?: { displayName: string; email: string; phone: string; timezone: string; location: string } | null,
+  plan?: string
 ): Promise<string> {
   // ── SECURITY: Strip plaintext credentials from task text ──
   // Credentials are provided via [CRED_*] references in the credNote section.
@@ -1909,9 +1910,11 @@ async function buildPrompt(
     }
   }
 
+  const planNote = plan ? `\n📋 PLAN (follow these steps in order):\n${plan}\n` : '';
+
   return `TASK: ${safeTask}
 URL: ${url}
-${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}${confirmationNote}
+${planNote}${credNote}${profileNote}${hiveMindNote}${errorNote}${triedSection}${stuckSection}${historyText}${confirmationNote}
 ACCESSIBILITY TREE (use [ref] numbers to target elements):
 ${snapshot}
 ${suggestedActions}
@@ -2077,9 +2080,27 @@ export async function runVisionAgent(
   let taskPlan = '';
   if (isComplexTask) {
     try {
-      const planPrompt = `TASK: ${task}\n\nOutput 3-5 bullet points: target URL, fields to fill, buttons to click, success criteria. Max 80 words.`;
+      const isBookingPlan = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso))\b/i.test(task);
+      const isSignupPlan = /\b(sign\s*up|signup|register|create\s*(a|an|my)?\s*account)\b/i.test(task);
+      const planContext = isBookingPlan
+        ? `This is a BOOKING task. Your plan MUST include:
+1. Navigate to the RESERVATIONS/BOOKING page (look for "Reserve", "Book a Table", "Reservations" link — NOT "Menu" or "About")
+2. Select date, time, party size from dropdowns/calendars
+3. Fill name, email, phone into the contact form
+4. Click the final "Complete Reservation" / "Book Now" / "Confirm" button
+5. Success = confirmation number or "thank you" page. NOTHING LESS.
+If the site has no online booking, OPEN_TAB to search "[restaurant] opentable" or "[restaurant] resy".`
+        : isSignupPlan
+        ? `This is a SIGNUP task. Your plan MUST include:
+1. Find the signup/register page (click "Sign Up", "Get Started", "Create Account" — NOT "Log In")
+2. Fill email, password, name fields
+3. Handle any CAPTCHA or verification step
+4. Click the submit/create button
+5. Success = dashboard, welcome page, or "verify your email" message.`
+        : '';
+      const planPrompt = `TASK: ${task}\n\n${planContext}\n\nOutput 3-5 concrete action steps: which pages to navigate to, which buttons to click, which fields to fill, and what success looks like. Be SPECIFIC about page navigation — name the exact links/buttons. Max 100 words.`;
       const planResult = await generateBrowserStepResponse(planPrompt, SYSTEM_PROMPT, userId, taskId, 'complex');
-      taskPlan = planResult.content.substring(0, 300);
+      taskPlan = planResult.content.substring(0, 500);
       totalCost += planResult.cost;
       console.log(`[BROWSER-AGENT] Plan: ${taskPlan.substring(0, 120)}`);
     } catch { /* planning is optional */ }
@@ -2979,7 +3000,7 @@ export async function runVisionAgent(
       }
 
       // ── Ask AI ──
-      const prompt = await buildPrompt(snapshot, url, task, history, taskCreds, triedText, stuckHint, userProfile);
+      const prompt = await buildPrompt(snapshot, url, task, history, taskCreds, triedText, stuckHint, userProfile, taskPlan);
 
       let aiResponse: string;
       let stepCost = 0;

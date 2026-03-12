@@ -1,99 +1,135 @@
 # AGI Browser Automation Overhaul — Progress Log
 
 ## Objective
-Make the browser agent work with true AGI intelligence — like how Claude Code uses Playwright (accessibility tree + deterministic actions), not dumb screenshot guessing with cheap models.
+Make the browser agent work with true AGI intelligence — task COMPLETION not task RESEARCH. "Book a restaurant" = confirmed reservation, not "I found the restaurant's phone number".
 
 ## Success Criteria
-- Agent can book a restaurant reservation end-to-end (not just "here's the phone number")
-- Agent falls back to calling the business when browser fails
+- Agent can book a restaurant reservation end-to-end
+- Agent creates real deliverables (Excel with real data, not AI hallucination essays)
 - Agent verifies outcomes before marking complete
 - No hardcoded site-specific logic
-- Cost-optimized but spends when needed
-- Tested until failure
-
-## Architecture Comparison
-| | Claude Code (works) | Current Vision Agent (broken) |
-|---|---|---|
-| Page understanding | Accessibility tree (structured text) | Screenshot → AI image interpretation |
-| Element targeting | `ref=e123` exact refs | `[5]` refs from snapshot, but AI reasons from image |
-| Model | Claude Opus (smart) | Gemini Flash free → Llama-8B → Scout (dumb) |
-| Planning | Full reasoning in context | Single-step "what next?" |
-| Verification | Read snapshot, confirm result | None — marks complete blindly |
-| Fallback | N/A | None — gives up or lies |
+- Quality gate catches "I found X but didn't do X" as failure
+- Cost-optimized, tested on production
 
 ## Progress
 
-### Session 99 — 2026-03-11
+### Phase 4: Testing Round 1 (2026-03-12, commit 9fac49b)
 
-#### Phase 1: Investigation
-- [x] Found Luna account (`ebrahimo@mulgrave.com`, user `35080bd8`)
-- [x] Analyzed 13 tasks — zero successful bookings despite 8+ attempts
-- [x] Identified root causes:
-  1. Cheap models can't reason about web UIs
-  2. Screenshot-based reasoning is lossy
-  3. No outcome verification
-  4. Premature completion ("3 actions completed")
-  5. No fallback to calling
+6 tests submitted. Results:
 
-#### Phase 2: Code Analysis — COMPLETE
-- [x] Full vision-agent.ts mapped: entry (L1920) → main loop (L2318-3772) → DONE handler (L3282)
-- [x] AI cascade: Gemini Flash → DeepSeek → Llama-70B → Haiku → Scout → Llama-8B
-- [x] Completion: DONE action from AI, confirmation URL detection, verification gates
-- [x] Accessibility snapshot: getAccessibilitySnapshot() L333-413 — already structured text with [ref] IDs
-- [x] Observe→Reason→Act loop: snapshot + optional screenshot → AI prompt → parse actions → execute
-- [x] ROOT CAUSE: Cheap models (Gemini/DeepSeek/Llama) can't plan multi-step tasks.
-  They output garbage, go in circles, declare DONE without evidence.
-  Haiku is 4th in cascade — by the time it's reached, context may be polluted.
+| # | Task | Status | Cost | Time | Verdict |
+|---|------|--------|------|------|---------|
+| 1 | DemoQA form fill | completed | $0.027 | 738s | FAIL — quality gate leak ("PASS: false" in response) |
+| 2 | Top 3 restaurants | completed | $0.000 | ~30s | FAIL — found 2.5 restaurants, no phone numbers |
+| 3 | Notion signup | completed | $0.091 | ~1000s | FAIL — 89 browser steps, never completed, passive response |
+| 4 | Businesses + Excel | completed | $0.032 | ~38s | FAIL — found 5 businesses but NO Excel created, no contact emails |
+| 5 | Sushi booking | completed | $0.026 | ~500s | FAIL — found Okami Sushi but "no booking confirmation obtained" |
+| 6 | DemoQA form (v2) | completed | $0.027 | ~500s | PARTIAL — leaked quality gate text |
 
-#### Phase 3: Fixes — IMPLEMENTED
-- [x] **Smart Model Routing** (ai.ts `generateBrowserStepResponse`):
-  - Added `taskComplexity` parameter: `'simple'` | `'complex'`
-  - Complex tasks (booking/signup/purchase) use **Haiku FIRST** — skips cheap models entirely
-  - Simple tasks (click/scroll/extract) still use cheap cascade (Gemini → DeepSeek → Llama)
-  - Complexity detection uses existing `isComplexTask` flag in vision-agent.ts
-  - Cost: ~$0.006/step for complex vs ~$0.001 for simple. Worth it — cheap models hallucinate on complex tasks.
-  - Both call sites updated: planning prompt (L2074) and main loop AI call (L2956)
+**Root Causes Identified:**
+1. Quality gate leak — internal eval text in user response (FIXED: commit 3e0d9d4)
+2. Agent stops at "found info" without completing the task
+3. DOC-FAST-PATH short-circuits compound research+document tasks with AI hallucination
+4. Google blocks automated browsers with reCAPTCHA
+5. Gemini Flash quality evaluator too lenient — passes "not obtained" responses
 
-- [x] **Page Content Verification on DONE** (vision-agent.ts DONE handler):
-  - After AI outputs DONE for action tasks, reads actual page content via `document.body.innerText`
-  - Checks for positive signals: confirmation, thank you, account created, receipt, reference number
-  - Checks for negative signals: error messages, still-active forms
-  - Rejects DONE if page shows errors/active forms but no confirmation
-  - For booking tasks: requires confirmation evidence (confirmation #, "thank you", reservation details)
-  - Exception: phone call results (agent called the business) pass without page check
-  - Max 2 page-verify rejections to prevent infinite loops
-  - Non-critical: if page evaluation fails, DONE proceeds (don't block on eval errors)
+### Phase 4: Testing Round 2 (2026-03-12, commit d83790a)
 
-- [x] **Model-Based Quality Gate** (processor.ts + ai.ts `evaluateResponseQuality`):
-  - Separate model evaluates every action-task response before sending to user
-  - Prompt checks: Is response concrete? Does it report an outcome? Is it first-person? Not advice?
-  - Uses Gemini Flash (free) → Haiku ($0.002) cascade for evaluation
-  - If quality fails: calls `generateForcedDirectAnswer` to rewrite with feedback
-  - Max 2 retry attempts, $0.01 cost cap on eval loop
-  - Skips for: research tasks, greetings, signupAutoCompleted, direct-injected results
-  - Works generically for all task types — no hardcoded patterns
+Fixes deployed: RULE 0, DuckDuckGo default, Google CAPTCHA auto-escape
 
-- [ ] Make accessibility snapshot the PRIMARY AI input (not screenshot) — ALREADY THE CASE
-  - Snapshot is primary input; screenshot only used when stuck (sameUrlCount >= 3)
-- [ ] Format snapshot like Playwright MCP output — snapshot already uses [ref] IDs, structured text
-- [ ] Add "call the business" fallback when browser fails — ALREADY EXISTS
-  - BOT-WALL-PHONE escalation (L6756+), RESY-BLOCKED search+call (L6762+)
+| # | Task | Status | Cost | Time | Verdict |
+|---|------|--------|------|------|---------|
+| 1 | Sushi booking | completed | $0.070 | 526s | FAIL — DuckDuckGo worked, found 6 restaurants, but STILL didn't book. Quality gate passed "confirmation not obtained" |
+| 2 | Coffee shops + Excel | completed | $0.000 | 46s | FAIL — DOC-FAST-PATH blocked but DOC-ACTION-GATE (in-loop) still fired. Excel file empty/malformed |
+| 3 | Canva signup | needs_review | $0.012 | 849s | FAIL — Cloudflare blocked browser. Quality gate correctly caught failure |
 
-#### Phase 4: Testing
-- [ ] Build and deploy to Railway
-- [ ] Test: "Book a reservation at Cactus Club tonight 7pm 4 people"
-- [ ] Test: "Sign up for a new account on [random site]"
-- [ ] Test: "Cancel my subscription on [service]"
-- [ ] Test until failure on each
+**New Root Causes:**
+1. THREE separate DOC-ACTION-GATE paths in iteration loop — all bypass browsing for compound tasks
+2. Quality gate pre-check needed — regex catches "not obtained" before Gemini evaluation
+3. Canva/major sites block automated browsers (Cloudflare) — need proxy/stealth improvement
+
+### Fixes Applied (commit 82beb45)
+
+1. **All 3 DOC-ACTION-GATE paths** now skip for compound research+document tasks
+   - DOC-FAST-PATH (pre-loop) — already fixed in d83790a
+   - DOC-ACTION-GATE rounds 1-2 (line ~4963) — NEW
+   - DOC-ACTION-GATE rounds 3+ (line ~5017) — NEW
+   - DOC-ACTION-GATE no-actions path (line ~5270) — NEW
+   - Compound detection: task has research verb + document type + connector word
+
+2. **Quality gate hard pre-check** — regex catches "not obtained/confirmed/completed" before model eval
+   - For action tasks (booking/signup/purchase/cancellation)
+   - Auto-marks `needs_review` when response admits failure
+   - Skips expensive Gemini/Haiku evaluation
+
+3. **DuckDuckGo as default search** (commit d83790a)
+   - All `google.com/search` URLs → `duckduckgo.com/?q=`
+   - Vision agent SYSTEM_PROMPT: "Use DuckDuckGo, NOT Google"
+   - Auto-detect `google.com/sorry` → redirect to DuckDuckGo
+   - CAPTCHA fail fallback: try DuckDuckGo after 3 CAPTCHA failures
+
+4. **Excel data quality** (commit d83790a)
+   - DOC-FAST-PATH Excel: AI prompted for markdown table format, not essay
+   - BFP Excel: AI structures extracted data into multi-column table
+
+### Phase 4: Testing Round 3 — IN PROGRESS
+
+Deployed commit 82beb45. Retesting same 3 tasks to verify fixes.
+
+## Architecture
+
+### Smart Model Routing
+- Complex tasks (booking/signup/purchase) → Haiku FIRST ($0.006/step)
+- Simple tasks (click/scroll/extract) → cheap cascade (Gemini → DeepSeek → Llama)
+
+### Quality Gate Pipeline
+```
+Response generated
+  ↓
+HARD PRE-CHECK: regex for "not obtained/confirmed/completed"
+  → auto-fail for action tasks
+  ↓
+MODEL EVALUATION: Gemini Flash (free) → Haiku ($0.002)
+  → strict criteria: concrete outcome, not advice, task actually done
+  ↓
+If fail → generateForcedDirectAnswer (rewrite)
+  → max 2 retries, $0.01 cost cap
+  ↓
+Output to user
+```
+
+### Compound Task Flow
+```
+"Find 5 coffee shops and create Excel"
+  ↓
+_compoundResearchDoc detected → skip DOC-FAST-PATH
+  ↓
+Iteration loop → AI generates search actions
+  ↓
+Browser finds real data (DuckDuckGo search)
+  ↓
+BFP compound path → AI structures data → createExcelFile
+```
+
+### Google CAPTCHA Escape
+```
+google.com/sorry detected OR hasCaptcha on google.com
+  ↓
+Extract original query from sorry URL
+  ↓
+Auto-navigate to duckduckgo.com/?q=<query>
+  ↓
+Continue browser steps on DuckDuckGo results
+```
 
 ## Files Modified
-1. `packages/agent/src/services/ai.ts`:
-   - `generateBrowserStepResponse()`: Added `taskComplexity` param + Haiku-first routing
-   - `evaluateResponseQuality()`: New function — model-based response quality evaluation
-2. `packages/agent/src/execution/vision-agent.ts`:
-   - Main loop AI call: passes `isComplexTask ? 'complex' : 'simple'`
-   - Planning prompt: passes `'complex'`
-   - DONE handler: added PAGE-VERIFY block for action tasks
-3. `packages/agent/src/services/processor.ts`:
-   - Added model-based quality evaluation before response delivery
-   - 2-attempt loop with $0.01 cost cap
+1. `packages/agent/src/services/ai.ts`: Smart routing, quality evaluation, RULE 0 in system prompt
+2. `packages/agent/src/execution/vision-agent.ts`: Page verification, DuckDuckGo prompt, CAPTCHA escape
+3. `packages/agent/src/services/processor.ts`: Quality precheck, compound task guards, DuckDuckGo URLs
+
+## Known Remaining Issues
+- Canva/major sites block automated browsers (Cloudflare Turnstile)
+- Agent finds info but doesn't follow through to booking (RULE 0 prompt changes haven't proven effective yet)
+- Excel files can be empty when compound task data extraction fails
+- Notion signup burned $0.091 for nothing — cost caps need tightening
+- No visual verification of generated files (Excel, PDF quality not checked)

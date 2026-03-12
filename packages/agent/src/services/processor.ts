@@ -4318,6 +4318,11 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
       currentIteration++;
       const iterationStart = Date.now();
       const ITERATION_TIMEOUT_MS = 60000; // 60 seconds per iteration max
+      // Cap actions per iteration to prevent hallucinated action explosions (e.g. 862 actions)
+      if (aiResponse.actions.length > 10) {
+        console.warn(`[ITERATE] Action cap: ${aiResponse.actions.length} actions → capped to 10`);
+        aiResponse.actions = aiResponse.actions.slice(0, 10);
+      }
       console.log(`[ITERATE] Round ${currentIteration}/${MAX_ITERATIONS}, ${aiResponse.actions.length} actions to execute`);
 
       // Heartbeat: update updated_at so watchdog knows we're alive
