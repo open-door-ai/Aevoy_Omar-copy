@@ -4431,11 +4431,14 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           const _isHollowResponse = (
             /(?:were|was|are|is)\s+not\s+(?:directly\s+)?(?:retrieved|extracted|fetched|obtained|found|available|provided|included)/i.test(_hrLC) ||
             /(?:specific|detailed)\s+(?:results?|listings?|data|information)\s+(?:are|were)\s+not\s+(?:provided|available|found)/i.test(_hrLC) ||
-            /(?:could not|couldn't|unable to)\s+(?:retrieve|extract|find|obtain|get)\s+(?:specific|detailed|actual)/i.test(_hrLC) ||
+            /(?:could not|couldn't|unable to|did not|didn't)\s+(?:retrieve|extract|find|obtain|get)\s+(?:specific|detailed|actual|enough)/i.test(_hrLC) ||
             /no\s+(?:specific|detailed|actual)\s+(?:results?|data|listings?|information|products?|jobs?)\s+(?:were|was|have been)\s+(?:found|retrieved|obtained)/i.test(_hrLC) ||
-            /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+(?:specific|detailed|actual)/i.test(_hrLC)
+            /(?:search results?|results?)\s+(?:do|did)\s+not\s+(?:provide|contain|include|show)\s+(?:specific|detailed|actual)/i.test(_hrLC) ||
+            // Meta-description: agent describes its process instead of delivering results
+            /^i\s+searched\s+for\b/i.test(_hrLC.trim()) && !/\b(\$|£|€)\s*\d|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/i.test(_hrLC) ||
+            /\bonly\s+yielded\b|\bdid\s+not\s+find\s+enough\b|\bnot\s+enough\s+(?:specific\s+)?data\b/i.test(_hrLC)
           );
-          if (_isHollowResponse && aiResponse.content.length < 800 && _hollowRejectionCount < MAX_HOLLOW_REJECTIONS) {
+          if (_isHollowResponse && aiResponse.content.length < 1500 && _hollowRejectionCount < MAX_HOLLOW_REJECTIONS) {
             _hollowRejectionCount++;
             console.warn(`[HOLLOW-GATE] REJECTED (${_hollowRejectionCount}/${MAX_HOLLOW_REJECTIONS}): AI said TASK_COMPLETE but response admits no data found (iter=${currentIteration}). Forcing different strategy.`);
             const _blockedList = [...domainFailures.entries()].filter(([, c]) => c >= 2).map(([d]) => d);

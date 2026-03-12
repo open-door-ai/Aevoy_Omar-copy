@@ -3409,8 +3409,16 @@ export async function runVisionAgent(
             }
           }
 
-          if (isPassive || isAdvice || isOrderIncomplete || isBookingIncomplete || isSignupIncomplete || dataMissing || isPageDescription) {
-            const reason = isPassive ? 'PASSIVE' : isBookingIncomplete ? 'BOOKING-INCOMPLETE' : isSignupIncomplete ? 'SIGNUP-INCOMPLETE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : isPageDescription ? 'PAGE-DESCRIPTION' : 'ADVICE';
+          // Research-incomplete: agent describes its search process instead of giving results
+          // "I searched for X", "I found the following resources", "did not find enough data"
+          const isResearchIncomplete = !isPassive && !isAdvice && (
+            /^i\s+searched\s+for\b/i.test(doneResult.trim()) && !/\b(\$|£|€)\s*\d|\d+\.\d{2}/.test(doneResult) ||
+            /\b(only\s+yielded|did\s+not\s+find\s+enough|not\s+enough\s+(?:specific\s+)?data|without\s+specific\s+(?:comparative|detailed|pricing))\b/i.test(doneResult) ||
+            /\b(?:browsing|search)\s+(?:action|results?)\s+only\s+(?:yielded|returned|showed)\b/i.test(doneResult)
+          );
+
+          if (isPassive || isAdvice || isOrderIncomplete || isBookingIncomplete || isSignupIncomplete || dataMissing || isPageDescription || isResearchIncomplete) {
+            const reason = isPassive ? 'PASSIVE' : isBookingIncomplete ? 'BOOKING-INCOMPLETE' : isSignupIncomplete ? 'SIGNUP-INCOMPLETE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : isPageDescription ? 'PAGE-DESCRIPTION' : isResearchIncomplete ? 'RESEARCH-INCOMPLETE' : 'ADVICE';
             console.log(`[BROWSER-AGENT] Rejected ${reason} DONE: "${doneResult.substring(0, 80)}"`);
             // Build a profile-aware forced action hint so the AI fills the form instead of asking
             const profileHint = userProfile
@@ -3427,6 +3435,8 @@ export async function runVisionAgent(
               ? `⚠️ BOOKING-INCOMPLETE DONE rejected: Finding the restaurant is step 1. You must ACTUALLY BOOK: CLICK on a restaurant, select date/time/party-size, FILL your name/email/phone, and CLICK "Complete Reservation" or "Book". If this site can't book online, OPEN_TAB and search "[restaurant name] opentable" or "[restaurant name] resy" to find a bookable listing.${profileHint}`
               : isSignupIncomplete
               ? `⚠️ SIGNUP-INCOMPLETE DONE rejected: Finding the signup page is step 1. You must ACTUALLY CREATE the account: FILL email, password, name fields and CLICK submit/create. If blocked, try OAuth (Google/Apple/Facebook buttons).${profileHint}`
+              : isResearchIncomplete
+              ? `⚠️ RESEARCH-INCOMPLETE DONE rejected: You described your search process instead of giving results. A human doesn't say "I searched for X" — they say "Here are the results." SCROLL DOWN on the current page to read the actual article content. If this page has no useful content, OPEN_TAB and try a DIFFERENT source. EXTRACT the actual names, features, prices, and data. Do NOT output DONE until you have SPECIFIC facts.`
               : dataMissing && !isActionTask
               ? `⚠️ DATA-MISSING DONE rejected: "${doneResult.substring(0, 100)}". You are on the correct page — READ the visible content and output DONE with the ACTUAL DATA the user asked for (titles, prices, names, addresses, etc.). Do NOT navigate away. Do NOT describe the page. Just output DONE "Item 1: [name] £X.XX, Item 2: ..."${forceRetryHint}`
               : `⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${forceRetryHint}${profileHint}`;
