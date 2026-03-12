@@ -1791,44 +1791,49 @@ async function buildPrompt(
     : '';
 
   // ── AUTO-SUGGEST: Generate suggested actions from accessibility tree for cheap models ──
-  // Matches field labels to credentials dynamically. Works for ANY site — no hardcoding.
+  // Two phases: (1) credential fields need creds, (2) action buttons always scan.
   // This is the key to making cheap models work: give them the answer to confirm/modify.
   let suggestedActions = '';
-  if (creds.email && !isErrorPage && !isConfirmationPage) {
+  if (!isErrorPage && !isConfirmationPage) {
     const suggestions: string[] = [];
-    // Parse the snapshot to find textbox/input refs and match to credentials
     const refLines = snapshot.split('\n');
-    for (const line of refLines) {
-      const refMatch = line.match(/\[(\d+)\]\s+(textbox|input|combobox)\s+"([^"]+)"/i);
-      if (!refMatch) continue;
-      const [, refNum, , fieldLabel] = refMatch;
-      const label = fieldLabel.toLowerCase();
-      // Match field labels to credential references (NEVER send actual values to AI)
-      if (/\b(email|e-mail|work.?email|user.?name|login)\b/.test(label) && creds.email) {
-        suggestions.push(`FILL [${refNum}] ${CRED_REFS.EMAIL}`);
-      } else if (/\b(password|passwd|pass)\b/.test(label) && creds.password) {
-        suggestions.push(`FILL [${refNum}] ${CRED_REFS.PASS}`);
-      } else if (/\b(first.?name|given.?name|fname)\b/.test(label) && creds.name) {
-        suggestions.push(`FILL [${refNum}] ${CRED_REFS.FIRST_NAME}`);
-      } else if (/\b(last.?name|surname|family|lname)\b/.test(label) && creds.name) {
-        suggestions.push(`FILL [${refNum}] ${CRED_REFS.LAST_NAME}`);
-      } else if (/\b(full.?name|your.?name|display.?name|name)\b/.test(label) && !/\b(company|org|user)\b/.test(label) && creds.name) {
-        suggestions.push(`FILL [${refNum}] ${CRED_REFS.NAME}`);
-      } else if (/\b(phone|tel|mobile|cell)\b/.test(label) && creds.phone) {
-        suggestions.push(`FILL [${refNum}] ${CRED_REFS.PHONE}`);
+    // Phase 1: Match form fields to credentials (only when creds available)
+    if (creds.email) {
+      for (const line of refLines) {
+        const refMatch = line.match(/\[(\d+)\]\s+(textbox|input|combobox)\s+"([^"]+)"/i);
+        if (!refMatch) continue;
+        const [, refNum, , fieldLabel] = refMatch;
+        const label = fieldLabel.toLowerCase();
+        if (/\b(email|e-mail|work.?email|user.?name|login)\b/.test(label) && creds.email) {
+          suggestions.push(`FILL [${refNum}] ${CRED_REFS.EMAIL}`);
+        } else if (/\b(password|passwd|pass)\b/.test(label) && creds.password) {
+          suggestions.push(`FILL [${refNum}] ${CRED_REFS.PASS}`);
+        } else if (/\b(first.?name|given.?name|fname)\b/.test(label) && creds.name) {
+          suggestions.push(`FILL [${refNum}] ${CRED_REFS.FIRST_NAME}`);
+        } else if (/\b(last.?name|surname|family|lname)\b/.test(label) && creds.name) {
+          suggestions.push(`FILL [${refNum}] ${CRED_REFS.LAST_NAME}`);
+        } else if (/\b(full.?name|your.?name|display.?name|name)\b/.test(label) && !/\b(company|org|user)\b/.test(label) && creds.name) {
+          suggestions.push(`FILL [${refNum}] ${CRED_REFS.NAME}`);
+        } else if (/\b(phone|tel|mobile|cell)\b/.test(label) && creds.phone) {
+          suggestions.push(`FILL [${refNum}] ${CRED_REFS.PHONE}`);
+        }
       }
     }
-    // Find submit/continue/create buttons AND signup links
+    // Phase 2: Find action buttons — always scan (signup, add-to-cart, book, etc.)
     for (const line of refLines) {
       const btnMatch = line.match(/\[(\d+)\]\s+(button|link)\s+"([^"]+)"/i);
       if (!btnMatch) continue;
       const [, refNum, , btnLabel] = btnMatch;
-      if (/\b(sign\s*up|register|create\s*account|submit|continue|next|join|get\s*started|enroll|agree|accept|get\s*it\s*free|start\s*free|try\s*free|try\s*it|free\s*trial|start\s*now)\b/i.test(btnLabel)) {
+      if (/\b(sign\s*up|register|create\s*account|submit|continue|next|join|get\s*started|enroll|agree|accept|get\s*it\s*free|start\s*free|try\s*free|try\s*it|free\s*trial|start\s*now|add\s*to\s*(cart|basket|bag)|buy\s*now|purchase|book\s*now|reserve|complete\s*(order|booking|reservation|purchase))\b/i.test(btnLabel)) {
         suggestions.push(`CLICK [${refNum}]`);
-        break; // Only suggest one submit/signup element
+        break; // Only suggest one action element
       }
     }
-    if (suggestions.length >= 2) {
+    // For credential pages: need >= 2 suggestions (field + button)
+    // For action-only pages (cart/booking): a single button suggestion is enough
+    const hasCredSuggestions = suggestions.some(s => s.startsWith('FILL'));
+    const minSuggestions = hasCredSuggestions ? 2 : 1;
+    if (suggestions.length >= minSuggestions) {
       suggestedActions = `\n📋 SUGGESTED ACTIONS (output these or adjust as needed):\n${suggestions.join('\n')}\n`;
     }
   }
