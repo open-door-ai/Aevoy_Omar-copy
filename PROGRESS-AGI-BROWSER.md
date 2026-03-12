@@ -72,9 +72,26 @@ Fixes deployed: RULE 0, DuckDuckGo default, Google CAPTCHA auto-escape
    - DOC-FAST-PATH Excel: AI prompted for markdown table format, not essay
    - BFP Excel: AI structures extracted data into multi-column table
 
-### Phase 4: Testing Round 3 — IN PROGRESS
+### Phase 4: Testing Round 3 (2026-03-12, commit 9dc674d)
 
-Deployed commit 82beb45. Retesting same 3 tasks to verify fixes.
+Fixes deployed: taskPlan injection into step prompts, action cap (10/iteration), enhanced booking/signup plans.
+
+| # | Task | Status | Cost | Time | Verdict |
+|---|------|--------|------|------|---------|
+| 1 | DemoQA form fill | completed | $0.024 | ~15min | FAIL — Agent navigated to form, saw all fields, but said "unable to directly interact". 15 browser steps, 0 Haiku calls. |
+
+**Root Cause**: `isComplexTask` regex didn't match "fill out the form" — classified as simple → Gemini Flash (free) instead of Haiku. Gemini Flash describes pages instead of filling forms.
+
+### Fixes Applied (commit e08af2d)
+
+1. **`isComplexTask` expanded**: Now matches `fill.*form`, `submit.*form`, `complete.*form` in addition to signup/booking/purchase patterns. This routes form-fill tasks to Haiku.
+2. **Form-fill plan template**: New plan context for form tasks: "For EACH field use FILL [ref], for radios/checkboxes use CLICK, for dropdowns SELECT, then CLICK Submit."
+3. **Action cap (commit 9dc674d)**: Max 10 actions per iteration in processor.ts — prevents 862-action explosion.
+4. **Plan injection (commit 9dc674d)**: `taskPlan` now passed from main loop to `buildPrompt()` — plan appears in every step prompt.
+
+### Phase 4: Testing Round 4 — PENDING DEPLOY
+
+Commit e08af2d ready locally. GitHub token expired — cannot push. Waiting for auth refresh.
 
 ## Architecture
 
@@ -128,8 +145,10 @@ Continue browser steps on DuckDuckGo results
 3. `packages/agent/src/services/processor.ts`: Quality precheck, compound task guards, DuckDuckGo URLs
 
 ## Known Remaining Issues
+- **GitHub token expired** — cannot push commits to deploy. Need Codespace auth refresh.
 - Canva/major sites block automated browsers (Cloudflare Turnstile)
-- Agent finds info but doesn't follow through to booking (RULE 0 prompt changes haven't proven effective yet)
+- Agent finds info but doesn't follow through to booking (RULE 0 + plan injection not yet tested)
 - Excel files can be empty when compound task data extraction fails
 - Notion signup burned $0.091 for nothing — cost caps need tightening
+- Budget: ~$1.55 remaining on Anthropic API. Must test wisely.
 - No visual verification of generated files (Excel, PDF quality not checked)
