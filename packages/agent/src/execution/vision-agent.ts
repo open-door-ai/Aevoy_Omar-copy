@@ -1710,8 +1710,12 @@ IDENTITY & SIGNUPS:
 - If form fields are ALREADY FILLED (email/password show values), just CLICK the submit/continue button.
 
 SHOPPING: Search → product → Add to Cart → DONE with price.
-BOOKING: Date/time/party → Search → Pick slot → Fill contact → Confirm.
+BOOKING: Date/time/party → Search → Pick slot → Fill contact → Confirm → DONE with confirmation number.
+  BOOKING IS NOT DONE until you have a CONFIRMATION. "Found the restaurant" = step 1. "Filled the form" = step 2. "Got confirmation" = DONE.
+  If the restaurant has no online booking: OPEN_TAB and search "[restaurant name] opentable" or "[restaurant name] resy". Try THOSE booking sites.
+  If NO online booking exists anywhere: output DONE with the restaurant name, phone, address so the user or processor can call.
 DATA EXTRACTION: If the task asks to FIND, GET, LIST, or EXTRACT information, and the page ALREADY shows that information (quotes, prices, names, data), output DONE with ALL the data immediately. Do NOT click around, navigate, or log in — just READ what is on the page and report it.
+SIGNUP IS NOT DONE until: account is created (welcome page, dashboard, or confirmation email). "Found the signup page" = step 1. "Filled the form" = step 2. "Clicked submit and see welcome/dashboard" = DONE.
 
 MULTI-TAB: Name tabs meaningfully. Max 5. SWITCH_TAB before acting.
 
