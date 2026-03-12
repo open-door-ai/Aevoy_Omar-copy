@@ -2293,7 +2293,8 @@ export async function generateBrowserStepResponse(
   prompt: string,
   systemPrompt: string,
   userId?: string,
-  taskId?: string
+  taskId?: string,
+  taskComplexity?: 'simple' | 'complex'
 ): Promise<{ content: string; cost: number }> {
   const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
     Promise.race([
@@ -2359,6 +2360,34 @@ export async function generateBrowserStepResponse(
     }
     return content; // No actions found — return as-is for validation
   };
+
+  // ═══ SMART ROUTING: Complex tasks (booking/signup/purchase) use Haiku FIRST ═══
+  // Cheap models hallucinate on multi-step flows. Haiku costs ~$0.006/step but actually works.
+  // Simple tasks (click, scroll, extract data) still use the cheap cascade.
+  if (taskComplexity === 'complex' && process.env.ANTHROPIC_API_KEY) {
+    try {
+      const response = await withTimeout(getAnthropicClient().messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        system: systemPrompt,
+        messages: [{ role: "user", content: prompt }],
+      }), 12000);
+      const content = response.content[0].type === "text" ? response.content[0].text : "";
+      if (content.length > 10) {
+        const inTok = response.usage?.input_tokens || 0;
+        const outTok = response.usage?.output_tokens || 0;
+        const usageAny = response.usage as unknown as Record<string, number>;
+        const cacheRead = usageAny?.cache_read_input_tokens || 0;
+        const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
+        const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
+        console.log(`[AI] BrowserStep (Haiku-PRIORITY complex) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step-complex").catch(() => {});
+        return { content, cost };
+      }
+    } catch (error) {
+      console.warn(`[AI] BrowserStep (Haiku-PRIORITY) failed: ${error instanceof Error ? error.message : String(error)} — falling through to cheap cascade`);
+    }
+  }
 
   // ═══ PRIMARY: Gemini Flash 2.5 — cheap ($0.15/$0.60 per M), good at structured output ═══
   // 10-20x cheaper than Haiku. Good enough for browser step actions.
@@ -3007,6 +3036,91 @@ export async function quickValidate(
 
   // All models failed — fail closed for safety
   return { result: "false", cost: 0 };
+}
+
+/**
+ * Model-based quality evaluation for task responses.
+ * A separate model checks: Did this response actually complete the user's task?
+ * Returns { pass: boolean, feedback: string, cost: number }
+ *
+ * Used as a final gate before sending response to user.
+ * Cost: ~$0.002/call (Haiku) or $0 (Gemini Flash).
+ */
+export async function evaluateResponseQuality(
+  task: string,
+  response: string,
+  taskType: string,
+  userId?: string,
+  taskId?: string
+): Promise<{ pass: boolean; feedback: string; cost: number }> {
+  const evalPrompt = `TASK the user asked for: "${task.substring(0, 300)}"
+TASK TYPE: ${taskType}
+
+AGENT'S RESPONSE:
+"${response.substring(0, 800)}"
+
+EVALUATE this response. Answer with EXACTLY this format:
+PASS: true/false
+REASON: one sentence
+
+PASS = true if ALL of these:
+1. Response directly addresses what the user asked for (not generic advice)
+2. Response reports a CONCRETE outcome (data found, action taken, specific result)
+3. Response does NOT just describe what a website/service offers
+4. Response does NOT tell the user to do it themselves (no "you can...", "visit...")
+5. For action tasks (signup/booking/order): response confirms the action was DONE, not just attempted
+6. Response is NOT a plan for future action ("I'll search...", "Let me try...")
+
+PASS = false if ANY of:
+- Response gives instructions/advice instead of results
+- Response describes a page/service without completing the task
+- Response is vague ("Working on it", "3 actions completed")
+- Response says "I found the page" without completing the actual task
+- Response asks for permission ("Would you like me to...", "Shall I...")`;
+
+  try {
+    // Try Gemini Flash first (free)
+    if (process.env.GOOGLE_API_KEY) {
+      const geminiResp = await getGeminiClient().chat.completions.create({
+        model: "gemini-2.5-flash",
+        max_tokens: 100,
+        temperature: 0.0,
+        messages: [
+          { role: "system", content: "You are a quality evaluator. Be strict. Output PASS: true/false and REASON: one sentence." },
+          { role: "user", content: evalPrompt },
+        ],
+      });
+      const content = geminiResp.choices[0]?.message?.content || '';
+      const pass = /PASS:\s*true/i.test(content);
+      const reason = content.match(/REASON:\s*(.+)/i)?.[1] || content;
+      console.log(`[QUALITY-EVAL] Gemini: pass=${pass} — ${reason.substring(0, 100)}`);
+      return { pass, feedback: reason.trim(), cost: 0 };
+    }
+
+    // Fall back to Haiku
+    if (process.env.ANTHROPIC_API_KEY) {
+      const haikuResp = await getAnthropicClient().messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 100,
+        system: "You are a quality evaluator. Be strict. Output PASS: true/false and REASON: one sentence.",
+        messages: [{ role: "user", content: evalPrompt }],
+      });
+      const content = haikuResp.content[0].type === "text" ? haikuResp.content[0].text : "";
+      const pass = /PASS:\s*true/i.test(content);
+      const reason = content.match(/REASON:\s*(.+)/i)?.[1] || content;
+      const inTok = haikuResp.usage?.input_tokens || 0;
+      const outTok = haikuResp.usage?.output_tokens || 0;
+      const cost = calculateAnthropicCost(inTok, outTok, 0, 0, 'haiku');
+      console.log(`[QUALITY-EVAL] Haiku: pass=${pass} — ${reason.substring(0, 100)} | $${cost.toFixed(6)}`);
+      if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "quality-eval").catch(() => {});
+      return { pass, feedback: reason.trim(), cost };
+    }
+  } catch (err) {
+    console.warn(`[QUALITY-EVAL] Error: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // If evaluation fails, pass by default (don't block on eval failure)
+  return { pass: true, feedback: 'Evaluation unavailable', cost: 0 };
 }
 
 /**

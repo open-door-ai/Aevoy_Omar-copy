@@ -9332,6 +9332,61 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       emailBody += `\n\n---\nCompleted ${successCount} actions.`;
     }
 
+    // ── MODEL-BASED QUALITY EVALUATION: Final AGI quality gate ──────────────
+    // A separate model evaluates: "Did this response actually complete the user's task?"
+    // Only fires for action tasks (booking/signup/order) — not research, greetings, etc.
+    // Max 2 retries with cost guard. If response fails quality check, reprompt for better answer.
+    if (_isBrowserActionTask && !signupAutoCompleted && cleanResponse && cleanResponse.length > 20) {
+      const _qualTaskType = /\b(book|reserv)/i.test(subject) ? 'booking'
+        : /\b(sign\s?up|signup|register|create.*account)/i.test(subject) ? 'signup'
+        : /\b(order|purchase|buy)/i.test(subject) ? 'purchase'
+        : /\b(cancel|unsubscribe)/i.test(subject) ? 'cancellation'
+        : 'action';
+      let qualEvalCost = 0;
+      const QUAL_EVAL_COST_CAP = 0.01; // $0.01 max for quality eval loop
+      for (let qualAttempt = 0; qualAttempt < 2 && qualEvalCost < QUAL_EVAL_COST_CAP; qualAttempt++) {
+        try {
+          const { evaluateResponseQuality } = await import("./ai.js");
+          const evalResult = await evaluateResponseQuality(
+            `${subject} ${body || ''}`,
+            cleanResponse,
+            _qualTaskType,
+            userId, taskId
+          );
+          qualEvalCost += evalResult.cost;
+          totalAiCost += evalResult.cost;
+
+          if (evalResult.pass) {
+            console.log(`[QUALITY-MODEL] PASS (attempt ${qualAttempt + 1}): ${evalResult.feedback.substring(0, 80)}`);
+            break;
+          }
+
+          // Quality check failed — try to generate a better response
+          console.log(`[QUALITY-MODEL] FAIL (attempt ${qualAttempt + 1}): ${evalResult.feedback.substring(0, 120)}`);
+          try {
+            const { generateForcedDirectAnswer } = await import("./ai.js");
+            const actionLog = actionResults.filter(r => r.success && r.result)
+              .map(r => `${r.action.type}: ${String(r.result).substring(0, 400)}`)
+              .join('\n');
+            const betterResponse = await generateForcedDirectAnswer(
+              `${subject} ${body || ''}`,
+              `QUALITY CHECK FAILED: "${evalResult.feedback}"\n\nOriginal response: "${cleanResponse.substring(0, 400)}"\n\nAction results:\n${actionLog || 'None'}\n\nRewrite as a concrete, first-person result. If the task couldn't be completed, explain exactly what happened and what's needed to proceed. NEVER give advice or instructions.`,
+              username, userId, taskId
+            );
+            if (betterResponse.content && betterResponse.content.length > 20) {
+              cleanResponse = betterResponse.content;
+              qualEvalCost += betterResponse.cost || 0;
+              totalAiCost += betterResponse.cost || 0;
+              console.log(`[QUALITY-MODEL] Response upgraded (${cleanResponse.length} chars)`);
+            }
+          } catch { /* keep original */ }
+        } catch (qualErr) {
+          console.warn(`[QUALITY-MODEL] Evaluation error: ${qualErr instanceof Error ? qualErr.message : qualErr}`);
+          break; // don't block on eval failures
+        }
+      }
+    }
+
     // Add soft disclaimer if verification had low confidence (no raw numbers)
     // Threshold raised to 75 — with 90% quality gates in place, anything below 75 is genuinely uncertain
     if (verificationResult && !verificationResult.passed && verificationResult.confidence < 75) {

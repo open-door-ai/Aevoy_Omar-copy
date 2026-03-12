@@ -2071,7 +2071,7 @@ export async function runVisionAgent(
   if (isComplexTask) {
     try {
       const planPrompt = `TASK: ${task}\n\nOutput 3-5 bullet points: target URL, fields to fill, buttons to click, success criteria. Max 80 words.`;
-      const planResult = await generateBrowserStepResponse(planPrompt, SYSTEM_PROMPT, userId, taskId);
+      const planResult = await generateBrowserStepResponse(planPrompt, SYSTEM_PROMPT, userId, taskId, 'complex');
       taskPlan = planResult.content.substring(0, 300);
       totalCost += planResult.cost;
       console.log(`[BROWSER-AGENT] Plan: ${taskPlan.substring(0, 120)}`);
@@ -2953,7 +2953,7 @@ export async function runVisionAgent(
         const result = await Promise.race([
           hasScreenshot
             ? generateVisionResponse(prompt, stepScreenshotData, SYSTEM_PROMPT, userId, taskId)
-            : generateBrowserStepResponse(prompt, SYSTEM_PROMPT, userId, taskId),
+            : generateBrowserStepResponse(prompt, SYSTEM_PROMPT, userId, taskId, isComplexTask ? 'complex' : 'simple'),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('AI timeout')), STEP_TIMEOUT_MS)),
         ]);
         aiResponse = result.content;
@@ -3461,6 +3461,48 @@ export async function runVisionAgent(
                   break;
                 }
               } catch { /* if visibility check fails, allow DONE to proceed */ }
+            }
+          }
+
+          // ── PAGE CONTENT VERIFICATION: For action tasks, verify page shows real outcome ──
+          // The AI may output DONE "Booked!" while the page still shows the booking form.
+          // Read the actual page content and check for confirmation signals.
+          if (_isActionTaskDone && !isInfoTask) {
+            const _pageVerifyCount = history.filter(h => h.includes('PAGE-VERIFY')).length;
+            if (_pageVerifyCount < 2) {
+              try {
+                const pageText = await Promise.race([
+                  activePage.evaluate(() => (document.body?.innerText || '').substring(0, 2000)),
+                  new Promise<string>(r => setTimeout(() => r(''), 3000)),
+                ]).catch(() => '');
+
+                if (pageText.length > 50) {
+                  const pageLC = pageText.toLowerCase();
+                  // Positive signals: page shows real confirmation
+                  const hasConfirmation = (
+                    /\b(confirm|confirmed|thank\s*you|order\s*placed|booking\s*confirmed|reservation\s*confirmed|welcome|account\s*created|successfully|receipt|reference\s*(#|number|code|id)|congratulations)\b/i.test(pageText) ||
+                    /confirmation\s*(?:#|number|code|id|:)\s*\w+/i.test(pageText)
+                  );
+                  // Negative signals: page shows errors or still-active forms
+                  const hasError = /\b(error|failed|invalid|denied|declined|expired|unavailable|incorrect|wrong|try again)\b/i.test(pageText);
+                  const hasActiveForm = /\b(enter your|create.*password|sign\s*up|create\s*account|register\s*now)\b/i.test(pageText) && !hasConfirmation;
+
+                  // Reject DONE if page clearly contradicts completion
+                  if ((hasError || hasActiveForm) && !hasConfirmation) {
+                    const signal = hasError ? 'ERROR on page' : 'form still active';
+                    console.warn(`[BROWSER-AGENT] PAGE-VERIFY rejected DONE: ${signal}. Page: "${pageText.substring(0, 120)}"`);
+                    history.push(`⚠️ PAGE-VERIFY rejected: You said "${cleanResult.substring(0, 60)}" but the page shows ${signal}. Read the page content carefully. If there's an error, fix it. If the form is still showing, FILL and SUBMIT it.`);
+                    break; // continue main loop
+                  }
+
+                  // For booking tasks: require actual confirmation evidence (not just absence of errors)
+                  if (isBookingTask && !hasConfirmation && !cleanResult.match(/\b(called|phoned|spoke|reservation\s*#|conf\w*\s*#)/i)) {
+                    console.warn(`[BROWSER-AGENT] PAGE-VERIFY: Booking DONE without confirmation on page. Result: "${cleanResult.substring(0, 80)}"`);
+                    history.push(`⚠️ PAGE-VERIFY: Booking task DONE but NO confirmation visible on page. Look for a confirmation number, "thank you" message, or reservation details. If the booking didn't go through, try again or NAVIGATE to a phone number to CALL the restaurant.`);
+                    break; // continue main loop
+                  }
+                }
+              } catch { /* page verification is non-critical — allow DONE to proceed */ }
             }
           }
 
