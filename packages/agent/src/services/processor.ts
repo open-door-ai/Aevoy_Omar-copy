@@ -2956,7 +2956,12 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
     const _taskNamesWebsite = /\b(go\s+to|visit|use|open|navigate\s+to|on)\s+\S+\.(com|ca|org|net|io|co|app)\b/i.test(`${subject} ${body}`) ||
       /\bhttps?:\/\/\S+/i.test(`${subject} ${body}`) ||
       /\b(go\s+to|visit|use|open|sign\s*(me\s+)?up\s+(?:for|on|at|with))\s+(?:an?\s+|the\s+)?[A-Z][a-zA-Z0-9]+\b/i.test(`${subject} ${body}`);
-    const _isDocumentAction = !_taskNamesWebsite && !_hasSignupIntent && /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
+    // Compound research+document tasks (find X and create Excel) are NOT pure document tasks —
+    // they need search/browsing first. Only treat as document task if there's no research intent.
+    const _hasDocKeyword = /\b(spreadsheet|excel|xlsx|csv|word document|docx|powerpoint|pptx|presentation slides?|business cards?|flyer|brochure|invoice|receipt|certificate|resume|cv|pdf|meal plan|report|letter|memo|proposal)\b/i.test(`${subject} ${body}`);
+    const _hasResearchIntent = /\b(find|search|look\s*up|get|list|discover|identify|research|check|browse|go\s*to)\b/i.test(`${subject} ${body}`) &&
+      /\b(and|then|,|with|into|in\s*a)\b/i.test(`${subject} ${body}`);
+    const _isDocumentAction = !_taskNamesWebsite && !_hasSignupIntent && _hasDocKeyword && !(_hasResearchIntent && _hasDocKeyword);
     // Early signup/booking detection: "make me an account" and "book me a table" must NOT be treated as writing tasks
     const _earlySignupCheck = /\b(sign\s?up|signup|create\b.*\baccount|make\b.*\baccount|register|enroll|open\b.*\baccount)\b/i.test(`${subject} ${body}`);
     const _earlyBookingCheck = /\b(book|reserv|make\s+a?\s*(reservation|booking|appointment|reso))\b/i.test(`${subject} ${body}`);
@@ -9437,6 +9442,71 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
           console.warn(`[QUALITY-MODEL] Evaluation error: ${qualErr instanceof Error ? qualErr.message : qualErr}`);
           break; // don't block on eval failures
         }
+      }
+    }
+
+    // ── COMPOUND RESEARCH+DOCUMENT: Create document from real data found during search ──
+    // For tasks like "Find 5 coffee shops and create an Excel", the iteration loop found real data
+    // via search/browse. Now create the document from that data.
+    if (_hasDocKeyword && _hasResearchIntent && cleanResponse && cleanResponse.length > 50 &&
+        !actionResults.some(r => ['create_word', 'create_excel', 'create_powerpoint', 'create_pdf'].includes(r.action?.type || ''))) {
+      try {
+        const _cdAct = /\b(spreadsheet|excel|xlsx|csv)\b/i.test(`${subject} ${body}`) ? 'create_excel'
+          : /\b(powerpoint|pptx|presentation)\b/i.test(`${subject} ${body}`) ? 'create_powerpoint'
+          : /\b(pdf)\b/i.test(`${subject} ${body}`) ? 'create_pdf' : 'create_word';
+        const _cdExt = _cdAct === 'create_excel' ? 'xlsx' : _cdAct === 'create_powerpoint' ? 'pptx' : _cdAct === 'create_pdf' ? 'pdf' : 'docx';
+        const _cdFile = `${subject.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 40)}.${_cdExt}`;
+        const _cdTypeName = _cdAct === 'create_excel' ? 'spreadsheet' : _cdAct === 'create_powerpoint' ? 'presentation' : _cdAct === 'create_pdf' ? 'PDF' : 'Word document';
+        console.log(`[COMPOUND-DOC] Creating ${_cdTypeName} from search results (${cleanResponse.length} chars)`);
+
+        let _cdResult: any;
+        if (_cdAct === 'create_excel') {
+          const { createExcelFile } = await import('../execution/actions/create-excel.js');
+          // Ask AI to structure the response data as a markdown table
+          let _cdHeaders: string[] = ['Item', 'Details'];
+          let _cdData: (string | number | null)[][] = [];
+          try {
+            const { generateForcedDirectAnswer: _cdGen } = await import("./ai.js");
+            const _cdTableResult = await _cdGen(
+              `Convert this data into a markdown table with appropriate columns for: "${subject}".\nData:\n${cleanResponse.substring(0, 2000)}\n\nOutput ONLY the markdown table. No explanation.`,
+              'format_data', username || 'user', userId, taskId
+            );
+            totalAiCost += _cdTableResult.cost || 0;
+            const _cdMatch = _cdTableResult.content.match(/\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)+)/);
+            if (_cdMatch) {
+              _cdHeaders = _cdMatch[1].split('|').map((h: string) => h.trim()).filter(Boolean);
+              _cdData = _cdMatch[2].trim().split('\n').map((row: string) =>
+                row.split('|').map((c: string) => c.trim()).filter(Boolean)
+              );
+            }
+          } catch { /* fall through */ }
+          if (_cdData.length === 0) {
+            // Fallback: split response into rows
+            const _cdLines = cleanResponse.split(/\d+\.\s+/).filter((l: string) => l.trim().length > 5);
+            _cdData = _cdLines.map((l: string) => [l.trim()]);
+          }
+          _cdResult = await createExcelFile({ filename: _cdFile, sheets: [{ name: 'Data', headers: _cdHeaders, data: _cdData, styles: { headerBold: true, alternateRowColors: true, freezeFirstRow: true, autoFilter: true } }] });
+        } else if (_cdAct === 'create_powerpoint') {
+          const { createPowerPoint } = await import('../execution/actions/create-powerpoint.js');
+          _cdResult = await createPowerPoint({ filename: _cdFile, slides: [{ title: subject, content: cleanResponse.substring(0, 3000) }] });
+        } else if (_cdAct === 'create_pdf') {
+          const { createPDF } = await import('../execution/actions/create-pdf.js');
+          _cdResult = await createPDF({ filename: _cdFile, content: [{ type: 'paragraph', text: cleanResponse }] });
+        } else {
+          const { createWordDocument } = await import('../execution/actions/create-word.js');
+          _cdResult = await createWordDocument({ filename: _cdFile, sections: [{ type: 'paragraph', text: cleanResponse }], title: subject });
+        }
+
+        if (_cdResult?.success && _cdResult?.url) {
+          const _agBase = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+          const _cdUrl = (_cdResult.url || _cdResult.filepath || '');
+          const _cdFullUrl = _cdUrl.startsWith('http') ? _cdUrl : `${_agBase}${_cdUrl}`;
+          cleanResponse = `Your ${_cdTypeName} is ready!\n\n**File:** ${_cdFile}\n**Download:** ${_cdFullUrl}\n\nData included:\n${cleanResponse}`;
+          console.log(`[COMPOUND-DOC] ${_cdTypeName} created: ${_cdFullUrl}`);
+        }
+      } catch (_cdErr) {
+        console.warn(`[COMPOUND-DOC] Document creation failed: ${_cdErr}`);
+        // Keep the text response — at least user gets the data
       }
     }
 
