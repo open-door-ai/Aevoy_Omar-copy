@@ -6659,12 +6659,21 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
               // signup/booking tasks where vision result said "found restaurants" or "found signup page".
               const _isCompletionResult = /\b(confirmed|booked|reserved|signed up|created|registered|cancelled|submitted|completed|purchased|ordered|logged in|account created|successfully)\b/i.test(rawVisionResult);
 
-              if (_isAdviceResult && !_isCompletionResult) {
-                // Vision agent gave advice, not completion — treat as failure
-                console.warn(`[VISION-VERIFY] Vision agent returned advice, not task completion. Treating as failure.`);
+              // ACTION-TASK INCOMPLETE CHECK: For signup/booking/order tasks, the vision agent
+              // must show actual completion evidence. "Found the page" or "blocked" = not done.
+              const _isActionTask = /\b(sign\s?up|signup|register|create\b.*\baccount|make\b.*\baccount|book|reserv|order|purchase|add\b.*\b(cart|basket)|cancel\b.*\b(subscription|account))\b/i.test(subject);
+              const _isActionIncomplete = _isActionTask && !_isCompletionResult && (
+                /\b(found|blocked|required|could not|unable|denied|did not|navigated|browsed|homepage|landing page)\b/i.test(rawVisionResult)
+              );
+
+              if ((_isAdviceResult || _isActionIncomplete) && !_isCompletionResult) {
+                // Vision agent gave advice or incomplete result for an action task — treat as failure
+                const _reason = _isAdviceResult ? 'advice' : 'action-incomplete';
+                console.warn(`[VISION-VERIFY] Vision agent returned ${_reason}, not task completion. Treating as failure.`);
                 lastVisionFailed = true;
-                visionAgentInvocations = 2; // prevent retry — browser can't complete, try alternative
-                visionFailureNote = `[BROWSER AUTOMATION INCOMPLETE] The browser agent navigated to the page but could NOT complete the task. It returned advice instead of actually doing it: "${rawVisionResult.substring(0, 200)}"
+                // Allow retry for action-incomplete (agent was close), block for pure advice
+                if (_isAdviceResult) visionAgentInvocations = 2;
+                visionFailureNote = `[BROWSER AUTOMATION INCOMPLETE] The browser agent navigated to the page but could NOT complete the task. It returned ${_reason} instead of actually doing it: "${rawVisionResult.substring(0, 200)}"
 
 YOU must complete the task using a DIFFERENT approach:
 1. If this is a booking/reservation: search for the business phone number and call them with [ACTION:call_external("+1...", "...")]

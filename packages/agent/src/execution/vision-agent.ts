@@ -1950,11 +1950,12 @@ export async function runVisionAgent(
 
   // ── Task classification ──
   const isBookingTask = /\b(order|reserve|book|pickup|delivery|reservation|get.*food|get.*pizza|get.*coffee)\b/i.test(task);
-  // Complex = multi-step tasks needing Haiku (signup, booking, form fill).
-  // Explicitly EXCLUDE simple tasks (login, navigate, extract, find).
-  const isSimpleTask = /\b(log\s*in|login|sign\s*in|navigate|go\s+to|visit|open|extract|scrape|find|tell\s+me|what\s+is|price\s+of)\b/i.test(task);
-  const isComplexTask = !isSimpleTask && /\b(sign\s*up|register|create\s+(a|an|my)\s+account|book|reserve|order|purchase|checkout|apply|subscribe|fill\s*(out|in|the)?\s*(a\s+)?form|submit\s*(a\s+|the\s+)?form|complete\s*(the\s+)?form)\b/i.test(task);
-  const isFormFillTask = /\b(sign\s*up|signup|register|create.*account|apply|fill.*form|submit.*form|probate|intake|legal.*form|contact.*form)\b/i.test(task);
+  // Complex = ANY task involving multi-step web interaction (signup, booking, form fill, add to cart).
+  // Simple = pure lookup/extraction tasks.
+  const isSimpleTask = /\b(log\s*in|login|sign\s*in|navigate|go\s+to|visit|open|extract|scrape|tell\s+me|what\s+is|price\s+of)\b/i.test(task)
+    && !/\b(sign\s*up|register|create\b.*\baccount|book|reserve|order|purchase|add\b.*\b(cart|basket)|subscribe|fill\b.*\bform|submit)\b/i.test(task);
+  const isComplexTask = !isSimpleTask && /\b(sign\s*up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|set\s*up\b.*\baccount|book|reserve|order|purchase|checkout|apply|subscribe|add\b.*\b(cart|basket)|fill\b.*\bform|submit\b.*\bform|complete\b.*\bform|cancel\b.*\b(subscription|account|membership))\b/i.test(task);
+  const isFormFillTask = /\b(sign\s*up|signup|register|create\b.*\baccount|make\b.*\baccount|apply|fill\b.*\bform|submit\b.*\bform|probate|intake|legal.*form|contact.*form)\b/i.test(task);
   const effectiveMaxSteps = isBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS;
   let dynamicMaxSteps = effectiveMaxSteps;
   let milestonesHit = 0;
@@ -2275,8 +2276,8 @@ export async function runVisionAgent(
       }
 
       // ── Cost guard + step guard: stop runaway sessions ──
-      const COST_LIMIT = isComplexTask ? 0.10 : 0.03;
-      const STEP_LIMIT = isComplexTask ? dynamicMaxSteps : Math.min(dynamicMaxSteps, 20);
+      const COST_LIMIT = isComplexTask ? 0.10 : 0.05;
+      const STEP_LIMIT = isComplexTask ? dynamicMaxSteps : Math.min(dynamicMaxSteps, 40);
       if (totalCost > COST_LIMIT || steps >= STEP_LIMIT) {
         const reason = totalCost > COST_LIMIT ? `cost $${totalCost.toFixed(3)} > $${COST_LIMIT}` : `${steps} steps > ${STEP_LIMIT} limit`;
         console.warn(`[BROWSER-AGENT] Guard triggered: ${reason} — stopping`);
@@ -3310,7 +3311,7 @@ export async function runVisionAgent(
           // Use \d{2,} not \d{3,} — prices like £53.74 only have 2 consecutive digits
           const hasFactualData = /\d{2,}/.test(doneResult) && doneResult.length > 15;
           // Detect give-up language: agent reporting failure in DONE instead of data
-          const isGiveUp = /\b(got stuck|couldn't|couldn.t|couldn.t complete|couldn.t find|could not|unable to|hit a snag|ran into|wasn.t working|got confused|I.m unable|unable to (access|find|complete|navigate)|may require a different|no longer accessible|the site (may|might)|try again|different approach|stuck after \d|stuck on the|couldn.t proceed|couldn.t access)\b/i.test(doneResult);
+          const isGiveUp = /\b(got stuck|couldn't|couldn.t|couldn.t complete|couldn.t find|could not|unable to|hit a snag|ran into|wasn.t working|got confused|I.m unable|unable to (access|find|complete|navigate)|may require a different|no longer accessible|the site (may|might)|try again|different approach|stuck after \d|stuck on the|couldn.t proceed|couldn.t access|was blocked|blocked from|access denied|denied access|did not (complete|succeed|manage|finish))\b/i.test(doneResult);
           const isInfoTask = /\b(tell me|what is|list|find|get me|get the|how much|how many|population|price|cost|address|rating|show me|what are|name the|first \d|top \d|quotes?|reviews?)\b/i.test(task);
           // Don't bypass rejection for tasks that ALSO have action verbs (e.g., "find X and add to cart")
           const isAlsoActionTask = /\b(add\b.*\b(cart|basket)|put\b.*\b(cart|basket)|sign\s*up|register|book|reserve|order|purchase|buy|fill|submit|cancel|log\s*in|login)\b/i.test(task);
@@ -3348,13 +3349,10 @@ export async function runVisionAgent(
             /\bcan be (cancel|book|reserv|subscrib|access|complet)\w*\b/i.test(doneResult)
           );
 
-          // Order-incomplete rejection — catches "add to cart", "add it to my cart", "put in basket" etc.
+          // Order-incomplete rejection — ANY order/cart DONE without confirmation = incomplete
           const isOrderTask = /\b(order|purchase|buy|checkout|add\b.*\b(cart|basket)|put\b.*\b(cart|basket)|get me)\b/i.test(task);
-          const hasOrderConfirmation = /\b(order(ed|.*confirm)|receipt|added to (cart|basket)|in\s*(the\s*)?(cart|basket)|placed|transaction|cart.*item|item.*cart)\b/i.test(doneResult);
-          const isOrderIncomplete = isOrderTask && !isPassive && !isAdvice && !hasOrderConfirmation && (
-            /\b(found|located|navigated|browsed|price|product page|listing)\b/i.test(doneResult) ||
-            /\bdid not add\b/i.test(doneResult)
-          );
+          const hasOrderConfirmation = /\b(order(ed|.*confirm)|receipt|added to (cart|basket)|in\s*(the\s*)?(cart|basket)|placed|transaction|cart.*item|item.*cart|successfully)\b/i.test(doneResult);
+          const isOrderIncomplete = isOrderTask && !isPassive && !isAdvice && !hasOrderConfirmation;
 
           // Data-missing rejection — only for tasks explicitly asking for numeric/contact data
           // "find" and "show me" are too generic — book titles, names, info are valid text answers
@@ -3366,19 +3364,17 @@ export async function runVisionAgent(
             doneResult.length > 80; // long text answer = has data (book titles, names, info)
           const dataMissing = wantsData && !hasData && !isPassive && !isAdvice && doneResult.length < 100;
 
-          // Booking-incomplete rejection: agent found restaurants/booking pages but didn't actually book
+          // Booking-incomplete rejection: agent DONE'd on booking task without actual confirmation
+          // Broad: ANY booking DONE without confirmation = incomplete
           const isBookingTask = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso))\b/i.test(task);
-          const hasBookingConfirmation = /\b(confirmed|confirmation|reservation\s*(#|number|id)|booked|your\s+(table|reservation)|thank\s+you\s+for\s+(your|booking|reserving)|booking\s+reference)\b/i.test(doneResult);
-          const isBookingIncomplete = isBookingTask && !isPassive && !isAdvice && !hasBookingConfirmation && (
-            /\b(found|found\s+the|contact\s+information|booking\s+page|listing|phone\s+number|address|website|menu|hours|open|close|yelp|opentable)\b/i.test(doneResult)
-          );
+          const hasBookingConfirmation = /\b(confirmed|confirmation|reservation\s*(#|number|id)|booked|your\s+(table|reservation)|thank\s+you\s+for\s+(your|booking|reserving)|booking\s+reference|successfully\s+(booked|reserved))\b/i.test(doneResult);
+          const isBookingIncomplete = isBookingTask && !isPassive && !isAdvice && !hasBookingConfirmation;
 
-          // Signup-incomplete rejection: agent found the signup page but didn't create the account
-          const isSignupTask = /\b(sign\s?up|signup|register|create.*account|make.*account)\b/i.test(task);
-          const hasSignupConfirmation = /\b(created|signed\s*up|registered|welcome|dashboard|account\s+is\s+ready|logged\s+in|verification\s+email|confirm\s+your\s+email)\b/i.test(doneResult);
-          const isSignupIncomplete = isSignupTask && !isPassive && !isAdvice && !hasSignupConfirmation && (
-            /\b(found|signup\s+page|signup\s+form|registration|sign.up\s+options?|login\s+page|encountered)\b/i.test(doneResult)
-          );
+          // Signup-incomplete rejection: agent DONE'd on a signup task without completing the account creation
+          // Broad: ANY signup DONE without confirmation words = incomplete. Don't narrow to specific words.
+          const isSignupTask = /\b(sign\s?up|signup|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount)\b/i.test(task);
+          const hasSignupConfirmation = /\b(created|signed\s*up|registered|welcome|dashboard|account\s+is\s+ready|logged\s+in|verification\s+email|confirm\s+your\s+email|successfully|account\s+ready)\b/i.test(doneResult);
+          const isSignupIncomplete = isSignupTask && !isPassive && !isAdvice && !hasSignupConfirmation;
 
           // Page-description rejection: DONE describes WHAT IS ON the page, not WHAT WAS ACCOMPLISHED
           // Only for action tasks (signup/book/order) — not for research/info tasks
