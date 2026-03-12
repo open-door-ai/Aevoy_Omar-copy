@@ -2472,20 +2472,21 @@ export async function runVisionAgent(
           const wallUrl = activePage.url();
           botWallCount = wallUrl === lastBotWallUrl ? botWallCount + 1 : 1;
           lastBotWallUrl = wallUrl;
-          console.log(`[BROWSER-AGENT] Bot wall at ${wallUrl} (attempt ${botWallCount})`);
-          if (botWallCount <= 2) {
-            // Longer wait for JS challenges (Cloudflare executes JS, then loads Turnstile)
-            await activePage.waitForTimeout(botWallCount === 1 ? 3000 : 5000);
-            // Reload after wait — Cloudflare often presents Turnstile after first reload
-            if (botWallCount === 1) {
-              await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-              await activePage.waitForTimeout(2000);
-            }
-            try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
-          } else if (botWallCount >= BOT_WALL_MAX) {
+          console.log(`[BROWSER-AGENT] Bot wall at ${wallUrl} (attempt ${botWallCount}/${BOT_WALL_MAX})`);
+          if (botWallCount >= BOT_WALL_MAX) {
             const pageData = await capturePageData(activePage);
             return { success: false, error: `Bot wall: ${wallUrl}`, steps, cost: totalCost, screenshots, pageData };
           }
+          // Progressive wait: Cloudflare JS challenge needs time, then loads Turnstile
+          const waitMs = Math.min(3000 + botWallCount * 2000, 10000);
+          await activePage.waitForTimeout(waitMs);
+          // Reload on first attempt — Cloudflare often shows Turnstile after reload
+          if (botWallCount <= 2) {
+            await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+            await activePage.waitForTimeout(3000);
+          }
+          // Try CAPTCHA solver on EVERY attempt (Turnstile may appear late)
+          try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
         } else { botWallCount = 0; }
 
         // Handle CAPTCHA (only when detected — not every step)
