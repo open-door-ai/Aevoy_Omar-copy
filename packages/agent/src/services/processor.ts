@@ -9368,13 +9368,22 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             const actionLog = actionResults.filter(r => r.success && r.result)
               .map(r => `${r.action.type}: ${String(r.result).substring(0, 400)}`)
               .join('\n');
+            // CRITICAL: Never include internal evaluation feedback in the context —
+            // models regurgitate it ("quality check shows PASS: false") into user-facing text.
             const betterResponse = await generateForcedDirectAnswer(
               `${subject} ${body || ''}`,
-              `QUALITY CHECK FAILED: "${evalResult.feedback}"\n\nOriginal response: "${cleanResponse.substring(0, 400)}"\n\nAction results:\n${actionLog || 'None'}\n\nRewrite as a concrete, first-person result. If the task couldn't be completed, explain exactly what happened and what's needed to proceed. NEVER give advice or instructions.`,
+              `The previous response was not good enough. Here is what actually happened:\n\nOriginal response: "${cleanResponse.substring(0, 400)}"\n\nAction results:\n${actionLog || 'None'}\n\nRewrite as a concrete, first-person past-tense statement. Say what you DID, what you FOUND, or what BLOCKED you. NEVER give advice, instructions, or ask permission. NEVER mention quality checks or evaluations.`,
               username, userId, taskId
             );
             if (betterResponse.content && betterResponse.content.length > 20) {
-              cleanResponse = betterResponse.content;
+              // Strip any leaked internal state from the rewritten response
+              let upgraded = betterResponse.content
+                .replace(/\b(quality check|PASS:\s*(true|false)|evaluation|quality gate)\b[^.]*\./gi, '')
+                .replace(/\b(the previous response|original response)\b[^.]*\./gi, '')
+                .trim();
+              if (upgraded.length > 20) {
+                cleanResponse = upgraded;
+              }
               qualEvalCost += betterResponse.cost || 0;
               totalAiCost += betterResponse.cost || 0;
               console.log(`[QUALITY-MODEL] Response upgraded (${cleanResponse.length} chars)`);
