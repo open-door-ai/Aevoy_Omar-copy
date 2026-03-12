@@ -4298,7 +4298,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
     let lastVisionFailed = false; // Tracks if last vision agent run failed (used in passive response guard)
     let _confirmationPauseSent = false; // Guard: only send confirmation request once per task
     let _hollowRejectionCount = 0; // Track how many times hollow response was rejected — after 2, accept partial data
-    const MAX_HOLLOW_REJECTIONS = 2; // Don't burn budget trying endlessly for perfect data
+    const MAX_HOLLOW_REJECTIONS = 3; // search → different search → browse article
 
     // Dynamic domain failure tracking — if browse/navigate fails 2+ times on a domain,
     // the agent auto-switches to search() for that domain (no hardcoded lists)
@@ -4443,17 +4443,30 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
             console.warn(`[HOLLOW-GATE] REJECTED (${_hollowRejectionCount}/${MAX_HOLLOW_REJECTIONS}): AI said TASK_COMPLETE but response admits no data found (iter=${currentIteration}). Forcing different strategy.`);
             const _blockedList = [...domainFailures.entries()].filter(([, c]) => c >= 2).map(([d]) => d);
             aiResponse.content = '';
-            aiResponse.actions = [{ type: 'search' as any, params: {
-              query: `${subject}`.substring(0, 80).replace(/\b(on|at|from|using)\s+\S+\.(com|ca|org|net)\b/gi, '').trim()
-            }}];
-            visionFailureNote = `Your previous search returned NO useful data. The user needs SPECIFIC results (names, prices, links). Try a COMPLETELY DIFFERENT search strategy:
+            // On 2nd+ rejection: browse the top search result URL instead of searching again.
+            // Search results already exist — reading the full article is more productive.
+            const _searchResultUrls = actionResults
+              .filter(r => r.action?.type === 'search' && r.success && r.result)
+              .flatMap(r => String(r.result).match(/https?:\/\/[^\s<>"{}|\\^`\])]+/g) || [])
+              .filter(u => !/\.(css|js|png|jpg|gif|svg|ico)$/i.test(u) && !/google\.com|duckduckgo\.com|bing\.com/i.test(u));
+            if (_hollowRejectionCount >= 2 && _searchResultUrls.length > 0) {
+              // Browse the top result to extract actual data
+              const _browseTarget = _searchResultUrls[0];
+              console.log(`[HOLLOW-GATE] 2nd rejection — browsing top search result: ${_browseTarget}`);
+              aiResponse.actions = [{ type: 'browse' as any, params: { url: _browseTarget } }];
+              visionFailureNote = `Search returned article titles but NOT the specific data the user needs. You are now BROWSING the top result to READ THE FULL ARTICLE. Extract the ACTUAL numbers, names, and data points. Do NOT signal [TASK_COMPLETE] until you have SPECIFIC data.`;
+            } else {
+              aiResponse.actions = [{ type: 'search' as any, params: {
+                query: `${subject}`.substring(0, 80).replace(/\b(on|at|from|using)\s+\S+\.(com|ca|org|net)\b/gi, '').trim()
+              }}];
+              visionFailureNote = `Your previous search returned NO useful data. The user needs SPECIFIC results (names, prices, links). Try a COMPLETELY DIFFERENT search strategy:
 - Use different keywords (more specific or broader)
-- Search for competitor/alternative platforms (e.g., if Indeed failed, try LinkedIn, Glassdoor, remote.co, weworkremotely, builtin.com)
 - Search for aggregator/comparison sites instead of the source directly
 - If searching for jobs: "remote AI engineer salary Canada 2026 hiring"
 - If searching for products: try review sites, price comparison sites
 ${_blockedList.length > 0 ? `\nDO NOT browse: ${_blockedList.join(', ')}` : ''}
 DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices, numbers, links).`;
+            }
             // Don't set isTaskComplete — loop continues with new search strategy
             continue; // Skip all other gates this round
           }
