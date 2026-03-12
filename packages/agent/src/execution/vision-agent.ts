@@ -2010,7 +2010,7 @@ export async function runVisionAgent(
 
   // ── Task classification ──
   const isBookingTask = /\b(order|reserve|book|pickup|delivery|reservation|get.*food|get.*pizza|get.*coffee)\b/i.test(task);
-  const isComplexTask = /\b(sign\s*up|register|create.*account|book|reserve|order|purchase|checkout|apply|subscribe)\b/i.test(task);
+  const isComplexTask = /\b(sign\s*up|register|create.*account|book|reserve|order|purchase|checkout|apply|subscribe|fill\s*(out|in|the)?\s*(a\s+)?form|submit\s*(a\s+|the\s+)?form|complete\s*(the\s+)?form)\b/i.test(task);
   const isFormFillTask = /\b(sign\s*up|signup|register|create.*account|apply|fill.*form|submit.*form|probate|intake|legal.*form|contact.*form)\b/i.test(task);
   const effectiveMaxSteps = isBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS;
   let dynamicMaxSteps = effectiveMaxSteps;
@@ -2082,6 +2082,7 @@ export async function runVisionAgent(
     try {
       const isBookingPlan = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso))\b/i.test(task);
       const isSignupPlan = /\b(sign\s*up|signup|register|create\s*(a|an|my)?\s*account)\b/i.test(task);
+      const isFormFillPlan = /\b(fill\s*(out|in|the)?|complete\s*(the)?|submit)\s*(a\s+)?form\b/i.test(task);
       const planContext = isBookingPlan
         ? `This is a BOOKING task. Your plan MUST include:
 1. Navigate to the RESERVATIONS/BOOKING page (look for "Reserve", "Book a Table", "Reservations" link — NOT "Menu" or "About")
@@ -2097,6 +2098,16 @@ If the site has no online booking, OPEN_TAB to search "[restaurant] opentable" o
 3. Handle any CAPTCHA or verification step
 4. Click the submit/create button
 5. Success = dashboard, welcome page, or "verify your email" message.`
+        : isFormFillPlan
+        ? `This is a FORM FILL task. Your plan MUST include:
+1. Navigate to the form page
+2. For EACH field: use FILL [ref] "value" to fill ALL fields one by one
+3. For radio buttons/checkboxes: use CLICK [ref] to select them
+4. For dropdowns: use SELECT [ref] "option" or CLICK to open then CLICK the option
+5. For date pickers: CLICK to open, navigate to the right month/year, CLICK the date
+6. After ALL fields are filled, CLICK the Submit button
+7. Success = confirmation message or form disappearing
+CRITICAL: Output FILL/CLICK commands for EVERY field. Do NOT describe the form.`
         : '';
       const planPrompt = `TASK: ${task}\n\n${planContext}\n\nOutput 3-5 concrete action steps: which pages to navigate to, which buttons to click, which fields to fill, and what success looks like. Be SPECIFIC about page navigation — name the exact links/buttons. Max 100 words.`;
       const planResult = await generateBrowserStepResponse(planPrompt, SYSTEM_PROMPT, userId, taskId, 'complex');
