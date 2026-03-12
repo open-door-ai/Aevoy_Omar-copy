@@ -2177,6 +2177,17 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
     return clean; // Return empty string if ALL lines were narration
   };
 
+  // Meta-description detector: catches responses that describe the search process instead of answering
+  const isMetaDescription = (text: string): boolean => {
+    const lc = text.toLowerCase();
+    return (
+      /\b(search results? provided|search results? (show|contain|yielded|returned))\b/i.test(lc) ||
+      /\bI found (an article|articles|links|resources)\b/i.test(lc) ||
+      /\b(specific|exact)\s+(salary|price|data|figures?)\s+(data\s+)?(was|were)\s+not\s+(found|provided|available|directly)/i.test(lc) ||
+      /\b(not\s+directly\s+provided|not\s+enough\s+data|data\s+was\s+not\s+found)\b/i.test(lc)
+    ) && !/\$\d+|£\d+|€\d+|\b\d{2,},\d{3}/.test(lc); // Has real data? Not meta.
+  };
+
   // Try OpenRouter first — 100% success rate in production, most reliable
   if (process.env.OPENROUTER_API_KEY && !isModelBackedOff('openrouter', 'mistralai/mistral-small-3.1-24b-instruct:free')) {
     try {
@@ -2192,10 +2203,12 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
       }), 15000);
       const content = res.choices[0]?.message?.content || '';
       const clean = stripNarration(content);
-      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean) && !isMetaDescription(clean)) {
         trackApiCall(userId, "mistralai/mistral-small-3.1-24b-instruct:free", 0, 0, 0, "openrouter", taskId, "fallback_direct_answer").catch(() => {});
         console.log(`[FALLBACK-OR] Direct answer via OpenRouter (${clean.length} chars, $0)`);
         return { content: clean, cost: 0, tokensUsed: 0 };
+      } else if (clean && isMetaDescription(clean)) {
+        console.warn(`[FALLBACK-OR] OpenRouter returned meta-description — falling through to next model`);
       }
     } catch (orErr) {
       console.warn(`[FALLBACK-OR] OpenRouter fallback failed: ${orErr instanceof Error ? orErr.message : String(orErr)}`);
@@ -2206,7 +2219,7 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
   if (process.env.GROQ_API_KEY && !isModelBackedOff('groq', 'meta-llama/llama-4-scout-17b-16e-instruct')) {
     try {
       const groqClient = getGroqClient();
-      const groqSystem = `You are a results reporter. Answer ONLY in factual present tense. NEVER start with "I'll", "Let me", "I will", or "I'm going to". Start directly with the answer. ONLY report data that appears in the search results — do NOT invent specific prices, phone numbers, or company names not found in the results. If search results only contain article links without specific data, summarize what the articles reference and note that more specific data was not available. NEVER say "available at", "not directly retrieved", "can be found at", or redirect to a URL. Max 2-3 sentences.`;
+      const groqSystem = systemPrompt;
       const res = await groqClient.chat.completions.create({
         model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         max_tokens: 300,
@@ -2218,7 +2231,7 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
       });
       const content = res.choices[0]?.message?.content || '';
       const clean = stripNarration(content);
-      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean) && !isMetaDescription(clean)) {
         const groqInputTokens = res.usage?.prompt_tokens || 100;
         const groqOutputTokens = res.usage?.completion_tokens || 100;
         const groqCost = (groqInputTokens * 0.11 + groqOutputTokens * 0.34) / 1_000_000;
@@ -2244,7 +2257,7 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
       }), 15000);
       const content = response.choices[0]?.message?.content || "";
       const clean = stripNarration(content);
-      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean) && !isMetaDescription(clean)) {
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "fallback_direct_answer").catch(() => {});
@@ -2261,7 +2274,7 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
   // Last resort: DeepSeek with ultra-strict prompt
   if (process.env.DEEPSEEK_API_KEY) {
     try {
-      const strictSystem = `RESULTS REPORT: Answer in present tense only. Start with a concrete fact from the search results. ONLY cite specific names, prices, and addresses that appear in the provided search data. If the search results only link to articles without the specific data requested, summarize what IS available and state clearly what data was not found. NEVER say "available at URL", "not directly retrieved", "can be found at", or point to a website. Max 2 sentences. Do NOT begin with "I'll", "Let me", or "I will".`;
+      const strictSystem = systemPrompt;
       const client = getDeepSeekClient();
       const res = await client.chat.completions.create({
         model: "deepseek-chat",
@@ -2274,7 +2287,7 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
       });
       const content = res.choices[0]?.message?.content || "";
       const clean = stripNarration(content);
-      if (clean && clean.length > 20 && !isWholeResponsePassive(clean)) {
+      if (clean && clean.length > 20 && !isWholeResponsePassive(clean) && !isMetaDescription(clean)) {
         const dsInputTokens = res.usage?.prompt_tokens || 100;
         const dsOutputTokens = res.usage?.completion_tokens || 100;
         const dsCost = (dsInputTokens * 0.27 + dsOutputTokens * 1.10) / 1_000_000;
@@ -2287,7 +2300,16 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
     }
   }
 
-  // All models failed — fall back to raw search data instead of returning empty
+  // All models returned meta-descriptions or failed — retry WITHOUT search context (pure general knowledge)
+  if (hasContext) {
+    console.warn(`[FALLBACK] All models returned meta-descriptions. Retrying without search context (general knowledge).`);
+    const gkResult = await generateForcedDirectAnswer(userRequest, '', username, userId, taskId);
+    if (gkResult.content && gkResult.content.length > 30) {
+      return gkResult;
+    }
+  }
+
+  // Last resort: raw search data
   if (hasContext) {
     // Extract the most useful text from context (strip HTML, truncate)
     const rawText = context
