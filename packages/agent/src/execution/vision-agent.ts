@@ -3407,6 +3407,20 @@ export async function runVisionAgent(
             doneResult.length > 80; // long text answer = has data (book titles, names, info)
           const dataMissing = wantsData && !hasData && !isPassive && !isAdvice && doneResult.length < 100;
 
+          // Booking-incomplete rejection: agent found restaurants/booking pages but didn't actually book
+          const isBookingTask = /\b(book|reserv|make\s+a?\s*(reservation|booking|reso))\b/i.test(task);
+          const hasBookingConfirmation = /\b(confirmed|confirmation|reservation\s*(#|number|id)|booked|your\s+(table|reservation)|thank\s+you\s+for\s+(your|booking|reserving)|booking\s+reference)\b/i.test(doneResult);
+          const isBookingIncomplete = isBookingTask && !isPassive && !isAdvice && !hasBookingConfirmation && (
+            /\b(found|found\s+the|contact\s+information|booking\s+page|listing|phone\s+number|address|website|menu|hours|open|close|yelp|opentable)\b/i.test(doneResult)
+          );
+
+          // Signup-incomplete rejection: agent found the signup page but didn't create the account
+          const isSignupTask = /\b(sign\s?up|signup|register|create.*account|make.*account)\b/i.test(task);
+          const hasSignupConfirmation = /\b(created|signed\s*up|registered|welcome|dashboard|account\s+is\s+ready|logged\s+in|verification\s+email|confirm\s+your\s+email)\b/i.test(doneResult);
+          const isSignupIncomplete = isSignupTask && !isPassive && !isAdvice && !hasSignupConfirmation && (
+            /\b(found|signup\s+page|signup\s+form|registration|sign.up\s+options?|login\s+page|encountered)\b/i.test(doneResult)
+          );
+
           // Page-description rejection: DONE describes WHAT IS ON the page, not WHAT WAS ACCOMPLISHED
           // Only for action tasks (signup/book/order) — not for research/info tasks
           const isActionTask = /\b(sign\s?up|signup|register|create.*account|book|reserve|order|purchase|cancel|subscribe|form|fill|submit|apply)\b/i.test(task);
@@ -3441,8 +3455,8 @@ export async function runVisionAgent(
             }
           }
 
-          if (isPassive || isAdvice || isOrderIncomplete || dataMissing || isPageDescription) {
-            const reason = isPassive ? 'PASSIVE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : isPageDescription ? 'PAGE-DESCRIPTION' : 'ADVICE';
+          if (isPassive || isAdvice || isOrderIncomplete || isBookingIncomplete || isSignupIncomplete || dataMissing || isPageDescription) {
+            const reason = isPassive ? 'PASSIVE' : isBookingIncomplete ? 'BOOKING-INCOMPLETE' : isSignupIncomplete ? 'SIGNUP-INCOMPLETE' : isOrderIncomplete ? 'ORDER-INCOMPLETE' : dataMissing ? 'DATA-MISSING' : isPageDescription ? 'PAGE-DESCRIPTION' : 'ADVICE';
             console.log(`[BROWSER-AGENT] Rejected ${reason} DONE: "${doneResult.substring(0, 80)}"`);
             // Build a profile-aware forced action hint so the AI fills the form instead of asking
             const profileHint = userProfile
@@ -3454,8 +3468,12 @@ export async function runVisionAgent(
             const forceRetryHint = (hasNoResults && altLocationMatch)
               ? ` The previous search had NO RESULTS. IMMEDIATELY search again — change the location to "${altLocationMatch[0]}" or remove location filters entirely. Do NOT ask, just DO IT NOW.`
               : '';
-            // Context-aware re-prompt: research tasks need data extraction, not form filling
-            const rejectionHint = dataMissing && !isActionTask
+            // Context-aware re-prompt based on rejection type
+            const rejectionHint = isBookingIncomplete
+              ? `⚠️ BOOKING-INCOMPLETE DONE rejected: Finding the restaurant is step 1. You must ACTUALLY BOOK: CLICK on a restaurant, select date/time/party-size, FILL your name/email/phone, and CLICK "Complete Reservation" or "Book". If this site can't book online, OPEN_TAB and search "[restaurant name] opentable" or "[restaurant name] resy" to find a bookable listing.${profileHint}`
+              : isSignupIncomplete
+              ? `⚠️ SIGNUP-INCOMPLETE DONE rejected: Finding the signup page is step 1. You must ACTUALLY CREATE the account: FILL email, password, name fields and CLICK submit/create. If blocked, try OAuth (Google/Apple/Facebook buttons).${profileHint}`
+              : dataMissing && !isActionTask
               ? `⚠️ DATA-MISSING DONE rejected: "${doneResult.substring(0, 100)}". You are on the correct page — READ the visible content and output DONE with the ACTUAL DATA the user asked for (titles, prices, names, addresses, etc.). Do NOT navigate away. Do NOT describe the page. Just output DONE "Item 1: [name] £X.XX, Item 2: ..."${forceRetryHint}`
               : `⚠️ ${reason} DONE rejected: "${doneResult.substring(0, 100)}". DO NOT ask for permission. DO NOT describe what you see. TAKE ACTION NOW — FILL the form fields with the user's identity, CLICK the button, SUBMIT.${forceRetryHint}${profileHint}`;
             history.push(rejectionHint);
