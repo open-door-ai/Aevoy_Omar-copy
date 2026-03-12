@@ -6651,7 +6651,9 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
                 /\b(you can|you must|you should|you'll need to|you need to|confirm directly|visit the|call them|contact them)\b/i.test(rawVisionResult) ||
                 /\b(here'?s?\s+how|here\s+are\s+the|steps?\s+to|follow\s+these)\b/i.test(rawVisionResult) ||
                 /\b(accepts\s+(reservations|bookings|orders)|may be available|for availability)\b/i.test(rawVisionResult) ||
-                /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(rawVisionResult) // fabricated 555-xxxx phone
+                /\(?\d{3}\)?[-.\s]?555[-.\s]?\d{4}/.test(rawVisionResult) || // fabricated 555-xxxx phone
+                // Passive promises: "I'll create/sign up/book..." = NOT done yet
+                /\bi['']ll\s+(create|sign|register|book|reserve|order|purchase|fill|submit|complete|add|cancel|set up|make|try|attempt|navigate|go)\b/i.test(rawVisionResult)
               );
               // Only TRUE task-completion words set signupAutoCompleted=true.
               // "found", "price", "cost", "$X" are research-only — they indicate the agent found
@@ -8705,7 +8707,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // (e.g. by outcome verifier, cascade, or other post-quality-gate code paths).
     // Normalizes apostrophes then checks for short plan-like openers.
     // SKIP for signup-auto — our response is the mechanical result, not narration.
-    if (aiResponse.content && !signupAutoCompleted) {
+    // ALWAYS run narration guard — even for signupAutoCompleted.
+    // Passive "I'll create an account" is NOT a valid response for any task.
+    if (aiResponse.content) {
       const _fn = aiResponse.content
         .replace(/[\u2018\u2019\u201B]/g, "'")
         .replace(/[\u201C\u201D]/g, '"')

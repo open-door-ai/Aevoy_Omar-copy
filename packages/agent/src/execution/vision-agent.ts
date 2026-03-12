@@ -3354,8 +3354,8 @@ export async function runVisionAgent(
             }
           } else {
 
-          // Passive DONE rejection — catch ANY occurrence of passive phrasing anywhere in the result
-          const isPassive = /\b(want me to|shall i\b|would you like me to|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make|click|submit)\b|want me to click|want me to sign\s?up|want me to try|want me to submit|want me to fill|want me to proceed|want me to complete|ready to submit|ready to proceed)|i['']ll need|would you like|let me know|please provide|can i proceed|ready to (start|begin)|i can (help|assist)/i.test(doneResult);
+          // Passive DONE rejection — catch ANY occurrence of passive/promise phrasing
+          const isPassive = /\b(want me to|shall i\b|would you like me to|do you want me to|should i\s+(proceed|go|try|fill|sign|create|start|make|click|submit)\b|want me to click|want me to sign\s?up|want me to try|want me to submit|want me to fill|want me to proceed|want me to complete|ready to submit|ready to proceed)|i['']ll need|would you like|let me know|please provide|can i proceed|ready to (start|begin)|i can (help|assist)|i['']ll\s+(create|sign|register|book|reserve|order|purchase|fill|submit|complete|add|cancel|set up|make)/i.test(doneResult);
 
           // Advice DONE rejection
           const isAdvice = !isPassive && (
