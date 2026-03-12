@@ -3312,8 +3312,10 @@ export async function runVisionAgent(
           // Detect give-up language: agent reporting failure in DONE instead of data
           const isGiveUp = /\b(got stuck|couldn't|couldn.t|couldn.t complete|couldn.t find|could not|unable to|hit a snag|ran into|wasn.t working|got confused|I.m unable|unable to (access|find|complete|navigate)|may require a different|no longer accessible|the site (may|might)|try again|different approach|stuck after \d|stuck on the|couldn.t proceed|couldn.t access)\b/i.test(doneResult);
           const isInfoTask = /\b(tell me|what is|list|find|get me|get the|how much|how many|population|price|cost|address|rating|show me|what are|name the|first \d|top \d|quotes?|reviews?)\b/i.test(task);
-          if (hasFactualData && isInfoTask && !isGiveUp) {
-            // Skip all rejection — this has real data for an info task
+          // Don't bypass rejection for tasks that ALSO have action verbs (e.g., "find X and add to cart")
+          const isAlsoActionTask = /\b(add\b.*\b(cart|basket)|put\b.*\b(cart|basket)|sign\s*up|register|book|reserve|order|purchase|buy|fill|submit|cancel|log\s*in|login)\b/i.test(task);
+          if (hasFactualData && isInfoTask && !isGiveUp && !isAlsoActionTask) {
+            // Skip all rejection — this has real data for a PURE info task (no action component)
           } else if (isGiveUp) {
             // Agent is reporting failure in DONE — force it to keep trying with strategy rotation
             const rejectGiveUpCount = history.filter(h => h.includes('GIVEUP rejected')).length;
