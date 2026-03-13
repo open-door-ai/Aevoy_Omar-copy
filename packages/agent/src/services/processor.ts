@@ -3087,10 +3087,14 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
     if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0) {
       console.warn(`[REFUSAL-DETECT] AI refused task with model=${aiResponse.model}: "${aiResponse.content.substring(0, 100)}"`);
       // Direct browse injection — don't waste time retrying, free models often refuse the same way
-      // Generic: search for the service name from the task text — no hardcoded brand lists
-      const _taskUrl = _isSignupContext
-          ? `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup')}`
-          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+      // Smart URL: extract brand name → try <brand>.com directly. Fall back to Bing search (Google CAPTCHAs us).
+      const _refBrandMatch = subject.match(/\b([A-Z][a-zA-Z0-9]{2,})\b/);
+      const _refDomainMatch = subject.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
+      const _taskUrl = _refDomainMatch
+          ? `https://${_refDomainMatch[1]}`
+          : _refBrandMatch
+            ? `https://www.${_refBrandMatch[1].toLowerCase()}.com`
+            : `https://www.bing.com/search?q=${encodeURIComponent(subject + (_isSignupContext ? ' signup' : ''))}`;
       aiResponse.content = `Starting the task now...`;
       aiResponse.actions = [{ type: 'browse' as const, params: { url: _taskUrl } }];
       _refusalRecovered = true;
@@ -3586,16 +3590,17 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       // Browser-required task but AI only generated non-browser actions (search, etc.) or no actions.
       // Force a browse action to the target domain.
       const _forceDomainMatch = _taskText.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app)(\/[\w./?=&#%-]*)?)/i);
-      // Also match brand names without explicit TLD (e.g. "on BestBuy", "for Swagbucks")
-      const _brandMatch = !_forceDomainMatch && subject.match(/\b(?:on|for|at|from|to)\s+([A-Z][a-zA-Z0-9]+)\b/);
+      // Match brand names — any capitalized word 3+ chars that's not a common English word
+      const _commonWords = /^(The|And|But|For|Not|You|All|Can|Her|Was|One|Our|Out|Has|His|How|Its|May|New|Now|Old|See|Way|Who|Day|Did|Get|Let|Say|She|Too|Use|Dad|Mom|Yes|Yet|Big|End|Far|Few|Got|Had|Man|Run|Set|Try|Two|Why|Ask|Bad|Bit|Cut|Due|Eat|Eye|Fit|Fun|Hit|Hot|Job|Key|Lot|Met|Mix|Net|Off|Own|Pay|Per|Put|Red|Sat|Sit|Six|Son|Ten|Top|Win|Won|Yes|Via|Use|Any|Create|Make|Open|Sign|Book|Just|Find|Also|Into|Over|With|From|What|When|This|That|Will|Been|Much|Some|Them|Than|Each|Made|Like|Could|Would|Should|About|After|Where|Which|Being|Great|These|First|Still|Their|Between|Through|Before|Between|Other)$/;
+      const _brandMatch = !_forceDomainMatch && subject.match(/\b([A-Z][a-zA-Z0-9]{2,})\b/g)
+        ?.filter(w => !_commonWords.test(w))?.[0];
       const _forceDomain = _forceDomainMatch?.[1] || '';
-      // Don't blindly add www. — many sites (demoqa.com, herokuapp.com) don't support it.
-      // Only add www. for well-known domains that typically use it; otherwise just use https://
+      // Smart URL construction: domain found → direct. Brand found → try <brand>.com. Else → Bing search.
       const _forceUrl = _forceDomainMatch
         ? `https://${_forceDomain}`
         : _brandMatch
-          ? `https://www.google.com/search?q=${encodeURIComponent(_brandMatch[1])} official site`
-          : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+          ? `https://www.${_brandMatch.toLowerCase()}.com`
+          : `https://www.bing.com/search?q=${encodeURIComponent(subject)}`;
       // Replace any search-only actions with a browse action
       aiResponse.actions = [{ type: 'browse' as any, params: { url: _forceUrl } }];
       aiResponse.content = `Starting browser task...`;
@@ -4399,8 +4404,10 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
       if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0 && _earlySignupCheck) {
         console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
-        // Generic: Google search for signup — no hardcoded brand lists
-        const _forceUrl = `https://www.google.com/search?q=${encodeURIComponent(subject + ' create account')}`;
+        // Smart: extract brand → try <brand>.com. Fall back to Bing (Google CAPTCHAs us).
+        const _loopBrand = subject.match(/\b([A-Z][a-zA-Z0-9]{2,})\b/g)?.filter(w => !/^(The|And|But|For|Not|You|All|Can|Create|Make|Open|Sign|Book|Just|Find|Also)$/.test(w))?.[0];
+        const _loopDomain = subject.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
+        const _forceUrl = _loopDomain ? `https://${_loopDomain[1]}` : _loopBrand ? `https://www.${_loopBrand.toLowerCase()}.com` : `https://www.bing.com/search?q=${encodeURIComponent(subject + ' create account')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
         console.log(`[REFUSAL-LOOP] Injected browse action: ${_forceUrl}`);
@@ -4411,8 +4418,10 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           /\b(want me to|shall i|would you like|do you want|find the.*link|show you how)\b/i.test(aiResponse.content) &&
           !/\b(signed up|created.*account|account.*created|registered|successfully)\b/i.test(aiResponse.content)) {
         console.warn(`[PASSIVE-SIGNUP] AI described service instead of signing up — forcing browse`);
-        // Generic: Google search for signup — no hardcoded brand lists
-        const _forceSignupUrl = `https://www.google.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
+        // Smart: extract brand → try <brand>.com. Fall back to Bing (Google CAPTCHAs us).
+        const _passBrand = subject.match(/\b([A-Z][a-zA-Z0-9]{2,})\b/g)?.filter(w => !/^(The|And|But|For|Not|You|All|Can|Create|Make|Open|Sign|Book|Just|Find|Also)$/.test(w))?.[0];
+        const _passDomain = subject.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
+        const _forceSignupUrl = _passDomain ? `https://${_passDomain[1]}` : _passBrand ? `https://www.${_passBrand.toLowerCase()}.com` : `https://www.bing.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceSignupUrl } }];
       }
@@ -11122,37 +11131,37 @@ async function executeAction(
         return { action, success: false, error: "Search failed: no browser available and API search returned no results" };
       }
 
-      // Strategy 1: Google via browser (most reliable, CAPTCHA auto-solved)
-      const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-      const googleResult1 = await executionEngine.executeSteps([
-        { action: 'navigate', params: { url: googleSearchUrl } },
-        { action: 'wait', params: { ms: 1500 } },
+      // Strategy 1: Bing via browser (Google CAPTCHAs automated browsers)
+      const bingSearchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+      const bingResult1 = await executionEngine.executeSteps([
+        { action: 'navigate', params: { url: bingSearchUrl } },
+        { action: 'wait', params: { ms: 2000 } },
         { action: 'extract', params: { selector: 'body' } }
       ]);
 
-      let pageText = typeof googleResult1.data === 'string' ? googleResult1.data : JSON.stringify(googleResult1.data || '');
-      let usedEngine = 'google';
+      let pageText = typeof bingResult1.data === 'string' ? bingResult1.data : JSON.stringify(bingResult1.data || '');
+      let usedEngine = 'bing';
 
-      // Strategy 2: If Google failed or returned garbage, try Bing
-      if (!googleResult1.success || isGarbageText(pageText) || pageText.length < 200) {
-        console.log(`[SEARCH] Google ${!googleResult1.success ? 'failed' : isGarbageText(pageText) ? 'error page' : 'too short'}, trying Bing...`);
-        const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-        const bingResult = await executionEngine.executeSteps([
-          { action: 'navigate', params: { url: bingUrl } },
-          { action: 'wait', params: { ms: 2000 } },
+      // Strategy 2: If Bing failed or returned garbage, try Google
+      if (!bingResult1.success || isGarbageText(pageText) || pageText.length < 200) {
+        console.log(`[SEARCH] Bing ${!bingResult1.success ? 'failed' : isGarbageText(pageText) ? 'error page' : 'too short'}, trying Google...`);
+        const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+        const googleResult = await executionEngine.executeSteps([
+          { action: 'navigate', params: { url: googleUrl } },
+          { action: 'wait', params: { ms: 1500 } },
           { action: 'extract', params: { selector: 'body' } }
         ]);
-        const bingText = typeof bingResult.data === 'string' ? bingResult.data : JSON.stringify(bingResult.data || '');
+        const googleText = typeof googleResult.data === 'string' ? googleResult.data : JSON.stringify(googleResult.data || '');
 
-        if (bingResult.success && !isGarbageText(bingText) && bingText.length > (isGarbageText(pageText) ? 0 : pageText.length)) {
-          pageText = bingText;
-          usedEngine = 'bing';
+        if (googleResult.success && !isGarbageText(googleText) && googleText.length > (isGarbageText(pageText) ? 0 : pageText.length)) {
+          pageText = googleText;
+          usedEngine = 'google';
         }
       }
 
-      // Strategy 2b: If Bing also failed, try Brave Search
+      // Strategy 3: If both failed, try Brave Search
       if (isGarbageText(pageText) || pageText.length < 200) {
-        console.log(`[SEARCH] Bing also ${isGarbageText(pageText) ? 'garbage' : 'too short'}, trying Brave...`);
+        console.log(`[SEARCH] Google also ${isGarbageText(pageText) ? 'garbage' : 'too short'}, trying Brave...`);
         const braveUrl = `https://search.brave.com/search?q=${encodeURIComponent(query)}`;
         const braveResult = await executionEngine.executeSteps([
           { action: 'navigate', params: { url: braveUrl } },
