@@ -2287,9 +2287,11 @@ export async function runVisionAgent(
     // ══════════════════════════════════════════════════════════════
     // MAIN LOOP
     // ══════════════════════════════════════════════════════════════
+    let _slowStepCount = 0; // Track consecutive slow steps (>45s each)
 
     for (steps = 0; steps < dynamicMaxSteps; steps++) {
-      if (Date.now() - startTime > TOTAL_TIMEOUT_MS) {
+      const _stepStartMs = Date.now();
+      if (_stepStartMs - startTime > TOTAL_TIMEOUT_MS) {
         const pageData = await capturePageData(activePage);
         return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots, pageData };
       }
@@ -3008,6 +3010,14 @@ export async function runVisionAgent(
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
+
+        // CDP disconnect / browser closed — bail immediately, let processor retry with local browser
+        const isBrowserDead = /target closed|connection closed|protocol error|session closed|browser.*closed|page.*closed|context.*closed|has been closed|disposed/i.test(errMsg);
+        if (isBrowserDead) {
+          console.error(`[BROWSER-AGENT] Browser disconnected at step ${steps + 1}: ${errMsg.substring(0, 100)}`);
+          return { success: false, error: 'browser_disconnected', steps: steps + 1, cost: totalCost, screenshots, pageData: '' };
+        }
+
         const isRateLimit = errMsg.includes('429') || /rate.?limit/i.test(errMsg) || errMsg.includes('Too Many Requests');
 
         if (isRateLimit) {
@@ -3873,6 +3883,19 @@ export async function runVisionAgent(
         if (!ok && (action.type === 'click' || action.type === 'rightclick' || action.type === 'navigate')) {
           break;
         }
+      }
+
+      // ── Slow step detector: if browser is consistently slow, bail early ──
+      const _stepDurationMs = Date.now() - _stepStartMs;
+      if (_stepDurationMs > 45000) {
+        _slowStepCount++;
+        if (_slowStepCount >= 3) {
+          console.warn(`[BROWSER-AGENT] SLOW BROWSER: ${_slowStepCount} consecutive steps >45s (last: ${(_stepDurationMs / 1000).toFixed(1)}s) — returning for engine switch`);
+          const pageData = await capturePageData(activePage);
+          return { success: false, error: 'browser_too_slow', steps: steps + 1, cost: totalCost, screenshots, pageData };
+        }
+      } else {
+        _slowStepCount = 0; // reset on fast step
       }
     }
 

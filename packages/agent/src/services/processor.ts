@@ -4117,7 +4117,41 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               );
 
               _bfpVisionCost = _bfpResult.cost || 0;
-              console.log(`[BROWSER-FAST-PATH] Vision agent result: success=${_bfpResult.success}, steps=${_bfpResult.steps}, cost=$${_bfpResult.cost.toFixed(4)}`);
+              console.log(`[BROWSER-FAST-PATH] Vision agent result: success=${_bfpResult.success}, steps=${_bfpResult.steps}, cost=$${_bfpResult.cost.toFixed(4)}, error=${_bfpResult.error || 'none'}`);
+
+              // BROWSER ENGINE SWITCH: If BrightData was too slow or disconnected, switch to local+geonode and retry
+              const _bfpNeedsEngineSwitch = !_bfpResult.success && (_bfpResult.error === 'browser_too_slow' || _bfpResult.error === 'browser_disconnected');
+              if (_bfpNeedsEngineSwitch && executionEngine) {
+                const _switchReason = _bfpResult.error === 'browser_too_slow' ? 'slow' : 'disconnected';
+                console.log(`[BROWSER-FAST-PATH] BrightData ${_switchReason} — switching to local browser + geonode proxy`);
+                try {
+                  executionEngine.forceLocalBrowser?.();
+                  await executionEngine.cleanup?.();
+                  const _switchDomain = (() => { try { return new URL(_bfpTargetUrl).hostname; } catch { return 'unknown'; } })();
+                  await executionEngine.initialize?.(userId, _switchDomain, taskId);
+                  const _localPage = executionEngine.getPage?.();
+                  if (_localPage && !_localPage.isClosed()) {
+                    // Navigate to target URL on local browser
+                    await _localPage.goto(_bfpTargetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+                    // Retry vision agent on local browser
+                    const _localRemainingMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+                    console.log(`[BROWSER-FAST-PATH] Retrying vision agent on local browser (${Math.round(_localRemainingMs / 60000)}min remaining)`);
+                    const _localResult = await runWithAdaptiveTimeout(
+                      runVisionAgent(_localPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
+                      taskId,
+                      Math.min(_bfpBaseTimeout, _localRemainingMs),
+                      subject
+                    );
+                    // Replace the result with the local browser result
+                    Object.assign(_bfpResult, _localResult);
+                    _bfpVisionCost += _localResult.cost || 0;
+                    console.log(`[BROWSER-FAST-PATH] Local browser result: success=${_localResult.success}, steps=${_localResult.steps}`);
+                  }
+                } catch (switchErr) {
+                  console.warn(`[BROWSER-FAST-PATH] Engine switch failed:`, switchErr instanceof Error ? switchErr.message : switchErr);
+                  // Fall through to normal failure handling
+                }
+              }
 
               if (_bfpResult.success && _bfpResult.result && _bfpResult.result.length > 30) {
                 // Data extraction check: if task wants specific data but result is a trivial header, reject
@@ -4788,6 +4822,29 @@ DO NOT signal [TASK_COMPLETE] until you have SPECIFIC data points (names, prices
                   new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Vision agent signup timeout after ${Math.round(VG_TIMEOUT_MS / 1000)}s`)), VG_TIMEOUT_MS)),
                 ]);
                 totalAiCost += vgResult.cost || 0; // Track vision agent costs for billing
+
+                // ENGINE SWITCH: If BrightData was slow or disconnected, retry with local browser
+                if (!vgResult.success && (vgResult.error === 'browser_too_slow' || vgResult.error === 'browser_disconnected') && executionEngine) {
+                  console.log(`[SIGNUP-GATE] BrightData ${vgResult.error} — switching to local browser`);
+                  try {
+                    executionEngine.forceLocalBrowser?.();
+                    await executionEngine.cleanup?.();
+                    await executionEngine.initialize?.(userId, classification.domains?.[0] || undefined, taskId);
+                    const _sgLocalPage = executionEngine.getPage?.();
+                    if (_sgLocalPage && !_sgLocalPage.isClosed()) {
+                      const _sgTargetUrl = (() => { try { return signupPage.url(); } catch { return ''; } })() || `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+                      await _sgLocalPage.goto(_sgTargetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+                      const _sgLocalMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+                      const _sgLocalResult = await Promise.race([
+                        runVisionAgent(_sgLocalPage, vgTask, userId, taskId, username, userTwilioPhone),
+                        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Local vision timeout')), Math.min(480000, _sgLocalMs - 30000))),
+                      ]);
+                      Object.assign(vgResult, _sgLocalResult);
+                      totalAiCost += _sgLocalResult.cost || 0;
+                    }
+                  } catch (swErr) { console.warn(`[SIGNUP-GATE] Local retry failed:`, swErr instanceof Error ? swErr.message : swErr); }
+                }
+
                 if (vgResult.success) {
                   aiResponse.content = vgResult.result || `Signed up using ${vgEmail}.`;
                   isTaskComplete = true;
@@ -6707,7 +6764,34 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
               subject
             );
             totalAiCost += visionResult.cost || 0; // Track vision agent costs for billing
-            console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}`);
+            console.log(`[VISION-AGENT] Result: success=${visionResult.success}, steps=${visionResult.steps}, cost=$${visionResult.cost.toFixed(4)}, error=${visionResult.error || 'none'}`);
+
+            // ENGINE SWITCH: BrightData slow or disconnected → retry with local+geonode
+            if (!visionResult.success && (visionResult.error === 'browser_too_slow' || visionResult.error === 'browser_disconnected') && executionEngine) {
+              console.log(`[VISION-AGENT] BrightData ${visionResult.error} — switching to local browser`);
+              try {
+                executionEngine.forceLocalBrowser?.();
+                await executionEngine.cleanup?.();
+                await executionEngine.initialize?.(userId, classification.domains?.[0] || undefined, taskId);
+                const _vaLocalPage = executionEngine.getPage?.();
+                if (_vaLocalPage && !_vaLocalPage.isClosed()) {
+                  const _vaNavUrl = (() => { try { return visionPage.url(); } catch { return ''; } })() || `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+                  await _vaLocalPage.goto(_vaNavUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+                  const _vaLocalMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
+                  console.log(`[VISION-AGENT] Retrying on local browser (${Math.round(_vaLocalMs / 60000)}min remaining)`);
+                  const _vaLocalResult = await runWithAdaptiveTimeout(
+                    runVisionAgent(_vaLocalPage, visionTask, userId, taskId, username, userTwilioPhone),
+                    taskId,
+                    Math.min(_vaBaseTimeout, _vaLocalMs),
+                    subject
+                  );
+                  Object.assign(visionResult, _vaLocalResult);
+                  totalAiCost += _vaLocalResult.cost || 0;
+                  console.log(`[VISION-AGENT] Local browser result: success=${_vaLocalResult.success}, steps=${_vaLocalResult.steps}`);
+                }
+              } catch (swErr) { console.warn(`[VISION-AGENT] Local retry failed:`, swErr instanceof Error ? swErr.message : swErr); }
+            }
+
             // Always capture page data from vision agent (success or failure)
             if (visionResult.pageData && visionResult.pageData.length > 50) {
               lastVisionPageData = visionResult.pageData;
