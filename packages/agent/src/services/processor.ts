@@ -276,6 +276,14 @@ async function tryEmailSendFastPath(
 ): Promise<TaskResult | null> {
   const taskText = (subject.trim().toLowerCase() === body.trim().toLowerCase() ? subject : `${subject} ${body}`).trim();
 
+  // GUARD: If the task is clearly a browser/account task that just mentions an email address,
+  // don't treat it as "send email". "using email X" or "create account with email X" is NOT email sending.
+  const _hasBrowserIntent = /\b(go\s+to|navigate|browse|sign\s*up|signup|create\b.*\baccount|make\b.*\baccount|register|add\s+to\s+cart|order|book\s+(a|me|the)|amazon|spotify|netflix)\b/i.test(taskText);
+  const _emailAsNoun = /\b(using\s+email|with\s+email|my\s+email|email\s+address|account\s+email)\b/i.test(taskText);
+  if (_hasBrowserIntent && _emailAsNoun) {
+    return null; // Not an email send task — it's a browser task that mentions an email address
+  }
+
   // Flexible patterns for detecting email send requests
   const EMAIL_SEND_PATTERNS = [
     /send\s+.*?email\s+to\s+([^\s,]+@[^\s,]+)/i,                    // "send [any words] email to X"
