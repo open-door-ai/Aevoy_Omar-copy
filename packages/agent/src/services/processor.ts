@@ -3091,7 +3091,7 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
     // REFUSAL DETECTOR — if the AI refuses the task, retry with a DIFFERENT model.
     // Free models (Groq/Llama) often refuse signup tasks. Instead of injecting a hardcoded URL,
     // re-call generateResponse which will skip the failed model and try the next one in the chain.
-    const _refusalPatterns = /\b(I cannot|I will not|I can't|I'm unable to|I am unable|cannot create.*account|cannot.*signup|cannot proceed|violat\w+ terms|fraudulent|misrepresentation|unauthorized|I must decline|I'm not able|against.*policy|prohibited|not something I can|I shouldn'?t)\b/i;
+    const _refusalPatterns = /\b(I cannot|I could not|I will not|I can't|I couldn'?t|I'm unable to|I am unable|I was unable|I do not have the ability|cannot create.*account|cannot.*signup|cannot proceed|could not create|could not.*sign|could not.*account|I am an AI|I'm an AI|as an AI|cannot directly access|violat\w+ terms|fraudulent|misrepresentation|unauthorized|I must decline|I'm not able|against.*policy|prohibited|not something I can|I shouldn'?t|handle personal information)\b/i;
     let _refusalRecovered = false;
     if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0) {
       const refusedModel = aiResponse.model || 'unknown';
@@ -4452,12 +4452,15 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
       }
 
       // IN-LOOP REFUSAL DETECTOR: If AI refuses during iteration, override and force action
-      if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0 && _earlySignupCheck) {
-        console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
+      // Applies to signup AND browser-action tasks (add to cart, book, order, etc.)
+      const _isRefusableTask = _earlySignupCheck || _earlyBookingCheck || _isBrowserRequiredTask;
+      if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0 && _isRefusableTask) {
+        console.warn(`[REFUSAL-LOOP] AI refused task in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
         // Extract domain from task text. No domain → Bing search. No brand guessing.
         const _loopDomain = `${subject} ${body || ''}`.match(/(?<![@/])(\b[\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
-        const _forceUrl = _loopDomain ? `https://${_loopDomain[1]}` : `https://www.bing.com/search?q=${encodeURIComponent(subject + ' create account')}`;
+        const _searchSuffix = _earlySignupCheck ? ' create account' : '';
+        const _forceUrl = _loopDomain ? `https://${_loopDomain[1]}` : `https://www.bing.com/search?q=${encodeURIComponent(subject + _searchSuffix)}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
         console.log(`[REFUSAL-LOOP] Injected browse action: ${_forceUrl}`);
@@ -8522,9 +8525,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     const _claimsBrowserAction = /\b(i (?:navigated|went|browsed|opened|visited|headed) to|i (?:started|began) the registration|i (?:searched|looked) (?:on|at|for)|i was unable to complete|i couldn'?t (?:complete|finish|access))\b/i.test(aiResponse.content || '');
     const _isDirectBrowserButNoActions = _isBrowserRequiredTask && noBrowserUsed && _claimsBrowserAction;
 
-    // REFUSAL DETECTION: "I cannot add items", "I'm unable to sign up", etc. for browser tasks
-    const _isRefusal = /\b(i (?:cannot|can'?t|am unable to|was unable to|couldn'?t|won'?t be able to)\s+(?:add|sign|book|register|create|order|buy|purchase|subscribe|browse|navigate|access|complete|open|visit))\b/i.test(aiResponse.content || '');
-    const _isBrowserRefusal = _isBrowserRequiredTask && noBrowserUsed && _isRefusal;
+    // REFUSAL DETECTION: "I cannot add items", "I'm unable to sign up", "I am an AI", etc.
+    const _isRefusal = /\b(i (?:cannot|could not|can'?t|couldn'?t|am unable to|was unable to|won'?t be able to)\s+(?:add|sign|book|register|create|order|buy|purchase|subscribe|browse|navigate|access|complete|open|visit))\b/i.test(aiResponse.content || '');
+    // AI identity refusal: "I am an AI and cannot...", "as an AI, I cannot..."
+    const _isAIIdentityRefusal = /\b(I am an AI|I'm an AI|as an AI|cannot directly access external|handle personal information)\b/i.test(aiResponse.content || '');
+    const _isBrowserRefusal = _isBrowserRequiredTask && (noBrowserUsed ? (_isRefusal || _isAIIdentityRefusal) : _isAIIdentityRefusal);
 
     // BROWSER-REQUIRED BUT NO BROWSER: Task clearly needs browser (add to cart, sign up, etc.) but no browser was used
     const _browserRequiredButMissing = _isBrowserRequiredTask && noBrowserUsed && !_awaitingCredentials;
