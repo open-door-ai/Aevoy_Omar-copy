@@ -1107,7 +1107,25 @@ async function injectCaptchaToken(page: Page, type: CaptchaType, token: string):
           // Fallback: global callback
           const cb = win.__recaptcha_callback as ((t: string) => void) | undefined;
           if (typeof cb === 'function') { cb(token); success = true; }
-        } catch { /* callback not found, token in textarea is sufficient */ }
+        } catch { /* callback not found */ }
+        // Auto-submit any form on the page after reCAPTCHA token injection
+        // Critical for standalone challenge pages (e.g., challenge.spotify.com/recaptcha)
+        // where the form needs explicit submission after token is set.
+        if (success) {
+          try {
+            const forms = Array.from(document.querySelectorAll('form'));
+            for (let i = 0; i < forms.length; i++) {
+              const hasRecaptchaInput = forms[i].querySelector('[name="g-recaptcha-response"]');
+              if (hasRecaptchaInput) {
+                forms[i].submit();
+                break;
+              }
+            }
+            // Also try clicking submit/continue buttons as fallback
+            const submitBtn = document.querySelector('button[type="submit"], input[type="submit"], button.submit, .challenge-submit, button[data-testid="submit"]') as HTMLButtonElement;
+            if (submitBtn) submitBtn.click();
+          } catch { /* form submission is best-effort */ }
+        }
 
       } else if (type === 'hcaptcha') {
         // Set hCaptcha response
