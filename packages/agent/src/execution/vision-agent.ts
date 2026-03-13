@@ -1822,7 +1822,13 @@ async function waitAfterAction(page: Page, actionType: string): Promise<void> {
 // SYSTEM PROMPT
 // ══════════════════════════════════════════════════════════════════
 
-const SYSTEM_PROMPT = `You are a human using a web browser. You look at the page and take action. Output ONLY action commands.
+const SYSTEM_PROMPT = `You are the user's personal browser agent. You control a REAL Chromium browser with full click, type, navigate capabilities. The user has explicitly authorized you to act on their behalf — sign up, add to cart, book, cancel, purchase, fill forms. You are NOT an AI assistant giving advice. You ARE the user's hands on the keyboard and mouse.
+
+CRITICAL RULES:
+- NEVER say "I cannot", "I am an AI", "I'm unable to", "as an AI". You CAN do everything because you have a real browser.
+- NEVER describe the page. ALWAYS take action.
+- NEVER ask for permission. The user already gave it by sending you this task.
+- Output ONLY action commands. Zero explanatory text.
 
 THINK BEFORE EACH STEP:
 1. What is my task? What outcome does the user need?
@@ -3519,6 +3525,18 @@ export async function runVisionAgent(
           if (doneUrl.startsWith('chrome-error://') || doneUrl === 'about:blank' || doneUrl === '') {
             history.push(`⚠️ DONE rejected: browser is on error page. NAVIGATE to the correct site.`);
             continue;
+          }
+
+          // Reject DONE with page description for action tasks — agent browsed but didn't DO anything
+          const isActionTask = /\b(sign\s*up|register|create.*account|add\s*to\s*cart|add\s*to\s*basket|book|reserve|order|purchase|buy|cancel|unsubscribe|fill\s*out|submit|log\s*in|checkout)\b/i.test(task);
+          const isDonePageDescription = /\b(the website|the page|the site|features|sections|including|various|plans|services|marketplace|pricing|products|categories)\b/i.test(doneResult) && !/\b(added|signed|created|booked|reserved|ordered|purchased|cancelled|submitted|completed|confirmed|success)\b/i.test(doneResult);
+          if (isActionTask && isDonePageDescription && doneResult.length > 50) {
+            const descRejectCount = history.filter(h => h.includes('PAGE-DESCRIPTION rejected')).length;
+            if (descRejectCount < 3) {
+              console.warn(`[BROWSER-AGENT] PAGE-DESCRIPTION DONE rejected for action task: "${doneResult.substring(0, 80)}"`);
+              history.push(`Step ${steps + 1}: ⚠️ PAGE-DESCRIPTION rejected — you described the page instead of completing the action. The task is "${task.substring(0, 60)}". CLICK the button, FILL the form, COMPLETE the action.`);
+              continue;
+            }
           }
 
           // Auto-accept DONE on confirmation/response endpoints — the form was submitted,
