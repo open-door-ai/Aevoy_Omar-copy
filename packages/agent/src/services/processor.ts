@@ -4029,10 +4029,16 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
             });
             await _bfpPage.waitForTimeout(1000); // Let JS/SPA render
 
-            const _bfpPageUrl = _bfpPage.url();
-            // Only treat chrome-error:// as an unrecoverable error page.
-            // about:blank means goto() failed — the vision agent's own pre-navigation logic
-            // will handle it (it detects blank and navigates itself).
+            let _bfpPageUrl = _bfpPage.url();
+            // If page is about:blank or chrome-error, the goto failed.
+            // Navigate to a search engine so the vision agent has somewhere to start.
+            if (_bfpPageUrl === 'about:blank' || _bfpPageUrl.startsWith('chrome-error://')) {
+              console.warn(`[BROWSER-FAST-PATH] Page stuck on ${_bfpPageUrl} — navigating to Bing search as fallback`);
+              const _bfpFallbackQuery = subject.substring(0, 100);
+              await _bfpPage.goto(`https://www.bing.com/search?q=${encodeURIComponent(_bfpFallbackQuery)}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+              await _bfpPage.waitForTimeout(1000);
+              _bfpPageUrl = _bfpPage.url();
+            }
             const _bfpIsError = _bfpPageUrl.startsWith('chrome-error://');
 
             if (!_bfpIsError) {
