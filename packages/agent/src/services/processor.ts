@@ -6250,15 +6250,14 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
         break;
       }
 
-      // IMAGE GENERATION FAILURE: If built-in generate_image failed, fall through to browser.
-      // A true AGI agent finds a free online image generator and uses it.
+      // IMAGE GENERATION FAILURE: If built-in generate_image failed, let the AI decide what to do.
+      // Don't give up, don't hardcode a fallback — let the AI model be resourceful.
       const _imgFailThisRound = iterationResults.find(r => r.action.type === 'generate_image' && !r.success);
       if (_imgFailThisRound && _isImageCreationTask) {
-        console.warn(`[IMAGE-FAIL] Built-in image gen failed (${_imgFailThisRound.error}) — falling through to browser-based approach`);
-        // Inject a browse action to find a free online image generator
-        aiResponse.actions = [{ type: 'browse' as any, params: { url: `https://www.google.com/search?q=free+AI+image+generator+online+no+signup` } }];
-        aiResponse.content = `Built-in image generation failed. Finding a free online alternative...`;
-        // Don't break — let the iteration loop continue with the browser approach
+        console.warn(`[IMAGE-FAIL] Built-in image gen failed (${_imgFailThisRound.error}) — letting AI find alternative`);
+        // Don't break, don't inject — let the iteration loop re-prompt the AI.
+        // The AI will see the failure in results and decide how to proceed
+        // (search for online tool, try different approach, etc.)
       }
 
       // POST-ACTION SIGNUP DETECTION: After browsing to a signup page, immediately
@@ -7787,12 +7786,16 @@ Use training knowledge for all content. Do NOT search for templates. Just output
         aiResponse.content = `Navigating to ${_iterTargetUrl} to complete the task.`;
       }
 
-      // IMAGE-STRIP (in-loop): If this is an image task, strip search/browse from new AI response
+      // IMAGE-STRIP (in-loop): Only strip browse if generate_image is also present.
+      // If generate_image failed, the AI might be searching for an online alternative — let it.
       if (_isImageCreationTask && !_isDocumentAction && aiResponse.actions.length > 0) {
-        const _ilImgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'].includes(a.type));
-        if (_ilImgNonSearch.length < aiResponse.actions.length) {
-          console.log(`[IMAGE-STRIP-LOOP] Stripped ${aiResponse.actions.length - _ilImgNonSearch.length} search/browse actions in iteration ${currentIteration}`);
-          aiResponse.actions = _ilImgNonSearch;
+        const hasImgAction = aiResponse.actions.some(a => a.type === 'generate_image');
+        if (hasImgAction) {
+          const _ilImgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'].includes(a.type));
+          if (_ilImgNonSearch.length < aiResponse.actions.length) {
+            console.log(`[IMAGE-STRIP-LOOP] Stripped ${aiResponse.actions.length - _ilImgNonSearch.length} search/browse actions (generate_image present)`);
+            aiResponse.actions = _ilImgNonSearch;
+          }
         }
       }
 
