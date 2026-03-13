@@ -6515,7 +6515,9 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
         // But NOT price research tasks (already excluded above by _isPriceResearchOnly)
         || (hasBrowseEver && /\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
       );
-      if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2) {
+      // Don't retry vision agent if total AI cost already exceeds $0.15 (prevents double-spending)
+      const _visionCostOk = totalAiCost < 0.15;
+      if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2 && _visionCostOk) {
         const visionPage = executionEngine.getPage?.();
         let visionPageUrl = visionPage?.url() || '';
         const isErrorPage = visionPageUrl.startsWith('chrome-error://') || visionPageUrl.startsWith('about:');
