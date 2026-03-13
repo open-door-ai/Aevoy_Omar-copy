@@ -1970,7 +1970,9 @@ export async function runVisionAgent(
   const isComplexTask = !isSimpleTask && /\b(sign\s*up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|set\s*up\b.*\baccount|book|reserve|order|purchase|checkout|apply|subscribe|add\b.*\b(cart|basket)|fill\b.*\bform|submit\b.*\bform|complete\b.*\bform|cancel\b.*\b(subscription|account|membership))\b/i.test(task);
   const isFormFillTask = /\b(sign\s*up|signup|register|create\b.*\baccount|make\b.*\baccount|apply|fill\b.*\bform|submit\b.*\bform|probate|intake|legal.*form|contact.*form)\b/i.test(task);
   // Quick-action tasks: add to cart/basket, click a button — should take <15 steps
-  const isQuickActionTask = !isFormFillTask && /\b(add\b.*\b(cart|basket|bag)|buy\s*now)\b/i.test(task) && !/\b(sign\s*up|register|create\b.*\baccount|book|reserve|checkout)\b/i.test(task);
+  // Note: "book" as noun (e.g. "add the book") must NOT trigger the booking exclusion.
+  // Only "book a/me/the/my/us" (verb = booking) should exclude.
+  const isQuickActionTask = !isFormFillTask && /\b(add\b.*\b(cart|basket|bag)|buy\s*now)\b/i.test(task) && !/\b(sign\s*up|register|create\b.*\baccount|book\s+(a|me|the|my|us|for)\b|reserve|checkout)\b/i.test(task);
   const effectiveMaxSteps = isBookingTask ? MAX_STEPS_BOOKING : (isQuickActionTask ? 20 : MAX_STEPS);
   let dynamicMaxSteps = effectiveMaxSteps;
   let milestonesHit = 0;
