@@ -1286,6 +1286,25 @@ export class ExecutionEngine {
       const message = error instanceof Error ? error.message : 'Unknown navigation error';
       console.error(`[ENGINE] Navigation failed for ${url}: ${message}`);
 
+      // BrightData compliance block ("Forbidden: target site requires special permission") →
+      // Immediate fallback to local browser + proxy. This domain will NEVER work on BrightData
+      // without additional KYC approval, so don't waste a retry.
+      const isBrightDataForbidden = this.useBrightData && (
+        message.includes('Forbidden') || message.includes('compliance policy') || message.includes('special permission')
+      );
+      if (isBrightDataForbidden) {
+        console.warn(`[ENGINE] Bright Data FORBIDDEN for ${url} (compliance) — immediate fallback to local + proxy`);
+        try {
+          await this.context?.close().catch(() => {});
+          await this.browser?.close().catch(() => {});
+        } catch { /* ignore cleanup errors */ }
+        this.browser = null; this.context = null; this.page = null;
+        this.useBrightData = false; this.isRemoteCDP = false;
+        brightDataInUse = false;
+        await this.initialize(this.userId, this.domain, this.taskId);
+        return this._doNavigate(url);
+      }
+
       // Runtime Bright Data fallback: after 2 consecutive nav failures, switch to local browser.
       // Generic — handles cert errors, cooldowns, blocked domains, any infrastructure issue.
       if (this.useBrightData && ++this.brightDataNavFailures >= 2) {
