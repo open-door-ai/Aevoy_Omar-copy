@@ -1827,20 +1827,11 @@ export async function processTask(task: TaskRequest): Promise<TaskResult> {
           console.log(`[IMAGE-FAST-PATH] Generated: ${_ifpImageUrl} (model: ${_ifpModel})`);
           return { taskId, success: true, response: _ifpResponse, actions: [] };
         } else {
-          // All providers failed — return clear error instead of searching stock photos
-          const _ifpErrResponse = `I wasn't able to generate the image right now (all image generation providers are temporarily unavailable). Please try again in a few minutes.`;
-          await getSupabaseClient().from('tasks').update({
-            status: 'completed',
-            completed_at: new Date().toISOString(),
-            execution_time_ms: Date.now() - startTime,
-            response_text: _ifpErrResponse,
-          }).eq('id', taskId);
-          if (!task.suppressEmail) {
-            await sendViaChannel(task.inputChannel, userId, from, `${username}@aevoy.com`, `Re: ${subject}`, _ifpErrResponse);
-          }
-          clearTimeout(masterTimer);
-          console.error(`[IMAGE-FAST-PATH] All providers failed — returning error`);
-          return { taskId, success: false, response: _ifpErrResponse, actions: [] };
+          // All providers failed — DON'T give up. Fall through to the main pipeline.
+          // A true AGI agent finds an alternative: browse to a free online image generator
+          // (Craiyon, Leonardo.ai, etc.) and create it there.
+          console.warn(`[IMAGE-FAST-PATH] All built-in providers failed — falling through to browser-based image generation`);
+          // Don't return — let the main pipeline handle it with browser-based approach
         }
       } catch (_ifpErr) {
         console.error(`[IMAGE-FAST-PATH] Error:`, _ifpErr);
@@ -3219,12 +3210,15 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       } else if (!hasImageAction) {
         console.warn(`[IMAGE-INJECT] Skipped — GOOGLE_API_KEY not set, generate_image would fail`);
       }
-      // Strip search/browse actions for image tasks — AI should use generate_image, not search for Canva/templates
-      const _imgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type));
-      if (_imgNonSearch.length < aiResponse.actions.length) {
-        const _imgStripped = aiResponse.actions.length - _imgNonSearch.length;
-        console.log(`[IMAGE-STRIP] Stripped ${_imgStripped} search/browse actions from image creation task`);
-        aiResponse.actions = _imgNonSearch;
+      // Strip search/browse ONLY if we have a generate_image action to try first.
+      // If generate_image isn't available, let the browser find an online tool.
+      if (hasImageAction) {
+        const _imgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', ...HEAVY_BROWSER_TYPES].includes(a.type));
+        if (_imgNonSearch.length < aiResponse.actions.length) {
+          const _imgStripped = aiResponse.actions.length - _imgNonSearch.length;
+          console.log(`[IMAGE-STRIP] Stripped ${_imgStripped} search/browse actions (generate_image available)`);
+          aiResponse.actions = _imgNonSearch;
+        }
       }
     }
 
@@ -6256,15 +6250,15 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
         break;
       }
 
-      // IMAGE GENERATION FAILURE: If this is an image task and generate_image just failed,
-      // stop immediately — don't let the AI iterate and search for stock photos or Canva
+      // IMAGE GENERATION FAILURE: If built-in generate_image failed, fall through to browser.
+      // A true AGI agent finds a free online image generator and uses it.
       const _imgFailThisRound = iterationResults.find(r => r.action.type === 'generate_image' && !r.success);
       if (_imgFailThisRound && _isImageCreationTask) {
-        aiResponse.content = `I wasn't able to generate the image right now (${_imgFailThisRound.error || 'API unavailable'}). Please try again in a few minutes.`;
-        isTaskComplete = true;
-        aiSignaledComplete = true;
-        console.log(`[IMAGE-FAIL] Image generation failed in loop — stopping: ${_imgFailThisRound.error}`);
-        break;
+        console.warn(`[IMAGE-FAIL] Built-in image gen failed (${_imgFailThisRound.error}) — falling through to browser-based approach`);
+        // Inject a browse action to find a free online image generator
+        aiResponse.actions = [{ type: 'browse' as any, params: { url: `https://www.google.com/search?q=free+AI+image+generator+online+no+signup` } }];
+        aiResponse.content = `Built-in image generation failed. Finding a free online alternative...`;
+        // Don't break — let the iteration loop continue with the browser approach
       }
 
       // POST-ACTION SIGNUP DETECTION: After browsing to a signup page, immediately
