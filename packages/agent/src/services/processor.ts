@@ -8683,10 +8683,14 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
       // ALL actions failed — check if the response still contains real data.
       // The browser fast path or page-data recovery may have produced a genuine answer
       // even though the formal action results all failed.
-      const _responseHasRealData = aiResponse.content.length > 100 &&
-        /\b(\$\d|USD|CAD|\d+\.\d{2}|\d{1,2}:\d{2}\s*(am|pm)|★|⭐|rating|rated|reviews?|located|address|\d{3}[-.)]\s*\d{3})\b/i.test(aiResponse.content) ||
-        // Response has specific names (proper nouns) and details — not generic advice
-        (aiResponse.content.length > 150 && /[A-Z][a-z]+\s+[A-Z][a-z]+/.test(aiResponse.content) && !/\b(you can|you should|here'?s how|steps to)\b/i.test(aiResponse.content));
+      // Real data check: response contains specific facts (prices, times, ratings, names)
+      // even if actions failed. Threshold is LOW (30 chars) because "$15.99" is valid data.
+      const _hasSpecificData = /(\$\d|\d+\.\d{2}|USD|CAD|\d{1,2}:\d{2}\s*(am|pm)|★|⭐|rating|rated|reviews?|located|address|\d{3}[-.)]\s*\d{3})/i.test(aiResponse.content);
+      const _hasProperNouns = /[A-Z][a-z]+\s+[A-Z][a-z]+/.test(aiResponse.content) && !/\b(you can|you should|here'?s how|steps to)\b/i.test(aiResponse.content);
+      const _responseHasRealData = (aiResponse.content.length > 30 && _hasSpecificData) ||
+        (aiResponse.content.length > 100 && _hasProperNouns) ||
+        // Vision agent ran and produced a result — trust it
+        (visionAgentInvocations > 0 && aiResponse.content.length > 30 && !/\b(i cannot|i am unable|as an ai|could not complete)\b/i.test(aiResponse.content));
       if (_responseHasRealData) {
         console.log(`[VERIFY] All ${actionResults.length} actions failed BUT response has real data — PASS`);
         verificationResult = {
