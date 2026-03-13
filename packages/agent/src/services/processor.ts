@@ -7782,6 +7782,17 @@ Use training knowledge for all content. Do NOT search for templates. Just output
 
       aiResponse = nextResponse;
 
+      // ── ITERATION LOOP REFUSAL GUARD ──
+      // Catch AI models that refuse in the iteration loop (this was unguarded before)
+      const _iterRefusal = /\b(I am an AI|I'm an AI|as an AI|cannot directly access|cannot directly browse|cannot directly interact|I do not have the ability|cannot access external|handle personal information)\b/i.test(aiResponse.content || '');
+      if (_iterRefusal && _isBrowserRequiredTask && aiResponse.actions.length === 0) {
+        console.warn(`[ITERATE] AI REFUSED in iteration loop: "${(aiResponse.content || '').substring(0, 80)}" — injecting browse action`);
+        // Override: inject a browse action to force the browser to run
+        const _iterTargetUrl = classification.domains?.[0] ? `https://www.${classification.domains[0]}` : `https://www.google.com/search?q=${encodeURIComponent(subject)}`;
+        aiResponse.actions = [{ type: 'browse', params: { url: _iterTargetUrl } }];
+        aiResponse.content = `Navigating to ${_iterTargetUrl} to complete the task.`;
+      }
+
       // IMAGE-STRIP (in-loop): If this is an image task, strip search/browse from new AI response
       if (_isImageCreationTask && !_isDocumentAction && aiResponse.actions.length > 0) {
         const _ilImgNonSearch = aiResponse.actions.filter(a => !['search', 'browse', 'navigate', 'screenshot', 'extract', 'fill_form', 'click', 'fill', 'select', 'submit', 'login', 'scroll', 'wait'].includes(a.type));
@@ -8899,12 +8910,17 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
 
     // SELF-REFUSAL DETECTION: If the AI claims it cannot access websites despite having done browser
     // work, the model is hallucinating limitations. Ignore the refusal and use page data as fallback.
-    const _isSelfRefusal = /\b(i cannot|i can't|i am unable|i'm unable|as an ai|i don't have (the ability|access)|cannot access external|cannot visit websites|cannot browse the internet|don't have access to (the internet|external|websites))\b/i.test(aiResponse.content || '');
-    if (_isSelfRefusal && (visionAgentInvocations > 0 || lastVisionPageData)) {
-      console.warn(`[SELF-REFUSAL] AI claimed it cannot access websites despite having done browser work (${visionAgentInvocations} vision run(s)). Using page data fallback.`);
-      aiResponse.content = lastVisionPageData && lastVisionPageData.length > 100
-        ? `Based on the website I browsed: ${lastVisionPageData.substring(0, 500)}`
-        : `I encountered issues completing this task on the website. The browser automation attempted ${visionAgentInvocations} session(s). Please try again or provide alternative instructions.`;
+    const _isSelfRefusal = /\b(i cannot|i can't|i am unable|i'm unable|as an ai|i am an ai|i'm an ai|i don't have (the ability|access)|cannot access external|cannot visit websites|cannot browse the internet|cannot directly (access|browse|interact|add|book|sign|create)|don't have access to (the internet|external|websites)|was blocked from directly interacting)\b/i.test(aiResponse.content || '');
+    if (_isSelfRefusal && (_isBrowserRequiredTask || visionAgentInvocations > 0 || lastVisionPageData)) {
+      console.warn(`[SELF-REFUSAL] AI refused (browser task=${_isBrowserRequiredTask}, vision runs=${visionAgentInvocations}). Replacing with page data.`);
+      // Extract useful data from the last page the browser visited
+      if (lastVisionPageData && lastVisionPageData.length > 100) {
+        // Strip the "I cannot" wrapper and use actual page data
+        aiResponse.content = lastVisionPageData.substring(0, 800);
+      } else if (visionAgentInvocations > 0) {
+        aiResponse.content = `The browser automation ran ${visionAgentInvocations} session(s) but encountered difficulties completing the task. Please try a different approach or provide additional details.`;
+      }
+      // Don't replace if we have no page data at all — let quality gate handle it
     }
 
     const rawCleanResponse = cleanResponseForEmail(aiResponse.content);
