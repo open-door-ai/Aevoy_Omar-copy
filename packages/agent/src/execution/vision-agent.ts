@@ -856,7 +856,7 @@ async function fetchRecentSms(toNumber: string, limit = 5, minutesBack = 5): Pro
 // ══════════════════════════════════════════════════════════════════
 
 interface PlaywrightAction {
-  type: 'click' | 'rightclick' | 'fill' | 'type' | 'select' | 'hover' | 'navigate' | 'scroll' | 'press' | 'wait' | 'done' | 'fail' | 'open_tab' | 'switch_tab' | 'close_tab' | 'read_tab' | 'tabs';
+  type: 'click' | 'rightclick' | 'doubleclick' | 'drag' | 'hold' | 'upload' | 'fill' | 'type' | 'select' | 'hover' | 'navigate' | 'scroll' | 'press' | 'wait' | 'done' | 'fail' | 'open_tab' | 'switch_tab' | 'close_tab' | 'read_tab' | 'tabs';
   ref?: number;  // element reference ID from accessibility snapshot (preferred)
   role?: string;
   name?: string;
@@ -865,6 +865,9 @@ interface PlaywrightAction {
   result?: string;
   key?: string;
   direction?: string;
+  targetRef?: number;   // for drag — target element ref
+  duration?: number;    // for hold — milliseconds to hold
+  filePath?: string;    // for upload — file path
   tabLabel?: string;   // for open_tab, switch_tab, close_tab, read_tab
   tabUrl?: string;     // for open_tab
   raw: string; // original line for logging
@@ -879,6 +882,22 @@ function parsePlaywrightAction(line: string): PlaywrightAction | null {
   // RIGHTCLICK [42] — right-click by ref ID (must come before CLICK to avoid false match)
   const rightClickRef = line.match(/^RIGHTCLICK\s+\[(\d+)\]/i);
   if (rightClickRef) return { type: 'rightclick', ref: parseInt(rightClickRef[1], 10), raw: line };
+
+  // DOUBLECLICK [42] — double-click by ref ID (must come before CLICK)
+  const dblClickRef = line.match(/^DOUBLECLICK\s+\[(\d+)\]/i);
+  if (dblClickRef) return { type: 'doubleclick', ref: parseInt(dblClickRef[1], 10), raw: line };
+
+  // HOLD [42] 1500 — click and hold by ref ID + duration ms
+  const holdRef = line.match(/^HOLD\s+\[(\d+)\]\s*(\d*)/i);
+  if (holdRef) return { type: 'hold', ref: parseInt(holdRef[1], 10), duration: holdRef[2] ? parseInt(holdRef[2], 10) : 1000, raw: line };
+
+  // DRAG [5] [10] — drag from source ref to target ref
+  const dragRef = line.match(/^DRAG\s+\[(\d+)\]\s+\[(\d+)\]/i);
+  if (dragRef) return { type: 'drag', ref: parseInt(dragRef[1], 10), targetRef: parseInt(dragRef[2], 10), raw: line };
+
+  // UPLOAD [5] "/path/to/file" — upload file to element
+  const uploadRef = line.match(/^UPLOAD\s+\[(\d+)\]\s+"((?:[^"\\]|\\.)*)"/i);
+  if (uploadRef) return { type: 'upload', ref: parseInt(uploadRef[1], 10), filePath: uploadRef[2], raw: line };
 
   // CLICK [42] — click by ref ID
   const clickRef = line.match(/^CLICK\s+\[(\d+)\]/i);
@@ -1222,6 +1241,133 @@ async function executeAction(page: Page, action: PlaywrightAction, history: stri
           history.push(`⚠️ Ref [${action.ref}] not found for right-click.`);
           return false;
         }
+        return false;
+      }
+
+      case 'doubleclick': {
+        // Double-click — for text selection, opening items, etc.
+        if (action.ref !== undefined) {
+          const resolved = resolveByRef(action.ref);
+          if (resolved) {
+            if (resolved.entry.selector) {
+              try {
+                const el = page.locator(resolved.entry.selector).first();
+                await el.dblclick({ timeout });
+                return true;
+              } catch { /* fall through */ }
+            }
+            try {
+              await resolved.locator.dblclick({ timeout });
+              return true;
+            } catch { /* fallback to coordinates */ }
+            if (resolved.entry.cx !== undefined && resolved.entry.cy !== undefined && resolved.entry.cx > 0 && resolved.entry.cy > 0) {
+              try {
+                await page.mouse.dblclick(resolved.entry.cx, resolved.entry.cy);
+                return true;
+              } catch { /* fall through */ }
+            }
+          }
+          history.push(`⚠️ Ref [${action.ref}] double-click failed. Try CLICK [${action.ref}] instead.`);
+          return false;
+        }
+        return false;
+      }
+
+      case 'drag': {
+        // Drag from source ref to target ref — for sliders, reordering, etc.
+        if (action.ref === undefined || action.targetRef === undefined) {
+          history.push('⚠️ DRAG requires source ref and target ref. Example: DRAG [5] [10]');
+          return false;
+        }
+        const sourceEl = resolveByRef(action.ref);
+        const targetEl = resolveByRef(action.targetRef);
+        if (!sourceEl || !targetEl) {
+          history.push(`⚠️ DRAG: could not resolve source [${action.ref}] or target [${action.targetRef}].`);
+          return false;
+        }
+        try {
+          // Use source/target coordinates for mouse-based drag
+          const sx = sourceEl.entry.cx ?? 0;
+          const sy = sourceEl.entry.cy ?? 0;
+          const tx = targetEl.entry.cx ?? 0;
+          const ty = targetEl.entry.cy ?? 0;
+          if (sx > 0 && sy > 0 && tx > 0 && ty > 0) {
+            await page.mouse.move(sx, sy, { steps: 10 });
+            await page.mouse.down();
+            await page.waitForTimeout(100 + Math.random() * 200);
+            // Move in small steps (human-like)
+            const dragSteps = 15 + Math.floor(Math.random() * 10);
+            await page.mouse.move(tx, ty, { steps: dragSteps });
+            await page.waitForTimeout(50 + Math.random() * 100);
+            await page.mouse.up();
+            return true;
+          }
+          // Fallback: Playwright's dragTo API
+          await sourceEl.locator.dragTo(targetEl.locator);
+          return true;
+        } catch (err) {
+          history.push(`⚠️ DRAG from [${action.ref}] to [${action.targetRef}] failed: ${err}`);
+          return false;
+        }
+      }
+
+      case 'hold': {
+        // Click and hold for a duration — for long-press menus, etc.
+        const holdMs = action.duration || 1000;
+        if (action.ref !== undefined) {
+          const resolved = resolveByRef(action.ref);
+          if (resolved) {
+            const cx = resolved.entry.cx ?? 0;
+            const cy = resolved.entry.cy ?? 0;
+            if (cx > 0 && cy > 0) {
+              await page.mouse.move(cx, cy, { steps: 8 });
+              await page.mouse.down();
+              await page.waitForTimeout(holdMs);
+              await page.mouse.up();
+              return true;
+            }
+          }
+          history.push(`⚠️ HOLD on ref [${action.ref}] failed — could not resolve coordinates.`);
+          return false;
+        }
+        return false;
+      }
+
+      case 'upload': {
+        // File upload via file chooser dialog
+        if (!action.filePath && !action.value) {
+          history.push('⚠️ UPLOAD requires a file path. Example: UPLOAD [5] "/path/to/file.pdf"');
+          return false;
+        }
+        const uploadPath = action.filePath || action.value || '';
+        if (action.ref !== undefined) {
+          const resolved = resolveByRef(action.ref);
+          if (resolved) {
+            try {
+              // Set input files directly if it's a file input
+              if (resolved.entry.selector) {
+                await page.locator(resolved.entry.selector).first().setInputFiles(uploadPath);
+                return true;
+              }
+              await resolved.locator.setInputFiles(uploadPath);
+              return true;
+            } catch {
+              // If not a direct input, click and handle file chooser
+              try {
+                const [fileChooser] = await Promise.all([
+                  page.waitForEvent('filechooser', { timeout: 5000 }),
+                  resolved.locator.click({ timeout }),
+                ]);
+                await fileChooser.setFiles(uploadPath);
+                return true;
+              } catch (uploadErr) {
+                history.push(`⚠️ UPLOAD failed: ${uploadErr}`);
+                return false;
+              }
+            }
+          }
+        }
+        history.push('⚠️ UPLOAD: could not find target element.');
         return false;
       }
 
@@ -1643,11 +1789,33 @@ async function waitAfterAction(page: Page, actionType: string): Promise<void> {
     page.waitForLoadState('domcontentloaded').catch(() => {}),
     new Promise<void>((resolve) => setTimeout(resolve, 5000)),
   ]);
-  if (actionType === 'click' || actionType === 'navigate') {
-    await page.waitForTimeout(300);
+
+  // Human-like variable delays — no bot does exactly 300ms every time
+  if (actionType === 'click' || actionType === 'navigate' || actionType === 'doubleclick') {
+    // Clicks: 200-600ms (humans pause after clicking to see what happens)
+    await page.waitForTimeout(200 + Math.floor(Math.random() * 400));
+  } else if (actionType === 'fill' || actionType === 'type') {
+    // After typing: 100-400ms (humans glance at what they typed)
+    await page.waitForTimeout(100 + Math.floor(Math.random() * 300));
+  } else if (actionType === 'scroll') {
+    // After scroll: 300-800ms (humans scan the new content)
+    await page.waitForTimeout(300 + Math.floor(Math.random() * 500));
   } else {
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(80 + Math.floor(Math.random() * 150));
   }
+
+  // Subtle mouse jitter — humans never keep the mouse perfectly still
+  try {
+    const vp = page.viewportSize();
+    if (vp) {
+      const jitterX = Math.floor(Math.random() * vp.width * 0.6) + vp.width * 0.2;
+      const jitterY = Math.floor(Math.random() * vp.height * 0.6) + vp.height * 0.2;
+      // Small random move (doesn't click, just repositions cursor like a human fidgeting)
+      if (Math.random() < 0.3) { // 30% chance per action — not every time
+        await page.mouse.move(jitterX, jitterY, { steps: 3 + Math.floor(Math.random() * 5) });
+      }
+    }
+  } catch { /* non-critical — page may be navigating */ }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1663,11 +1831,16 @@ THINK BEFORE EACH STEP:
 4. Do it. No hesitation, no asking permission, no describing what you see.
 
 ACTIONS (use [ref] numbers from the accessibility tree — they change every step):
-CLICK [5]                          — click element
+CLICK [5]                          — left-click element (human-like cursor movement)
+DOUBLECLICK [5]                    — double-click (text selection, open items)
+RIGHTCLICK [5]                     — right-click (context menus)
+HOLD [5] 1500                      — click and hold for N ms (long-press menus, tooltips)
+DRAG [5] [10]                      — drag from source to target ref (sliders, reordering, map panning)
 FILL [12] "text"                   — fill input field (use [CRED_*] for credentials)
 TYPE [12] "query"                  — type character-by-character (for search boxes with autocomplete)
 SELECT [8] "option"                — select dropdown option
 HOVER [5]                          — hover to reveal menus
+UPLOAD [5] "/path/to/file"         — upload file to file input
 SCROLL down / SCROLL up            — see more content
 PRESS Enter / Tab / Escape         — keyboard key
 NAVIGATE "https://example.com"     — go to a DIFFERENT website
