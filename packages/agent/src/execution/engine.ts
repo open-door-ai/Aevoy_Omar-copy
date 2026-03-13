@@ -397,6 +397,17 @@ export class ExecutionEngine {
     return this.page;
   }
 
+  /**
+   * Force the engine to use local Playwright on next initialize().
+   * Called when BrightData returns "Forbidden" for a domain (compliance block).
+   */
+  forceLocalBrowser(): void {
+    this.useBrightData = false;
+    this.useRemoteCDP = false;
+    this.useMultiUser = false;
+    console.log('[ENGINE] Forced to local Playwright (BrightData disabled for this task)');
+  }
+
   getTotalCost(): number {
     return this.totalCost;
   }
@@ -1294,12 +1305,12 @@ export class ExecutionEngine {
       );
       if (isBrightDataForbidden) {
         console.warn(`[ENGINE] Bright Data FORBIDDEN for ${url} (compliance) — immediate fallback to local + proxy`);
+        this.forceLocalBrowser();
         try {
           await this.context?.close().catch(() => {});
           await this.browser?.close().catch(() => {});
         } catch { /* ignore cleanup errors */ }
         this.browser = null; this.context = null; this.page = null;
-        this.useBrightData = false; this.isRemoteCDP = false;
         brightDataInUse = false;
         await this.initialize(this.userId, this.domain, this.taskId);
         return this._doNavigate(url);

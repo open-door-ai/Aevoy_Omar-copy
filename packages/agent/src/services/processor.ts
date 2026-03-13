@@ -4024,20 +4024,44 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
           let _bfpVisionAttempted = false; // track whether we reached runVisionAgent call
           try {
             // Navigate directly to the target URL — use .catch() so goto errors don't skip iteration loop
+            let _bfpGotoError = '';
             await _bfpPage.goto(_bfpTargetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch((gotoErr: Error) => {
-              console.warn(`[BROWSER-FAST-PATH] goto(${_bfpTargetUrl}) failed: ${gotoErr.message} — checking page state`);
+              _bfpGotoError = gotoErr.message || '';
+              console.warn(`[BROWSER-FAST-PATH] goto(${_bfpTargetUrl}) failed: ${_bfpGotoError} — checking page state`);
             });
             await _bfpPage.waitForTimeout(1000); // Let JS/SPA render
 
-            let _bfpPageUrl = _bfpPage.url();
+            // BrightData compliance "Forbidden" — this domain will NEVER work on BrightData.
+            // Restart engine with local browser + proxy so the vision agent can actually reach the site.
+            const _bfpIsBrightDataForbidden = _bfpGotoError && (
+              _bfpGotoError.includes('Forbidden') || _bfpGotoError.includes('compliance policy') || _bfpGotoError.includes('special permission')
+            );
+            if (_bfpIsBrightDataForbidden && executionEngine) {
+              console.warn(`[BROWSER-FAST-PATH] BrightData FORBIDDEN for ${_bfpTargetUrl} — restarting engine with local browser + proxy`);
+              executionEngine.forceLocalBrowser?.();
+              await executionEngine.cleanup?.();
+              // Re-initialize will use local Playwright (BrightData disabled by forceLocalBrowser)
+              await executionEngine.initialize?.(userId, _bfpTargetUrl.replace(/^https?:\/\//, '').split('/')[0], taskId);
+              // Get the new page from the reinitialized engine
+              const _bfpNewPage = executionEngine.getPage?.();
+              if (_bfpNewPage && !_bfpNewPage.isClosed()) {
+                // Navigate to target on local browser
+                await _bfpNewPage.goto(_bfpTargetUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+                await _bfpNewPage.waitForTimeout(1000);
+              }
+            }
+
+            // Re-get page reference (may have changed after engine restart)
+            const _bfpActivePage = executionEngine.getPage?.() || _bfpPage;
+            let _bfpPageUrl = _bfpActivePage.url();
             // If page is about:blank or chrome-error, the goto failed.
             // Navigate to a search engine so the vision agent has somewhere to start.
             if (_bfpPageUrl === 'about:blank' || _bfpPageUrl.startsWith('chrome-error://')) {
               console.warn(`[BROWSER-FAST-PATH] Page stuck on ${_bfpPageUrl} — navigating to Bing search as fallback`);
               const _bfpFallbackQuery = subject.substring(0, 100);
-              await _bfpPage.goto(`https://www.bing.com/search?q=${encodeURIComponent(_bfpFallbackQuery)}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-              await _bfpPage.waitForTimeout(1000);
-              _bfpPageUrl = _bfpPage.url();
+              await _bfpActivePage.goto(`https://www.bing.com/search?q=${encodeURIComponent(_bfpFallbackQuery)}`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+              await _bfpActivePage.waitForTimeout(1000);
+              _bfpPageUrl = _bfpActivePage.url();
             }
             const _bfpIsError = _bfpPageUrl.startsWith('chrome-error://');
 
@@ -4083,8 +4107,10 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
               // Cap vision timeout at remaining master time to prevent outliving the master timer
               const _bfpRemainingMs = Math.max(MASTER_TIMEOUT_MS - (Date.now() - startTime), 60000);
               const VISION_TIMEOUT_MS = Math.min(_bfpBaseTimeout, _bfpRemainingMs);
+              // Use the active page (may have changed after BrightData→local restart)
+              const _bfpVisionPage = executionEngine.getPage?.() || _bfpPage;
               const _bfpResult = await runWithAdaptiveTimeout(
-                runVisionAgent(_bfpPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
+                runVisionAgent(_bfpVisionPage, _bfpVisionTask, userId, taskId, username, userTwilioPhone),
                 taskId,
                 VISION_TIMEOUT_MS,
                 subject
