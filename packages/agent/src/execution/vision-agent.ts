@@ -2466,7 +2466,8 @@ export async function runVisionAgent(
     // ══════════════════════════════════════════════════════════════
     // MAIN LOOP
     // ══════════════════════════════════════════════════════════════
-    let _slowStepCount = 0; // Track consecutive slow steps (>45s each)
+    let _slowStepCount = 0; // Track slow steps (>30s each) — cumulative, not consecutive
+    let _totalStepTimeMs = 0; // Track total time spent in steps
 
     for (steps = 0; steps < dynamicMaxSteps; steps++) {
       const _stepStartMs = Date.now();
@@ -4104,15 +4105,17 @@ export async function runVisionAgent(
 
       // ── Slow step detector: if browser is consistently slow, bail early ──
       const _stepDurationMs = Date.now() - _stepStartMs;
-      if (_stepDurationMs > 45000) {
+      _totalStepTimeMs += _stepDurationMs;
+      if (_stepDurationMs > 30000) {
         _slowStepCount++;
-        if (_slowStepCount >= 3) {
-          console.warn(`[BROWSER-AGENT] SLOW BROWSER: ${_slowStepCount} consecutive steps >45s (last: ${(_stepDurationMs / 1000).toFixed(1)}s) — returning for engine switch`);
-          const pageData = await capturePageData(activePage);
-          return { success: false, error: 'browser_too_slow', steps: steps + 1, cost: totalCost, screenshots, pageData };
-        }
-      } else {
-        _slowStepCount = 0; // reset on fast step
+      }
+      // Trigger engine switch if: 3+ slow steps (cumulative) OR average step time >35s after 5+ steps
+      const _avgStepMs = steps > 0 ? _totalStepTimeMs / (steps + 1) : _stepDurationMs;
+      if (_slowStepCount >= 3 || (steps >= 4 && _avgStepMs > 35000)) {
+        const reason = _slowStepCount >= 3 ? `${_slowStepCount} slow steps (>30s)` : `avg ${(_avgStepMs / 1000).toFixed(1)}s/step after ${steps + 1} steps`;
+        console.warn(`[BROWSER-AGENT] SLOW BROWSER: ${reason} (last: ${(_stepDurationMs / 1000).toFixed(1)}s) — returning for engine switch`);
+        const pageData = await capturePageData(activePage);
+        return { success: false, error: 'browser_too_slow', steps: steps + 1, cost: totalCost, screenshots, pageData };
       }
     }
 
