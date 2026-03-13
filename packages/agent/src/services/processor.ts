@@ -6515,8 +6515,9 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
         // But NOT price research tasks (already excluded above by _isPriceResearchOnly)
         || (hasBrowseEver && /\S+\.(com|ca|org|net|io|co|app)\b/i.test(taskTextLower))
       );
-      // Don't retry vision agent if total AI cost already exceeds $0.15 (prevents double-spending)
-      const _visionCostOk = totalAiCost < 0.15;
+      // Don't retry vision agent if total AI cost already exceeds $0.08 (prevents double-spending)
+      // After a full vision run (~$0.06-0.10), a retry would double the cost with minimal benefit.
+      const _visionCostOk = totalAiCost < 0.08;
       if (isBrowserInteractionTask && !isTaskComplete && (hasBrowseEver || hasLoadedPage) && executionEngine && visionAgentInvocations < 2 && _visionCostOk) {
         const visionPage = executionEngine.getPage?.();
         let visionPageUrl = visionPage?.url() || '';
