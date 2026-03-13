@@ -145,27 +145,35 @@ export class ExecutionEngine {
         const cdpTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
           Promise.race([promise, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timeout after ${ms}ms`)), ms))]);
 
-        // Bright Data provides a direct WSS endpoint — no /json/version step needed
-        this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 15000, 'brightdata-connect');
+        // Bright Data provides a direct WSS endpoint — no /json/version step needed.
+        // Increase timeout to 30s — remote browser provisioning can be slow.
+        this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 30000, 'brightdata-connect');
         this.isRemoteCDP = true;
 
-        const { getDeviceProfile } = await import('./stealth.js');
-        const bdProfile = getDeviceProfile();
-        this.context = await cdpTimeout(this.browser.newContext({
-          viewport: bdProfile.viewport,
-          screen: bdProfile.screen,
-          deviceScaleFactor: bdProfile.deviceScaleFactor,
-          userAgent: bdProfile.userAgent,
-          locale: bdProfile.locale,
-          timezoneId: bdProfile.timezone,
-        }), 10000, 'brightdata-newContext');
+        // CRITICAL: Use BrightData's DEFAULT context — do NOT create newContext().
+        // BrightData Scraping Browser pre-configures the default context with:
+        //   - Residential proxy routing (new context loses this → chrome-error://)
+        //   - Real browser fingerprint (UA, viewport, TLS) matched to their proxy IP
+        //   - Built-in CAPTCHA solving and anti-detection
+        // Creating newContext() or overriding UA/viewport breaks all of this.
+        const defaultContext = this.browser.contexts()[0];
+        if (defaultContext) {
+          this.context = defaultContext;
+          const existingPages = defaultContext.pages();
+          this.page = existingPages.length > 0 ? existingPages[0] : await cdpTimeout(defaultContext.newPage(), 10000, 'brightdata-newPage');
+        } else {
+          // Some BrightData versions don't have a default context — create page on browser
+          this.page = await cdpTimeout(this.browser.newPage(), 10000, 'brightdata-newPage');
+          this.context = this.page.context();
+        }
 
-        await applyStealthPatches(this.context);
-        this.page = await cdpTimeout(this.context.newPage(), 10000, 'brightdata-newPage');
+        // DO NOT apply stealth patches — BrightData handles anti-detection natively.
+        // DO NOT override userAgent — it's matched to their real browser fingerprint.
+        // Only humanize mouse/keyboard timing (doesn't conflict with fingerprint).
         await humanizeInteraction(this.page);
         await cdpTimeout(this.page.evaluate(() => document.readyState), 5000, 'brightdata-readyState');
         this.brightDataSessionStart = Date.now();
-        console.log(`[ENGINE] Connected to Bright Data Scraping Browser`);
+        console.log(`[ENGINE] Connected to Bright Data Scraping Browser (using default context)`);
         return;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
@@ -1191,10 +1199,11 @@ export class ExecutionEngine {
       return { success: false, action: 'navigate', error: urlBlockReason };
     }
 
-    // HARD 45s BACKSTOP: page.goto() timeout (30s) doesn't always fire on WAF/Cloudflare sites.
-    // handleCloudflare waits 30s. Total: goto(30) + SPA(10) + antibot(30) = 70s possible.
-    // This backstop prevents indefinite hangs regardless of what Chromium does.
-    const NAV_HARD_TIMEOUT = 45000;
+    // HARD BACKSTOP: page.goto() timeout doesn't always fire on WAF/Cloudflare sites.
+    // BrightData remote browser needs more time (network hop + proxy routing).
+    // Local: goto(30) + SPA(10) + antibot(30) = 70s possible → 45s backstop.
+    // BrightData: goto(60) + SPA(10) + antibot(30) = 100s possible → 75s backstop.
+    const NAV_HARD_TIMEOUT = this.useBrightData ? 75000 : 45000;
     try {
       return await Promise.race([
         this._doNavigate(url),
@@ -1218,10 +1227,13 @@ export class ExecutionEngine {
 
   private async _doNavigate(url: string): Promise<StepResult> {
     try {
-      console.log(`[ENGINE] Navigating to: ${url} (${this.isMultiUser ? 'vps' : 'local'})`);
+      const browserType = this.useBrightData ? 'brightdata' : this.isMultiUser ? 'vps' : this.isRemoteCDP ? 'remote-cdp' : 'local';
+      console.log(`[ENGINE] Navigating to: ${url} (${browserType})`);
+      // BrightData remote browser needs longer timeout — traffic routes through residential proxy
+      const gotoTimeout = this.useBrightData ? 60000 : 30000;
       await this.page!.goto(url, {
         waitUntil: 'domcontentloaded',
-        timeout: 30000
+        timeout: gotoTimeout
       });
 
       // Use SPA-ready wait instead of just domcontentloaded
