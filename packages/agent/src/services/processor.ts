@@ -3105,7 +3105,7 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
         // Check if the retry ALSO refused
         if (_refusalPatterns.test(aiResponse.content) && aiResponse.actions.length === 0) {
           console.warn(`[REFUSAL-DETECT] Retry also refused (model=${aiResponse.model}) — injecting browse as last resort`);
-          const _refDomainMatch = `${subject} ${body || ''}`.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app)(\/[\w./?=&#%-]*)?)\b/i);
+          const _refDomainMatch = `${subject} ${body || ''}`.match(/(?<![@/])(\b[\w.-]+\.(com|ca|org|net|io|co|app)(\/[\w./?=&#%-]*)?)\b/i);
           const _taskUrl = _refDomainMatch
               ? `https://${_refDomainMatch[1]}`
               : `https://www.bing.com/search?q=${encodeURIComponent(subject + (_isSignupContext ? ' signup' : ''))}`;
@@ -3116,7 +3116,7 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
       } catch (retryErr) {
         console.error(`[REFUSAL-DETECT] Retry failed:`, retryErr);
         // Fall back to domain extraction + Bing search
-        const _refDomainMatch = `${subject} ${body || ''}`.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app)(\/[\w./?=&#%-]*)?)\b/i);
+        const _refDomainMatch = `${subject} ${body || ''}`.match(/(?<![@/])(\b[\w.-]+\.(com|ca|org|net|io|co|app)(\/[\w./?=&#%-]*)?)\b/i);
         const _taskUrl = _refDomainMatch
             ? `https://${_refDomainMatch[1]}`
             : `https://www.bing.com/search?q=${encodeURIComponent(subject + (_isSignupContext ? ' signup' : ''))}`;
@@ -4424,7 +4424,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
         console.warn(`[REFUSAL-LOOP] AI refused signup in iteration ${currentIteration}: "${aiResponse.content.substring(0, 80)}"`);
         // Force browse to the service directly — don't re-prompt (same model will refuse again)
         // Extract domain from task text. No domain → Bing search. No brand guessing.
-        const _loopDomain = `${subject} ${body || ''}`.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
+        const _loopDomain = `${subject} ${body || ''}`.match(/(?<![@/])(\b[\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
         const _forceUrl = _loopDomain ? `https://${_loopDomain[1]}` : `https://www.bing.com/search?q=${encodeURIComponent(subject + ' create account')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceUrl } }];
@@ -4437,7 +4437,7 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
           !/\b(signed up|created.*account|account.*created|registered|successfully)\b/i.test(aiResponse.content)) {
         console.warn(`[PASSIVE-SIGNUP] AI described service instead of signing up — forcing browse`);
         // Extract domain from task text. No domain → Bing search. No brand guessing.
-        const _passDomain = `${subject} ${body || ''}`.match(/\b([\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
+        const _passDomain = `${subject} ${body || ''}`.match(/(?<![@/])(\b[\w.-]+\.(com|ca|org|net|io|co|app))\b/i);
         const _forceSignupUrl = _passDomain ? `https://${_passDomain[1]}` : `https://www.bing.com/search?q=${encodeURIComponent(subject + ' signup page')}`;
         aiResponse.content = '';
         aiResponse.actions = [{ type: 'browse' as const, params: { url: _forceSignupUrl } }];
@@ -6552,7 +6552,7 @@ DO NOT complete until you have SPECIFIC data (names, prices, numbers).`;
         // If on error/blank page, try to navigate to target URL before starting vision agent
         if (visionPage && !visionPage.isClosed() && isErrorPage) {
           const _targetUrl = (subject + ' ' + (body || '')).match(/https?:\/\/[^\s,)]+/)?.[0]
-            || (subject + ' ' + (body || '')).match(/\b([\w.-]+\.(com|org|net|io|ca|co\.uk))\b/i)?.[1];
+            || (subject + ' ' + (body || '')).match(/(?<![@/])(\b[\w.-]+\.(com|org|net|io|ca|co\.uk))\b/i)?.[1];
           const _navTarget = _targetUrl?.startsWith('http') ? _targetUrl : _targetUrl ? `https://www.${_targetUrl}` : null;
           if (_navTarget) {
             console.log(`[VISION-AGENT] Pre-navigating from error page to ${_navTarget}`);
