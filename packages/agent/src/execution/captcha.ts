@@ -202,29 +202,51 @@ export async function solveCaptcha(
     {
       name: 'capsolver',
       fn: async () => {
-        // For Turnstile without siteKey, try to extract it first
-        if (detection.type === 'turnstile' && !detection.siteKey) {
-          const extractedKey = await extractTurnstileSiteKeyFromPage(page);
-          if (extractedKey) detection.siteKey = extractedKey;
+        // For any CAPTCHA without siteKey, try to extract it from the page
+        if (!detection.siteKey) {
+          if (detection.type === 'turnstile') {
+            const extractedKey = await extractTurnstileSiteKeyFromPage(page);
+            if (extractedKey) detection.siteKey = extractedKey;
+          } else if (detection.type === 'recaptcha_v2' || detection.type === 'recaptcha_v3' || detection.type === 'hcaptcha') {
+            const extractedKey = await extractSiteKeyFromPage(page, detection.type);
+            if (extractedKey) detection.siteKey = extractedKey;
+          }
         }
         return solveWithCapSolver(page, detection, capsolverKey!);
       },
-      // CapSolver handles ALL types: siteKey-based, screenshot-based, and cookie-based
+      // CapSolver handles ALL common CAPTCHA types — siteKey extracted at solve time if missing
       available: !!capsolverKey && (
         !!detection.siteKey ||
+        detection.type === 'recaptcha_v2' || // siteKey extracted at solve time
+        detection.type === 'recaptcha_v3' ||
+        detection.type === 'hcaptcha' ||
         detection.type === 'image' ||
         detection.type === 'verification_page' ||
         detection.type === 'perimeterx' ||
         detection.type === 'datadome' ||
         detection.type === 'geetest' ||
-        detection.type === 'turnstile' || // Turnstile — we'll try to extract siteKey
+        detection.type === 'turnstile' ||
         detection.type === 'funcaptcha'
       ),
     },
     {
       name: '2captcha',
-      fn: () => solveWith2Captcha(page, detection, twocaptchaKey!),
-      available: !!twocaptchaKey && (!!detection.siteKey || detection.type === 'image' || detection.type === 'verification_page'),
+      fn: async () => {
+        // Extract siteKey if missing
+        if (!detection.siteKey && (detection.type === 'recaptcha_v2' || detection.type === 'recaptcha_v3' || detection.type === 'hcaptcha')) {
+          const extractedKey = await extractSiteKeyFromPage(page, detection.type);
+          if (extractedKey) detection.siteKey = extractedKey;
+        }
+        return solveWith2Captcha(page, detection, twocaptchaKey!);
+      },
+      available: !!twocaptchaKey && (
+        !!detection.siteKey ||
+        detection.type === 'recaptcha_v2' ||
+        detection.type === 'recaptcha_v3' ||
+        detection.type === 'hcaptcha' ||
+        detection.type === 'image' ||
+        detection.type === 'verification_page'
+      ),
     },
     {
       name: 'claude_vision',
@@ -300,6 +322,72 @@ async function extractTurnstileSiteKeyFromPage(page: Page): Promise<string | und
     }
     return undefined;
   }).catch(() => undefined);
+}
+
+/**
+ * Extract siteKey for reCAPTCHA v2/v3 or hCaptcha from a page.
+ * Handles: data-sitekey attributes, iframe src params, script src, JS config objects.
+ */
+async function extractSiteKeyFromPage(page: Page, type: CaptchaType): Promise<string | undefined> {
+  return page.evaluate((captchaType: string) => {
+    // 1. data-sitekey attribute (most common)
+    const els = Array.from(document.querySelectorAll('[data-sitekey], [data-hcaptcha-sitekey]'));
+    for (let i = 0; i < els.length; i++) {
+      const key = els[i].getAttribute('data-sitekey') || els[i].getAttribute('data-hcaptcha-sitekey');
+      if (key && key.length > 10) return key;
+    }
+
+    // 2. iframe src — reCAPTCHA: iframe[src*="recaptcha"]?k=SITEKEY, hCaptcha: iframe[src*="hcaptcha"]?sitekey=SITEKEY
+    const iframeSelectors = captchaType.startsWith('recaptcha')
+      ? 'iframe[src*="recaptcha"], iframe[src*="google.com/recaptcha"]'
+      : 'iframe[src*="hcaptcha"]';
+    const iframes = Array.from(document.querySelectorAll(iframeSelectors));
+    for (let i = 0; i < iframes.length; i++) {
+      const src = iframes[i].getAttribute('src') || '';
+      const kMatch = src.match(/[?&]k=([^&]+)/);
+      if (kMatch) return kMatch[1];
+      const sitekeyMatch = src.match(/[?&]sitekey=([^&]+)/);
+      if (sitekeyMatch) return sitekeyMatch[1];
+    }
+
+    // 3. Script src — render=SITEKEY for reCAPTCHA v3
+    if (captchaType === 'recaptcha_v3') {
+      const scripts = Array.from(document.querySelectorAll('script[src*="recaptcha"]'));
+      for (let i = 0; i < scripts.length; i++) {
+        const src = scripts[i].getAttribute('src') || '';
+        const renderMatch = src.match(/render=([^&]+)/);
+        if (renderMatch && renderMatch[1] !== 'explicit') return renderMatch[1];
+      }
+    }
+
+    // 4. JS config object — ___grecaptcha_cfg.clients
+    try {
+      const win = window as unknown as Record<string, unknown>;
+      if (typeof win.___grecaptcha_cfg === 'object') {
+        const cfg = win.___grecaptcha_cfg as Record<string, unknown>;
+        const clients = cfg.clients as Record<string, unknown> | undefined;
+        if (clients) {
+          for (const key of Object.keys(clients)) {
+            const client = clients[key] as Record<string, unknown>;
+            // Walk the client tree to find sitekey
+            const json = JSON.stringify(client);
+            const sitekeyMatch = json.match(/"sitekey"\s*:\s*"([^"]+)"/);
+            if (sitekeyMatch) return sitekeyMatch[1];
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
+    // 5. Inline scripts with sitekey
+    const scripts = Array.from(document.querySelectorAll('script'));
+    for (let i = 0; i < scripts.length; i++) {
+      const text = scripts[i].textContent || '';
+      const sitekeyMatch = text.match(/sitekey['"\s:]+['"]?([A-Za-z0-9_-]{30,})/i);
+      if (sitekeyMatch) return sitekeyMatch[1];
+    }
+
+    return undefined;
+  }, type).catch(() => undefined);
 }
 
 /**
