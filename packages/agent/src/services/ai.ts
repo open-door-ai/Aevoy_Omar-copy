@@ -88,6 +88,13 @@ function isModelBackedOff(provider: string, model: string): boolean {
   return Date.now() < until;
 }
 
+/** Mark a model as "refused" — back it off for 5 minutes so retry uses next model in chain */
+export function setModelRefusalBackoff(provider: string, model: string): void {
+  const key = `${provider}:${model}`;
+  rateLimitBackoff.set(key, Date.now() + 300000); // 5-minute backoff for refusals
+  console.log(`[AI] Model ${key} backed off 5min for task refusal`);
+}
+
 /** Mark a model as rate-limited for the given duration */
 function setModelBackoff(provider: string, model: string, durationMs: number): void {
   const key = `${provider}:${model}`;
