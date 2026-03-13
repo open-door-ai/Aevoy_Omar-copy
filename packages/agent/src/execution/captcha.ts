@@ -70,12 +70,49 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
       };
     }
 
-    // Cloudflare Turnstile
+    // Cloudflare Turnstile — also detect Cloudflare challenge pages ("Just a moment")
     const turnstile = document.querySelector('.cf-turnstile, [data-turnstile-sitekey], iframe[src*="turnstile"]');
     if (turnstile) {
       return {
         type: 'turnstile' as const,
         siteKey: turnstile.getAttribute('data-sitekey') || turnstile.getAttribute('data-turnstile-sitekey') || undefined,
+      };
+    }
+
+    // Cloudflare challenge page (renders Turnstile after JS executes)
+    const cfChallenge = document.querySelector('#challenge-form, #challenge-running, .cf-browser-verification');
+    const isCfPage = document.title.toLowerCase().includes('just a moment') ||
+      document.title.toLowerCase().includes('attention required');
+    if (cfChallenge || isCfPage) {
+      // Try to extract Turnstile siteKey from the challenge page
+      let cfSiteKey: string | undefined;
+      // Check iframes for turnstile
+      const cfIframes = Array.from(document.querySelectorAll('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]'));
+      for (let _i = 0; _i < cfIframes.length; _i++) {
+        const src = cfIframes[_i].getAttribute('src') || '';
+        const keyMatch = src.match(/[?&]k=([^&]+)/);
+        if (keyMatch) { cfSiteKey = keyMatch[1]; break; }
+      }
+      // Check scripts and inline JS for siteKey
+      if (!cfSiteKey) {
+        const scripts = Array.from(document.querySelectorAll('script'));
+        for (let _i = 0; _i < scripts.length; _i++) {
+          const text = scripts[_i].textContent || '';
+          const keyMatch = text.match(/sitekey['":\s]+['"]?(0x[A-Za-z0-9_-]+)['"]?/i);
+          if (keyMatch) { cfSiteKey = keyMatch[1]; break; }
+        }
+      }
+      // Check data attributes on challenge form
+      if (!cfSiteKey && cfChallenge) {
+        cfSiteKey = cfChallenge.getAttribute('data-sitekey') || undefined;
+        if (!cfSiteKey) {
+          const inner = cfChallenge.querySelector('[data-sitekey]');
+          if (inner) cfSiteKey = inner.getAttribute('data-sitekey') || undefined;
+        }
+      }
+      return {
+        type: 'turnstile' as const,
+        siteKey: cfSiteKey,
       };
     }
 
@@ -164,9 +201,25 @@ export async function solveCaptcha(
   }> = [
     {
       name: 'capsolver',
-      fn: () => solveWithCapSolver(page, detection, capsolverKey!),
-      // CapSolver works with siteKey-based CAPTCHAs AND screenshot-based solving for verification pages
-      available: !!capsolverKey && (!!detection.siteKey || detection.type === 'image' || detection.type === 'verification_page' || detection.type === 'perimeterx'),
+      fn: async () => {
+        // For Turnstile without siteKey, try to extract it first
+        if (detection.type === 'turnstile' && !detection.siteKey) {
+          const extractedKey = await extractTurnstileSiteKeyFromPage(page);
+          if (extractedKey) detection.siteKey = extractedKey;
+        }
+        return solveWithCapSolver(page, detection, capsolverKey!);
+      },
+      // CapSolver handles ALL types: siteKey-based, screenshot-based, and cookie-based
+      available: !!capsolverKey && (
+        !!detection.siteKey ||
+        detection.type === 'image' ||
+        detection.type === 'verification_page' ||
+        detection.type === 'perimeterx' ||
+        detection.type === 'datadome' ||
+        detection.type === 'geetest' ||
+        detection.type === 'turnstile' || // Turnstile — we'll try to extract siteKey
+        detection.type === 'funcaptcha'
+      ),
     },
     {
       name: '2captcha',
@@ -219,6 +272,37 @@ export async function solveCaptcha(
 }
 
 /**
+ * Extract Turnstile siteKey from a page (challenge pages, embedded widgets).
+ */
+async function extractTurnstileSiteKeyFromPage(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => {
+    // Check iframes for Cloudflare challenges
+    const iframes = Array.from(document.querySelectorAll('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]'));
+    for (let i = 0; i < iframes.length; i++) {
+      const src = iframes[i].getAttribute('src') || '';
+      const keyMatch = src.match(/[?&]k=([^&]+)/);
+      if (keyMatch) return keyMatch[1];
+    }
+    // Check inline scripts for siteKey patterns
+    const scripts = Array.from(document.querySelectorAll('script'));
+    for (let i = 0; i < scripts.length; i++) {
+      const text = scripts[i].textContent || '';
+      const keyMatch = text.match(/sitekey['":\s]+['"]?(0x[A-Za-z0-9_-]+)['"]?/i);
+      if (keyMatch) return keyMatch[1];
+      const renderMatch = text.match(/turnstile\.render\s*\([^)]*sitekey\s*:\s*['"]([^'"]+)/i);
+      if (renderMatch) return renderMatch[1];
+    }
+    // Check data attributes
+    const els = Array.from(document.querySelectorAll('[data-sitekey], [data-turnstile-sitekey], .cf-turnstile'));
+    for (let i = 0; i < els.length; i++) {
+      const key = els[i].getAttribute('data-sitekey') || els[i].getAttribute('data-turnstile-sitekey');
+      if (key) return key;
+    }
+    return undefined;
+  }).catch(() => undefined);
+}
+
+/**
  * Solve CAPTCHA using CapSolver API (AI-powered, 95%+ success, fastest).
  * Pricing: $0.80-$3.00 per 1000 solves depending on type.
  */
@@ -256,10 +340,14 @@ async function solveWithCapSolver(
         };
         break;
       case 'turnstile':
+        if (!detection.siteKey) {
+          return { success: false, error: 'Turnstile requires siteKey — could not extract from page' };
+        }
         taskType = 'AntiTurnstileTaskProxyLess';
         taskData = {
           websiteURL: detection.pageUrl,
           websiteKey: detection.siteKey,
+          metadata: { action: 'managed', cdata: '' },
         };
         break;
       case 'funcaptcha':
@@ -344,8 +432,9 @@ async function solveWithCapSolver(
 
     const taskId = createResult.taskId;
 
-    // Poll for result (max 30 seconds, 3s intervals — must not block the vision agent step loop)
-    for (let i = 0; i < 10; i++) {
+    // Poll for result — Turnstile/advanced CAPTCHAs need up to 60s, simple ones ~10s
+    const maxPolls = (detection.type === 'turnstile' || detection.type === 'funcaptcha' || detection.type === 'geetest' || detection.type === 'datadome' || detection.type === 'perimeterx') ? 20 : 10;
+    for (let i = 0; i < maxPolls; i++) {
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       const getResponse = await fetch('https://api.capsolver.com/getTaskResult', {
@@ -386,7 +475,7 @@ async function solveWithCapSolver(
       }
     }
 
-    return { success: false, error: 'CapSolver solve timed out after 30s' };
+    return { success: false, error: `CapSolver solve timed out after ${maxPolls * 3}s` };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: `CapSolver error: ${message}` };
@@ -846,36 +935,161 @@ Please review your recent tasks and contact support if needed.
 
 /**
  * Inject a solved CAPTCHA token into the page.
+ * Handles ALL CAPTCHA types: reCAPTCHA, hCaptcha, Turnstile, FunCaptcha, GeeTest, DataDome, PerimeterX.
  */
 async function injectCaptchaToken(page: Page, type: CaptchaType, token: string): Promise<void> {
-  await page.evaluate(
+  const injected = await page.evaluate(
     ({ type, token }) => {
+      let success = false;
+
       if (type === 'recaptcha_v2' || type === 'recaptcha_v3') {
-        // Set reCAPTCHA response
+        // Set reCAPTCHA response textarea
         const textarea = document.querySelector('#g-recaptcha-response, [name="g-recaptcha-response"]') as HTMLTextAreaElement;
         if (textarea) {
           textarea.style.display = 'block';
           textarea.value = token;
+          success = true;
         }
-        // Call callback if exists
-        const callback = (window as unknown as Record<string, unknown>).__recaptcha_callback as ((token: string) => void) | undefined;
-        if (typeof callback === 'function') {
-          callback(token);
-        }
+        // Try official callback
+        try {
+          const win = window as unknown as Record<string, unknown>;
+          if (typeof win.___grecaptcha_cfg === 'object') {
+            const cfg = win.___grecaptcha_cfg as Record<string, unknown>;
+            const clients = cfg.clients as Record<string, unknown> | undefined;
+            if (clients) {
+              // Walk reCAPTCHA client tree to find callback
+              for (const clientId of Object.keys(clients)) {
+                const client = clients[clientId] as Record<string, unknown>;
+                for (const key of Object.keys(client)) {
+                  const prop = client[key] as Record<string, unknown>;
+                  if (prop && typeof prop === 'object') {
+                    for (const subKey of Object.keys(prop)) {
+                      const sub = prop[subKey] as Record<string, unknown>;
+                      if (sub && typeof sub.callback === 'function') {
+                        (sub.callback as (t: string) => void)(token);
+                        success = true;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          // Fallback: global callback
+          const cb = win.__recaptcha_callback as ((t: string) => void) | undefined;
+          if (typeof cb === 'function') { cb(token); success = true; }
+        } catch { /* callback not found, token in textarea is sufficient */ }
+
       } else if (type === 'hcaptcha') {
+        // Set hCaptcha response
         const textarea = document.querySelector('[name="h-captcha-response"], [name="g-recaptcha-response"]') as HTMLTextAreaElement;
-        if (textarea) {
-          textarea.value = token;
-        }
+        if (textarea) { textarea.value = token; success = true; }
+        // Try hCaptcha callback
+        try {
+          const win = window as unknown as Record<string, unknown>;
+          const hcaptcha = win.hcaptcha as { execute?: () => void; setResponse?: (t: string) => void } | undefined;
+          if (hcaptcha?.setResponse) { hcaptcha.setResponse(token); success = true; }
+        } catch { /* ok */ }
+
       } else if (type === 'turnstile') {
+        // Set Turnstile response input
         const input = document.querySelector('[name="cf-turnstile-response"]') as HTMLInputElement;
-        if (input) {
-          input.value = token;
+        if (input) { input.value = token; success = true; }
+        // Also check for challenge form hidden input
+        const challengeInput = document.querySelector('#challenge-form input[name="cf-turnstile-response"], #challenge-form input[type="hidden"]') as HTMLInputElement;
+        if (challengeInput && !challengeInput.value) { challengeInput.value = token; success = true; }
+        // Try Turnstile callback — Cloudflare sets window.turnstile or cf challenge callbacks
+        try {
+          const win = window as unknown as Record<string, unknown>;
+          const turnstile = win.turnstile as { getResponse?: () => string; execute?: () => void; callback?: (t: string) => void } | undefined;
+          if (turnstile?.callback) { turnstile.callback(token); success = true; }
+          // Walk known CF callback paths
+          const cfCallbacks = [
+            (win._cf_chl_opt as Record<string, unknown>)?.['chlApiCb'],
+            (win._cf_chl_opt as Record<string, unknown>)?.['cOpt']?.['cb' as never],
+          ];
+          for (const cb of cfCallbacks) {
+            if (typeof cb === 'function') { (cb as (t: string) => void)(token); success = true; }
+          }
+        } catch { /* ok */ }
+        // Auto-submit the challenge form if present
+        const form = document.querySelector('#challenge-form') as HTMLFormElement;
+        if (form && success) {
+          try { form.submit(); } catch { /* ok */ }
         }
+
+      } else if (type === 'funcaptcha') {
+        // FunCaptcha (ArkoseLabs): inject token into hidden field + call enforcement callback
+        const input = document.querySelector('input[name="fc-token"], input[name="verification-token"], #fc-token') as HTMLInputElement;
+        if (input) { input.value = token; success = true; }
+        try {
+          const win = window as unknown as Record<string, unknown>;
+          const enforcement = win.ArkoseEnforcement as { setConfig?: (c: Record<string, unknown>) => void } | undefined;
+          if (enforcement?.setConfig) {
+            enforcement.setConfig({ data: { token } });
+            success = true;
+          }
+          // Try the more common callback pattern
+          const fnCallback = win.arkoseCallback as ((t: string) => void) | undefined;
+          if (typeof fnCallback === 'function') { fnCallback(token); success = true; }
+        } catch { /* ok */ }
+
+      } else if (type === 'geetest') {
+        // GeeTest: token is usually a JSON object {challenge, validate, seccode}
+        try {
+          const parsed = typeof token === 'string' ? JSON.parse(token) : token;
+          const challengeInput = document.querySelector('input[name="geetest_challenge"]') as HTMLInputElement;
+          const validateInput = document.querySelector('input[name="geetest_validate"]') as HTMLInputElement;
+          const seccodeInput = document.querySelector('input[name="geetest_seccode"]') as HTMLInputElement;
+          if (challengeInput && parsed.challenge) { challengeInput.value = parsed.challenge; success = true; }
+          if (validateInput && parsed.validate) { validateInput.value = parsed.validate; success = true; }
+          if (seccodeInput && parsed.seccode) { seccodeInput.value = parsed.seccode; success = true; }
+          // Try GeeTest callback
+          const win = window as unknown as Record<string, unknown>;
+          const geetestCb = win.geetestCallback as ((r: unknown) => void) | undefined;
+          if (typeof geetestCb === 'function') { geetestCb(parsed); success = true; }
+        } catch {
+          // If token is not JSON, try as plain string
+          const input = document.querySelector('input[name="geetest_validate"]') as HTMLInputElement;
+          if (input) { input.value = token; success = true; }
+        }
+
+      } else if (type === 'datadome') {
+        // DataDome: solution is typically a cookie value — set it as document cookie
+        try {
+          document.cookie = `datadome=${token}; path=/; secure; samesite=lax`;
+          success = true;
+        } catch { /* ok */ }
+
+      } else if (type === 'perimeterx') {
+        // PerimeterX: solution is typically a cookie (_px3, _pxhd)
+        try {
+          document.cookie = `_px3=${token}; path=/; secure; samesite=lax`;
+          success = true;
+          // Try PerimeterX callback
+          const win = window as unknown as Record<string, unknown>;
+          const pxCallback = win._pxOnCaptchaSuccess as (() => void) | undefined;
+          if (typeof pxCallback === 'function') { pxCallback(); }
+        } catch { /* ok */ }
       }
+
+      return success;
     },
     { type, token }
   );
+
+  if (injected) {
+    console.log(`[CAPTCHA] ✓ Token injected for ${type}`);
+  } else {
+    console.warn(`[CAPTCHA] ⚠ Token injection may have failed for ${type} — no matching elements found`);
+  }
+
+  // For DataDome/PerimeterX, reload the page after setting cookies
+  if (type === 'datadome' || type === 'perimeterx') {
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+    } catch { /* ok */ }
+  }
 }
 
 /**

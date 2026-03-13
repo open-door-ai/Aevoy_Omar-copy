@@ -7,6 +7,7 @@
 
 import type { Page } from 'patchright';
 import { delay } from '../utils/timeout.js';
+import { detectCaptcha, solveCaptcha } from './captcha.js';
 
 export type AntiBotType = 'cloudflare' | 'aws_waf' | 'rate_limit' | 'generic_block' | 'unknown' | 'none';
 
@@ -107,39 +108,144 @@ export async function handleAntiBot(page: Page, detection: AntiBotDetection): Pr
 }
 
 /**
- * Handle Cloudflare challenge by waiting for auto-resolve.
+ * Handle Cloudflare challenge — wait briefly for auto-resolve, then actively solve via CapSolver.
+ * Cloudflare uses Turnstile under the hood; we detect it and solve it programmatically.
  */
 async function handleCloudflare(page: Page): Promise<boolean> {
-  console.log('[ANTIBOT] Cloudflare challenge detected, waiting for auto-resolve...');
+  console.log('[ANTIBOT] Cloudflare challenge detected — attempting active solve...');
 
-  // Cloudflare typically auto-resolves in 5-10 seconds
-  for (let i = 0; i < 6; i++) {
+  // Phase 1: Quick wait (5s) — many Cloudflare JS challenges auto-resolve for stealth browsers
+  await delay(5000);
+  const quickResolved = await page.evaluate(() => {
+    const title = document.title.toLowerCase();
+    return !title.includes('just a moment') && !title.includes('attention required');
+  }).catch(() => false);
+
+  if (quickResolved) {
+    console.log('[ANTIBOT] Cloudflare challenge auto-resolved in 5s');
+    return true;
+  }
+
+  // Phase 2: Active CAPTCHA solving via CapSolver (Turnstile)
+  console.log('[ANTIBOT] Auto-resolve failed — using CapSolver for Turnstile...');
+  try {
+    const detection = await detectCaptcha(page);
+    if (detection.type === 'turnstile' || detection.type === 'none') {
+      // Even if detectCaptcha says 'none', we KNOW this is a CF challenge page.
+      // Force Turnstile detection with siteKey extraction.
+      const siteKey = detection.siteKey || await extractTurnstileSiteKey(page);
+
+      if (siteKey) {
+        console.log(`[ANTIBOT] Found Turnstile siteKey: ${siteKey.substring(0, 10)}...`);
+        const result = await solveCaptcha(page, {
+          type: 'turnstile',
+          siteKey,
+          pageUrl: page.url(),
+        });
+
+        if (result.success) {
+          console.log(`[ANTIBOT] ✓ Cloudflare Turnstile solved via ${result.service}`);
+          // Wait for page to process the token and redirect
+          await delay(3000);
+          const resolved = await page.evaluate(() => {
+            const title = document.title.toLowerCase();
+            return !title.includes('just a moment') && !title.includes('attention required');
+          }).catch(() => false);
+          if (resolved) return true;
+
+          // Token injected but page didn't redirect — try submitting the challenge form
+          await page.evaluate(() => {
+            const form = document.querySelector('#challenge-form') as HTMLFormElement;
+            if (form) form.submit();
+          }).catch(() => {});
+          await delay(3000);
+          const resolvedAfterSubmit = await page.evaluate(() => {
+            const title = document.title.toLowerCase();
+            return !title.includes('just a moment') && !title.includes('attention required');
+          }).catch(() => false);
+          if (resolvedAfterSubmit) return true;
+        }
+      } else {
+        console.warn('[ANTIBOT] Could not extract Turnstile siteKey from Cloudflare page');
+      }
+    } else {
+      // Some other CAPTCHA type on the Cloudflare page
+      const result = await solveCaptcha(page, detection);
+      if (result.success) {
+        console.log(`[ANTIBOT] ✓ Solved ${detection.type} on Cloudflare page via ${result.service}`);
+        await delay(3000);
+        return true;
+      }
+    }
+  } catch (error) {
+    console.warn('[ANTIBOT] Active CAPTCHA solve failed:', error);
+  }
+
+  // Phase 3: Extended wait with checkbox click attempts (15s more)
+  console.log('[ANTIBOT] Active solve didn\'t resolve page — trying extended wait + checkbox clicks...');
+  for (let i = 0; i < 3; i++) {
+    try {
+      const checkbox = page.locator('input[type="checkbox"], .cf-turnstile iframe');
+      if (await checkbox.count() > 0) {
+        await checkbox.first().click().catch(() => {});
+      }
+    } catch { /* no checkbox */ }
+
     await delay(5000);
 
-    // Check if challenge is still present
     const stillBlocked = await page.evaluate(() => {
       const title = document.title.toLowerCase();
       return title.includes('just a moment') || title.includes('attention required');
     }).catch(() => true);
 
     if (!stillBlocked) {
-      console.log('[ANTIBOT] Cloudflare challenge resolved');
+      console.log('[ANTIBOT] Cloudflare resolved after extended wait');
       return true;
-    }
-
-    // Try clicking the checkbox if it appears (Turnstile)
-    try {
-      const checkbox = page.locator('input[type="checkbox"], .cf-turnstile iframe');
-      if (await checkbox.count() > 0) {
-        await checkbox.first().click().catch(() => {});
-      }
-    } catch {
-      // No checkbox
     }
   }
 
-  console.warn('[ANTIBOT] Cloudflare challenge did not auto-resolve after 30s');
+  console.warn('[ANTIBOT] Cloudflare challenge not resolved after active solve + 30s wait');
   return false;
+}
+
+/**
+ * Extract Turnstile siteKey from a Cloudflare challenge page.
+ * Looks in iframes, scripts, and data attributes.
+ */
+async function extractTurnstileSiteKey(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => {
+    // Check iframes
+    const iframes = Array.from(document.querySelectorAll('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]'));
+    for (let i = 0; i < iframes.length; i++) {
+      const src = iframes[i].getAttribute('src') || '';
+      const keyMatch = src.match(/[?&]k=([^&]+)/);
+      if (keyMatch) return keyMatch[1];
+    }
+    // Check inline scripts
+    const scripts = Array.from(document.querySelectorAll('script'));
+    for (let i = 0; i < scripts.length; i++) {
+      const text = scripts[i].textContent || '';
+      const keyMatch = text.match(/sitekey['":\s]+['"]?(0x[A-Za-z0-9_-]+)['"]?/i);
+      if (keyMatch) return keyMatch[1];
+      const cDataMatch = text.match(/cData\s*\[?\s*['"]?sitekey['"]?\s*\]?\s*[:=]\s*['"]?(0x[A-Za-z0-9_-]+)/i);
+      if (cDataMatch) return cDataMatch[1];
+      const renderMatch = text.match(/turnstile\.render\s*\([^)]*sitekey\s*:\s*['"]([^'"]+)/i);
+      if (renderMatch) return renderMatch[1];
+    }
+    // Check data attributes
+    const cfElements = Array.from(document.querySelectorAll('[data-sitekey], [data-turnstile-sitekey]'));
+    for (let i = 0; i < cfElements.length; i++) {
+      const key = cfElements[i].getAttribute('data-sitekey') || cfElements[i].getAttribute('data-turnstile-sitekey');
+      if (key) return key;
+    }
+    // Check challenge form hidden inputs
+    const challengeForm = document.querySelector('#challenge-form');
+    if (challengeForm) {
+      const inner = challengeForm.querySelector('[data-sitekey]');
+      if (inner) return inner.getAttribute('data-sitekey') || undefined;
+    }
+    return undefined;
+  }).catch(() => undefined);
 }
 
 /**

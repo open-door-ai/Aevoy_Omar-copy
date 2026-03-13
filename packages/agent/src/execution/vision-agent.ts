@@ -2499,7 +2499,9 @@ export async function runVisionAgent(
           // Reload on first attempt — Cloudflare often shows Turnstile after reload
           if (botWallCount <= 2) {
             await activePage.reload({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-            await activePage.waitForTimeout(3000);
+            // Wait for Turnstile iframe to render (Cloudflare loads it async)
+            await activePage.waitForSelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], .cf-turnstile', { timeout: 8000 }).catch(() => {});
+            await activePage.waitForTimeout(2000); // extra settle time
           }
           // Try CAPTCHA solver on EVERY attempt (Turnstile may appear late)
           try { await handleCaptchaIfPresent(activePage, userId, taskId); } catch { /* ok */ }
