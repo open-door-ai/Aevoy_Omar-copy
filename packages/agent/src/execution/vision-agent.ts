@@ -1962,18 +1962,18 @@ export async function runVisionAgent(
   }
 
   // ── Task classification ──
-  const isBookingTask = /\b(order|reserve|book|pickup|delivery|reservation|get.*food|get.*pizza|get.*coffee)\b/i.test(task);
+  // "book" as verb (booking) vs noun (a book): use "book\s+(a|me|the|my|us|for)" for verb detection.
+  const isBookingTask = /\b(order\s+(a|me|the|my|us|for|food|pizza|coffee)|reserve|book\s+(a|me|the|my|us|for)|pickup|delivery|reservation|get\s*(me\s*)?(food|pizza|coffee|lunch|dinner|breakfast))\b/i.test(task);
   // Complex = ANY task involving multi-step web interaction (signup, booking, form fill, add to cart).
   // Simple = pure lookup/extraction tasks.
   const isSimpleTask = /\b(log\s*in|login|sign\s*in|navigate|go\s+to|visit|open|extract|scrape|tell\s+me|what\s+is|price\s+of)\b/i.test(task)
-    && !/\b(sign\s*up|register|create\b.*\baccount|book|reserve|order|purchase|add\b.*\b(cart|basket)|subscribe|fill\b.*\bform|submit)\b/i.test(task);
-  const isComplexTask = !isSimpleTask && /\b(sign\s*up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|set\s*up\b.*\baccount|book|reserve|order|purchase|checkout|apply|subscribe|add\b.*\b(cart|basket)|fill\b.*\bform|submit\b.*\bform|complete\b.*\bform|cancel\b.*\b(subscription|account|membership))\b/i.test(task);
+    && !/\b(sign\s*up|register|create\b.*\baccount|book\s+(a|me|the|my|us|for)|reserve|order\s+(a|me|the|my|us|for|food|pizza)|purchase|add\b.*\b(cart|basket)|subscribe|fill\b.*\bform|submit)\b/i.test(task);
+  const isComplexTask = !isSimpleTask && /\b(sign\s*up|register|create\b.*\baccount|make\b.*\baccount|open\b.*\baccount|set\s*up\b.*\baccount|book\s+(a|me|the|my|us|for)|reserve|order\s+(a|me|the|my)|purchase|checkout|apply|subscribe|add\b.*\b(cart|basket)|fill\b.*\bform|submit\b.*\bform|complete\b.*\bform|cancel\b.*\b(subscription|account|membership))\b/i.test(task);
   const isFormFillTask = /\b(sign\s*up|signup|register|create\b.*\baccount|make\b.*\baccount|apply|fill\b.*\bform|submit\b.*\bform|probate|intake|legal.*form|contact.*form)\b/i.test(task);
-  // Quick-action tasks: add to cart/basket, click a button — should take <15 steps
-  // Note: "book" as noun (e.g. "add the book") must NOT trigger the booking exclusion.
-  // Only "book a/me/the/my/us" (verb = booking) should exclude.
+  // Quick-action tasks: add to cart/basket, click a button — should take <20 steps
   const isQuickActionTask = !isFormFillTask && /\b(add\b.*\b(cart|basket|bag)|buy\s*now)\b/i.test(task) && !/\b(sign\s*up|register|create\b.*\baccount|book\s+(a|me|the|my|us|for)\b|reserve|checkout)\b/i.test(task);
-  const effectiveMaxSteps = isBookingTask ? MAX_STEPS_BOOKING : (isQuickActionTask ? 20 : MAX_STEPS);
+  // Quick-action takes priority over booking (if "add book X to cart", book=noun not verb)
+  const effectiveMaxSteps = isQuickActionTask ? 20 : (isBookingTask ? MAX_STEPS_BOOKING : MAX_STEPS);
   let dynamicMaxSteps = effectiveMaxSteps;
   let milestonesHit = 0;
   let hasFilledAnyField = false;
