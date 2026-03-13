@@ -4231,8 +4231,12 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                 }
 
                 // Strategy 1: If we have page data for a research task, try AI summary
+                // BUT: skip if the page is an error/block page — those should fall through to iteration loop
                 const _bfpIsResearch = /\b(find|search|look|show|get me|compare|what|which|best|top|cheapest|rating|price|review)\b/i.test(taskTextLower);
-                if (_bfpPageData.length > 50 && _bfpIsResearch && !isTaskComplete) {
+                const _bfpIsErrorPage = /\b(access denied|permission denied|forbidden|403|blocked|not authorized|security check|captcha|cloudflare|ddos protection|reference code|error code)\b/i.test(_bfpPageData);
+                if (_bfpIsErrorPage) {
+                  console.log(`[BROWSER-FAST-PATH] Page is error/block page — skipping AI summary, falling through to iteration loop`);
+                } else if (_bfpPageData.length > 50 && _bfpIsResearch && !isTaskComplete) {
                   try {
                     const { generateForcedDirectAnswer } = await import("./ai.js");
                     const _bfpSummary = await generateForcedDirectAnswer(
@@ -4241,11 +4245,17 @@ STEP 3 — Pick an available time slot. STEP 4 — Fill in name/email/phone (use
                       username
                     );
                     if (_bfpSummary.content && _bfpSummary.content.length > 30) {
-                      aiResponse.content = _bfpSummary.content;
-                      isTaskComplete = true;
-                      aiSignaledComplete = true;
-                      signupAutoCompleted = true;
-                      console.log(`[BROWSER-FAST-PATH] Research data summarized — skipping iteration loop`);
+                      // Final check: reject if the AI summary itself mentions the site being blocked
+                      const _bfpSummaryIsError = /\b(access denied|permission denied|forbidden|blocked|not authorized|the server returned|error message)\b/i.test(_bfpSummary.content);
+                      if (_bfpSummaryIsError) {
+                        console.log(`[BROWSER-FAST-PATH] AI summary describes block/error — falling through to iteration loop`);
+                      } else {
+                        aiResponse.content = _bfpSummary.content;
+                        isTaskComplete = true;
+                        aiSignaledComplete = true;
+                        signupAutoCompleted = true;
+                        console.log(`[BROWSER-FAST-PATH] Research data summarized — skipping iteration loop`);
+                      }
                     }
                   } catch { /* try next strategy */ }
                 }
