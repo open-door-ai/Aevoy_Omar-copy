@@ -8250,11 +8250,9 @@ Extract the ACTUAL phone number from search results and call them:
       aiResponse.content = String(_imgResult.result);
       console.log(`[IMAGE-PRIORITY] generate_image succeeded — using image result as response`);
     } else if (_imgFailed && _isImageCreationTask) {
-      // Image task but generation failed — give clear error, don't let AI iterate to suggest Canva
-      aiResponse.content = `I wasn't able to generate the image right now (${_imgFailed.error || 'API unavailable'}). Please try again in a few minutes.`;
-      isTaskComplete = true;
-      aiSignaledComplete = true;
-      console.log(`[IMAGE-FAIL] Image creation task but generate_image failed — stopping loop: ${_imgFailed.error}`);
+      // Image task but generation failed — let AI find an alternative (browser, online tool, etc.)
+      console.warn(`[IMAGE-FAIL] generate_image failed (${_imgFailed.error}) — letting AI iterate to find alternative`);
+      // Don't set isTaskComplete — let the AI try a different approach
     }
     const hasDirectResultData = signupAutoCompleted || _isRealGeneratedContent || !!_imgResult || actionResults.some(r =>
       ['read_email', 'check_calendar'].includes(r.action.type) &&
