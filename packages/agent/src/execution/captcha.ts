@@ -23,6 +23,7 @@ interface CaptchaDetection {
   pageUrl: string;
   imageUrl?: string;
   isInvisible?: boolean;
+  isEnterprise?: boolean;
 }
 
 interface CaptchaSolveResult {
@@ -72,16 +73,23 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
           }
         } catch { /* ignore */ }
       }
-      // Detect invisible reCAPTCHA: data-size="invisible" or .grecaptcha-badge present
+      // Detect invisible reCAPTCHA: data-size="invisible" on the widget element
+      // NOTE: .grecaptcha-badge alone is NOT reliable — it persists even on challenge pages
+      // where the reCAPTCHA is visible. Check the actual widget element's data-size.
       const isInvisible = !!(
         recaptchaV2.getAttribute('data-size') === 'invisible' ||
-        document.querySelector('.grecaptcha-badge') ||
         document.querySelector('[data-size="invisible"]')
+      );
+      // Detect Enterprise reCAPTCHA: iframe src contains /enterprise/
+      const isEnterprise = !!(
+        document.querySelector('iframe[src*="recaptcha/enterprise"]') ||
+        document.querySelector('script[src*="recaptcha/enterprise"]')
       );
       return {
         type: 'recaptcha_v2' as const,
         siteKey,
         isInvisible,
+        isEnterprise,
       };
     }
 
@@ -444,14 +452,16 @@ async function solveWithCapSolver(
         if (!detection.siteKey) {
           return { success: false, error: 'reCAPTCHA v2 requires siteKey — extraction failed' };
         }
-        taskType = 'ReCaptchaV2TaskProxyLess';
+        // Enterprise reCAPTCHA needs different task type
+        taskType = detection.isEnterprise ? 'ReCaptchaV2EnterpriseTaskProxyLess' : 'ReCaptchaV2TaskProxyLess';
         taskData = {
           websiteURL: detection.pageUrl,
           websiteKey: detection.siteKey,
-          // Detect invisible reCAPTCHA: badge element or size=invisible in data attribute
           ...(detection.isInvisible ? { isInvisible: true } : {}),
+          // Enterprise-specific: pass empty enterprisePayload (CapSolver handles it)
+          ...(detection.isEnterprise ? { enterprisePayload: {} } : {}),
         };
-        console.log(`[CAPTCHA] CapSolver reCAPTCHA v2: siteKey=${detection.siteKey.substring(0, 15)}..., invisible=${!!detection.isInvisible}`);
+        console.log(`[CAPTCHA] CapSolver reCAPTCHA v2: siteKey=${detection.siteKey.substring(0, 15)}..., invisible=${!!detection.isInvisible}, enterprise=${!!detection.isEnterprise}`);
         break;
       case 'recaptcha_v3':
         taskType = 'ReCaptchaV3TaskProxyLess';
