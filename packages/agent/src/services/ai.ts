@@ -2852,14 +2852,13 @@ export async function generateVisionResponse(
   // ═══ 3. OpenRouter FREE — 20 RPM shared across all free models ═══
   // Last for image calls: most free models are 429/exhausted. Backoff prevents wasting 175s.
   if (process.env.OPENROUTER_API_KEY) {
+    // ONLY models that accept image input — text-only models (Nemotron-30B, Llama-3.3, GPT-OSS)
+    // return 404 "No endpoints found that support image input" and waste time.
     const freeModels = [
       { model: "google/gemma-3-27b-it:free", name: "Gemma-3-27B" },
       { model: "nvidia/nemotron-nano-12b-v2-vl:free", name: "Nemotron-Nano-12B-VL" },
-      { model: "nvidia/nemotron-3-nano-30b-a3b:free", name: "Nemotron-3-Nano-30B" },
       { model: "mistralai/mistral-small-3.1-24b-instruct:free", name: "Mistral-Small-3.1" },
-      { model: "meta-llama/llama-3.3-70b-instruct:free", name: "Llama-3.3-70B" },
       { model: "qwen/qwen3-vl-30b-a3b-thinking", name: "Qwen3-VL-30B-Thinking" },
-      { model: "openai/gpt-oss-120b:free", name: "GPT-OSS-120B" },
     ];
 
     for (const fm of freeModels) {
@@ -2889,7 +2888,10 @@ export async function generateVisionResponse(
         const msg = error instanceof Error ? error.message : String(error);
         console.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
         // 5 min backoff for exhausted/rate-limited free models — prevents wasting 7×25s on dead models
-        if (msg.includes('429') || msg.toLowerCase().includes('rate limit') || msg.includes('402')) {
+        // Also backoff on 404 (model doesn't support image input) — 1 hour since this won't change
+        if (msg.includes('404')) {
+          rateLimitBackoff.set(`openrouter:${fm.model}`, Date.now() + 3600000); // 1 hour
+        } else if (msg.includes('429') || msg.toLowerCase().includes('rate limit') || msg.includes('402')) {
           rateLimitBackoff.set(`openrouter:${fm.model}`, Date.now() + 300000);
         }
         continue;
