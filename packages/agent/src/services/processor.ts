@@ -9276,7 +9276,11 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
             // Verify the rewrite itself isn't also passive/advice
             const _rewriteStillBad = /\b(you can|you should|you must|you'll need to|visit the|here's how|want me to|shall i|would you like)\b/i.test(_upgraded.result)
               && !/\b(completed|booked|reserved|signed up|confirmed|called|sent|created)\b/i.test(_upgraded.result);
-            if (!_rewriteStillBad) {
+            // Reject truncated rewrites (ends mid-sentence without terminal punctuation)
+            const _rewriteTruncated = _upgraded.result.length < 150 && !/[.!?)"']$/.test(_upgraded.result.trim());
+            if (_rewriteTruncated) {
+              console.log(`[QUALITY-GATE] Rewrite truncated (${_upgraded.result.length} chars, no terminal punct) — rejecting`);
+            } else if (!_rewriteStillBad) {
               cleanResponse = _upgraded.result;
               console.log('[QUALITY-GATE] Response upgraded to action-oriented');
             } else {
