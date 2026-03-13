@@ -22,6 +22,7 @@ interface CaptchaDetection {
   siteKey?: string;
   pageUrl: string;
   imageUrl?: string;
+  isInvisible?: boolean;
 }
 
 interface CaptchaSolveResult {
@@ -41,12 +42,46 @@ export async function detectCaptcha(page: Page): Promise<CaptchaDetection> {
   const pageUrl = page.url();
 
   const result = await page.evaluate(() => {
-    // reCAPTCHA v2
+    // reCAPTCHA v2 (visible or invisible)
     const recaptchaV2 = document.querySelector('.g-recaptcha, [data-sitekey], iframe[src*="recaptcha"]');
     if (recaptchaV2) {
+      // Try multiple sources for siteKey
+      let siteKey = recaptchaV2.getAttribute('data-sitekey') || undefined;
+      if (!siteKey) {
+        // Check parent elements for data-sitekey
+        const parent = recaptchaV2.closest('[data-sitekey]');
+        if (parent) siteKey = parent.getAttribute('data-sitekey') || undefined;
+      }
+      if (!siteKey) {
+        // Check iframe src for k= parameter
+        const iframe = document.querySelector('iframe[src*="recaptcha"]');
+        if (iframe) {
+          const src = iframe.getAttribute('src') || '';
+          const kMatch = src.match(/[?&]k=([^&]+)/);
+          if (kMatch) siteKey = kMatch[1];
+        }
+      }
+      if (!siteKey) {
+        // Check ___grecaptcha_cfg for sitekey
+        try {
+          const w = window as unknown as Record<string, unknown>;
+          if (typeof w.___grecaptcha_cfg === 'object') {
+            const json = JSON.stringify(w.___grecaptcha_cfg);
+            const m = json.match(/"sitekey"\s*:\s*"([^"]+)"/);
+            if (m) siteKey = m[1];
+          }
+        } catch { /* ignore */ }
+      }
+      // Detect invisible reCAPTCHA: data-size="invisible" or .grecaptcha-badge present
+      const isInvisible = !!(
+        recaptchaV2.getAttribute('data-size') === 'invisible' ||
+        document.querySelector('.grecaptcha-badge') ||
+        document.querySelector('[data-size="invisible"]')
+      );
       return {
         type: 'recaptcha_v2' as const,
-        siteKey: recaptchaV2.getAttribute('data-sitekey') || undefined,
+        siteKey,
+        isInvisible,
       };
     }
 
@@ -187,7 +222,7 @@ export async function solveCaptcha(
     return { success: true };
   }
 
-  console.log(`[CAPTCHA] Solving ${detection.type} on ${detection.pageUrl}`);
+  console.log(`[CAPTCHA] Solving ${detection.type} on ${detection.pageUrl} (siteKey=${detection.siteKey ? detection.siteKey.substring(0, 15) + '...' : 'NONE'}, invisible=${!!detection.isInvisible})`);
 
   const startTime = Date.now(); // Track for 1-hour timeout in autonomous workarounds
   const capsolverKey = process.env.CAPSOLVER_API_KEY;
@@ -406,11 +441,17 @@ async function solveWithCapSolver(
     // Map CAPTCHA types to CapSolver task types
     switch (detection.type) {
       case 'recaptcha_v2':
+        if (!detection.siteKey) {
+          return { success: false, error: 'reCAPTCHA v2 requires siteKey — extraction failed' };
+        }
         taskType = 'ReCaptchaV2TaskProxyLess';
         taskData = {
           websiteURL: detection.pageUrl,
           websiteKey: detection.siteKey,
+          // Detect invisible reCAPTCHA: badge element or size=invisible in data attribute
+          ...(detection.isInvisible ? { isInvisible: true } : {}),
         };
+        console.log(`[CAPTCHA] CapSolver reCAPTCHA v2: siteKey=${detection.siteKey.substring(0, 15)}..., invisible=${!!detection.isInvisible}`);
         break;
       case 'recaptcha_v3':
         taskType = 'ReCaptchaV3TaskProxyLess';
