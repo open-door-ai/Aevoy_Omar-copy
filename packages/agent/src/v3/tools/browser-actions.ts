@@ -74,7 +74,7 @@ async function getPageSnapshot(page: Page): Promise<string> {
         let ref = 1;
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el) || items.length >= 80) return;
+            if (seen.has(el) || items.length >= 200) return;
             seen.add(el);
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
