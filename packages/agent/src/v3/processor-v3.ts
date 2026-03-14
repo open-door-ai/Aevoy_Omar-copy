@@ -30,6 +30,7 @@ import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
 import './tools/browser.js';
+import { cleanupTaskEngine } from './tools/browser.js';
 
 // ── Constants ──
 
@@ -130,6 +131,9 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       { suppressEmail: task.suppressEmail }
     );
 
+    // ── Cleanup browser engine ──
+    await cleanupTaskEngine(taskId);
+
     // ── Update usage counter ──
     try { await getSupabaseClient().rpc('increment_messages_used', { p_user_id: task.userId }); } catch { /* non-critical */ }
 
@@ -147,6 +151,9 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
+
+    // Cleanup browser engine on error
+    if (taskId) await cleanupTaskEngine(taskId);
 
     // Update task as failed
     if (taskId) {
