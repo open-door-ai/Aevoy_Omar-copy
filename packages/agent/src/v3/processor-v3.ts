@@ -457,17 +457,15 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         : 'I ran out of time working on your task. Could you try a simpler version of the request?';
     }
 
-    // ── Hard iteration cap: force wrap-up at 40, force completion at 60 ──
-    if (iterations === 40 && !wrapUpInjected) {
+    // ── Hard iteration cap: force wrap-up at 50, force completion at 70 ──
+    if (iterations === 50 && !wrapUpInjected) {
       wrapUpInjected = true;
       messages.push({
         role: 'user',
-        content: `IMPORTANT: You have used 40 iterations. You must WRAP UP NOW.
-If you have partial results, present them. If you're stuck on a complex page, report what you see and what you attempted.
-Do NOT keep trying the same approach. Provide your best answer with whatever information you have gathered.`
+        content: `You have used 50 iterations. Wrap up soon — fill remaining fields, submit, and report results. Be efficient: call multiple browser_fill() in one step if you have several fields left.`
       });
     }
-    if (iterations >= 60) {
+    if (iterations >= 70) {
       const partial = ledger.getPartialResults();
       return partial !== 'No results gathered yet.'
         ? `I worked on this for a while. Here's what I found:\n\n${partial}`

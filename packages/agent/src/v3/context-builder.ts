@@ -156,7 +156,10 @@ IMPORTANT RULES:
   3. VISION FALLBACK (only when DOM refs can't reach the element): browser_screenshot() → read coordinates → browser_click_xy(x, y). Use sparingly — coordinates can be imprecise.
   4. browser_locate(description) → finds element coordinates by visual description. Also imprecise — prefer DOM refs.
   5. For <select> dropdowns: browser_select(ref, value) — much more reliable than clicking coordinates.
-- EFFICIENCY RULE: You have ~40 iterations max. Each screenshot costs time. Use DOM refs for 90% of clicks. Only use vision for elements not in the snapshot.
+- EFFICIENCY RULE: You have ~50 iterations. Be efficient:
+  * Call multiple browser_fill() in ONE response when filling forms (don't snapshot between each fill)
+  * Only call browser_snapshot() when you need to see new elements (after navigation or click that changes the page)
+  * Use DOM refs for 90% of clicks. Only use vision for elements not in the snapshot.
 - SMART NAVIGATION: Construct search URLs directly (amazon.com/s?k=query) instead of filling complex search UIs.
 - ANTI-BOT: If a site shows a CAPTCHA, blank page, or "access denied" — try Google search, a different site, or a direct URL.
 - PARTIAL RESULTS: If you can't fully complete a task after 30 iterations, report what you accomplished and what's blocking you.
