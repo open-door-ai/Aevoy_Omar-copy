@@ -94,6 +94,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
 import { processorV2 } from "./services/processor-v2.js";
+import { processTaskV3 } from "./v3/processor-v3.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
 import { startInboxManager } from "./services/inbox-manager.js";
@@ -1108,9 +1109,25 @@ app.post("/task", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
+  // ── V3 routing: check PROCESSOR_VERSION env var for opt-in ──
+  const processorVersion = process.env.PROCESSOR_VERSION || 'v1';
+  const useV3 = processorVersion === 'v3';
+
   activeTasks++;
   registerActiveTask(task.userId, task.taskId || '', task.subject || '');
-  processTask(task)
+
+  const processFunc = useV3
+    ? async (t: TaskRequest) => {
+        try {
+          return await processTaskV3(t);
+        } catch (v3Err) {
+          console.error(`[V3-CRASH] Falling back to V1:`, v3Err);
+          return await processTask(t);
+        }
+      }
+    : processTask;
+
+  processFunc(task)
     .then((result) => {
       console.log(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
     })
