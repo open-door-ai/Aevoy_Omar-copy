@@ -85,11 +85,17 @@ async function getPageSnapshot(page: Page): Promise<string> {
   try {
     const result = await Promise.race([
       page.evaluate((selectors: string[]) => {
+        // CRITICAL: Stamp each element with data-aevoy-ref attribute.
+        // Click/fill/select use this attribute to find the EXACT element,
+        // eliminating race conditions from DOM mutations between calls.
+        // Clear old refs first
+        document.querySelectorAll('[data-aevoy-ref]').forEach(el => el.removeAttribute('data-aevoy-ref'));
+
         const seen = new Set<Element>();
         const items: string[] = [];
         let totalCount = 0;
         let ref = 1;
-        const MAX_DISPLAY = 80; // Show up to 80 elements (was 50)
+        const MAX_DISPLAY = 80;
 
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {
@@ -98,6 +104,8 @@ async function getPageSnapshot(page: Page): Promise<string> {
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
             totalCount++;
+            // Stamp element with stable ref
+            (el as HTMLElement).setAttribute('data-aevoy-ref', String(ref));
             if (items.length < MAX_DISPLAY) {
               const tag = el.tagName.toLowerCase();
               const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
@@ -191,8 +199,8 @@ registerTool({
           const directCdp = process.env.REMOTE_BROWSER_CDP_DIRECT || process.env.REMOTE_BROWSER_CDP?.replace(':9223', ':9225');
           if (directCdp) {
             await cleanupTaskPage(ctx.taskId);
-            // Temporarily swap CDP endpoint to the direct (non-proxy) Chrome
-            const origCdp = process.env.REMOTE_BROWSER_CDP;
+            // Switch to direct Chrome — keep it for the rest of this task
+            // (don't restore env var on success — subsequent calls should use direct too)
             process.env.REMOTE_BROWSER_CDP = directCdp;
             try {
               const { page: newPage } = await getOrCreatePage(ctx, url);
@@ -202,8 +210,6 @@ registerTool({
               return { success: true, data: `(Switched to direct connection — proxy was blocked)\n\n${snapshot}`, cost: 0 };
             } catch (directErr) {
               console.warn(`[V3-BROWSER] Direct Chrome also failed for ${url}:`, directErr);
-              // Restore original CDP and report failure
-              process.env.REMOTE_BROWSER_CDP = origCdp!;
               return { success: false, error: `Site unreachable via both proxy and direct: ${url}`, cost: 0 };
             }
           }
@@ -252,30 +258,17 @@ registerTool({
     }
     const ref = Number(params.ref);
     try {
-      // Find the element by re-querying the DOM with the same selector logic
-      const clicked = await existing.page.evaluate((args: { targetRef: number; selectors: string[] }) => {
-        const { targetRef, selectors } = args;
-        const seen = new Set<Element>();
-        let currentRef = 1;
-        let result = { clicked: false, tag: '', text: '' };
-        for (const sel of selectors) {
-          document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el)) return;
-            seen.add(el);
-            const rect = el.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return;
-            if (currentRef === targetRef) {
-              (el as HTMLElement).click();
-              result = { clicked: true, tag: el.tagName, text: (el.textContent || '').trim().substring(0, 50) };
-            }
-            currentRef++;
-          });
-        }
-        return result;
-      }, { targetRef: ref, selectors: INTERACTIVE_SELECTORS });
+      // Use data-aevoy-ref attribute stamped during snapshot — immune to DOM mutations
+      const clicked = await existing.page.evaluate((targetRef: number) => {
+        const el = document.querySelector(`[data-aevoy-ref="${targetRef}"]`) as HTMLElement;
+        if (!el) return { clicked: false, tag: '', text: '' };
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        el.click();
+        return { clicked: true, tag: el.tagName, text: (el.textContent || '').trim().substring(0, 50) };
+      }, ref);
 
       if (!clicked.clicked) {
-        return { success: false, error: `Element [${ref}] not found on page`, cost: 0 };
+        return { success: false, error: `Element [${ref}] not found. The page may have changed — call browser_snapshot() to get fresh refs.`, cost: 0 };
       }
 
       await existing.page.waitForTimeout(1000);
@@ -304,33 +297,20 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      const filled = await existing.page.evaluate((args: { targetRef: number; value: string; selectors: string[] }) => {
-        const selectors = args.selectors;
-        const seen = new Set<Element>();
-        let currentRef = 1;
-        let result = { filled: false, tag: '', name: '' };
-        for (const sel of selectors) {
-          document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el)) return;
-            seen.add(el);
-            const rect = el.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return;
-            if (currentRef === args.targetRef) {
-              const input = el as HTMLInputElement;
-              input.focus();
-              input.value = args.value;
-              input.dispatchEvent(new Event('input', { bubbles: true }));
-              input.dispatchEvent(new Event('change', { bubbles: true }));
-              result = { filled: true, tag: el.tagName, name: el.getAttribute('name') || el.getAttribute('placeholder') || '' };
-            }
-            currentRef++;
-          });
-        }
-        return result;
-      }, { targetRef: ref, value, selectors: INTERACTIVE_SELECTORS });
+      // Use data-aevoy-ref for stable element lookup
+      const filled = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
+        const el = document.querySelector(`[data-aevoy-ref="${args.targetRef}"]`) as HTMLInputElement;
+        if (!el) return { filled: false, tag: '', name: '' };
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        el.focus();
+        el.value = args.value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { filled: true, tag: el.tagName, name: el.getAttribute('name') || el.getAttribute('placeholder') || '' };
+      }, { targetRef: ref, value });
 
       if (!filled.filled) {
-        return { success: false, error: `Input [${ref}] not found on page`, cost: 0 };
+        return { success: false, error: `Input [${ref}] not found. The page may have changed — call browser_snapshot() to get fresh refs.`, cost: 0 };
       }
 
       return { success: true, data: `Filled [${ref}] "${filled.name}" with "${value}"`, cost: 0 };
@@ -565,38 +545,25 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      const result = await existing.page.evaluate((args: { targetRef: number; value: string; selectors: string[] }) => {
-        const selectors = args.selectors;
-        const seen = new Set<Element>();
-        let currentRef = 1;
+      // Use data-aevoy-ref for stable element lookup
+      const result = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
+        const el = document.querySelector(`[data-aevoy-ref="${args.targetRef}"]`) as HTMLSelectElement;
         let result = { selected: false, options: [] as string[] };
-        for (const sel of selectors) {
-          document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el)) return;
-            seen.add(el);
-            const rect = el.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return;
-            if (currentRef === args.targetRef) {
-              const select = el as HTMLSelectElement;
-              if (select.tagName === 'SELECT') {
-                // Try by value first, then by text
-                const options = Array.from(select.options);
-                result.options = options.map(o => `"${o.text}" (value="${o.value}")`);
-                const byValue = options.find(o => o.value === args.value);
-                const byText = options.find(o => o.text.toLowerCase().includes(args.value.toLowerCase()));
-                const match = byValue || byText;
-                if (match) {
-                  select.value = match.value;
-                  select.dispatchEvent(new Event('change', { bubbles: true }));
-                  result.selected = true;
-                }
-              }
-            }
-            currentRef++;
-          });
+        if (!el) return result;
+        if (el.tagName === 'SELECT') {
+          const options = Array.from(el.options);
+          result.options = options.map(o => `"${o.text}" (value="${o.value}")`);
+          const byValue = options.find(o => o.value === args.value);
+          const byText = options.find(o => o.text.toLowerCase().includes(args.value.toLowerCase()));
+          const match = byValue || byText;
+          if (match) {
+            el.value = match.value;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            result.selected = true;
+          }
         }
         return result;
-      }, { targetRef: ref, value, selectors: INTERACTIVE_SELECTORS });
+      }, { targetRef: ref, value });
 
       if (!result.selected) {
         return {
