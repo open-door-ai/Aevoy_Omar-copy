@@ -207,6 +207,11 @@ export class ExecutionEngine {
         // Create an isolated context for this task (with timeout for each step)
         const { getDeviceProfile } = await import('./stealth.js');
         const profile = getDeviceProfile();
+
+        // Proxy authentication for BrightData residential proxy (if Chrome is proxied)
+        const proxyUser = process.env.BRIGHTDATA_PROXY_USER;
+        const proxyPass = process.env.BRIGHTDATA_PROXY_PASS;
+
         this.context = await cdpTimeout(this.browser.newContext({
           viewport: profile.viewport,
           screen: profile.screen,
@@ -214,6 +219,7 @@ export class ExecutionEngine {
           userAgent: profile.userAgent,
           locale: profile.locale,
           timezoneId: profile.timezone,
+          ...(proxyUser && proxyPass ? { httpCredentials: { username: proxyUser, password: proxyPass } } : {}),
         }), 10000, 'newContext');
 
         await applyStealthPatches(this.context);
