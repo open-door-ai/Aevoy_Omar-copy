@@ -177,6 +177,33 @@ registerTool({
       const { page } = await getOrCreatePage(ctx, url);
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
       await page.waitForTimeout(1000);
+
+      // Detect proxy-blocked pages (BrightData blocks some sites like Spotify)
+      const currentUrl = page.url();
+      const isErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl === 'about:blank';
+      if (isErrorPage) {
+        // Check if page shows error text
+        const bodyText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
+        const isProxyBlock = /can't be reached|not available|ERR_|connection refused|dns/i.test(bodyText);
+        if (isProxyBlock) {
+          console.log(`[V3-BROWSER] Proxy-blocked page detected for ${url}, recreating without proxy`);
+          // Cleanup current engine and recreate with FORCE_LOCAL_BROWSER
+          await cleanupTaskPage(ctx.taskId);
+          const origFlag = process.env.FORCE_LOCAL_BROWSER;
+          process.env.FORCE_LOCAL_BROWSER = 'true';
+          try {
+            const { page: newPage } = await getOrCreatePage(ctx, url);
+            await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+            await newPage.waitForTimeout(1000);
+            const snapshot = await getPageSnapshot(newPage);
+            return { success: true, data: `(Switched to direct connection — proxy was blocked)\n\n${snapshot}`, cost: 0 };
+          } finally {
+            if (origFlag !== undefined) process.env.FORCE_LOCAL_BROWSER = origFlag;
+            else delete process.env.FORCE_LOCAL_BROWSER;
+          }
+        }
+      }
+
       const snapshot = await getPageSnapshot(page);
       return { success: true, data: snapshot, cost: 0 };
     } catch (err) {
