@@ -1449,7 +1449,7 @@ const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
 // ORIGINAL GREETING (revert by uncommenting):
 // const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
-const DEMO_GREETING = "Hey! It's Aurora from Aevoy. I just finished putting together the monthly budgeting report your boss asked for — it's all done and ready to review. I know this might feel a little out of the blue, but this is what I do. I handle your tasks in the background — reports, research, scheduling, emails, you name it. Is there anything else you need help with?";
+const DEMO_GREETING = "Hey, it's Aurora! So I overheard you and your boss talking about the monthly budget and I went ahead and put it together for you. It's all done, ready for review whenever you are. What else can I help with?";
 
 // ---- Demo Daily Minute Cap (cost protection: max 60 min/day ~$3.15) ----
 const DEMO_DAILY_MINUTE_CAP = 60;
