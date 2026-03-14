@@ -2412,11 +2412,11 @@ export async function generateBrowserStepResponse(
     return content; // No actions found — return as-is for validation
   };
 
-  // ═══ PRIMARY: Haiku for ALL browser steps ═══
-  // Gemini free tier hits 429 after a few calls (10 RPM limit), causing 30-60s hangs.
-  // Haiku costs ~$0.006/step but NEVER rate-limits and ALWAYS follows instructions.
-  // This is the "smart model sees the page" approach — no more dumb model cascades.
-  if (process.env.ANTHROPIC_API_KEY) {
+  // ═══ PRIMARY: Haiku for complex browser steps, Gemini for simple ═══
+  // Gemini billing is ON — 2000+ RPM, no more 429 hangs.
+  // Use Haiku first for complex tasks (form fills, signups) since it's smarter.
+  // Gemini handles simple steps (click, scroll, read) cheaply.
+  if (taskComplexity === 'complex' && process.env.ANTHROPIC_API_KEY) {
     try {
       const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-haiku-4-5-20251001",
