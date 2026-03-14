@@ -29,10 +29,16 @@ import './tools/communication.js';
 import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
-// Both browser_session AND individual tools available — AI uses hybrid approach
-import './tools/browser.js';
+// Phase 2: Individual browser tools ONLY — no vision agent wrapper
+// browser_session removed to force direct browser control (browser_go, browser_click, browser_fill)
 import './tools/browser-actions.js';
-import { cleanupTaskEngine } from './tools/browser.js';
+// cleanupTaskEngine from browser.ts — still imported for cleanup even though browser_session is disabled
+const cleanupTaskEngine = async (taskId: string) => {
+  try {
+    const mod = await import('./tools/browser.js');
+    await mod.cleanupTaskEngine(taskId);
+  } catch { /* browser.ts not critical for cleanup */ }
+};
 import { cleanupTaskPage } from './tools/browser-actions.js';
 
 // ── Constants ──
@@ -511,17 +517,24 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
       tool_calls: assistantToolCalls,
     });
 
-    // Execute each tool call and add results
+    // Execute each tool call and add results — wrapped in try/catch to NEVER crash V3
     for (let i = 0; i < modelResponse.toolCalls.length; i++) {
       const tc = modelResponse.toolCalls[i];
       console.log(`[V3] Step ${iterations}.${i + 1}: ${tc.name}(${JSON.stringify(tc.arguments).substring(0, 100)})`);
 
-      const result = await executeToolCall(tc, ctx);
-      ledger.recordObservation(tc.name, tc.arguments, result);
+      let result;
+      try {
+        result = await executeToolCall(tc, ctx);
+        ledger.recordObservation(tc.name, tc.arguments, result);
+      } catch (toolErr) {
+        console.error(`[V3] Tool ${tc.name} threw unhandled error:`, toolErr);
+        result = { success: false, error: `Tool crashed: ${toolErr instanceof Error ? toolErr.message : 'unknown'}`, cost: 0 };
+        ledger.recordObservation(tc.name, tc.arguments, result);
+      }
 
       // Track tool cost
       if (result.cost > 0) {
-        await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`);
+        try { await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`); } catch { /* non-critical */ }
       }
 
       // Add tool result to conversation
