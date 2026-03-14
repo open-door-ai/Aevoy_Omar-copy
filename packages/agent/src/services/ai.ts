@@ -2412,10 +2412,11 @@ export async function generateBrowserStepResponse(
     return content; // No actions found — return as-is for validation
   };
 
-  // ═══ SMART ROUTING: Complex tasks (booking/signup/purchase) use Haiku FIRST ═══
-  // Cheap models hallucinate on multi-step flows. Haiku costs ~$0.006/step but actually works.
-  // Simple tasks (click, scroll, extract data) still use the cheap cascade.
-  if (taskComplexity === 'complex' && process.env.ANTHROPIC_API_KEY) {
+  // ═══ PRIMARY: Haiku for ALL browser steps ═══
+  // Gemini free tier hits 429 after a few calls (10 RPM limit), causing 30-60s hangs.
+  // Haiku costs ~$0.006/step but NEVER rate-limits and ALWAYS follows instructions.
+  // This is the "smart model sees the page" approach — no more dumb model cascades.
+  if (process.env.ANTHROPIC_API_KEY) {
     try {
       const response = await withTimeout(getAnthropicClient().messages.create({
         model: "claude-haiku-4-5-20251001",
