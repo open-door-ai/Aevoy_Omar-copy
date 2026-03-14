@@ -1121,7 +1121,14 @@ app.post("/task", taskLimiter, async (req, res) => {
         try {
           return await processTaskV3(t);
         } catch (v3Err) {
-          console.error(`[V3-CRASH] Falling back to V1:`, v3Err);
+          const errMsg = v3Err instanceof Error ? `${v3Err.message}\n${v3Err.stack}` : String(v3Err);
+          console.error(`[V3-CRASH] Falling back to V1. Error: ${errMsg}`);
+          // Log crash to DB so we can query it
+          try {
+            await getSupabaseClient().from('tasks').update({
+              stuck_reason: `[V3-CRASH] ${errMsg.substring(0, 500)}`,
+            }).eq('user_id', t.userId).eq('status', 'processing').order('created_at', { ascending: false }).limit(1);
+          } catch { /* non-critical */ }
           return await processTask(t);
         }
       }
