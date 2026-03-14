@@ -483,7 +483,7 @@ const MODEL_MIN_INTERVAL: Record<string, number> = {
   'qwen/qwen3-32b': 30000,                            // 6K TPM — tightest, 2 calls/min max
   'groq/compound-mini': 20000,                          // 70K TPM, no TPD limit
   'llama-3.1-8b-instant': 8000,                        // 6K TPM but ~2K per call, browser workhorse
-  'gemini-2.5-flash': 5000,                             // free tier 10 RPM (6s/req) — 5s tight but avoids wasting time
+  'gemini-2.5-flash': 1500,                             // 1.5s pace — fast enough for browser steps, billing enabled
 };
 
 async function paceModelCall(model: string): Promise<void> {
@@ -2475,74 +2475,9 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  // ═══ FALLBACK: DeepSeek V3 ═══
-  if (process.env.DEEPSEEK_API_KEY && Date.now() > deepseekBackoffUntil) {
-    try {
-      const response = await withTimeout(getDeepSeekClient().chat.completions.create({
-        model: "deepseek-chat",
-        max_tokens: 300,
-        temperature: 0.0, // deterministic — follow instructions exactly
-        messages,
-      }), 12000);
-      const rawContent = response.choices[0]?.message?.content || '';
-      const stripped = stripThinkTags(rawContent);
-      const content = extractActionLines(stripped);
-      if (content.length > 10 && isValidBrowserAction(content)) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.27 + outTok * 1.10) / 1_000_000;
-        console.log(`[AI] BrowserStep (DeepSeek-V3) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "deepseek-chat", inTok, outTok, cost, "deepseek", taskId, "browser-step").catch(() => {});
-        return { content, cost };
-      } else if (stripped.length > 10) {
-        console.warn(`[AI] BrowserStep (DeepSeek) rejected — no action command in: "${stripped.substring(0, 120)}"`);
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.warn(`[AI] BrowserStep (DeepSeek-V3) failed: ${msg}`);
-      // Back off DeepSeek for 60s on rate limit, 10s on other errors
-      if (msg.includes('429') || msg.includes('rate')) {
-        deepseekBackoffUntil = Date.now() + 60000;
-      } else if (msg.includes('402')) {
-        deepseekBackoffUntil = Date.now() + 3600000; // 1 hour if out of funds — no point retrying
-        console.error('[AI] DeepSeek balance depleted — backing off for 1 hour');
-      } else {
-        deepseekBackoffUntil = Date.now() + 10000;
-      }
-    }
-  }
-
-  // ═══ FALLBACK: OpenRouter Llama-3.3-70B — fast, no thinking tokens ═══
-  if (process.env.OPENROUTER_API_KEY) {
-    try {
-      const response = await withTimeout(getPlatformOpenRouterClient().chat.completions.create({
-        model: "meta-llama/llama-3.3-70b-instruct",
-        max_tokens: 300,
-        temperature: 0.1,
-        messages,
-      }), 10000);
-      const rawContent = response.choices[0]?.message?.content || '';
-      const stripped = stripThinkTags(rawContent);
-      const content = extractActionLines(stripped);
-      if (content.length > 10 && isValidBrowserAction(content)) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        const cost = (inTok * 0.10 + outTok * 0.13) / 1_000_000;
-        console.log(`[AI] BrowserStep (Llama-3.3-70B fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "meta-llama/llama-3.3-70b-instruct", inTok, outTok, cost, "openrouter", taskId, "browser-step").catch(() => {});
-        return { content, cost };
-      } else if (stripped.length > 10) {
-        console.warn(`[AI] BrowserStep (Llama-3.3-70B) rejected — no action command in: "${stripped.substring(0, 120)}"`);
-      }
-    } catch (error) {
-      console.warn(`[AI] BrowserStep (Llama-3.3-70B) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
   // ═══ FALLBACK: Haiku 4.5 — reliable, $0.006/step ═══
-  // Promoted above Scout/Llama-8B because those models return syntactically valid
-  // but semantically useless actions (describe page instead of filling forms).
-  // Haiku actually follows instructions and fills forms correctly.
+  // Skip dumb models entirely. If Gemini can't do it, Haiku can.
+  // DeepSeek/OpenRouter/Groq are too dumb for form fills and waste time trying.
   if (process.env.ANTHROPIC_API_KEY) {
     try {
       const response = await withTimeout(getAnthropicClient().messages.create({
@@ -2550,7 +2485,7 @@ export async function generateBrowserStepResponse(
         max_tokens: 512,
         system: systemPrompt,
         messages: [{ role: "user", content: prompt }],
-      }), 12000);
+      }), 15000);
       const content = response.content[0].type === "text" ? response.content[0].text : "";
       if (content.length > 10) {
         const inTok = response.usage?.input_tokens || 0;
@@ -2559,7 +2494,7 @@ export async function generateBrowserStepResponse(
         const cacheRead = usageAny?.cache_read_input_tokens || 0;
         const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
         const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] BrowserStep (Haiku) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        console.log(`[AI] BrowserStep (Haiku fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
@@ -2568,7 +2503,7 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  // ═══ EMERGENCY: Groq Scout — free but weak at form fills ═══
+  // ═══ LAST RESORT: Groq Scout — free, better than nothing ═══
   if (process.env.GROQ_API_KEY) {
     try {
       await paceModelCall("meta-llama/llama-4-scout-17b-16e-instruct");
@@ -2580,10 +2515,8 @@ export async function generateBrowserStepResponse(
       const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
       const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        console.log(`[AI] BrowserStep (Groq Scout) | $0 | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
+        console.log(`[AI] BrowserStep (Groq Scout last-resort) | $0`);
+        if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
@@ -2591,31 +2524,8 @@ export async function generateBrowserStepResponse(
     }
   }
 
-  // ═══ EMERGENCY: Groq Llama-8B — last free option ═══
-  if (process.env.GROQ_API_KEY) {
-    try {
-      await paceModelCall("llama-3.1-8b-instant");
-      const response = await withTimeout(getGroqClient().chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        max_tokens: 512,
-        messages,
-      }), 5000);
-      const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
-      const content = extractActionLines(stripped);
-      if (content.length > 10 && isValidBrowserAction(content)) {
-        const inTok = response.usage?.prompt_tokens || 0;
-        const outTok = response.usage?.completion_tokens || 0;
-        console.log(`[AI] BrowserStep (Groq Llama-8B emergency) | $0 | ${inTok}in/${outTok}out`);
-        if (userId) trackApiCall(userId, "llama-3.1-8b-instant", inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
-        return { content, cost: 0 };
-      }
-    } catch (error) {
-      console.warn(`[AI] BrowserStep (Groq Llama-8B) failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  // All models exhausted — throw so vision-agent's consecutiveAiErrors counter fires
-  throw new Error("ALL_BROWSER_STEP_MODELS_FAILED: Gemini/DeepSeek/OpenRouter/Groq/Haiku all unavailable or rate-limited");
+  // All models exhausted
+  throw new Error("ALL_BROWSER_STEP_MODELS_FAILED: Gemini/Haiku/Scout all unavailable or rate-limited");
 }
 
 /**
