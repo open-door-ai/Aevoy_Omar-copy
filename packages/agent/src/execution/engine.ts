@@ -204,21 +204,19 @@ export class ExecutionEngine {
         this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 10000, 'connectOverCDP');
         this.isRemoteCDP = true;
 
-        // Create an isolated context for this task (with timeout for each step)
-        const { getDeviceProfile } = await import('./stealth.js');
-        const profile = getDeviceProfile();
-
-        this.context = await cdpTimeout(this.browser.newContext({
-          viewport: profile.viewport,
-          screen: profile.screen,
-          deviceScaleFactor: profile.deviceScaleFactor,
-          userAgent: profile.userAgent,
-          locale: profile.locale,
-          timezoneId: profile.timezone,
-        }), 10000, 'newContext');
+        // Use Chrome's default context to inherit proxy settings (--proxy-server flag)
+        // newContext() is isolated and doesn't inherit Chrome-level proxy.
+        const defaultContext = this.browser.contexts()[0];
+        if (defaultContext) {
+          this.context = defaultContext;
+          const existingPages = defaultContext.pages();
+          this.page = existingPages.length > 0 ? existingPages[0] : await cdpTimeout(defaultContext.newPage(), 10000, 'cdp-newPage');
+        } else {
+          this.page = await cdpTimeout(this.browser.newPage(), 10000, 'cdp-newPage');
+          this.context = this.page.context();
+        }
 
         await applyStealthPatches(this.context);
-        this.page = await cdpTimeout(this.context.newPage(), 10000, 'newPage');
         await humanizeInteraction(this.page);
 
         // Verify page is responsive
