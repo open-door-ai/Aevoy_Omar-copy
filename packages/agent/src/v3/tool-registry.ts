@@ -42,11 +42,13 @@ export async function executeToolCall(
   }
 
   const startTime = Date.now();
+  // Browser tools need up to 15 minutes (vision agent has 13-min internal timeout)
+  const timeoutMs = tool.category === 'browser' ? 900000 : 120000;
   try {
     const result = await Promise.race([
       tool.execute(call.arguments, ctx),
       new Promise<ToolCallResult>((_, reject) =>
-        setTimeout(() => reject(new Error(`Tool ${call.name} timed out after 120s`)), 120000)
+        setTimeout(() => reject(new Error(`Tool ${call.name} timed out after ${timeoutMs / 1000}s`)), timeoutMs)
       ),
     ]);
 

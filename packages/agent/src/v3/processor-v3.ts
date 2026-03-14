@@ -34,7 +34,7 @@ import './tools/browser.js';
 // ── Constants ──
 
 const MAX_ITERATIONS = 15;
-const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const TASK_TIMEOUT_MS = 40 * 60 * 1000; // 40 minutes (browser sessions can take 13min each)
 const BUDGET_PER_TASK = 5.0;
 
 // ══════════════════════════════════════════════════════════════════
