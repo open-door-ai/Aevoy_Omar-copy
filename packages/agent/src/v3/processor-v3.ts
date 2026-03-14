@@ -70,7 +70,6 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
           input_text: task.body,
           started_at: new Date().toISOString(),
           input_channel: task.inputChannel || 'email',
-          processor_version: 'v3',
         })
         .select()
         .single();
@@ -79,7 +78,6 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       await getSupabaseClient().from('tasks').update({
         status: 'processing',
         started_at: new Date().toISOString(),
-        processor_version: 'v3',
       }).eq('id', taskId);
     }
 
