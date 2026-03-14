@@ -95,21 +95,20 @@ export class ExecutionEngine {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
 
-    // Priority: Bright Data > Remote CDP > VPS Multi-User > Local Playwright
+    // Priority: Remote CDP (VPS) > Bright Data > VPS Multi-User > Local Playwright
+    // VPS Chrome is fastest (1-3s/step). BrightData is slow (60-90s/step) but has residential IPs.
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
-    // PRIORITY 0: Bright Data Scraping Browser (real managed Chrome, bypasses DataDome/Akamai)
-    // KYC is verified — Bright Data can handle ALL task types including signup, login, forms.
-    // Uses residential proxy + real browser fingerprint = best anti-bot bypass.
-    this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    // PRIORITY 0: Remote CDP browser (connects to VPS Chrome — fastest option)
+    this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
+
+    // PRIORITY 1: Bright Data Scraping Browser (residential proxy, anti-bot bypass — slow but stealthy)
+    this.useBrightData = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_BROWSER_WS);
     if (process.env.BRIGHT_DATA_BROWSER_WS) {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
     } else {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: NOT SET');
     }
-
-    // PRIORITY 1: Remote CDP browser (connects to VPS Chrome via WebSocket)
-    this.useRemoteCDP = !forceLocal && !this.useBrightData && !!(process.env.REMOTE_BROWSER_CDP);
 
     // PRIORITY 2: VPS Multi-User Browser (shared Chrome on this process)
     this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
