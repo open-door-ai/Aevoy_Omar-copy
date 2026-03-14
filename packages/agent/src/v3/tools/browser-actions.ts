@@ -61,58 +61,94 @@ export async function cleanupTaskPage(taskId: string): Promise<void> {
   }
 }
 
-/** Get a compact accessibility snapshot of the current page */
+/**
+ * Adaptive page snapshot — DOM-first with vision hints for complex pages.
+ * ≤50 elements: full text list (fast, free)
+ * 51-150: text list + hint to use browser_screenshot()
+ * 150+: summary only + instruction to use browser_screenshot()
+ * 0: auto-take screenshot (SPA loading)
+ */
 async function getPageSnapshot(page: Page): Promise<string> {
   try {
-    const elements = await Promise.race([
+    const result = await Promise.race([
       page.evaluate(() => {
-        const items: string[] = [];
         const selectors = ['a', 'button', 'input', 'select', 'textarea',
           '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
-          '[role="tab"]', '[role="menuitem"]', '[contenteditable="true"]'];
+          '[role="tab"]', '[role="menuitem"]', '[role="combobox"]', '[contenteditable="true"]'];
         const seen = new Set<Element>();
+        const items: string[] = [];
+        let totalCount = 0;
         let ref = 1;
+
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {
-            if (seen.has(el) || items.length >= 200) return;
+            if (seen.has(el)) return;
             seen.add(el);
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
-            const tag = el.tagName.toLowerCase();
-            const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
-              tag === 'input' ? (el.getAttribute('type') || 'textbox') : tag === 'select' ? 'combobox' :
-              tag === 'textarea' ? 'textbox' : tag);
-            const name = el.getAttribute('aria-label') ||
-              el.getAttribute('placeholder') ||
-              (tag === 'a' || tag === 'button' ? (el.textContent || '').trim().substring(0, 50) : '') ||
-              el.getAttribute('name') || '';
-            const value = (el as HTMLInputElement).value || '';
-            items.push(`[${ref}] ${role} "${name}"${value ? ` value="${value}"` : ''}`);
+            totalCount++;
+            // Only collect details for first 50 elements (keeps snapshot compact)
+            if (items.length < 50) {
+              const tag = el.tagName.toLowerCase();
+              const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
+                tag === 'input' ? (el.getAttribute('type') || 'textbox') : tag === 'select' ? 'combobox' :
+                tag === 'textarea' ? 'textbox' : tag);
+              const name = el.getAttribute('aria-label') ||
+                el.getAttribute('placeholder') ||
+                (tag === 'a' || tag === 'button' ? (el.textContent || '').trim().substring(0, 50) : '') ||
+                el.getAttribute('name') || '';
+              const value = (el as HTMLInputElement).value || '';
+              items.push(`[${ref}] ${role} "${name}"${value ? ` value="${value}"` : ''}`);
+            }
             ref++;
           });
         }
-        // Also get page title and visible text summary
+
         const title = document.title;
         const h1 = document.querySelector('h1')?.textContent?.trim() || '';
         const alerts = Array.from(document.querySelectorAll('[role="alert"], .error, .alert'))
           .map(el => el.textContent?.trim()).filter(Boolean).slice(0, 3);
-        return { elements: items, title, h1, alerts, url: location.href };
+        return { elements: items, totalCount, title, h1, alerts, url: location.href };
       }),
-      new Promise<any>(r => setTimeout(() => r({ elements: [], title: '', h1: '', alerts: [], url: '' }), 5000))
+      new Promise<any>(r => setTimeout(() => r({ elements: [], totalCount: 0, title: '', h1: '', alerts: [], url: '' }), 5000))
     ]);
 
     const lines: string[] = [];
-    lines.push(`URL: ${elements.url}`);
-    if (elements.title) lines.push(`Title: ${elements.title}`);
-    if (elements.h1) lines.push(`Heading: ${elements.h1}`);
-    if (elements.alerts?.length) lines.push(`Alerts: ${elements.alerts.join('; ')}`);
+    lines.push(`URL: ${result.url}`);
+    if (result.title) lines.push(`Title: ${result.title}`);
+    if (result.h1) lines.push(`Heading: ${result.h1}`);
+    if (result.alerts?.length) lines.push(`Alerts: ${result.alerts.join('; ')}`);
+    lines.push(`Interactive elements: ${result.totalCount} found`);
     lines.push('');
-    lines.push('Interactive elements:');
-    lines.push(...elements.elements);
+
+    if (result.totalCount === 0) {
+      lines.push('No interactive elements found. The page may still be loading. Call browser_screenshot() to see what the page looks like visually.');
+    } else if (result.totalCount <= 50) {
+      // Simple page — full list
+      lines.push(...result.elements);
+    } else if (result.totalCount <= 150) {
+      // Medium page — full list + hint
+      lines.push(...result.elements);
+      lines.push(`\n... and ${result.totalCount - 50} more elements not shown.`);
+      lines.push('TIP: If you cannot find the element you need, call browser_screenshot() to see the full page visually, then use browser_click_xy(x, y) to click at specific coordinates.');
+    } else {
+      // Complex page — summary only
+      lines.push(`First 50 of ${result.totalCount} elements:`);
+      lines.push(...result.elements);
+      lines.push(`\n... ${result.totalCount - 50} more elements not shown.`);
+      lines.push('COMPLEX PAGE: This page has too many elements to list. Call browser_screenshot() to see the full page visually. Then use browser_click_xy(x, y) to click at the coordinates you see in the screenshot.');
+    }
+
     return lines.join('\n');
   } catch (err) {
     return `Error getting page snapshot: ${err instanceof Error ? err.message : 'unknown'}`;
   }
+}
+
+/** Take a PNG screenshot of the current page */
+async function takePageScreenshot(page: Page): Promise<string> {
+  const buf = await page.screenshot({ type: 'png', fullPage: false });
+  return buf.toString('base64');
 }
 
 // ── Tools ──
@@ -356,6 +392,98 @@ registerTool({
       return { success: true, data: text || 'Page has no visible text', cost: 0 };
     } catch (err) {
       return { success: false, error: `Read failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
+    }
+  },
+});
+
+// ── Vision Tools (Phase 3: Hybrid DOM+Vision) ──
+
+registerTool({
+  name: 'browser_screenshot',
+  description: 'Take a screenshot of the current page. Use this when the page has too many elements for the text snapshot (150+ elements), or when you need to see the visual layout (date pickers, time grids, calendars, maps). Returns an image you can see. After viewing, use browser_click_xy(x, y) to click at specific coordinates.',
+  category: 'browser',
+  parameters: {},
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const existing = taskPages.get(ctx.taskId);
+    if (!existing || existing.page.isClosed()) {
+      return { success: false, error: 'No browser page open.', cost: 0 };
+    }
+    try {
+      const screenshot = await takePageScreenshot(existing.page);
+      // Return special marker that processor-v3 will convert to image content
+      return {
+        success: true,
+        data: `__SCREENSHOT__${screenshot}`,
+        cost: 0,
+      };
+    } catch (err) {
+      return { success: false, error: `Screenshot failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
+    }
+  },
+});
+
+registerTool({
+  name: 'browser_click_xy',
+  description: 'Click at specific pixel coordinates on the page. Use this after browser_screenshot() when you can see where to click. Coordinates are relative to the top-left corner of the viewport (1280x720). Use human-like mouse movement.',
+  category: 'browser',
+  parameters: {
+    x: { type: 'number', description: 'X coordinate in pixels from left edge of viewport' },
+    y: { type: 'number', description: 'Y coordinate in pixels from top edge of viewport' },
+  },
+  required: ['x', 'y'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const existing = taskPages.get(ctx.taskId);
+    if (!existing || existing.page.isClosed()) {
+      return { success: false, error: 'No browser page open.', cost: 0 };
+    }
+    const x = Math.max(5, Math.min(1275, Number(params.x)));
+    const y = Math.max(5, Math.min(715, Number(params.y)));
+    try {
+      // Use ghost cursor for human-like movement if available
+      try {
+        const { createCursor } = await import('ghost-cursor-patchright-core');
+        const cursor = createCursor(existing.page);
+        await cursor.moveTo({ x, y });
+      } catch {
+        // Ghost cursor not available, use direct mouse move
+        await existing.page.mouse.move(x, y, { steps: 5 });
+      }
+      await existing.page.mouse.click(x, y);
+      await existing.page.waitForTimeout(1000);
+      const snapshot = await getPageSnapshot(existing.page);
+      return { success: true, data: `Clicked at (${x}, ${y})\n\n${snapshot}`, cost: 0 };
+    } catch (err) {
+      return { success: false, error: `Click at (${x}, ${y}) failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
+    }
+  },
+});
+
+registerTool({
+  name: 'browser_locate',
+  description: 'Find an element on the page by visual description and return its coordinates. Use when you know WHAT to click but not WHERE. Takes a screenshot and uses AI vision to find the element. Returns x, y coordinates for browser_click_xy.',
+  category: 'browser',
+  parameters: {
+    description: { type: 'string', description: 'Visual description of what to find (e.g. "7:30 PM time slot", "Add to Cart button", "search icon")' },
+  },
+  required: ['description'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const existing = taskPages.get(ctx.taskId);
+    if (!existing || existing.page.isClosed()) {
+      return { success: false, error: 'No browser page open.', cost: 0 };
+    }
+    try {
+      const { predictClickCoordinates } = await import('../../execution/vigorl.js');
+      const result = await predictClickCoordinates(existing.page, String(params.description));
+      if (result && result.x !== undefined && result.y !== undefined) {
+        return {
+          success: true,
+          data: `Found "${params.description}" at coordinates (${result.x}, ${result.y}). Confidence: ${result.confidence || 'medium'}. Use browser_click_xy(${result.x}, ${result.y}) to click it.`,
+          cost: 0.001,
+        };
+      }
+      return { success: false, error: `Could not find "${params.description}" on the page. Try browser_screenshot() to see the page and identify coordinates manually.`, cost: 0 };
+    } catch (err) {
+      return { success: false, error: `Locate failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
   },
 });

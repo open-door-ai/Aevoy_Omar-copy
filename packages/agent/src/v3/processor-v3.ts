@@ -548,14 +548,28 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
         try { await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`); } catch { /* non-critical */ }
       }
 
-      // Add tool result to conversation
-      messages.push({
-        role: 'tool',
-        content: result.success
-          ? String(result.data || 'Success')
-          : `Error: ${result.error || 'Unknown error'}`,
-        tool_call_id: assistantToolCalls[i].id,
-      });
+      // Add tool result to conversation — handle screenshots as multimodal
+      const resultData = result.success ? String(result.data || 'Success') : `Error: ${result.error || 'Unknown error'}`;
+      const isScreenshot = resultData.startsWith('__SCREENSHOT__');
+
+      if (isScreenshot) {
+        const base64 = resultData.replace('__SCREENSHOT__', '');
+        // Multimodal content: image + text instruction
+        messages.push({
+          role: 'tool',
+          content: JSON.stringify([
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${base64}` } },
+            { type: 'text', text: 'Screenshot of the current page. Identify what you see and use browser_click_xy(x, y) to click at specific pixel coordinates. The viewport is 1280x720 pixels.' }
+          ]),
+          tool_call_id: assistantToolCalls[i].id,
+        });
+      } else {
+        messages.push({
+          role: 'tool',
+          content: resultData,
+          tool_call_id: assistantToolCalls[i].id,
+        });
+      }
     }
 
     // ── Context compression after 5 iterations ──
