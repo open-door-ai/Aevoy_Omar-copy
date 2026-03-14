@@ -186,20 +186,26 @@ registerTool({
         const bodyText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
         const isProxyBlock = /can't be reached|not available|ERR_|connection refused|dns/i.test(bodyText);
         if (isProxyBlock) {
-          console.log(`[V3-BROWSER] Proxy-blocked page detected for ${url}, recreating without proxy`);
-          // Cleanup current engine and recreate with FORCE_LOCAL_BROWSER
-          await cleanupTaskPage(ctx.taskId);
-          const origFlag = process.env.FORCE_LOCAL_BROWSER;
-          process.env.FORCE_LOCAL_BROWSER = 'true';
-          try {
-            const { page: newPage } = await getOrCreatePage(ctx, url);
-            await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-            await newPage.waitForTimeout(1000);
-            const snapshot = await getPageSnapshot(newPage);
-            return { success: true, data: `(Switched to direct connection — proxy was blocked)\n\n${snapshot}`, cost: 0 };
-          } finally {
-            if (origFlag !== undefined) process.env.FORCE_LOCAL_BROWSER = origFlag;
-            else delete process.env.FORCE_LOCAL_BROWSER;
+          console.log(`[V3-BROWSER] Proxy-blocked page detected for ${url}, trying direct Chrome`);
+          // Try the non-proxy Chrome instance on VPS (port 9225)
+          const directCdp = process.env.REMOTE_BROWSER_CDP_DIRECT || process.env.REMOTE_BROWSER_CDP?.replace(':9223', ':9225');
+          if (directCdp) {
+            await cleanupTaskPage(ctx.taskId);
+            // Temporarily swap CDP endpoint to the direct (non-proxy) Chrome
+            const origCdp = process.env.REMOTE_BROWSER_CDP;
+            process.env.REMOTE_BROWSER_CDP = directCdp;
+            try {
+              const { page: newPage } = await getOrCreatePage(ctx, url);
+              await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+              await newPage.waitForTimeout(1000);
+              const snapshot = await getPageSnapshot(newPage);
+              return { success: true, data: `(Switched to direct connection — proxy was blocked)\n\n${snapshot}`, cost: 0 };
+            } catch (directErr) {
+              console.warn(`[V3-BROWSER] Direct Chrome also failed for ${url}:`, directErr);
+              // Restore original CDP and report failure
+              process.env.REMOTE_BROWSER_CDP = origCdp!;
+              return { success: false, error: `Site unreachable via both proxy and direct: ${url}`, cost: 0 };
+            }
           }
         }
       }
