@@ -48,6 +48,9 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
   const page = engine.getPage();
   if (!page) throw new Error('Failed to create browser page');
 
+  // Force consistent viewport so vision coordinates match click coordinates
+  try { await page.setViewportSize({ width: 1280, height: 720 }); } catch { /* ignore */ }
+
   taskPages.set(ctx.taskId, { page, engine });
   return { page, isNew: true };
 }
@@ -409,19 +412,34 @@ registerTool({
       return { success: false, error: 'No browser page open.', cost: 0 };
     }
     try {
+      // Get actual viewport size for accurate coordinate mapping
+      const vpSize = existing.page.viewportSize() || { width: 1280, height: 720 };
       const screenshot = await takePageScreenshot(existing.page);
+      let url = 'unknown';
+      try { url = existing.page.url(); } catch { /* ignore */ }
       // Use Gemini Vision to describe the page
       const { generateVisionResponse } = await import('../../services/ai.js');
       const visionResult = await generateVisionResponse(
-        'Describe this webpage screenshot in detail. List ALL visible interactive elements (buttons, links, inputs, dropdowns, time slots, date pickers) with their approximate pixel coordinates (x, y) from the top-left corner. Format each element as: "- [element description] at approximately (x, y)". The viewport is 1280x720 pixels.',
+        `Analyze this screenshot of ${url}. The viewport is exactly ${vpSize.width}x${vpSize.height} pixels.
+
+List ALL visible interactive elements in this exact format (one per line):
+ELEMENT: [description] | TYPE: [button/link/input/dropdown/tab/time-slot/date/checkbox] | COORDS: (x, y)
+
+Where (x, y) is the CENTER of the element in pixels from top-left.
+Be precise — a few pixels off means clicking the wrong element.
+
+Also describe:
+- PAGE LAYOUT: What is the page structure (header, sidebar, main content)?
+- CURRENT STATE: What is selected/active (e.g., "2 guests selected", "March 15 selected")?
+- KEY ACTION NEEDED: What should be clicked next to progress?`,
         screenshot,
-        'You are a precise UI element identifier. List every clickable element with its approximate position.',
+        'You are a precise UI element coordinate mapper. Your coordinates must be accurate to within 10 pixels. When listing elements, focus on interactive ones that can be clicked.',
         ctx.userId,
         ctx.taskId
       );
       return {
         success: true,
-        data: `Visual description of the page:\n${visionResult.content}\n\nUse browser_click_xy(x, y) to click at the coordinates listed above.`,
+        data: `Page: ${url} (${vpSize.width}x${vpSize.height})\n\n${visionResult.content}\n\nUse browser_click_xy(x, y) to click at the coordinates listed above.`,
         cost: visionResult.cost,
       };
     } catch (err) {
@@ -432,7 +450,7 @@ registerTool({
 
 registerTool({
   name: 'browser_click_xy',
-  description: 'Click at specific pixel coordinates on the page. Use this after browser_screenshot() when you can see where to click. Coordinates are relative to the top-left corner of the viewport (1280x720). Use human-like mouse movement.',
+  description: 'Click at specific pixel coordinates on the page. Use this after browser_screenshot() when you can see where to click. Coordinates are relative to the top-left corner of the viewport. Use human-like mouse movement.',
   category: 'browser',
   parameters: {
     x: { type: 'number', description: 'X coordinate in pixels from left edge of viewport' },
@@ -444,8 +462,9 @@ registerTool({
     if (!existing || existing.page.isClosed()) {
       return { success: false, error: 'No browser page open.', cost: 0 };
     }
-    const x = Math.max(5, Math.min(1275, Number(params.x)));
-    const y = Math.max(5, Math.min(715, Number(params.y)));
+    const vpSize = existing.page.viewportSize() || { width: 1280, height: 720 };
+    const x = Math.max(5, Math.min(vpSize.width - 5, Number(params.x)));
+    const y = Math.max(5, Math.min(vpSize.height - 5, Number(params.y)));
     try {
       // Use ghost cursor for human-like movement if available
       try {
@@ -493,5 +512,91 @@ registerTool({
     } catch (err) {
       return { success: false, error: `Locate failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
+  },
+});
+
+registerTool({
+  name: 'browser_select',
+  description: 'Select an option from a <select> dropdown by its ref number. Use when the snapshot shows a "combobox" element.',
+  category: 'browser',
+  parameters: {
+    ref: { type: 'number', description: 'The [ref] number of the select/combobox element' },
+    value: { type: 'string', description: 'The value or visible text of the option to select' },
+  },
+  required: ['ref', 'value'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const existing = taskPages.get(ctx.taskId);
+    if (!existing || existing.page.isClosed()) {
+      return { success: false, error: 'No browser page open.', cost: 0 };
+    }
+    const ref = Number(params.ref);
+    const value = String(params.value);
+    try {
+      const result = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
+        const selectors = ['a', 'button', 'input', 'select', 'textarea',
+          '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
+          '[role="tab"]', '[role="menuitem"]', '[role="combobox"]', '[contenteditable="true"]'];
+        const seen = new Set<Element>();
+        let currentRef = 1;
+        let result = { selected: false, options: [] as string[] };
+        for (const sel of selectors) {
+          document.querySelectorAll(sel).forEach(el => {
+            if (seen.has(el)) return;
+            seen.add(el);
+            const rect = el.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+            if (currentRef === args.targetRef) {
+              const select = el as HTMLSelectElement;
+              if (select.tagName === 'SELECT') {
+                // Try by value first, then by text
+                const options = Array.from(select.options);
+                result.options = options.map(o => `"${o.text}" (value="${o.value}")`);
+                const byValue = options.find(o => o.value === args.value);
+                const byText = options.find(o => o.text.toLowerCase().includes(args.value.toLowerCase()));
+                const match = byValue || byText;
+                if (match) {
+                  select.value = match.value;
+                  select.dispatchEvent(new Event('change', { bubbles: true }));
+                  result.selected = true;
+                }
+              }
+            }
+            currentRef++;
+          });
+        }
+        return result;
+      }, { targetRef: ref, value });
+
+      if (!result.selected) {
+        return {
+          success: false,
+          error: `Could not select "${value}" in dropdown [${ref}]. Available options: ${result.options.join(', ')}`,
+          cost: 0,
+        };
+      }
+      return { success: true, data: `Selected "${value}" in dropdown [${ref}]`, cost: 0 };
+    } catch (err) {
+      return { success: false, error: `Select failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
+    }
+  },
+});
+
+registerTool({
+  name: 'browser_wait',
+  description: 'Wait for a specified number of seconds. Use when a page is loading or after a click triggers a navigation.',
+  category: 'browser',
+  parameters: {
+    seconds: { type: 'number', description: 'Number of seconds to wait (1-10)' },
+  },
+  required: ['seconds'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const existing = taskPages.get(ctx.taskId);
+    if (!existing) {
+      return { success: false, error: 'No browser page open.', cost: 0 };
+    }
+    const seconds = Math.max(1, Math.min(10, Number(params.seconds) || 2));
+    await existing.page.waitForTimeout(seconds * 1000);
+    const snapshot = await getPageSnapshot(existing.page);
+    return { success: true, data: `Waited ${seconds}s\n\n${snapshot}`, cost: 0 };
   },
 });

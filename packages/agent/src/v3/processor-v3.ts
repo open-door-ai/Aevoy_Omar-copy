@@ -435,6 +435,12 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   // ── Task ledger ──
   const ledger = new TaskLedger(ctx.taskId, { maxIterations: MAX_ITERATIONS, timeoutMs: TASK_TIMEOUT_MS });
 
+  // ── Stall detection state ──
+  let lastUrl = '';
+  let sameUrlCount = 0;
+  let lastScreenshotToolCount = 0;
+  const progressNotes: string[] = []; // Running log of what was accomplished
+
   // ── Multi-step loop ──
   let iterations = 0;
 
@@ -549,18 +555,62 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
       }
 
       // Add tool result to conversation
+      const resultContent = result.success
+        ? String(result.data || 'Success')
+        : `Error: ${result.error || 'Unknown error'}`;
       messages.push({
         role: 'tool',
-        content: result.success
-          ? String(result.data || 'Success')
-          : `Error: ${result.error || 'Unknown error'}`,
+        content: resultContent,
         tool_call_id: assistantToolCalls[i].id,
       });
+
+      // ── Stall detection: track URLs from browser tool results ──
+      if (tc.name === 'browser_go' || tc.name === 'browser_snapshot' || tc.name === 'browser_click' || tc.name === 'browser_click_xy') {
+        const urlMatch = resultContent.match(/URL:\s*(\S+)/);
+        if (urlMatch) {
+          const currentUrl = urlMatch[1];
+          if (currentUrl === lastUrl) {
+            sameUrlCount++;
+          } else {
+            // URL changed — record progress
+            if (lastUrl) progressNotes.push(`Navigated: ${lastUrl} → ${currentUrl}`);
+            lastUrl = currentUrl;
+            sameUrlCount = 0;
+          }
+        }
+      }
+
+      // Track screenshot usage
+      if (tc.name === 'browser_screenshot') lastScreenshotToolCount++;
+
+      // Track meaningful actions for progress log
+      if (tc.name === 'browser_fill' && result.success) {
+        progressNotes.push(`Filled: ${JSON.stringify(tc.arguments).substring(0, 80)}`);
+      }
+      if (tc.name === 'browser_click' && result.success) {
+        const clickText = resultContent.match(/Clicked \[.*?\] \(.*?"(.*?)"\)/)?.[1] || '';
+        if (clickText) progressNotes.push(`Clicked: "${clickText}"`);
+      }
     }
 
-    // ── Context compression after 5 iterations ──
-    if (iterations % 5 === 0 && messages.length > 10) {
-      const compressed = compressMessages(messages);
+    // ── Stall detection: inject course correction ──
+    if (sameUrlCount >= 8 && iterations > 15) {
+      console.log(`[V3] Stall detected at iteration ${iterations}: same URL for ${sameUrlCount} rounds`);
+      messages.push({
+        role: 'user',
+        content: `STALL DETECTED: You've been on the same page for ${sameUrlCount} rounds without progress. Your clicks may not be landing on the right elements. Try:
+1. Call browser_screenshot() to see the page fresh
+2. Look for a DIFFERENT approach — maybe scroll down, try a different section
+3. If clicking coordinates isn't working, try browser_snapshot() + browser_click(ref) with DOM ref numbers
+4. If the page is truly stuck, navigate to a different URL
+DO NOT repeat the same clicks.`
+      });
+      sameUrlCount = 0; // Reset to avoid spam
+    }
+
+    // ── Context compression every 8 iterations ──
+    if (iterations % 8 === 0 && messages.length > 15) {
+      const compressed = compressMessagesV2(messages, progressNotes);
       messages.length = 0;
       messages.push(...compressed);
     }
@@ -587,34 +637,54 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
 // ══════════════════════════════════════════════════════════════════
 
 /**
- * Compress message history to prevent context overflow.
- * Keeps system prompt, first user message, and last 3 exchanges.
+ * V2 context compression — preserves progress awareness.
+ *
+ * Strategy:
+ * 1. Keep system prompt + original task
+ * 2. Build a progress summary from progressNotes (what was accomplished)
+ * 3. Keep the last 8 messages (4 exchanges) — these must be structurally valid
+ *    (assistant with tool_calls must be followed by matching tool results)
+ * 4. Total context stays manageable even at 100+ iterations
  */
-function compressMessages(messages: Array<{ role: string; content: string; [key: string]: any }>): Array<any> {
-  if (messages.length <= 8) return messages;
+function compressMessagesV2(
+  messages: Array<{ role: string; content: string; [key: string]: any }>,
+  progressNotes: string[]
+): Array<any> {
+  if (messages.length <= 12) return messages;
 
-  const system = messages.find(m => m.role === 'system');
-  const firstUser = messages.find(m => m.role === 'user');
-  const recent = messages.slice(-6); // Last 3 exchanges (assistant+tool pairs)
+  const system = messages[0]; // System prompt is always first
+  const firstUser = messages.find(m => m.role === 'user' && !m.content?.startsWith('['));
 
-  // Summarize middle messages
-  const middle = messages.slice(
-    messages.indexOf(firstUser!) + 1,
-    messages.length - 6
-  );
+  // Find a clean cut point for recent messages — must start with assistant or user, not tool
+  let recentStart = messages.length - 10;
+  while (recentStart > 2 && messages[recentStart]?.role === 'tool') {
+    recentStart--; // Back up to include the assistant message with tool_calls
+  }
+  const recent = messages.slice(recentStart);
 
-  const middleSummary = middle
-    .filter(m => m.role === 'tool')
-    .map(m => m.content?.substring(0, 100) || '')
-    .filter(Boolean)
-    .join(' | ');
+  // Build progress summary
+  const progressSummary = progressNotes.length > 0
+    ? `PROGRESS SO FAR:\n${progressNotes.slice(-15).map((n, i) => `${i + 1}. ${n}`).join('\n')}`
+    : '';
+
+  // Extract the last URL seen for context
+  let lastSeenUrl = '';
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const urlMatch = messages[i].content?.match(/URL:\s*(\S+)/);
+    if (urlMatch) { lastSeenUrl = urlMatch[1]; break; }
+  }
 
   const result: any[] = [];
-  if (system) result.push(system);
+  result.push(system);
   if (firstUser) result.push(firstUser);
-  if (middleSummary) {
-    result.push({ role: 'user', content: `[Previous tool results summary: ${middleSummary}]` });
-  }
+
+  // Insert progress context
+  const contextParts: string[] = [];
+  if (progressSummary) contextParts.push(progressSummary);
+  if (lastSeenUrl) contextParts.push(`CURRENT PAGE: ${lastSeenUrl}`);
+  contextParts.push(`Iterations completed: ${messages.filter(m => m.role === 'assistant').length}. Continue working on the task.`);
+
+  result.push({ role: 'user', content: contextParts.join('\n\n') });
   result.push(...recent);
 
   return result;
