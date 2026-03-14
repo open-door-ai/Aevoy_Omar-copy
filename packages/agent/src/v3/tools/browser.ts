@@ -107,11 +107,13 @@ async function buildVisionTask(
   return { visionTask, phoneNumber: phone };
 }
 
+import crypto from 'crypto';
+
 function generateFallbackPassword(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
   const special = '!@#$%&';
   let pw = '';
-  const bytes = require('crypto').randomBytes(14);
+  const bytes = crypto.randomBytes(14);
   for (let i = 0; i < 12; i++) pw += chars[bytes[i] % chars.length];
   pw += special[bytes[12] % special.length];
   pw += String(bytes[13] % 10);
