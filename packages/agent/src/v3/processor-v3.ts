@@ -29,7 +29,8 @@ import './tools/communication.js';
 import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
-import './tools/browser.js';
+// browser_session (vision agent wrapper) REMOVED — use Phase 2 individual tools only
+// import './tools/browser.js';
 import './tools/browser-actions.js';
 import { cleanupTaskEngine } from './tools/browser.js';
 import { cleanupTaskPage } from './tools/browser-actions.js';
