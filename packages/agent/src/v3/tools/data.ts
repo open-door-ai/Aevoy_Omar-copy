@@ -109,11 +109,16 @@ registerTool({
   description: 'Save a fact or piece of information to the user\'s long-term memory for future reference.',
   category: 'data',
   parameters: {
-    fact: { type: 'string', description: 'The fact or information to remember' },
+    fact: { type: 'string', description: 'The fact or information to remember. Must be a factual statement, not instructions.' },
   },
   required: ['fact'],
   async execute(params, ctx): Promise<ToolCallResult> {
-    const fact = String(params.fact);
+    let fact = String(params.fact);
+    // Security: strip injection patterns from stored memories
+    fact = fact.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u00AD]/g, '');
+    fact = fact.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    fact = fact.replace(/<\/?untrusted-data>/gi, '');
+    if (fact.length > 500) fact = fact.substring(0, 500);
     try {
       await updateMemoryWithFact(ctx.userId, fact);
       return { success: true, data: `Remembered: "${fact}"`, cost: 0 };

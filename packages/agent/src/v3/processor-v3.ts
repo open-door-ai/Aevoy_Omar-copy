@@ -112,6 +112,9 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       response = `${task.responsePrefix}\n\n${response}`;
     }
 
+    // ── Security: strip any leaked credentials from response ──
+    response = stripCredentialLeaks(response);
+
     // ── Complete task ──
     const executionTime = Date.now() - startTime;
     await atomicCompleteTask(
@@ -587,4 +590,21 @@ function compressMessages(messages: Array<{ role: string; content: string; [key:
   result.push(...recent);
 
   return result;
+}
+
+/**
+ * Strip any leaked credential references from response text.
+ * Prevents [CRED_EMAIL], [CRED_PASS], etc. from reaching the user.
+ * Also strips common patterns of exposed secrets.
+ */
+function stripCredentialLeaks(text: string): string {
+  let clean = text;
+  // Strip credential reference tokens
+  clean = clean.replace(/\[CRED_\w+\]/gi, '[redacted]');
+  // Strip anything that looks like an exposed API key or secret
+  clean = clean.replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[redacted-key]');
+  clean = clean.replace(/\b(Bearer\s+[a-zA-Z0-9._-]{20,})\b/g, 'Bearer [redacted]');
+  // Strip password= patterns that might leak
+  clean = clean.replace(/password\s*[=:]\s*\S+/gi, 'password=[redacted]');
+  return clean;
 }
