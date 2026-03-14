@@ -29,7 +29,8 @@ import './tools/communication.js';
 import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
-import './tools/browser.js';
+// browser.ts (browser_session) DISABLED — forces AI to use individual browser tools
+// import './tools/browser.js';
 import './tools/browser-actions.js';
 import { cleanupTaskEngine } from './tools/browser.js';
 import { cleanupTaskPage } from './tools/browser-actions.js';
