@@ -32,13 +32,9 @@ import './tools/system.js';
 // Phase 2: Individual browser tools ONLY — no vision agent wrapper
 // browser_session removed to force direct browser control (browser_go, browser_click, browser_fill)
 import './tools/browser-actions.js';
-// cleanupTaskEngine from browser.ts — still imported for cleanup even though browser_session is disabled
-const cleanupTaskEngine = async (taskId: string) => {
-  try {
-    const mod = await import('./tools/browser.js');
-    await mod.cleanupTaskEngine(taskId);
-  } catch { /* browser.ts not critical for cleanup */ }
-};
+// Cleanup is handled by cleanupTaskPage from browser-actions.ts
+// No need for cleanupTaskEngine since browser_session is disabled
+const cleanupTaskEngine = async (_taskId: string) => { /* no-op */ };
 import { cleanupTaskPage } from './tools/browser-actions.js';
 
 // ── Constants ──

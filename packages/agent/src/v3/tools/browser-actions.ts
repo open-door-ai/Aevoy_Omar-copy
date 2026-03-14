@@ -30,6 +30,14 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
     taskPages.delete(ctx.taskId);
   }
 
+  // Clean up ALL other task pages first — only one browser session at a time on VPS
+  for (const [oldTaskId, entry] of taskPages) {
+    if (oldTaskId !== ctx.taskId) {
+      try { await entry.engine.cleanup(); } catch {}
+      taskPages.delete(oldTaskId);
+    }
+  }
+
   // Create new engine + page
   const domain = url ? (() => { try { return new URL(url).hostname; } catch { return 'unknown'; } })() : 'unknown';
   const lockedIntent = createLockedIntent({
