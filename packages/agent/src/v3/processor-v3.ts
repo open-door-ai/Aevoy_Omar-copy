@@ -449,12 +449,8 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         : 'I ran out of time working on your task. Could you try a simpler version of the request?';
     }
 
-    if (budget.isExceeded()) {
-      const partial = ledger.getPartialResults();
-      return partial !== 'No results gathered yet.'
-        ? `Budget limit reached. Here's what I accomplished:\n\n${partial}`
-        : 'Budget limit reached before I could complete the task.';
-    }
+    // No hard budget ceiling — the AI should be efficient but never stop mid-task due to cost.
+    // Cost is tracked for billing but doesn't terminate tasks.
 
     // ── Call AI model with tools ──
     let modelResponse;
