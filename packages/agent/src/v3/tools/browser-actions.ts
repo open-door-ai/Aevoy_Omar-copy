@@ -17,6 +17,16 @@ import { getSupabaseClient } from '../../utils/supabase.js';
 import type { ToolCallResult, TaskContext } from '../types.js';
 import type { Page } from 'patchright';
 
+// ── Shared selector list for consistent ref numbering across snapshot/click/fill ──
+const INTERACTIVE_SELECTORS = [
+  'a', 'button', 'input', 'select', 'textarea',
+  '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
+  '[role="tab"]', '[role="menuitem"]', '[role="combobox"]', '[role="option"]',
+  '[role="listbox"]', '[role="radio"]', '[role="switch"]', '[role="slider"]',
+  '[contenteditable="true"]', '[tabindex]', '[onclick]',
+  'li[class*="option"]', 'div[class*="option"]', 'span[class*="option"]',
+];
+
 // ── Per-task page cache (shared with browser.ts via engine cache) ──
 const taskPages = new Map<string, { page: Page; engine: ExecutionEngine }>();
 
@@ -74,14 +84,12 @@ export async function cleanupTaskPage(taskId: string): Promise<void> {
 async function getPageSnapshot(page: Page): Promise<string> {
   try {
     const result = await Promise.race([
-      page.evaluate(() => {
-        const selectors = ['a', 'button', 'input', 'select', 'textarea',
-          '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
-          '[role="tab"]', '[role="menuitem"]', '[role="combobox"]', '[contenteditable="true"]'];
+      page.evaluate((selectors: string[]) => {
         const seen = new Set<Element>();
         const items: string[] = [];
         let totalCount = 0;
         let ref = 1;
+        const MAX_DISPLAY = 80; // Show up to 80 elements (was 50)
 
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {
@@ -89,16 +97,17 @@ async function getPageSnapshot(page: Page): Promise<string> {
             seen.add(el);
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
+            // Skip elements fully outside viewport (scrolled away)
+            if (rect.bottom < 0 || rect.top > window.innerHeight) return;
             totalCount++;
-            // Only collect details for first 50 elements (keeps snapshot compact)
-            if (items.length < 50) {
+            if (items.length < MAX_DISPLAY) {
               const tag = el.tagName.toLowerCase();
               const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
                 tag === 'input' ? (el.getAttribute('type') || 'textbox') : tag === 'select' ? 'combobox' :
                 tag === 'textarea' ? 'textbox' : tag);
               const name = el.getAttribute('aria-label') ||
                 el.getAttribute('placeholder') ||
-                (tag === 'a' || tag === 'button' ? (el.textContent || '').trim().substring(0, 50) : '') ||
+                (el.textContent || '').trim().substring(0, 60) ||
                 el.getAttribute('name') || '';
               const value = (el as HTMLInputElement).value || '';
               items.push(`[${ref}] ${role} "${name}"${value ? ` value="${value}"` : ''}`);
@@ -112,7 +121,7 @@ async function getPageSnapshot(page: Page): Promise<string> {
         const alerts = Array.from(document.querySelectorAll('[role="alert"], .error, .alert'))
           .map(el => el.textContent?.trim()).filter(Boolean).slice(0, 3);
         return { elements: items, totalCount, title, h1, alerts, url: location.href };
-      }),
+      }, INTERACTIVE_SELECTORS),
       new Promise<any>(r => setTimeout(() => r({ elements: [], totalCount: 0, title: '', h1: '', alerts: [], url: '' }), 5000))
     ]);
 
@@ -125,21 +134,18 @@ async function getPageSnapshot(page: Page): Promise<string> {
     lines.push('');
 
     if (result.totalCount === 0) {
-      lines.push('No interactive elements found. The page may still be loading. Call browser_screenshot() to see what the page looks like visually.');
-    } else if (result.totalCount <= 50) {
-      // Simple page — full list
+      lines.push('No interactive elements found. The page may still be loading. Try browser_wait(3) then browser_snapshot() again.');
+    } else if (result.totalCount <= 80) {
+      // Simple/medium page — full list
       lines.push(...result.elements);
-    } else if (result.totalCount <= 150) {
-      // Medium page — full list + hint
-      lines.push(...result.elements);
-      lines.push(`\n... and ${result.totalCount - 50} more elements not shown.`);
-      lines.push('TIP: If you cannot find the element you need, call browser_screenshot() to see the full page visually, then use browser_click_xy(x, y) to click at specific coordinates.');
     } else {
-      // Complex page — summary only
-      lines.push(`First 50 of ${result.totalCount} elements:`);
+      // Complex page — show what we have + overflow notice
+      const shown = result.elements.length;
+      lines.push(`Showing ${shown} of ${result.totalCount} visible elements:`);
       lines.push(...result.elements);
-      lines.push(`\n... ${result.totalCount - 50} more elements not shown.`);
-      lines.push('COMPLEX PAGE: This page has too many elements to list. Call browser_screenshot() to see the full page visually. Then use browser_click_xy(x, y) to click at the coordinates you see in the screenshot.');
+      if (result.totalCount > shown) {
+        lines.push(`\n... ${result.totalCount - shown} more elements not shown. Try scrolling to see more, or use browser_screenshot() for a visual overview.`);
+      }
     }
 
     return lines.join('\n');
@@ -216,10 +222,8 @@ registerTool({
     const ref = Number(params.ref);
     try {
       // Find the element by re-querying the DOM with the same selector logic
-      const clicked = await existing.page.evaluate((targetRef: number) => {
-        const selectors = ['a', 'button', 'input', 'select', 'textarea',
-          '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
-          '[role="tab"]', '[role="menuitem"]', '[contenteditable="true"]'];
+      const clicked = await existing.page.evaluate((args: { targetRef: number; selectors: string[] }) => {
+        const { targetRef, selectors } = args;
         const seen = new Set<Element>();
         let currentRef = 1;
         let result = { clicked: false, tag: '', text: '' };
@@ -237,7 +241,7 @@ registerTool({
           });
         }
         return result;
-      }, ref);
+      }, { targetRef: ref, selectors: INTERACTIVE_SELECTORS });
 
       if (!clicked.clicked) {
         return { success: false, error: `Element [${ref}] not found on page`, cost: 0 };
@@ -269,10 +273,8 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      const filled = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
-        const selectors = ['a', 'button', 'input', 'select', 'textarea',
-          '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
-          '[role="tab"]', '[role="menuitem"]', '[contenteditable="true"]'];
+      const filled = await existing.page.evaluate((args: { targetRef: number; value: string; selectors: string[] }) => {
+        const selectors = args.selectors;
         const seen = new Set<Element>();
         let currentRef = 1;
         let result = { filled: false, tag: '', name: '' };
@@ -294,7 +296,7 @@ registerTool({
           });
         }
         return result;
-      }, { targetRef: ref, value });
+      }, { targetRef: ref, value, selectors: INTERACTIVE_SELECTORS });
 
       if (!filled.filled) {
         return { success: false, error: `Input [${ref}] not found on page`, cost: 0 };
@@ -532,10 +534,8 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      const result = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
-        const selectors = ['a', 'button', 'input', 'select', 'textarea',
-          '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
-          '[role="tab"]', '[role="menuitem"]', '[role="combobox"]', '[contenteditable="true"]'];
+      const result = await existing.page.evaluate((args: { targetRef: number; value: string; selectors: string[] }) => {
+        const selectors = args.selectors;
         const seen = new Set<Element>();
         let currentRef = 1;
         let result = { selected: false, options: [] as string[] };
@@ -565,7 +565,7 @@ registerTool({
           });
         }
         return result;
-      }, { targetRef: ref, value });
+      }, { targetRef: ref, value, selectors: INTERACTIVE_SELECTORS });
 
       if (!result.selected) {
         return {
