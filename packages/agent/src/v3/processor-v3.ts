@@ -232,7 +232,7 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     const classifyPrompt = `Classify this task into exactly one category. Respond with ONLY the category name, nothing else.
 
 Categories:
-- instant: Simple greeting, small talk, or conversational response
+- instant: Simple greeting, small talk, conversational response, OR factual/knowledge questions the AI can answer from memory (e.g. "what is the capital of X", "explain Y", "how does Z work", math, translations, definitions, general knowledge)
 - weather: Weather check for a location
 - send_email: Send an email to someone
 - send_sms: Send a text/SMS message
@@ -240,8 +240,10 @@ Categories:
 - generate_image: Create/generate an image
 - create_document: Create a document (Word/Excel/PowerPoint/PDF)
 - make_call: Place a voice call
-- browser: Any task requiring a web browser (search, sign up, book, buy, research, cancel subscription, fill forms)
-- multi_step: Complex task needing multiple actions
+- browser: Task requiring a REAL web browser to interact with a specific website (sign up, book, buy, add to cart, cancel subscription, fill forms, scrape live data from a site)
+- multi_step: Complex task needing multiple different actions in sequence
+
+IMPORTANT: Only use "browser" when the task REQUIRES visiting a website to take action or get LIVE/current data. General knowledge questions should be "instant".
 
 Task: "${taskText.substring(0, 300)}"
 
