@@ -708,11 +708,14 @@ function compressMessagesV2(
   result.push(system);
   if (firstUser) result.push(firstUser);
 
-  // Insert progress context
+  // Insert progress context — CRITICAL: tell AI where it is and what it already did
   const contextParts: string[] = [];
   if (progressSummary) contextParts.push(progressSummary);
-  if (lastSeenUrl) contextParts.push(`CURRENT PAGE: ${lastSeenUrl}`);
-  contextParts.push(`Iterations completed: ${messages.filter(m => m.role === 'assistant').length}. Continue working on the task.`);
+  if (lastSeenUrl) {
+    contextParts.push(`CURRENT BROWSER PAGE: ${lastSeenUrl}`);
+    contextParts.push(`IMPORTANT: You are ALREADY on this page. Do NOT navigate back to earlier pages. Continue from where you are.`);
+  }
+  contextParts.push(`Iterations used: ${messages.filter(m => m.role === 'assistant').length}. Continue working — do not restart.`);
 
   result.push({ role: 'user', content: contextParts.join('\n\n') });
   result.push(...recent);

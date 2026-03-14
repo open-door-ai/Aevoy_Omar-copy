@@ -97,8 +97,6 @@ async function getPageSnapshot(page: Page): Promise<string> {
             seen.add(el);
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
-            // Skip elements fully outside viewport (scrolled away)
-            if (rect.bottom < 0 || rect.top > window.innerHeight) return;
             totalCount++;
             if (items.length < MAX_DISPLAY) {
               const tag = el.tagName.toLowerCase();
