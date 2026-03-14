@@ -43,7 +43,7 @@ import { cleanupTaskPage } from './tools/browser-actions.js';
 
 // ── Constants ──
 
-const MAX_ITERATIONS = 15;
+const MAX_ITERATIONS = 30; // SauceDemo checkout needs ~20 individual tool calls
 const TASK_TIMEOUT_MS = 40 * 60 * 1000; // 40 minutes (browser sessions can take 13min each)
 const BUDGET_PER_TASK = 5.0;
 
