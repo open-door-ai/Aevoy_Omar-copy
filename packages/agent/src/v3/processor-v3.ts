@@ -30,7 +30,9 @@ import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
 import './tools/browser.js';
+import './tools/browser-actions.js';
 import { cleanupTaskEngine } from './tools/browser.js';
+import { cleanupTaskPage } from './tools/browser-actions.js';
 
 // ── Constants ──
 
@@ -136,6 +138,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
 
     // ── Cleanup browser engine ──
     await cleanupTaskEngine(taskId);
+    await cleanupTaskPage(taskId);
 
     // ── Update usage counter ──
     try { await getSupabaseClient().rpc('increment_messages_used', { p_user_id: task.userId }); } catch { /* non-critical */ }
@@ -156,7 +159,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     console.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
 
     // Cleanup browser engine on error
-    if (taskId) await cleanupTaskEngine(taskId);
+    if (taskId) { await cleanupTaskEngine(taskId); await cleanupTaskPage(taskId); }
 
     // Update task as failed
     if (taskId) {
