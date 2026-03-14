@@ -208,11 +208,6 @@ export class ExecutionEngine {
         const { getDeviceProfile } = await import('./stealth.js');
         const profile = getDeviceProfile();
 
-        // BrightData residential proxy — route through residential IPs for anti-bot bypass
-        const proxyUser = process.env.BRIGHTDATA_PROXY_USER;
-        const proxyPass = process.env.BRIGHTDATA_PROXY_PASS;
-        const useResidentialProxy = proxyUser && proxyPass;
-
         this.context = await cdpTimeout(this.browser.newContext({
           viewport: profile.viewport,
           screen: profile.screen,
@@ -220,13 +215,6 @@ export class ExecutionEngine {
           userAgent: profile.userAgent,
           locale: profile.locale,
           timezoneId: profile.timezone,
-          ...(useResidentialProxy ? {
-            proxy: {
-              server: 'http://brd.superproxy.io:33335',
-              username: proxyUser,
-              password: proxyPass,
-            }
-          } : {}),
         }), 10000, 'newContext');
 
         await applyStealthPatches(this.context);
