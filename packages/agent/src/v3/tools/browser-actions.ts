@@ -186,14 +186,15 @@ registerTool({
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
       await page.waitForTimeout(1000);
 
-      // Detect proxy-blocked pages (BrightData blocks some sites like Spotify)
+      // Detect proxy-blocked pages — BrightData blocks many sites
+      // Check for: chrome errors, blank pages, proxy error pages, residential blocks
       const currentUrl = page.url();
+      const bodyText = await page.evaluate(() => (document.body?.innerText || '').substring(0, 500)).catch(() => '');
       const isErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl === 'about:blank';
-      if (isErrorPage) {
-        // Check if page shows error text
-        const bodyText = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
-        const isProxyBlock = /can't be reached|not available|ERR_|connection refused|dns/i.test(bodyText);
-        if (isProxyBlock) {
+      const isProxyBlock = isErrorPage
+        || /can't be reached|not available|ERR_|connection refused|dns|access denied|blocked|residential/i.test(bodyText)
+        || (bodyText.length < 50 && !currentUrl.includes(new URL(url).hostname)); // Page loaded but wrong domain
+      if (isProxyBlock) {
           console.log(`[V3-BROWSER] Proxy-blocked page detected for ${url}, trying direct Chrome`);
           // Try the non-proxy Chrome instance on VPS (port 9225)
           const directCdp = process.env.REMOTE_BROWSER_CDP_DIRECT || process.env.REMOTE_BROWSER_CDP?.replace(':9223', ':9225');
@@ -213,7 +214,6 @@ registerTool({
               return { success: false, error: `Site unreachable via both proxy and direct: ${url}`, cost: 0 };
             }
           }
-        }
       }
 
       const snapshot = await getPageSnapshot(page);
