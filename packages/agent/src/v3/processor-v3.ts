@@ -480,6 +480,25 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     if (modelResponse.toolCalls.length === 0) {
       const response = modelResponse.content.trim();
       if (response) {
+        // GIVE-UP DETECTION: reject surrender responses and force the AI to keep trying
+        const isGiveUp = /\b(can't complete|cannot complete|unable to|couldn't|can't access|I can't|I cannot|not able to|having trouble|privacy error|blocked|out of stock.*I'll|let you know if|I'll try.*later)\b/i.test(response);
+        const giveUpCount = messages.filter(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('DO NOT GIVE UP')).length;
+
+        if (isGiveUp && giveUpCount < 3 && iterations < 50) {
+          console.log(`[V3] Rejected give-up response (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
+          messages.push({ role: 'assistant', content: response });
+          messages.push({
+            role: 'user',
+            content: `DO NOT GIVE UP. You said "${response.substring(0, 100)}" — that is NOT acceptable. You MUST find another way:
+1. If a product is out of stock, find a similar in-stock product on the same site
+2. If a site blocks you, try a competing site (e.g., Best Buy instead of Amazon)
+3. If a search fails, try a different search query
+4. If a page won't load, try Google search for the same info
+NEVER return without a concrete result. Keep trying with browser_go and other tools.`
+          });
+          continue;
+        }
+
         ledger.complete(response);
         return response;
       }
