@@ -206,11 +206,12 @@ export class ExecutionEngine {
 
         // Use Chrome's default context to inherit proxy settings (--proxy-server flag)
         // newContext() is isolated and doesn't inherit Chrome-level proxy.
+        // CRITICAL: Always create a NEW page — never reuse existing pages.
+        // Multiple tasks connect to the same Chrome; reusing pages causes cross-task interference.
         const defaultContext = this.browser.contexts()[0];
         if (defaultContext) {
           this.context = defaultContext;
-          const existingPages = defaultContext.pages();
-          this.page = existingPages.length > 0 ? existingPages[0] : await cdpTimeout(defaultContext.newPage(), 10000, 'cdp-newPage');
+          this.page = await cdpTimeout(defaultContext.newPage(), 10000, 'cdp-newPage');
         } else {
           this.page = await cdpTimeout(this.browser.newPage(), 10000, 'cdp-newPage');
           this.context = this.page.context();
@@ -351,10 +352,13 @@ export class ExecutionEngine {
       }
     }
 
-    // Remote CDP: close context only (browser stays running on VPS for other tasks)
+    // Remote CDP: close PAGE only (context is shared by all tasks, browser stays running)
     // Local Playwright: close everything
     if (this.isRemoteCDP) {
-      if (this.context) await this.context.close().catch(() => {});
+      // Only close OUR page — don't close the shared default context or other tasks' pages die
+      if (this.page && !this.page.isClosed()) {
+        await this.page.close().catch(() => {});
+      }
       // Disconnect from remote browser (don't close it — it serves other tasks)
       if (this.browser) await this.browser.close().catch(() => {});
       console.log('[ENGINE] Disconnected from remote CDP browser');
