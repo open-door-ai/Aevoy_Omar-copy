@@ -438,7 +438,9 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   // ── Stall detection state ──
   let lastUrl = '';
   let sameUrlCount = 0;
-  let lastScreenshotToolCount = 0;
+  let screenshotCount = 0;
+  let locateCount = 0;
+  let wrapUpInjected = false;
   const progressNotes: string[] = []; // Running log of what was accomplished
 
   // ── Multi-step loop ──
@@ -453,6 +455,23 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
       return partial !== 'No results gathered yet.'
         ? `I ran out of time, but here's what I found so far:\n\n${partial}`
         : 'I ran out of time working on your task. Could you try a simpler version of the request?';
+    }
+
+    // ── Hard iteration cap: force wrap-up at 40, force completion at 60 ──
+    if (iterations === 40 && !wrapUpInjected) {
+      wrapUpInjected = true;
+      messages.push({
+        role: 'user',
+        content: `IMPORTANT: You have used 40 iterations. You must WRAP UP NOW.
+If you have partial results, present them. If you're stuck on a complex page, report what you see and what you attempted.
+Do NOT keep trying the same approach. Provide your best answer with whatever information you have gathered.`
+      });
+    }
+    if (iterations >= 60) {
+      const partial = ledger.getPartialResults();
+      return partial !== 'No results gathered yet.'
+        ? `I worked on this for a while. Here's what I found:\n\n${partial}`
+        : 'I spent a lot of time on this but couldn\'t complete the task fully. Please try breaking it into smaller steps.';
     }
 
     // No hard budget ceiling — the AI should be efficient but never stop mid-task due to cost.
@@ -580,8 +599,9 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
         }
       }
 
-      // Track screenshot usage
-      if (tc.name === 'browser_screenshot') lastScreenshotToolCount++;
+      // Track vision tool overuse
+      if (tc.name === 'browser_screenshot') screenshotCount++;
+      if (tc.name === 'browser_locate') locateCount++;
 
       // Track meaningful actions for progress log
       if (tc.name === 'browser_fill' && result.success) {
@@ -594,18 +614,28 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
     }
 
     // ── Stall detection: inject course correction ──
-    if (sameUrlCount >= 8 && iterations > 15) {
+    if (sameUrlCount >= 6 && iterations > 10) {
       console.log(`[V3] Stall detected at iteration ${iterations}: same URL for ${sameUrlCount} rounds`);
       messages.push({
         role: 'user',
-        content: `STALL DETECTED: You've been on the same page for ${sameUrlCount} rounds without progress. Your clicks may not be landing on the right elements. Try:
-1. Call browser_screenshot() to see the page fresh
-2. Look for a DIFFERENT approach — maybe scroll down, try a different section
-3. If clicking coordinates isn't working, try browser_snapshot() + browser_click(ref) with DOM ref numbers
-4. If the page is truly stuck, navigate to a different URL
-DO NOT repeat the same clicks.`
+        content: `STALL DETECTED: You've been on the same page for ${sameUrlCount} rounds without progress. SWITCH STRATEGY:
+1. STOP using browser_screenshot/browser_click_xy — the coordinates may be inaccurate on this page
+2. Use browser_snapshot() to get DOM elements with [ref] numbers, then browser_click(ref) for precise clicks
+3. For dropdowns, try browser_select(ref, value)
+4. If you truly can't interact with this page, navigate away and try a different approach
+5. Report what you've accomplished so far — partial progress is better than infinite loops`
       });
       sameUrlCount = 0; // Reset to avoid spam
+    }
+
+    // Vision tool overuse detection — if taking too many screenshots without progress
+    if (screenshotCount > 8 && iterations > 20) {
+      console.log(`[V3] Screenshot overuse at iteration ${iterations}: ${screenshotCount} screenshots taken`);
+      messages.push({
+        role: 'user',
+        content: `You've taken ${screenshotCount} screenshots. Screenshots are expensive and you keep misidentifying coordinates. SWITCH TO DOM MODE: use browser_snapshot() + browser_click(ref) which is more reliable. Only use screenshots if DOM mode absolutely cannot work.`
+      });
+      screenshotCount = 0; // Reset
     }
 
     // ── Context compression every 8 iterations ──
