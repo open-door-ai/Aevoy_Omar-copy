@@ -400,7 +400,7 @@ registerTool({
 
 registerTool({
   name: 'browser_screenshot',
-  description: 'Take a screenshot of the current page. Use this when the page has too many elements for the text snapshot (150+ elements), or when you need to see the visual layout (date pickers, time grids, calendars, maps). Returns an image you can see. After viewing, use browser_click_xy(x, y) to click at specific coordinates.',
+  description: 'Take a screenshot of the current page and get a visual description of what is on screen. Use this when the page has too many elements (150+), or when you need to understand visual layout (date pickers, time grids, calendars). Returns a text description of what is visible and key clickable areas with approximate coordinates.',
   category: 'browser',
   parameters: {},
   async execute(params, ctx): Promise<ToolCallResult> {
@@ -410,14 +410,22 @@ registerTool({
     }
     try {
       const screenshot = await takePageScreenshot(existing.page);
-      // Return special marker that processor-v3 will convert to image content
+      // Use Gemini Vision to describe the page
+      const { generateVisionResponse } = await import('../../services/ai.js');
+      const visionResult = await generateVisionResponse(
+        'Describe this webpage screenshot in detail. List ALL visible interactive elements (buttons, links, inputs, dropdowns, time slots, date pickers) with their approximate pixel coordinates (x, y) from the top-left corner. Format each element as: "- [element description] at approximately (x, y)". The viewport is 1280x720 pixels.',
+        screenshot,
+        'You are a precise UI element identifier. List every clickable element with its approximate position.',
+        ctx.userId,
+        ctx.taskId
+      );
       return {
         success: true,
-        data: `__SCREENSHOT__${screenshot}`,
-        cost: 0,
+        data: `Visual description of the page:\n${visionResult.content}\n\nUse browser_click_xy(x, y) to click at the coordinates listed above.`,
+        cost: visionResult.cost,
       };
     } catch (err) {
-      return { success: false, error: `Screenshot failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
+      return { success: false, error: `Screenshot analysis failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
   },
 });
