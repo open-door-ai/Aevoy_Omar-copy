@@ -65,6 +65,39 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
   return { page, isNew: true };
 }
 
+/**
+ * Auto-detect and solve CAPTCHAs on the current page.
+ * Called after navigation and clicks — transparent to the AI.
+ * Returns a note if a CAPTCHA was solved, empty string otherwise.
+ */
+async function autoSolveCaptcha(page: Page, ctx: TaskContext): Promise<{ solved: boolean; note: string; cost: number }> {
+  try {
+    const { detectCaptcha, solveCaptcha } = await import('../../execution/captcha.js');
+    const detection = await detectCaptcha(page);
+    if (detection.type === 'none') return { solved: false, note: '', cost: 0 };
+
+    console.log(`[V3-CAPTCHA] Detected ${detection.type} on ${page.url()}`);
+    const result = await solveCaptcha(page, detection, ctx.userId, ctx.taskId);
+
+    if (result.success) {
+      console.log(`[V3-CAPTCHA] Solved ${detection.type} via ${result.service} (cost: $${result.cost?.toFixed(4)})`);
+      // Wait for page to process the solution
+      await page.waitForTimeout(2000);
+      return {
+        solved: true,
+        note: `[CAPTCHA auto-solved: ${detection.type} via ${result.service}]`,
+        cost: result.cost || 0,
+      };
+    } else {
+      console.warn(`[V3-CAPTCHA] Failed to solve ${detection.type}: ${result.error}`);
+      return { solved: false, note: `[CAPTCHA detected: ${detection.type} — solve failed: ${result.error}]`, cost: 0 };
+    }
+  } catch (err) {
+    // Don't let CAPTCHA errors crash the tool
+    return { solved: false, note: '', cost: 0 };
+  }
+}
+
 /** Cleanup page for a task */
 export async function cleanupTaskPage(taskId: string): Promise<void> {
   const entry = taskPages.get(taskId);
@@ -216,8 +249,10 @@ registerTool({
           }
       }
 
+      // Auto-solve any CAPTCHAs that appeared after navigation
+      const captcha = await autoSolveCaptcha(page, ctx);
       const snapshot = await getPageSnapshot(page);
-      return { success: true, data: snapshot, cost: 0 };
+      return { success: true, data: `${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Navigation failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
@@ -272,8 +307,10 @@ registerTool({
       }
 
       await existing.page.waitForTimeout(1000);
+      // Auto-solve CAPTCHAs triggered by the click (signup/submit buttons often trigger them)
+      const captcha = await autoSolveCaptcha(existing.page, ctx);
       const snapshot = await getPageSnapshot(existing.page);
-      return { success: true, data: `Clicked [${ref}] (${clicked.tag} "${clicked.text}")\n\n${snapshot}`, cost: 0 };
+      return { success: true, data: `Clicked [${ref}] (${clicked.tag} "${clicked.text}")${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Click failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
@@ -490,8 +527,9 @@ registerTool({
       }
       await existing.page.mouse.click(x, y);
       await existing.page.waitForTimeout(1000);
+      const captcha = await autoSolveCaptcha(existing.page, ctx);
       const snapshot = await getPageSnapshot(existing.page);
-      return { success: true, data: `Clicked at (${x}, ${y})\n\n${snapshot}`, cost: 0 };
+      return { success: true, data: `Clicked at (${x}, ${y})${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Click at (${x}, ${y}) failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
