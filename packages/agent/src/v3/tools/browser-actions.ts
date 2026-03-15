@@ -68,32 +68,62 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
 /**
  * Auto-detect and solve CAPTCHAs on the current page.
  * Called after navigation and clicks — transparent to the AI.
- * Returns a note if a CAPTCHA was solved, empty string otherwise.
+ *
+ * Optimizations:
+ * - Only checks pages that look like CAPTCHA challenges (few elements, challenge URLs)
+ * - 15-second hard timeout (prevents hanging on false positives)
+ * - Skips if page URL hasn't changed since last solve
  */
+const recentCaptchaSolves = new Set<string>(); // Track solved URLs to avoid re-checking
+
 async function autoSolveCaptcha(page: Page, ctx: TaskContext): Promise<{ solved: boolean; note: string; cost: number }> {
   try {
-    const { detectCaptcha, solveCaptcha } = await import('../../execution/captcha.js');
-    const detection = await detectCaptcha(page);
-    if (detection.type === 'none') return { solved: false, note: '', cost: 0 };
+    const url = page.url();
+    // Skip if we already solved a CAPTCHA on this exact URL
+    if (recentCaptchaSolves.has(url)) return { solved: false, note: '', cost: 0 };
 
-    console.log(`[V3-CAPTCHA] Detected ${detection.type} on ${page.url()}`);
-    const result = await solveCaptcha(page, detection, ctx.userId, ctx.taskId);
+    // Quick check: only run full detection on pages that look like CAPTCHA challenges
+    const quickCheck = await Promise.race([
+      page.evaluate(() => {
+        const body = document.body?.innerText || '';
+        const hasChallenge = /captcha|verify|human|robot|challenge|security check/i.test(body);
+        const hasCaptchaElement = !!document.querySelector('.g-recaptcha, [data-sitekey], .h-captcha, .cf-turnstile, iframe[src*="recaptcha"], iframe[src*="hcaptcha"]');
+        return hasChallenge || hasCaptchaElement;
+      }),
+      new Promise<boolean>(r => setTimeout(() => r(false), 3000)), // 3s timeout for quick check
+    ]);
 
-    if (result.success) {
-      console.log(`[V3-CAPTCHA] Solved ${detection.type} via ${result.service} (cost: $${result.cost?.toFixed(4)})`);
-      // Wait for page to process the solution
-      await page.waitForTimeout(2000);
-      return {
-        solved: true,
-        note: `[CAPTCHA auto-solved: ${detection.type} via ${result.service}]`,
-        cost: result.cost || 0,
-      };
-    } else {
-      console.warn(`[V3-CAPTCHA] Failed to solve ${detection.type}: ${result.error}`);
-      return { solved: false, note: `[CAPTCHA detected: ${detection.type} — solve failed: ${result.error}]`, cost: 0 };
-    }
-  } catch (err) {
-    // Don't let CAPTCHA errors crash the tool
+    if (!quickCheck) return { solved: false, note: '', cost: 0 };
+
+    // Full detection + solving with 15-second timeout
+    const result = await Promise.race([
+      (async () => {
+        const { detectCaptcha, solveCaptcha } = await import('../../execution/captcha.js');
+        const detection = await detectCaptcha(page);
+        if (detection.type === 'none') return { solved: false, note: '', cost: 0 };
+
+        console.log(`[V3-CAPTCHA] Detected ${detection.type} on ${url}`);
+        const solveResult = await solveCaptcha(page, detection, ctx.userId, ctx.taskId);
+
+        if (solveResult.success) {
+          console.log(`[V3-CAPTCHA] Solved ${detection.type} via ${solveResult.service}`);
+          recentCaptchaSolves.add(url);
+          await page.waitForTimeout(2000);
+          return {
+            solved: true,
+            note: `[CAPTCHA auto-solved: ${detection.type} via ${solveResult.service}]`,
+            cost: solveResult.cost || 0,
+          };
+        }
+        return { solved: false, note: `[CAPTCHA detected but solve failed: ${solveResult.error}]`, cost: 0 };
+      })(),
+      new Promise<{ solved: boolean; note: string; cost: number }>(r =>
+        setTimeout(() => r({ solved: false, note: '', cost: 0 }), 15000) // 15s hard timeout
+      ),
+    ]);
+
+    return result;
+  } catch {
     return { solved: false, note: '', cost: 0 };
   }
 }
