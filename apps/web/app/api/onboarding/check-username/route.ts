@@ -1,5 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+
+// Service-role client bypasses RLS — needed to check usernames across ALL users
+function getAdminClient() {
+  return createAdminClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -11,6 +21,8 @@ export async function POST(request: Request) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const admin = getAdminClient();
 
   try {
     const body = await request.json();
@@ -60,17 +72,18 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if taken by another user
-    const { data: existing } = await supabase
+    // Check if taken by another user — use admin client to bypass RLS
+    // RLS blocks cross-user queries, so user's client can't see other profiles
+    const { data: existing } = await admin
       .from("profiles")
       .select("id")
-      .eq("username", username)
+      .ilike("username", username)
       .neq("id", user.id)
       .maybeSingle();
 
     if (existing) {
       return NextResponse.json(
-        { available: false, reason: "This username is already taken" },
+        { available: false, reason: `${username}@aevoy.com is already taken` },
         { status: 200 }
       );
     }

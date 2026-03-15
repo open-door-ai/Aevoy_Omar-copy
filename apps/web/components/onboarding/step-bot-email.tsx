@@ -145,10 +145,15 @@ export default function StepBotEmail({
     return picks;
   }, [shuffleIndex, takenNames]);
 
-  // Generate email suggestions when bot name changes
+  // Generate email suggestions AND auto-set email prefix when bot name changes
   useEffect(() => {
     if (botName.trim().length >= 2) {
       setSuggestions(generateEmailSuggestions(botName));
+      // Auto-populate email prefix with bot name (lowercase, alphanumeric only)
+      const autoPrefix = botName.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (autoPrefix.length >= 3) {
+        setUsername(autoPrefix);
+      }
     } else {
       setSuggestions([]);
     }
