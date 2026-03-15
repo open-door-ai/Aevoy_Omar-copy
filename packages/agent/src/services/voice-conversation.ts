@@ -1137,6 +1137,7 @@ async function saveInterviewFromConversation(session: VoiceSession): Promise<voi
 
 async function saveConversationToMemory(session: VoiceSession): Promise<void> {
   if (!session.userId || session.conversationHistory.length === 0) return;
+  if (session.callType === "demo") return; // Demo calls don't pollute user memory
 
   try {
     const duration = Math.round((Date.now() - session.startedAt) / 1000);
@@ -1259,6 +1260,7 @@ async function handleEmailVoiceQuery(session: VoiceSession, voicePrompt: string)
 
 async function maybeCreateTask(session: VoiceSession, userSpeech: string, aiResponse: string): Promise<void> {
   if (!session.userId) return;
+  if (session.callType === "demo") return; // Demo calls never create real tasks
 
   // Detect task-like commands in user speech
   const taskKeywords = /\b(book|schedule|remind|send|email|search|find|order|buy|create|set up|look up|research|remember|cancel|sign up|sign me up|make|add|get|walmart|amazon|netflix|uber|subscribe|unsubscribe|register|account|cart|purchase|check|call|phone|ring|browse|go to|navigate|open|visit|download|upload|update|change|modify|delete|remove|pay|transfer|move|ship|deliver|track|monitor|watch|follow|unfollow|block|report|share|post|tweet|message|text|write|draft|compose|apply|submit|fill|complete|request|reserve|rent|hire|contact|reach|lookup|compare|price|cost|review|rate|recommend)\b/i;
@@ -1287,7 +1289,7 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
   if (!session.userId) return;
 
   try {
-    // Log call history
+    // Log call history (demo calls get logged for analytics but NOT billed)
     getSupabaseClient()
       .from("call_history")
       .insert({
@@ -1301,9 +1303,8 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
       })
       .then(() => {}, (e: any) => console.error("[VOICE-WS] Call history insert failed:", e));
 
-    // Track voice call cost (Twilio + ElevenLabs TTS + Deepgram STT bundled)
-    // VOICE_MARKUP (1.5×) on top of base 1.296× = 1.944× total
-    if (durationSeconds > 0) {
+    // Track voice call cost — skip billing for demo calls (they're not tied to real accounts)
+    if (durationSeconds > 0 && session.callType !== "demo") {
       const voiceCost = calculateVoiceCost(durationSeconds, false);
       trackServiceCost(session.userId, "twilio", "voice_call", voiceCost, "voice_call", undefined, VOICE_MARKUP).catch(() => {});
     }

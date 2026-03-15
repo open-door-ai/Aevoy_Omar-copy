@@ -1517,35 +1517,8 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
       } catch (e: any) {
         console.error("[VOICE-DEMO] Outbound userId lookup error:", e.message);
       }
-    } else if (callerDigits.length >= 10) {
-      // No userId — fall back to phone number lookup
-      try {
-        const { data: matchedProfiles } = await supabase
-          .from("profiles")
-          .select("id, display_name, username, onboarding_interview_status")
-          .or(`phone_number.ilike.%${callerDigits}`);
-
-        if (matchedProfiles && matchedProfiles.length > 0) {
-          const profile = matchedProfiles[0];
-          const interviewDone = profile.onboarding_interview_status === "phone_call_completed"
-            || profile.onboarding_interview_status === "web_completed";
-
-          if (!interviewDone) {
-            effectiveCallType = "onboarding_setup";
-            effectiveUserId = profile.id;
-            const name = profile.display_name || profile.username || "";
-            effectiveGreeting = name
-              ? `Hey ${name}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
-              : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
-            console.log(`[VOICE-DEMO] Outbound matched registered user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
-          } else {
-            console.log(`[VOICE-DEMO] Outbound matched user ${profile.id.slice(0, 8)} but interview already done`);
-          }
-        }
-      } catch (e: any) {
-        console.error("[VOICE-DEMO] Outbound caller lookup error:", e.message);
-      }
     }
+    // No phone number fallback — cold demo callers stay fully isolated from real accounts
 
     // Log demo call (fire-and-forget)
     supabase.from("call_history").insert({
@@ -1716,40 +1689,10 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 </Response>`);
       }
 
-      // Check if this caller is a registered user (by phone number)
-      const callerDigits = callerNumber.replace(/\D/g, "").slice(-10);
-      let registeredUserId = "";
-      let registeredUserName = "";
-      let isRegisteredCaller = false;
-
-      if (callerDigits.length >= 10) {
-        try {
-          const { data: matchedProfiles } = await supabase
-            .from("profiles")
-            .select("id, display_name, username, onboarding_interview_status")
-            .or(`phone_number.ilike.%${callerDigits}`);
-
-          if (matchedProfiles && matchedProfiles.length > 0) {
-            const profile = matchedProfiles[0];
-            registeredUserId = profile.id;
-            registeredUserName = profile.display_name || profile.username || "";
-            // Only do interview if they haven't completed it yet
-            const interviewDone = profile.onboarding_interview_status === "phone_call_completed"
-              || profile.onboarding_interview_status === "web_completed";
-            isRegisteredCaller = !interviewDone;
-            console.log(`[VOICE-DEMO] Matched caller to user ${registeredUserId.slice(0, 8)} (${registeredUserName}), interview_done=${interviewDone}`);
-          }
-        } catch (e: any) {
-          console.error("[VOICE-DEMO] Caller lookup error:", e.message);
-        }
-      }
-
-      const effectiveCallType = isRegisteredCaller ? "onboarding_setup" : "demo";
-      const effectiveUserId = isRegisteredCaller ? registeredUserId : DEMO_USER_ID;
-      const interviewGreeting = registeredUserName
-        ? `Hey ${registeredUserName}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
-        : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
-      const effectiveGreeting = isRegisteredCaller ? interviewGreeting : DEMO_GREETING;
+      // Demo calls are fully isolated — no phone lookup, no account linking
+      const effectiveCallType = "demo";
+      const effectiveUserId = DEMO_USER_ID;
+      const effectiveGreeting = DEMO_GREETING;
 
       console.log(`[VOICE-DEMO] ${effectiveCallType} call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 
