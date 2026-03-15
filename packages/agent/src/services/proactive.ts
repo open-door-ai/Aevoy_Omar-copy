@@ -21,13 +21,38 @@ import { getSupabaseClient } from "../utils/supabase.js";
 import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
 
 // ---- Proactive SMS Rate Limit (1 SMS per user per hour max) ----
+// Fast in-memory cache + DB source of truth (survives restarts)
 
-const lastProactiveSms = new Map<string, number>(); // userId → timestamp
+const lastProactiveSms = new Map<string, number>(); // userId → timestamp (fast cache)
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
-function canSendProactiveSms(userId: string): boolean {
-  const last = lastProactiveSms.get(userId) || 0;
-  if (Date.now() - last < ONE_HOUR_MS) return false;
+async function canSendProactiveSms(userId: string): Promise<boolean> {
+  // Fast path: in-memory cache check
+  const lastCached = lastProactiveSms.get(userId) || 0;
+  if (Date.now() - lastCached < ONE_HOUR_MS) return false;
+
+  // DB source of truth: check ai_cost_log for recent proactive SMS
+  try {
+    const oneHourAgo = new Date(Date.now() - ONE_HOUR_MS).toISOString();
+    const { data } = await getSupabaseClient()
+      .from('ai_cost_log')
+      .select('created_at')
+      .eq('user_id', userId)
+      .eq('service', 'twilio')
+      .eq('operation', 'proactive_sms')
+      .gte('created_at', oneHourAgo)
+      .limit(1);
+
+    if (data && data.length > 0) {
+      // Update in-memory cache with DB value
+      lastProactiveSms.set(userId, new Date(data[0].created_at).getTime());
+      return false;
+    }
+  } catch {
+    // Don't block on DB errors — fall through to allow
+  }
+
+  // Update in-memory cache
   lastProactiveSms.set(userId, Date.now());
   return true;
 }
@@ -552,7 +577,7 @@ export class ProactiveEngine {
         }
         if ((preferredChannel === "sms" || preferredChannel === "voice") && user.phone) {
           // RATE LIMIT: max 1 proactive SMS per user per hour (prevents runaway loops)
-          if (!canSendProactiveSms(user.userId)) {
+          if (!(await canSendProactiveSms(user.userId))) {
             console.log(`[PROACTIVE] Skipping SMS for ${user.username} — rate limited (1/hour). Finding: ${finding.trigger}`);
             // Silently degrade to email for low-priority, skip for sms channel
             await sendResponse({
@@ -580,9 +605,19 @@ export class ProactiveEngine {
 
       switch (priority) {
         case "high": {
-          // High priority: always call + send via preferred channel
+          // High priority: call (if under daily cap) + send via preferred channel
           if (user.phone) {
-            await callUser({ userId: user.userId, to: user.phone, message: action });
+            const { data: todayCalls } = await getSupabaseClient()
+              .from('call_history')
+              .select('id')
+              .eq('user_id', user.userId)
+              .gte('created_at', new Date(new Date().setHours(0,0,0,0)).toISOString())
+              .limit(4);
+            if (todayCalls && todayCalls.length >= 3) {
+              console.log(`[PROACTIVE] Call cap reached for ${user.userId.slice(0,8)} (${todayCalls.length} today) — skipping call`);
+            } else {
+              await callUser({ userId: user.userId, to: user.phone, message: action });
+            }
           }
           await sendViaPreferred(false);
           break;

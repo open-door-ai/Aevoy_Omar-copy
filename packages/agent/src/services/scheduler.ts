@@ -843,8 +843,8 @@ async function runDueScheduledTasksInner(): Promise<void> {
       const cronExpr = String(scheduled.cron_expression || "").trim();
       const isOnce = cronExpr === "once";
       const newRunCount = (scheduled.run_count || 0) + 1;
-      const maxRuns = scheduled.max_runs ?? null;
-      const isOneTime = isOnce || (maxRuns !== null && newRunCount >= maxRuns);
+      const effectiveMaxRuns = scheduled.max_runs ?? 30; // Default safety limit for recurring tasks
+      const isOneTime = isOnce || (newRunCount >= effectiveMaxRuns);
 
       // DEBUG: Log raw values and types to diagnose comparison failures
       console.log(`[SCHEDULER] Task ${scheduled.id} RAW: cron_expression=${JSON.stringify(scheduled.cron_expression)} (type=${typeof scheduled.cron_expression}), task_template=${JSON.stringify(scheduled.task_template)} (type=${typeof scheduled.task_template}), isOnce=${isOnce}, isOneTime=${isOneTime}`);
