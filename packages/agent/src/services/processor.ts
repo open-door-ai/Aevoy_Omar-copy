@@ -30,22 +30,29 @@ import { join } from 'path';
 // ── Thorough HTML sanitization (prevents XSS via entities, event handlers, malformed tags) ──
 function sanitizeHtml(input: string): string {
   let text = input;
+  // Step 1: Strip dangerous tags from raw input (catches both <script> and encoded variants)
   text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
   text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-  text = text.replace(/<\/?[a-z][^>]*>/gi, ' ');
-  text = text.replace(/<[^>]*on\w+\s*=[^>]*>/gi, ' ');
-  text = text
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  text = text.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '');
+  text = text.replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '');
+  text = text.replace(/<embed[^>]*>[\s\S]*?<\/embed>/gi, '');
+  // Remove event handlers (onclick, onerror, etc.)
+  text = text.replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '');
+  text = text.replace(/\s+on\w+\s*=\s*[^\s>]*/gi, '');
+  // Step 2: Unescape common entities to normalize
+  text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
-    .replace(/&apos;/g, "'").replace(/&#x2F;/g, '/').replace(/&#x5C;/g, '\\')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_m: string, code: string) => String.fromCharCode(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_m: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
-  text = text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/&#x2F;/g, '/');
+  // Step 3: Strip tags AGAIN after unescaping (catches double-encoded attacks)
+  text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  text = text.replace(/<img[^>]*on\w+[^>]*>/gi, '');
+  // Step 4: Final escape for safe display
+  text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  text = text.replace(/\s+/g, ' ').trim();
-  return text;
+  // Step 5: Remove zero-width and control characters
+  text = text.replace(/[\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
+  return text.trim();
 }
 
 // ── ATOMIC RESPONSE DELIVERY ──
@@ -68,12 +75,13 @@ async function atomicCompleteTask(
     try {
       await sendViaChannel(channel, userId, from, aevoyFrom, `Re: ${subject}`, responseText);
     } catch (sendErr) {
-      console.error(`[ATOMIC-DELIVERY] sendViaChannel failed for task ${taskId?.slice(0, 8)} — keeping status as processing:`, sendErr);
-      // Mark with stuck_reason so watchdog can pick it up, but do NOT mark completed
+      console.error(`[ATOMIC-DELIVERY] sendViaChannel failed for task ${taskId?.slice(0, 8)}:`, sendErr);
+      // ALWAYS update task status even if send fails — prevents ghost tasks
       await getSupabaseClient().from('tasks').update({
-        stuck_reason: `[DELIVERY-FAIL] ${sendErr instanceof Error ? sendErr.message : 'unknown'}`,
+        status: 'needs_review',
+        completed_at: new Date().toISOString(),
+        response_text: responseText || 'Task completed but delivery failed. Check your dashboard for results.',
       }).eq('id', taskId);
-      throw sendErr; // Propagate so caller knows delivery failed
     }
   }
   // 2. Only mark completed AFTER successful delivery

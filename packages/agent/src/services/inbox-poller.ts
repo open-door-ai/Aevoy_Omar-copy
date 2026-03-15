@@ -201,7 +201,11 @@ async function pollInbox(): Promise<void> {
           await markEmailProcessed(messageId, fromAddr, toAddr, subject);
 
           // Mark as read after successful processing
-          await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+          try {
+            await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+          } catch (flagErr) {
+            console.warn(`[INBOX-POLLER] Failed to mark uid=${uid} as read (already processed):`, flagErr);
+          }
         } catch (msgErr) {
           console.error(
             `[INBOX-POLLER] Error processing uid=${uid}:`,
@@ -386,6 +390,13 @@ function extractUsername(toAddr: string): string | null {
 // ---------------------------------------------------------------------------
 
 async function sendPinReply(toEmail: string, username: string, originalSubject: string, message: string): Promise<void> {
+  // Sanitize email address — prevent CRLF header injection
+  const sanitizedTo = toEmail.replace(/[\r\n\t]/g, '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitizedTo)) {
+    console.warn(`[INBOX-POLLER] Invalid reply-to address: ${maskEmail(toEmail)}`);
+    return;
+  }
+
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) {
     console.log(`[INBOX-POLLER] No RESEND_API_KEY — cannot send PIN reply for ${username}`);
@@ -401,7 +412,7 @@ async function sendPinReply(toEmail: string, username: string, originalSubject: 
       },
       body: JSON.stringify({
         from: `${username}@aevoy.com`,
-        to: toEmail,
+        to: sanitizedTo,
         subject: `Re: ${originalSubject}`,
         text: `${message}\n\n— ${username}'s AI assistant`,
       }),
@@ -488,6 +499,13 @@ async function sendAutoReply(
   originalSubject: string,
   replyBody: string
 ): Promise<void> {
+  // Sanitize email address — prevent CRLF header injection
+  const sanitizedTo = toEmail.replace(/[\r\n\t]/g, '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitizedTo)) {
+    console.warn(`[INBOX-POLLER] Invalid reply-to address: ${maskEmail(toEmail)}`);
+    return;
+  }
+
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) return;
 
@@ -500,7 +518,7 @@ async function sendAutoReply(
       },
       body: JSON.stringify({
         from: `${fromUsername}@aevoy.com`,
-        to: toEmail,
+        to: sanitizedTo,
         subject: originalSubject.startsWith("Re:") ? originalSubject : `Re: ${originalSubject}`,
         text: `${replyBody}\n\n— ${fromUsername}'s AI assistant`,
       }),
@@ -569,6 +587,13 @@ const ADMIN_FORWARD_EMAIL = process.env.ADMIN_FORWARD_EMAIL || "omarkebrahim@gma
 const BYPASS_USERNAMES = ['omar', 'hello', 'welcome', 'info', 'contact', 'sales', 'admin', 'noreply', 'no-reply', 'postmaster', 'abuse'];
 
 async function forwardToAdmin(email: ParsedInboxEmail, username: string): Promise<void> {
+  // Sanitize email address — prevent CRLF header injection
+  const sanitizedFrom = email.from.replace(/[\r\n\t]/g, '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitizedFrom)) {
+    console.warn(`[INBOX-POLLER] Invalid forward-from address: ${maskEmail(email.from)}`);
+    return;
+  }
+
   // Forward via Resend (already configured in the agent)
   try {
     const resendKey = process.env.RESEND_API_KEY;

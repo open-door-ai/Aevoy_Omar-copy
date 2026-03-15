@@ -429,6 +429,14 @@ export default {
     try {
       console.log(`[EMAIL] Received, size: ${message.rawSize}`);
 
+      // Reject oversized emails (10MB max) to prevent OOM
+      const MAX_EMAIL_SIZE = 10 * 1024 * 1024; // 10MB
+      if (message.rawSize > MAX_EMAIL_SIZE) {
+        console.warn(`[EMAIL] Rejected oversized email: ${message.rawSize} bytes (max ${MAX_EMAIL_SIZE})`);
+        message.setReject("Email too large. Maximum size is 10MB.");
+        return;
+      }
+
       // Extract username from to address
       const toAddress = message.to.toLowerCase();
       const username = toAddress.split("@")[0];
