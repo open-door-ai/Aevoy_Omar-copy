@@ -2132,7 +2132,7 @@ export default function SettingsPage() {
                 Call or text{" "}
                 <button
                   type="button"
-                  onClick={() => handleCopyPhone("+16043321466")}
+                  onClick={() => handleCopyPhone("+18882981661")}
                   className="inline-flex items-center gap-1 font-mono font-semibold hover:text-primary transition-colors"
                 >
                   +1 (604) 332-1466
