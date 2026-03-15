@@ -187,6 +187,30 @@ export async function callUser(request: VoiceCallRequest): Promise<{
       console.warn(`[TWILIO] callUser blocked: user ${request.userId.slice(0, 8)} has no dedicated number`);
       return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
     }
+
+    // Block premium/toll numbers that charge high per-minute rates
+    const cleanedNumber = (request.to || '').replace(/[^\d+]/g, '');
+    if (/^\+?1(900|976|950|540)/.test(cleanedNumber)) {
+      console.warn(`[TWILIO] BLOCKED premium number: ${cleanedNumber.slice(0,7)}***`);
+      return { success: false, error: 'Premium/toll numbers are not supported for safety.' };
+    }
+
+    // Daily call safety cap — prevents runaway automation
+    // Users pay themselves, but this prevents bugs/loops from burning hundreds
+    const DEFAULT_DAILY_CALL_LIMIT = 20;
+    try {
+      const { data: todayCalls } = await getSupabaseClient()
+        .from('call_history')
+        .select('id')
+        .eq('user_id', request.userId)
+        .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
+        .limit(DEFAULT_DAILY_CALL_LIMIT + 1);
+      if (todayCalls && todayCalls.length >= DEFAULT_DAILY_CALL_LIMIT) {
+        console.warn(`[TWILIO] Daily call limit (${DEFAULT_DAILY_CALL_LIMIT}) reached for user ${request.userId.slice(0,8)}`);
+        return { success: false, error: `Daily call limit reached (${DEFAULT_DAILY_CALL_LIMIT}). This resets at midnight.` };
+      }
+    } catch { /* Don't block calls on DB errors */ }
+
     const agentUrl = process.env.AGENT_URL || '';
 
     // Use a URL-based approach: Twilio fetches TwiML from our server
@@ -248,6 +272,29 @@ export async function callExternal(
     console.warn(`[TWILIO] callExternal blocked: user ${userId.slice(0, 8)} has no dedicated number`);
     return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
   }
+
+  // Block premium/toll numbers that charge high per-minute rates
+  const cleanedNumber = (to || '').replace(/[^\d+]/g, '');
+  if (/^\+?1(900|976|950|540)/.test(cleanedNumber)) {
+    console.warn(`[TWILIO] BLOCKED premium number: ${cleanedNumber.slice(0,7)}***`);
+    return { success: false, error: 'Premium/toll numbers are not supported for safety.' };
+  }
+
+  // Daily call safety cap — prevents runaway automation
+  // Users pay themselves, but this prevents bugs/loops from burning hundreds
+  const DEFAULT_DAILY_CALL_LIMIT = 20;
+  try {
+    const { data: todayCalls } = await getSupabaseClient()
+      .from('call_history')
+      .select('id')
+      .eq('user_id', userId)
+      .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
+      .limit(DEFAULT_DAILY_CALL_LIMIT + 1);
+    if (todayCalls && todayCalls.length >= DEFAULT_DAILY_CALL_LIMIT) {
+      console.warn(`[TWILIO] Daily call limit (${DEFAULT_DAILY_CALL_LIMIT}) reached for user ${userId.slice(0,8)}`);
+      return { success: false, error: `Daily call limit reached (${DEFAULT_DAILY_CALL_LIMIT}). This resets at midnight.` };
+    }
+  } catch { /* Don't block calls on DB errors */ }
 
   try {
     // Generate a unique context key for this call

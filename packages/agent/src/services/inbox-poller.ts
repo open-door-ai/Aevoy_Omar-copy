@@ -108,7 +108,9 @@ async function pollInbox(): Promise<void> {
   isPolling = true;
 
   // Distributed lock — only one instance polls at a time
-  const lockAcquired = await acquireDistributedLock("inbox_poller", POLL_INTERVAL + 10_000);
+  // Was: POLL_INTERVAL + 10_000 (40s total — too short for slow IMAP)
+  // Now: POLL_INTERVAL + 120_000 (150s total — handles slow connections)
+  const lockAcquired = await acquireDistributedLock("inbox_poller", POLL_INTERVAL + 120_000);
   if (!lockAcquired) {
     isPolling = false;
     return; // Another instance is polling
@@ -141,10 +143,17 @@ async function pollInbox(): Promise<void> {
 
       console.log(`[INBOX-POLLER] Found ${uids.length} unread email(s)`);
 
-      // Process up to 10 per cycle to avoid blocking
-      const batch = uids.slice(-10);
+      // Process up to 20 per cycle to avoid blocking
+      const MAX_EMAILS_PER_POLL = 20;
+      const batch = uids.slice(-MAX_EMAILS_PER_POLL);
+      let emailsProcessed = 0;
 
       for (const uid of batch) {
+        if (emailsProcessed >= MAX_EMAILS_PER_POLL) {
+          console.log(`[INBOX-POLLER] Reached ${MAX_EMAILS_PER_POLL} emails this cycle — will continue next poll`);
+          break;
+        }
+        emailsProcessed++;
         try {
           // Fetch envelope + full text source
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
