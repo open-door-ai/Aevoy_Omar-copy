@@ -238,9 +238,15 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       const session = activeSessions.get(sessionId);
 
       switch (message.type) {
-        case "setup":
+        case "setup": {
+          const existingSession = activeSessions.get(sessionId);
+          if (existingSession && existingSession.state !== 'setup') {
+            console.log(`[VOICE-WS] Duplicate setup for ${sessionId.slice(0,8)} — ignoring`);
+            break;
+          }
           await handleSetup(ws, message, sessionId);
           break;
+        }
 
         case "prompt":
           if (session) await handlePrompt(session, message);
@@ -755,7 +761,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       ? (session.lastResponseText.toLowerCase().includes(voicePrompt.toLowerCase().trim()) ||
          voicePrompt.toLowerCase().trim().split(' ').filter((w: string) => session.lastResponseText.toLowerCase().includes(w)).length > voicePrompt.split(' ').length * 0.5)
       : false;
-    if (echoSimilarity || timeSinceLastResponse < 800) {
+    if (echoSimilarity || timeSinceLastResponse < 1500) {
       console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} ECHO DETECTED (${timeSinceLastResponse}ms after response, similarity=${echoSimilarity}): "${voicePrompt.slice(0, 50)}"`);
       return;
     }
@@ -972,7 +978,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     // ── GOODBYE DETECTION ─────────────────────────────────────────────────
     // When BOTH user speech AND AI response contain farewell signals, schedule
     // a hang-up after 3s to let TTS finish playing the farewell message.
-    const userGoodbye = /(bye|goodbye|good night|take care|talk (to you |ya |u )?later|gotta go|i('ll| will) let you go|have a (good|great|nice)|that('s| is) all|thanks,? that('s| is) all)/i.test(voicePrompt);
+    const userGoodbye = /(bye|goodbye|good night|take care|talk (to you |ya |u )?later|gotta go|i('ll| will) let you go|have a (good|great|nice)|that('s| is) all|thanks,? that('s| is) all|okay,? thanks|alright,? (thanks|bye)|i('m| am) (good|all set|done)|sounds good|perfect,? thanks|cool,? (thanks|bye))/i.test(voicePrompt);
     const aiGoodbye = /(bye|goodbye|take care|talk (to you |ya )?soon|have a (good|great|nice)|pleasure|it was (great|nice) (talking|speaking|chatting))/i.test(cleanedResponse);
     if (userGoodbye && aiGoodbye) {
       // Mark as intentional close (goodbye)

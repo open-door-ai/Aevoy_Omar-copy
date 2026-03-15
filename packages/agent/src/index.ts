@@ -634,7 +634,12 @@ app.post("/admin/clear-active-tasks", async (req, res) => {
 });
 
 // ---- Memory subsystem health check ----
-app.get("/health/memory", async (_req, res) => {
+app.get("/health/memory", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
   const checks: Record<string, string> = {};
 
   // Supabase user_memory table
@@ -1532,7 +1537,8 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
       pin_success: null,
     }).then(() => {}, (e: any) => console.error("[VOICE-DEMO] Call history insert failed:", e));
 
-    const escGreeting = effectiveGreeting.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const cappedGreeting = effectiveGreeting.substring(0, 120);
+    const escGreeting = cappedGreeting.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1587,9 +1593,10 @@ app.post("/webhook/voice/outbound-twiml", twilioLimiter, validateTwilioSignature
   const fullMessage = message || 'Hey! Your AI assistant is calling back. What can I help you with?';
   // Cap welcomeGreeting to prevent ElevenLabs TTS buffering delay (long text = 10s silence)
   // Full message is passed as a Parameter for handleSetup to use in conversation context
-  const shortGreeting = fullMessage.length > 80
-    ? fullMessage.substring(0, fullMessage.lastIndexOf(' ', 80)) + '...'
-    : fullMessage;
+  const cappedGreeting = fullMessage.substring(0, 120);
+  const shortGreeting = cappedGreeting.length > 80
+    ? cappedGreeting.substring(0, cappedGreeting.lastIndexOf(' ', 80)) + '...'
+    : cappedGreeting;
   const escGreeting = shortGreeting.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const escFullMessage = fullMessage.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -1695,7 +1702,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       // Demo calls are fully isolated — no phone lookup, no account linking
       const effectiveCallType = "demo";
       const effectiveUserId = DEMO_USER_ID;
-      const effectiveGreeting = DEMO_GREETING;
+      const effectiveGreeting = DEMO_GREETING.substring(0, 120);
 
       console.log(`[VOICE-DEMO] ${effectiveCallType} call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 
@@ -1915,9 +1922,10 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       const botName = profile.bot_name || "Dave";
       const hour = new Date().getHours();
       const timeGreeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-      const greeting = greetingStyle === 'jarvis'
+      const rawGreeting = greetingStyle === 'jarvis'
         ? `${timeGreeting}, ${userName}. How may I assist you?`
         : `Hey ${userName}! What can I help you with?`;
+      const greeting = rawGreeting.substring(0, 120);
 
       console.log(`[VOICE-INCOMING] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -2053,9 +2061,10 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
         const hour = new Date().getHours();
         const timeGreeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
         const greetingStyle = userSettings?.greeting_style || "casual";
-        greeting = greetingStyle === 'jarvis'
+        const rawGreeting2 = greetingStyle === 'jarvis'
           ? `${timeGreeting}, ${userName}. How may I assist you?`
           : `Hey ${userName}! It's ${botName}. What can I help you with?`;
+        greeting = rawGreeting2.substring(0, 120);
       } catch { greeting = "Hey! What can I help with?"; }
 
       console.log(`[VOICE] ConversationRelay TwiML for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}, wsUrl=${wsUrl}`);
@@ -2705,8 +2714,8 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Incorrect PIN. You have ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.</Say>
-  <Gather action="${process.env.AGENT_URL}/webhook/voice/pin-verify" numDigits="4" timeout="10">
-    <Say voice="${voice}">Please enter your 4 to 6 digit PIN.</Say>
+  <Gather action="${process.env.AGENT_URL}/webhook/voice/pin-verify" numDigits="6" finishOnKey="#" timeout="10">
+    <Say voice="${voice}">Please enter your 4 to 6 digit PIN, then press pound.</Say>
   </Gather>
   <Hangup/>
 </Response>`);
@@ -3285,6 +3294,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
           : `Hey ${userName}! How did today go?`;
       }
 
+      greeting = greeting.substring(0, 120);
       console.log(`[VOICE-CHECKIN] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>

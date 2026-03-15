@@ -27,8 +27,10 @@ registerTool({
     const subject = String(params.subject);
     const body = String(params.body);
 
-    if (!to || !to.includes('@')) {
-      return { success: false, error: 'Invalid email address', cost: 0 };
+    // Validate email format — prevent BCC injection and malformed addresses
+    const emailRegex = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(to) || to.includes(',') || to.includes(';')) {
+      return { success: false, error: 'Invalid email address format', cost: 0 };
     }
 
     // Try user's IMAP first, then fall back to Resend

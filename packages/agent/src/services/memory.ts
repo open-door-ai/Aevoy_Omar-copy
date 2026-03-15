@@ -68,7 +68,11 @@ setInterval(() => {
 }, 60_000); // Check every minute
 
 export function setShortTermMemory(taskId: string, data: Record<string, unknown>, userId?: string): void {
-  const key = userId ? stmKey(userId, taskId) : taskId;
+  if (!userId) {
+    console.warn(`[MEMORY] setShortTermMemory called without userId for task ${taskId} — skipping to prevent cross-user leak`);
+    return;
+  }
+  const key = stmKey(userId, taskId);
   const existing = shortTermMemory.get(key);
   shortTermMemory.set(key, {
     data: { ...(existing?.data), ...data },
