@@ -733,7 +733,7 @@ function stripCredentialLeaks(text: string): string {
   // Strip anything that looks like an exposed API key or secret
   clean = clean.replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[redacted-key]');
   clean = clean.replace(/\b(Bearer\s+[a-zA-Z0-9._-]{20,})\b/g, 'Bearer [redacted]');
-  // Strip password= patterns that might leak
-  clean = clean.replace(/password\s*[=:]\s*\S+/gi, 'password=[redacted]');
+  // Note: Don't strip password patterns from responses — user may have asked for credentials
+  // Only strip internal credential tokens and API keys above
   return clean;
 }
