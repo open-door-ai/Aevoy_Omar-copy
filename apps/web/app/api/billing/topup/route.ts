@@ -72,21 +72,34 @@ export async function POST(req: NextRequest) {
         .eq("user_id", user.id);
     }
 
-    // Create PaymentIntent
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amountCents,
-      currency: "usd",
+    // Create Stripe Checkout Session (hosted payment page — no frontend SDK needed)
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
       customer: customerId,
-      metadata: {
-        user_id: user.id,
-        type: "credit_topup",
-        amount_cents: amountCents.toString(),
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `Aevoy Credit Top-Up — $${(amountCents / 100).toFixed(2)}`,
+            description: `Add $${(amountCents / 100).toFixed(2)} credits to your Aevoy account`,
+          },
+          unit_amount: amountCents,
+        },
+        quantity: 1,
+      }],
+      payment_intent_data: {
+        metadata: {
+          user_id: user.id,
+          type: "credit_topup",
+          amount_cents: amountCents.toString(),
+        },
       },
-      automatic_payment_methods: { enabled: true },
+      success_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com"}/dashboard/billing?topup=success`,
+      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "https://www.aevoy.com"}/dashboard/billing?topup=cancelled`,
     });
 
     return NextResponse.json({
-      client_secret: paymentIntent.client_secret,
+      checkout_url: session.url,
       amount_cents: amountCents,
     });
   } catch (error) {

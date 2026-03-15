@@ -34,27 +34,54 @@ export async function POST(request: Request) {
         return NextResponse.json({ available: false, reason: "Name is required" });
       }
 
-      // Use admin client to see ALL profiles (RLS blocks cross-user queries with anon key)
-      const { data: existing } = await admin
+      // Check BOTH username (email prefix) AND bot_name (display name)
+      // Username is what creates the @aevoy.com email address
+      const { data: byUsername } = await admin
+        .from("profiles")
+        .select("id")
+        .ilike("username", name)
+        .neq("id", user.id)
+        .maybeSingle();
+
+      if (byUsername) {
+        return NextResponse.json({ available: false, reason: `${name}@aevoy.com is already taken` });
+      }
+
+      const { data: byBotName } = await admin
         .from("profiles")
         .select("id")
         .ilike("bot_name", name)
         .neq("id", user.id)
         .maybeSingle();
 
-      return NextResponse.json({ available: !existing });
+      if (byBotName) {
+        return NextResponse.json({ available: false, reason: `"${name}" is already used as an agent name` });
+      }
+
+      return NextResponse.json({ available: true });
     }
 
-    // Batch check for quick picks
+    // Batch check for quick picks — check both username and bot_name
     if (body.names && Array.isArray(body.names)) {
       const names: string[] = body.names.slice(0, 50);
-      const { data: taken } = await admin
+
+      const { data: takenByUsername } = await admin
+        .from("profiles")
+        .select("username")
+        .neq("id", user.id)
+        .in("username", names.map(n => n.toLowerCase()));
+
+      const { data: takenByBotName } = await admin
         .from("profiles")
         .select("bot_name")
         .neq("id", user.id)
         .in("bot_name", names);
 
-      const takenSet = new Set((taken || []).map((r: { bot_name?: string }) => r.bot_name?.toLowerCase()));
+      const takenSet = new Set([
+        ...(takenByUsername || []).map((r: { username?: string }) => r.username?.toLowerCase()),
+        ...(takenByBotName || []).map((r: { bot_name?: string }) => r.bot_name?.toLowerCase()),
+      ]);
+
       const results: Record<string, boolean> = {};
       for (const n of names) {
         results[n] = !takenSet.has(n.toLowerCase());

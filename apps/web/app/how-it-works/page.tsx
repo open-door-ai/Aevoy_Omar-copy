@@ -348,16 +348,16 @@ export default function HowItWorksPage() {
             Pricing
           </h2>
           <p className="text-xl text-stone-500 mb-12">
-            We&apos;re in beta. Everything is free.
+            Pay only for what you use. No subscriptions.
           </p>
 
           <div className="max-w-md mx-auto bg-gradient-to-br from-stone-800 to-stone-900 rounded-3xl p-10 text-white">
             <div className="inline-block px-3 py-1 bg-white/10 rounded-full text-sm font-medium mb-6">
-              Beta Access
+              Pay As You Go
             </div>
-            <div className="text-6xl font-bold mb-2">$0</div>
+            <div className="text-6xl font-bold mb-2">$10</div>
             <p className="text-stone-400 mb-8">
-              per month, while we&apos;re in beta
+              free credit to start &mdash; then pay as you go
             </p>
             <ul className="text-left space-y-3 mb-10">
               {[

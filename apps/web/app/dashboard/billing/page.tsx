@@ -125,8 +125,10 @@ export default function BillingPage() {
         return;
       }
 
-      if (json.client_secret) {
-        alert(`Stripe checkout ready. Client secret: ${json.client_secret.slice(0, 20)}...`);
+      if (json.checkout_url) {
+        // Redirect to Stripe Checkout
+        window.location.href = json.checkout_url;
+        return;
       }
     } catch (error) {
       console.error("Top-up error:", error);

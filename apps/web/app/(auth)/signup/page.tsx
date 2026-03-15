@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BetaPaymentModal } from "@/components/beta-payment-modal";
+// BetaPaymentModal removed — Stripe is live, no beta wall needed
 import { FadeIn, StaggerContainer, StaggerItem, ShakeOnError } from "@/components/ui/motion";
 
 export default function SignupPage() {
@@ -16,7 +16,7 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showBetaModal, setShowBetaModal] = useState(false);
+  // Beta modal removed — Stripe is live
   const router = useRouter();
 
   // Password strength
@@ -80,18 +80,13 @@ export default function SignupPage() {
         return;
       }
 
-      setShowBetaModal(true);
+      // Go straight to dashboard/onboarding — no beta wall
+      router.push("/dashboard");
+      router.refresh();
     } catch {
       setError("An unexpected error occurred");
       setLoading(false);
     }
-  };
-
-  const handleBetaComplete = () => {
-    setShowBetaModal(false);
-    setLoading(false);
-    router.push("/dashboard");
-    router.refresh();
   };
 
   return (
@@ -102,7 +97,7 @@ export default function SignupPage() {
             Get your AI employee
           </h1>
           <p className="mt-2 text-muted-foreground">
-            <span className="text-[oklch(0.55_0.15_270)] font-semibold">Free during beta</span>
+            <span className="text-[oklch(0.55_0.15_270)] font-semibold">$10 free credit</span>
             {" "}&mdash; create your account to get started
           </p>
         </FadeIn>
@@ -235,12 +230,7 @@ export default function SignupPage() {
         </form>
       </div>
 
-      {showBetaModal && (
-        <BetaPaymentModal
-          onComplete={handleBetaComplete}
-          userEmail={email}
-        />
-      )}
+      {/* Beta payment modal removed — Stripe is live */}
     </>
   );
 }
