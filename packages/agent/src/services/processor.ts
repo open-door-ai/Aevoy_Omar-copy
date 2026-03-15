@@ -6,6 +6,7 @@
  */
 
 import crypto from "crypto";
+import { BILLING_MARKUP, COST_SAFETY_MARGIN } from '../utils/cost-calculator.js';
 import { loadMemory, appendDailyLog, updateMemoryWithFact } from "./memory.js";
 import { generateResponse, generateVisionResponse, cleanResponseForEmail, classifyTask, checkUserBudget, quickValidate, trackServiceCost, setModelRefusalBackoff } from "./ai.js";
 import { sendResponse, sendOverQuotaEmail, sendProgressEmail, sendConfirmationEmail, sendTaskAccepted, sendTaskCancelled } from "./email.js";
@@ -8621,8 +8622,9 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
     // These are early notifications, never valid task completions.
     const _isPlaceholderResponse = /\b(i'?m processing|taking longer than expected|i'?ll follow up|working on (it|this|your)|please (wait|hold)|still (working|processing))\b/i.test(aiResponse.content || '');
 
-    // FAKE BROWSER RESPONSE: AI claims "I navigated to..." but action_count=0
-    const _claimsBrowserAction = /\b(i (?:navigated|went|browsed|opened|visited|headed) to|i (?:started|began) the registration|i (?:searched|looked) (?:on|at|for)|i was unable to complete|i couldn'?t (?:complete|finish|access))\b/i.test(aiResponse.content || '');
+    // FAKE BROWSER RESPONSE: AI claims browser actions but action_count=0
+    const fakeNarrationPatterns = /\b(navigat|clicked|scrolled|filled|submitted|opened|browsed|searched|found and|added to cart|checked out|signed up|i (?:went|visited|headed) to|i (?:started|began) the registration|i (?:looked) (?:on|at|for)|i was unable to complete|i couldn'?t (?:complete|finish|access))\b/i;
+    const _claimsBrowserAction = fakeNarrationPatterns.test(aiResponse.content || '');
     const _isDirectBrowserButNoActions = _isBrowserRequiredTask && noBrowserUsed && _claimsBrowserAction;
 
     // REFUSAL DETECTION: "I cannot add items", "I'm unable to sign up", "I am an AI", etc.
@@ -9834,11 +9836,12 @@ The task is NOT actually complete. Try a COMPLETELY DIFFERENT approach to achiev
         console.log(`[COST] ai_cost_log query: ${costRows.length} calls, total $${totalCost.toFixed(4)} (billed, incl. 1.2x markup)`);
       }
     } catch (costErr) {
-      // Fallback to accumulated raw cost if DB query fails
+      // Fallback to accumulated raw cost if DB query fails — apply markup to match billed rates
       const aiCost = aiResponse.cost || 0;
       const browserCost = executionEngine?.getTotalCost() || 0;
-      totalCost = aiCost + browserCost;
-      console.warn(`[COST] ai_cost_log query failed, using fallback: $${totalCost.toFixed(4)} (raw, no markup)`);
+      const rawCost = aiCost + browserCost;
+      totalCost = rawCost * COST_SAFETY_MARGIN * BILLING_MARKUP;
+      console.warn(`[COST] ai_cost_log query failed, using fallback: $${totalCost.toFixed(4)} (raw $${rawCost.toFixed(4)} × ${COST_SAFETY_MARGIN} × ${BILLING_MARKUP} markup)`);
     }
 
     // Use confidence >= tier target to determine pass, not just verificationResult.passed

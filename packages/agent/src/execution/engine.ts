@@ -138,6 +138,15 @@ export class ExecutionEngine {
     if (this.useBrightData) {
       try {
         brightDataInUse = true;
+        // Safety timeout: auto-release lock after 30 minutes to prevent permanent lock on crash
+        const lockTimeout = setTimeout(() => {
+          if (brightDataInUse) {
+            console.warn('[ENGINE] BrightData lock auto-released after 30 min timeout');
+            brightDataInUse = false;
+          }
+        }, 30 * 60 * 1000);
+        // Store timeout so we can clear it on normal cleanup
+        (this as any)._brightDataLockTimeout = lockTimeout;
         const wsUrl = process.env.BRIGHT_DATA_BROWSER_WS!;
         console.log(`[ENGINE] Connecting to Bright Data Scraping Browser...`);
 
@@ -180,6 +189,10 @@ export class ExecutionEngine {
         this.browser = null; this.context = null; this.page = null; this.isRemoteCDP = false;
         this.useBrightData = false;
         brightDataInUse = false; // Release lock on connection failure
+        if ((this as any)._brightDataLockTimeout) {
+          clearTimeout((this as any)._brightDataLockTimeout);
+          (this as any)._brightDataLockTimeout = null;
+        }
       }
     }
 
@@ -374,6 +387,10 @@ export class ExecutionEngine {
     // Release Bright Data concurrency lock
     if (this.useBrightData) {
       brightDataInUse = false;
+      if ((this as any)._brightDataLockTimeout) {
+        clearTimeout((this as any)._brightDataLockTimeout);
+        (this as any)._brightDataLockTimeout = null;
+      }
       console.log('[ENGINE] Released Bright Data concurrency lock');
     }
 

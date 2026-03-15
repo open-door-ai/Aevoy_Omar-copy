@@ -2478,6 +2478,13 @@ export async function runVisionAgent(
         return { success: false, error: 'Timeout: 10 minutes exceeded', steps, cost: totalCost, screenshots, pageData };
       }
 
+      // ── Hard cost limit: $2.00 absolute cap, checked every step ──
+      if (totalCost > 2.00) {
+        console.log(`[VISION] Hard cost limit reached: $${totalCost.toFixed(3)} > $2.00 — stopping`);
+        const pageData = await capturePageData(activePage);
+        return { success: false, error: `Hard cost limit ($${totalCost.toFixed(2)} > $2.00) after ${steps} steps`, steps, cost: totalCost, screenshots, pageData };
+      }
+
       // ── Cost guard + step guard: stop runaway sessions ──
       const COST_LIMIT = isQuickActionTask ? 0.06 : (isComplexTask ? 0.10 : 0.05);
       const STEP_LIMIT = isQuickActionTask ? 20 : (isComplexTask ? dynamicMaxSteps : Math.min(dynamicMaxSteps, 40));
@@ -3166,7 +3173,10 @@ export async function runVisionAgent(
         const hasScreenshot = stepScreenshotData.length > 100;
         if (hasScreenshot && sameUrlCount >= 3) {
           // Add to evidence trail when stuck
-          try { screenshots.push(await takeScreenshot(activePage)); } catch { /* non-critical */ }
+          try {
+            screenshots.push(await takeScreenshot(activePage));
+            if (screenshots.length > 5) screenshots.splice(0, screenshots.length - 5);
+          } catch { /* non-critical */ }
           // Reset sameUrlCount after using vision for stuck — prevents permanent vision lock
           sameUrlCount = 0;
         }
@@ -3180,6 +3190,13 @@ export async function runVisionAgent(
         aiResponse = result.content;
         stepCost = result.cost;
         totalCost += stepCost;
+
+        // ── Hard cost limit: $2.00 absolute cap, checked every step after cost accumulation ──
+        if (totalCost > 2.00) {
+          console.log(`[VISION] Hard cost limit reached: $${totalCost.toFixed(3)} > $2.00 — stopping`);
+          const pageData = await capturePageData(activePage);
+          return { success: false, error: `Hard cost limit ($${totalCost.toFixed(2)} > $2.00) after ${steps + 1} steps`, steps: steps + 1, cost: totalCost, screenshots, pageData };
+        }
 
         // ── COST GUARD: Bail if browser task is burning money without progress ──
         // $0.30 cap = ~75 Haiku calls. If spending this much, the task is likely stuck.
@@ -3499,7 +3516,10 @@ export async function runVisionAgent(
             ? `Completed on ${postActionUrl}. Page shows: ${confirmPageText.substring(0, 400)}`
             : `Task completed on ${postActionUrl}`;
           console.log(`[BROWSER-AGENT] Force-DONE on confirmation URL: ${postActionUrl.substring(0, 80)}`);
-          try { screenshots.push(await takeScreenshot(activePage)); } catch { /* ok */ }
+          try {
+            screenshots.push(await takeScreenshot(activePage));
+            if (screenshots.length > 5) screenshots.splice(0, screenshots.length - 5);
+          } catch { /* ok */ }
           return { success: true, result: confirmResult, steps: steps + 1, cost: totalCost, screenshots };
         }
       }
@@ -3554,7 +3574,10 @@ export async function runVisionAgent(
             /\/(checkout\/complete|order[-_]confirm|order[-_]success|payment[-_]success|booking[-_]confirm)\b/i.test(doneUrlPath);
           if (isConfirmationUrl) {
             console.log(`[BROWSER-AGENT] Auto-accepting DONE on confirmation URL: ${doneUrl.substring(0, 80)}`);
-            try { screenshots.push(await takeScreenshot(activePage)); } catch { /* ok */ }
+            try {
+              screenshots.push(await takeScreenshot(activePage));
+              if (screenshots.length > 5) screenshots.splice(0, screenshots.length - 5);
+            } catch { /* ok */ }
             return { success: true, result: doneResult || `Task completed on ${doneUrl}`, steps: steps + 1, cost: totalCost, screenshots };
           }
 
@@ -3793,7 +3816,10 @@ export async function runVisionAgent(
           }
 
           console.log(`[BROWSER-AGENT] DONE after ${steps + 1} steps: ${cleanResult.substring(0, 200)}`);
-          try { screenshots.push(await takeScreenshot(activePage)); } catch { /* ok */ }
+          try {
+            screenshots.push(await takeScreenshot(activePage));
+            if (screenshots.length > 5) screenshots.splice(0, screenshots.length - 5);
+          } catch { /* ok */ }
           return { success: true, result: cleanResult, steps: steps + 1, cost: totalCost, screenshots };
         }
 
