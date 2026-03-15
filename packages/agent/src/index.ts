@@ -1447,9 +1447,7 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+16043321466";
 const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an account (set on Railway)
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
-// ORIGINAL GREETING (revert by uncommenting):
-// const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
-const DEMO_GREETING = "Hey, it's Aurora! So I overheard you and your boss talking about the monthly budget and I went ahead and put it together for you. It's all done, ready for review whenever you are. What else can I help with?";
+const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
 
 // ---- Demo Daily Minute Cap (cost protection: max 60 min/day ~$3.15) ----
 const DEMO_DAILY_MINUTE_CAP = 60;
@@ -1582,7 +1580,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
     // Fallback: simple greeting so the call doesn't fail silently
     const fallback = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">Hey there! I'm Aurora from Aevoy. Something went wrong on my end, but I'm real! Visit aevoy.com to try again.</Say>
+  <Say voice="Polly.Joanna-Neural">Hey there! I'm Aevoy, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
 </Response>`;
     res.type("text/xml").send(fallback);
   }
