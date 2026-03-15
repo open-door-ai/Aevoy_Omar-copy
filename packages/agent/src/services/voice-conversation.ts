@@ -123,14 +123,16 @@ interface VoiceSession {
   intentionalClose: boolean;
   // Whether an auto-callback has already been sent for this session (prevent loops)
   autoCallbackSent: boolean;
+  // Hard kill timer — force-terminates call after absolute max duration
+  hardKillTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const activeSessions = new Map<string, VoiceSession>();
 const MAX_SESSIONS = 50;
-const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes max call
+const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max call (was 20 — $1.24/call burn)
 const DEMO_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes max for demo calls (cost control)
-const INTERVIEW_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes for demo interview calls
-const EXTERNAL_CALL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes max for external calls (restaurant, etc.)
+const INTERVIEW_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes for demo interview calls
+const EXTERNAL_CALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes max for external calls (was 5 — biggest cost leak)
 
 // External call context store — populated by callExternal, consumed by handleSetup
 // Key: callSid or a temp UUID, Value: context for the AI to use during the call
@@ -162,6 +164,11 @@ function cleanupSession(sessionId: string): void {
     if (session.silenceWatchdog) {
       clearInterval(session.silenceWatchdog);
       session.silenceWatchdog = null;
+    }
+    // Clear hard kill timer
+    if (session.hardKillTimer) {
+      clearTimeout(session.hardKillTimer);
+      session.hardKillTimer = null;
     }
     activeSessions.delete(sessionId);
     console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} cleaned up (active: ${activeSessions.size})`);
@@ -296,42 +303,16 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
         saveInterviewFromConversation(session).catch(() => {});
       }
 
-      // Auto-callback on unexpected disconnect — only for user calls and checkin calls
-      // (NOT demo, external_call, demo_interview, or onboarding_setup)
-      const callbackEligibleTypes = ['task', 'callback', 'checkin', 'user'];
-      const isCallbackEligible = callbackEligibleTypes.includes(session.callType) || !session.callType;
-      if (
-        !session.intentionalClose &&
-        !session.autoCallbackSent &&
-        session.conversationHistory.length >= 2 &&
-        session.userId &&
-        isCallbackEligible
-      ) {
-        session.autoCallbackSent = true;
-        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} UNEXPECTED DISCONNECT — scheduling callback in 5s`);
-        // Capture session data before cleanup
-        const capturedUserId = session.userId;
-        const capturedSessionId = session.sessionId;
-        const capturedHistory = session.conversationHistory.slice(-2);
-        setTimeout(async () => {
-          try {
-            const { callUser } = await import('./twilio.js');
-            const supabase = (await import('../utils/supabase.js')).getSupabaseClient();
-            const { data: profile } = await supabase.from('profiles').select('phone_number').eq('id', capturedUserId).single();
-            if (profile?.phone_number) {
-              const lastTopic = capturedHistory.map(h => h.content).join(' ').slice(0, 200);
-              await callUser({
-                userId: capturedUserId,
-                to: profile.phone_number,
-                message: `Hey, sorry about that — we got disconnected. You were telling me about: ${lastTopic}. What were you saying?`,
-              });
-              console.log(`[VOICE-WS] ${capturedSessionId.slice(0, 8)} Auto-callback initiated to ${profile.phone_number}`);
-            }
-          } catch (e) {
-            console.warn(`[VOICE-WS] Auto-callback failed:`, e);
-          }
-        }, 5000); // 5 second delay to let things settle
+      // Auto-callback DISABLED — was creating cascading calls and burning $$.
+      // Every unexpected disconnect spawned a new call ($0.23+ each), which could
+      // also disconnect and spawn another. Only re-enable after cost controls are proven.
+      if (!session.intentionalClose) {
+        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} UNEXPECTED DISCONNECT (auto-callback disabled to prevent cost cascade)`);
       }
+
+      // Force-terminate the Twilio call leg on WebSocket close — critical cost control.
+      // Without this, Twilio keeps billing even after WebSocket drops.
+      forceHangupCall(session.callSid).catch(() => {});
     }
     cleanupSession(sessionId);
   });
@@ -339,6 +320,9 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
   ws.on("error", (err) => {
     clearInterval(pingInterval);
     console.error(`[VOICE-WS] WebSocket error:`, err);
+    // Force-terminate on error too — don't leave call leg alive
+    const session = activeSessions.get(sessionId);
+    if (session) forceHangupCall(session.callSid).catch(() => {});
     cleanupSession(sessionId);
   });
 }
@@ -366,10 +350,11 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
     conversationHistory: [], state: 'setup', pinAttempts: 0, pinDigits: '',
     ws, startedAt: Date.now(), lastActivityAt: Date.now(), lastResponseAt: 0, lastResponseText: '', callType, memoryContext: '', userProfile: '', lastMemoryRefresh: Date.now(),
     silenceWatchdog: null, silenceWarnings: 0,
-    callBudgetUsd: callType === 'demo' ? 2.0 : callType === 'external_call' ? 1.0 : 5.0,
+    callBudgetUsd: callType === 'demo' ? 2.0 : callType === 'external_call' ? 0.5 : 3.0,
     budgetWarned: false,
     intentionalClose: false,
     autoCallbackSent: false,
+    hardKillTimer: null,
   };
   activeSessions.set(sessionId, placeholderSession);
 
@@ -479,12 +464,14 @@ CRITICAL RULES:
 - Speak naturally, like a real human making a phone call. Use "Hi", "thanks", "perfect", natural filler.
 - If they put you on hold, wait patiently.
 - If there's a phone menu (press 1 for X, press 2 for Y), output [DTMF:1] (or whatever digit) and the system will send the tone. Example: "Let me press 1 for reservations. [DTMF:1]". You can also press multiple digits: [DTMF:12] sends 1 then 2.
-- If you reach voicemail, leave a message with: the reservation details, your client's name, and a callback number.
+- If you reach voicemail, leave a BRIEF message (10 seconds max) with your client's name and request, then say "goodbye" to trigger hang-up. Do NOT sit on the line.
 - If they ask for contact info: phone and email will be provided by the system.
 - Confirm all details before hanging up: date, time, party size, name.
-- When done, summarize what was confirmed in your last response.
-- Keep the call under 3 minutes. Be efficient but friendly.
-- If they can't accommodate the request (fully booked, etc.), ask about alternatives (different time, waitlist, etc.).
+- When done, say "goodbye" or "thank you, bye" to trigger hang-up. Do NOT stay on the line after business is done.
+- Keep the call under 2 minutes. Be extremely efficient.
+- If they can't accommodate the request (fully booked, etc.), ask ONE alternative, then wrap up.
+- If you hear hold music or silence for more than 10 seconds, say "I'll call back later, goodbye."
+- CRITICAL: Always end with a farewell phrase ("bye", "goodbye", "thank you, bye") — this triggers the system to hang up.
 
 VOICE STYLE: Warm, casual, like a friend making a call. Not corporate. Not robotic.`;
 
@@ -615,17 +602,42 @@ RULES:
 
   console.log(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
 
+  // ── HARD MAX DURATION TIMER ────────────────────────────────────────────────
+  // Fires regardless of speech activity — absolute ceiling to prevent runaway billing.
+  // This is the LAST line of defense: even if silence watchdog and budget check both fail,
+  // this timer WILL kill the call.
+  const maxDurationMs = session.callType === 'external_call' ? EXTERNAL_CALL_TIMEOUT_MS
+    : session.callType === 'demo' ? DEMO_TIMEOUT_MS
+    : (session.callType === 'demo_interview' || session.callType === 'onboarding_setup') ? INTERVIEW_TIMEOUT_MS
+    : SESSION_TIMEOUT_MS;
+  session.hardKillTimer = setTimeout(() => {
+    const s = activeSessions.get(sessionId);
+    if (!s) return;
+    s.intentionalClose = true;
+    const mins = Math.round(maxDurationMs / 60000);
+    console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} HARD KILL TIMER (${mins}min max reached)`);
+    try {
+      s.ws.send(JSON.stringify({ type: "text", token: "I need to wrap up now. It was great talking with you!", last: true }));
+      s.ws.send(JSON.stringify({ type: "end" }));
+      s.ws.close();
+    } catch { /* ignore */ }
+    forceHangupCall(s.callSid).catch(() => {});
+    cleanupSession(sessionId);
+  }, maxDurationMs);
+
   // ── SILENCE WATCHDOG ──────────────────────────────────────────────────────
   // Check every 30s for dead air. Thresholds vary by call type:
-  //   External calls: 30s warning, 45s hangup (short — we're calling businesses)
-  //   Demo calls:     45s warning, 60s hangup
-  //   User calls:     60s warning, 90s hangup
-  const SILENCE_WARN_MS = session.callType === 'external_call' ? 30_000
+  //   External calls: 15s warning, 20s hangup (aggressive — biggest cost leak)
+  //   Demo calls:     30s warning, 45s hangup
+  //   User calls:     45s warning, 60s hangup
+  const SILENCE_WARN_MS = session.callType === 'external_call' ? 15_000
+    : (session.callType === 'demo' || session.callType === 'demo_interview') ? 30_000
+    : 45_000;
+  const SILENCE_HANGUP_MS = session.callType === 'external_call' ? 20_000
     : (session.callType === 'demo' || session.callType === 'demo_interview') ? 45_000
     : 60_000;
-  const SILENCE_HANGUP_MS = session.callType === 'external_call' ? 45_000
-    : (session.callType === 'demo' || session.callType === 'demo_interview') ? 60_000
-    : 90_000;
+  // Check interval: 10s for external calls (so 20s hangup is caught promptly), 30s for others
+  const WATCHDOG_INTERVAL = session.callType === 'external_call' ? 10_000 : 30_000;
   session.silenceWatchdog = setInterval(() => {
     const currentSession = activeSessions.get(sessionId);
     if (!currentSession || currentSession.ws.readyState !== WebSocket.OPEN) {
@@ -661,7 +673,7 @@ RULES:
         currentSession.ws.send(JSON.stringify({ type: "text", token: "Hey, you still there?", last: true }));
       } catch { /* ignore */ }
     }
-  }, 30_000);
+  }, WATCHDOG_INTERVAL);
 
   if (needsPin) {
     ws.send(JSON.stringify({
@@ -679,6 +691,25 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
 
   session.lastActivityAt = Date.now();
   session.silenceWarnings = 0; // Reset silence counter on any user speech
+
+  // ── EXPLICIT HANG-UP COMMAND ──────────────────────────────────────────────
+  // User says "hang up", "end call", etc. → immediately terminate without waiting for AI
+  const lowerVoice = voicePrompt.toLowerCase().trim();
+  const isHangupCommand = /\b(hang up|end (the )?call|disconnect|stop (the )?call|end this|i('m| am) done|that('s| is) it|let me go|drop the call)\b/i.test(lowerVoice);
+  if (isHangupCommand) {
+    session.intentionalClose = true;
+    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} EXPLICIT HANG-UP command: "${voicePrompt.slice(0, 50)}"`);
+    try {
+      session.ws.send(JSON.stringify({ type: "text", token: "Got it — hanging up now. Talk soon!", last: true }));
+      session.ws.send(JSON.stringify({ type: "end" }));
+      setTimeout(() => {
+        try { session.ws.close(); } catch { /* ignore */ }
+        forceHangupCall(session.callSid).catch(() => {});
+        cleanupSession(session.sessionId);
+      }, 2000);
+    } catch { /* ignore */ }
+    return;
+  }
 
   // ── PER-CALL COST BUDGET GUARD ───────────────────────────────────────────
   const elapsedMinutes = (Date.now() - session.startedAt) / 60000;
@@ -784,6 +815,40 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     return;
   }
 
+  // ── VOICEMAIL / IVR DETECTION (external calls) ─────────────────────────
+  // When calling businesses, voicemail greetings and IVR menus get transcribed
+  // by STT as "prompts". The AI responds to them (talking to a machine), burning
+  // minutes indefinitely. Detect and handle:
+  if (session.callType === 'external_call' && session.conversationHistory.length <= 2) {
+    const isVoicemailGreeting = /\b(leave (a |your )?(message|name|number)|after the (beep|tone)|not available|voicemail|mailbox (is )?full|record your message|press \d|press star|main menu|for (sales|support|billing|hours|directions)|office hours|currently closed|we('re| are) (closed|unavailable)|call back|business hours)\b/i.test(voicePrompt);
+    if (isVoicemailGreeting) {
+      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} VOICEMAIL/IVR DETECTED in external call: "${voicePrompt.slice(0, 80)}"`);
+      // Check if this is an IVR menu (press X for Y) — try to navigate
+      const ivrMatch = voicePrompt.match(/press (\d)\b.*?\b(reserv|book|speak|agent|operator|representative|host)/i);
+      if (ivrMatch) {
+        const digit = ivrMatch[1];
+        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} IVR NAVIGATION: pressing ${digit}`);
+        session.ws.send(JSON.stringify({ type: "dtmf", digit }));
+        // Don't hang up — let the call continue after pressing the digit
+      } else if (/leave (a |your )?(message|name)|after the (beep|tone)|voicemail|record your message/i.test(voicePrompt)) {
+        // It's a voicemail — leave a brief message and hang up
+        session.intentionalClose = true;
+        const extCtx = session.memoryContext;
+        const vmMessage = `Hi, this is calling on behalf of ${session.userName}. ${extCtx.includes('MISSION') ? 'We were hoping to' : 'Please call us back at your convenience.'} Thank you, goodbye.`;
+        session.ws.send(JSON.stringify({ type: "text", token: vmMessage, last: true }));
+        setTimeout(() => {
+          try {
+            session.ws.send(JSON.stringify({ type: "end" }));
+            session.ws.close();
+          } catch { /* ignore */ }
+          forceHangupCall(session.callSid).catch(() => {});
+          cleanupSession(session.sessionId);
+        }, 4000);
+        return;
+      }
+    }
+  }
+
   // Normal conversation
   session.conversationHistory.push({ role: "user", content: voicePrompt });
   console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} user: "${voicePrompt.slice(0, 80)}"`);
@@ -882,8 +947,10 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       if (digits.length > 0) {
         const allDigits = digits.join('');
         console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} SENDING DTMF: ${allDigits}`);
-        // ConversationRelay expects { type: "sendDigits", digits: "123" } format
-        session.ws.send(JSON.stringify({ type: "sendDigits", digits: allDigits }));
+        // Send each digit individually — ConversationRelay uses { type: "dtmf", digit: "X" }
+        for (const d of allDigits) {
+          session.ws.send(JSON.stringify({ type: "dtmf", digit: d }));
+        }
       }
     }
 
@@ -1303,11 +1370,9 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
       })
       .then(() => {}, (e: any) => console.error("[VOICE-WS] Call history insert failed:", e));
 
-    // Track voice call cost — skip billing for demo calls (they're not tied to real accounts)
-    if (durationSeconds > 0 && session.callType !== "demo") {
-      const voiceCost = calculateVoiceCost(durationSeconds, false);
-      trackServiceCost(session.userId, "twilio", "voice_call", voiceCost, "voice_call", undefined, VOICE_MARKUP).catch(() => {});
-    }
+    // Voice call cost is tracked by /webhook/voice/call-end StatusCallback (actual duration from Twilio).
+    // DO NOT log cost here — it was being double-billed (once here on WS close, once on StatusCallback).
+    // The StatusCallback uses Twilio's reported duration which is the source of truth.
   } catch { /* non-critical */ }
 }
 

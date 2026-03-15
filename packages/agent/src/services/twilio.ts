@@ -218,11 +218,9 @@ export async function callUser(request: VoiceCallRequest): Promise<{
 
     const data = await response.json() as { sid: string };
 
-    // Track usage
+    // Track usage count only — actual cost is logged by /webhook/voice/call-end StatusCallback.
+    // DO NOT log estimate here — it was never deducted when actual arrived, causing double-billing.
     await trackVoiceUsage(request.userId, 1);
-    // Preliminary estimate (~2 min raw cost) — will be corrected by /webhook/voice/call-end StatusCallback
-    // Raw cost: 2min × $0.0585/min = $0.117. VOICE_MARKUP applied on top of base 1.296×.
-    trackServiceCost(request.userId, "twilio", "voice_outbound_estimate", 0.117, "voice_outbound", undefined, VOICE_MARKUP).catch(() => {});
 
     console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
     return { success: true, callSid: data.sid };
@@ -290,9 +288,8 @@ export async function callExternal(
     }
 
     const data = await response.json() as { sid: string };
+    // Track usage count only — actual cost is logged by /webhook/voice/call-end StatusCallback.
     await trackVoiceUsage(userId, 1);
-    // Preliminary estimate (~2 min raw cost) — will be corrected by /webhook/voice/call-end StatusCallback
-    trackServiceCost(userId, "twilio", "voice_outbound_estimate", 0.117, "voice_outbound", undefined, VOICE_MARKUP).catch(() => {});
 
     console.log(`[CALL-EXTERNAL] ConversationRelay call placed: to=${to}, from=${fromNumber || config.phoneNumber}, sid=${data.sid}, business=${businessName || 'unknown'}`);
     return { success: true, callSid: data.sid };

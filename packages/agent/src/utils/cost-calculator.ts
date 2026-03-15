@@ -97,7 +97,7 @@ export const CAPTCHA_COSTS = {
  * Markup is applied later by trackServiceCost with VOICE_MARKUP.
  */
 export function calculateVoiceCost(durationSeconds: number, direction: 'inbound' | 'outbound' | boolean = 'inbound'): number {
-  const durationMinutes = Math.ceil(durationSeconds / 60); // Twilio rounds up to nearest minute
+  const durationMinutes = durationSeconds / 60; // Twilio bills per-second (since 2024)
   // Support legacy boolean isInternational param (treated as outbound if true)
   let ratePerMin: number;
   if (direction === true) {

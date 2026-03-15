@@ -480,20 +480,182 @@ export default {
         }
       }
 
-      // Validate sender matches registered user email
+      // ── EMAIL PROCESSING ──────────────────────────────────────────────────
+      // MX records point to Cloudflare (route1/2/3.mx.cloudflare.net).
+      // Cloudflare delivers emails HERE. We parse, verify sender/PIN, and
+      // POST directly to the agent's /task/incoming endpoint.
+      //
+      // Root cause of email outage (2026-03-15): Worker validated users but
+      // never forwarded or processed the email. Emails silently lost.
+
+      // Parse the email content
+      const parsed = await parseEmail(message.raw);
+      const { type: emailType, taskId } = detectEmailType(parsed.subject, parsed.body);
       const senderEmail = message.from.toLowerCase().trim();
       const registeredEmail = user.email?.toLowerCase().trim() || "";
 
-      // ALL email processing is now handled by the IMAP Inbox Poller.
-      // The Cloudflare Worker's only job is to forward emails so they arrive
-      // in the Gmail inbox where the poller picks them up.
-      // This eliminates the duplicate processing bug where both Cloudflare AND
-      // the IMAP poller would process the same email, causing double PIN
-      // challenges and duplicate task execution.
-      console.log(`[EMAIL] Valid user ${username}, forwarding to inbox for IMAP poller processing`);
-      // Note: message.forward() is not needed here — Porkbun email forwarding
-      // handles routing *@aevoy.com to the Gmail inbox. The Cloudflare Worker
-      // just validates the recipient exists so invalid addresses get rejected early.
+      console.log(`[EMAIL] User ${username} (${maskUserId(user.id)}), type=${emailType}, from=${maskEmail(senderEmail)}`);
+
+      // ── SENDER VERIFICATION & PIN ──────────────────────────────────────
+      // Known sender = user's registered email → trusted, no PIN needed
+      // Service email (noreply@, automated domains) → trusted, no PIN needed
+      // Unknown human sender → require PIN verification via bcrypt
+      const isKnownSender = senderEmail === registeredEmail;
+      const senderDomain = senderEmail.split('@')[1] || '';
+      const TRUSTED_DOMAINS = [
+        'gmail.com', 'outlook.com', 'yahoo.com', 'hotmail.com', 'icloud.com',
+        'google.com', 'github.com', 'linkedin.com', 'facebook.com', 'twitter.com',
+        'amazon.com', 'apple.com', 'microsoft.com', 'netflix.com', 'stripe.com',
+        'paypal.com', 'shopify.com', 'twilio.com', 'resend.dev', 'notion.so',
+      ];
+      const isServiceEmail = /^(no-?reply|mailer|notifications?|alerts?|info|support|billing|updates?|news|digest)@/i.test(senderEmail)
+        || TRUSTED_DOMAINS.includes(senderDomain);
+
+      let processedSubject = parsed.subject;
+      let processedBody = parsed.body;
+
+      if (!isKnownSender && !isServiceEmail) {
+        // Unknown human sender — PIN required
+        const supabase = getSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
+
+        // Check if user has a PIN set
+        if (!user.unified_pin_hash) {
+          // No PIN set — reject with instructions
+          await sendEmailViaAgent({
+            to: senderEmail,
+            from: `${username}@aevoy.com`,
+            subject: `Re: ${parsed.subject}`,
+            html: `<p>This email address only accepts emails from ${username}'s registered email address.</p><p>To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aevoy settings.</p>`,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
+          console.log(`[EMAIL] Unknown sender ${maskEmail(senderEmail)}, no PIN set — sent setup instructions`);
+          return;
+        }
+
+        // Check lockout (DB-backed, survives restarts)
+        if (user.pin_locked_until) {
+          const lockExpiry = new Date(user.pin_locked_until).getTime();
+          if (Date.now() < lockExpiry) {
+            await sendEmailViaAgent({
+              to: senderEmail,
+              from: `${username}@aevoy.com`,
+              subject: `Re: ${parsed.subject}`,
+              html: `<p>Too many incorrect PIN attempts. This account is temporarily locked. Please try again later.</p>`,
+              agentUrl: env.AGENT_URL,
+              webhookSecret: env.AGENT_WEBHOOK_SECRET,
+            });
+            console.log(`[EMAIL] PIN locked for ${username} — rejected`);
+            return;
+          }
+        }
+
+        // Extract PIN from subject or body (first 4-6 digit number)
+        const pinMatch = parsed.subject.match(/\b(\d{4,6})\b/) || parsed.body.match(/\b(\d{4,6})\b/);
+
+        if (!pinMatch) {
+          // No PIN found — send challenge
+          await sendEmailViaAgent({
+            to: senderEmail,
+            from: `${username}@aevoy.com`,
+            subject: `Re: ${parsed.subject}`,
+            html: `<p>Hi! This is ${username}'s AI assistant at Aevoy.</p><p>I received your email, but I don't recognize your email address. To verify your identity, please reply with your <strong>4-6 digit security PIN</strong> in the subject line or body of your email.</p><p>If you don't have a PIN, please ask ${username} to share it with you.</p>`,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
+          console.log(`[EMAIL] Sent PIN request to ${maskEmail(senderEmail)} for ${username}`);
+          return;
+        }
+
+        // Verify PIN via agent's /api/verify-pin endpoint (bcrypt comparison + lockout)
+        // Can't do bcrypt in Cloudflare Workers — delegate to Node.js agent
+        let pinStatus: string = 'error';
+        try {
+          const pinResponse = await fetch(`${env.AGENT_URL}/api/verify-pin`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Webhook-Secret': env.AGENT_WEBHOOK_SECRET,
+            },
+            body: JSON.stringify({ userId: user.id, pin: pinMatch[1] }),
+          });
+          if (pinResponse.ok) {
+            const pinData = await pinResponse.json() as { result: string; remaining?: number };
+            pinStatus = pinData.result;
+          }
+        } catch (pinErr) {
+          console.error(`[EMAIL] PIN verification API failed:`, pinErr);
+        }
+
+        if (pinStatus === 'locked') {
+          await sendEmailViaAgent({
+            to: senderEmail,
+            from: `${username}@aevoy.com`,
+            subject: `Re: ${parsed.subject}`,
+            html: `<p>Too many incorrect PIN attempts. Your account has been temporarily locked. Please try again in about an hour.</p>`,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
+          console.log(`[EMAIL] PIN lockout triggered for ${username}`);
+          return;
+        }
+
+        if (pinStatus !== 'valid') {
+          await sendEmailViaAgent({
+            to: senderEmail,
+            from: `${username}@aevoy.com`,
+            subject: `Re: ${parsed.subject}`,
+            html: `<p>Incorrect PIN. Please reply with the correct 4-6 digit security PIN in the subject or body.</p>`,
+            agentUrl: env.AGENT_URL,
+            webhookSecret: env.AGENT_WEBHOOK_SECRET,
+          });
+          console.log(`[EMAIL] Wrong PIN from ${maskEmail(senderEmail)} for ${username}`);
+          return;
+        }
+
+        // PIN valid — strip PIN from content before processing
+        processedSubject = parsed.subject.replace(new RegExp(`\\b${pinMatch[1]}\\b`), '').trim() || parsed.subject;
+        processedBody = parsed.body.replace(new RegExp(`\\b${pinMatch[1]}\\b`), '').trim() || parsed.body;
+        console.log(`[EMAIL] PIN verified for ${maskEmail(senderEmail)} → ${username}`);
+      }
+
+      // For confirmation/verification replies, extract just the reply text
+      const emailBody = (emailType === 'confirmation_reply' || emailType === 'verification_reply')
+        ? extractReplyText(processedBody)
+        : processedBody;
+
+      // ── POST TO AGENT ──────────────────────────────────────────────────
+      try {
+        const agentResponse = await fetchWithRetry(`${env.AGENT_URL}/task/incoming`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Webhook-Secret": env.AGENT_WEBHOOK_SECRET,
+          },
+          body: JSON.stringify({
+            userId: user.id,
+            username: user.username,
+            from: message.from,
+            subject: processedSubject,
+            body: emailBody,
+            inputChannel: "email",
+            emailType,
+            taskId: taskId || undefined,
+            senderName: parsed.senderName || undefined,
+            attachments: parsed.attachments || undefined,
+          }),
+        });
+
+        console.log(`[EMAIL] Agent response: ${agentResponse.status} for ${username}@aevoy.com`);
+      } catch (agentErr) {
+        console.error(`[EMAIL] Agent POST failed for ${username}@aevoy.com:`, agentErr);
+        // Forward to admin as fallback so the email isn't lost
+        try {
+          const ADMIN_EMAIL = env.ADMIN_FORWARD_EMAIL || "omarkebrahim@gmail.com";
+          await message.forward(ADMIN_EMAIL);
+          console.log(`[EMAIL] Fallback: forwarded to admin`);
+        } catch { /* last resort failed */ }
+      }
     } catch (error) {
       console.error("Email processing error:", error);
       // Don't reject for processing errors - we received the email

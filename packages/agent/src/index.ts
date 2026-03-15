@@ -1544,6 +1544,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`;
 
     console.log(`[VOICE-DEMO] Outbound TwiML: ${effectiveCallType}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
@@ -1554,6 +1555,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
     const fallback = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna-Neural">Hey there! I'm Aevoy, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
+  <Hangup/>
 </Response>`;
     res.type("text/xml").send(fallback);
   }
@@ -1602,6 +1604,7 @@ app.post("/webhook/voice/outbound-twiml", twilioLimiter, validateTwilioSignature
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`;
 
   console.log(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}, voice=${voiceId}`);
@@ -1723,6 +1726,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`);
       }
 
@@ -1733,6 +1737,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   <Gather input="speech" timeout="10" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app'}/webhook/voice/demo" method="POST" />
   <Say voice="${voice}">I didn't catch that. Feel free to call back anytime!</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -1797,6 +1802,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     <Say voice="${voice}">Please leave your message. What would you like me to tell ${escapeXml(calledUser.username)}?</Say>
   </Gather>
   <Say voice="${voice}">I didn't hear a message. I'll let ${escapeXml(calledUser.username)} know you called. Goodbye!</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -1923,6 +1929,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -1966,6 +1973,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   <Gather input="speech" timeout="8" speechTimeout="auto" speechModel="phone_call" enhanced="true"
     action="${process.env.AGENT_URL}/webhook/voice/process/${userId}" method="POST" />
   <Say voice="${voice}">I didn't catch that. Call me back anytime!</Say>
+  <Hangup/>
 </Response>`);
   } catch (error) {
     console.error("[VOICE] Incoming call error:", error);
@@ -2023,6 +2031,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
     <Say voice="${voice}">Please leave your message. What would you like me to tell ${escapeXml(userName)}?</Say>
   </Gather>
   <Say voice="${voice}">I didn't hear a message. Goodbye!</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -2059,6 +2068,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -2074,6 +2084,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Sorry, an error occurred. Please try again later.</Say>
+  <Hangup/>
 </Response>`);
   }
 });
@@ -2119,6 +2130,7 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Sorry, I had trouble processing that. Please try again.</Say>
+  <Hangup/>
 </Response>`);
   }
 });
@@ -2144,6 +2156,7 @@ app.post("/webhook/voice/email-decision/:userId/:queueId", twilioLimiter, valida
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${DEFAULT_VOICE}">Sorry, I had trouble processing your response. I'll queue this in your dashboard for you to review later.</Say>
+  <Hangup/>
 </Response>`);
   }
 });
@@ -2164,6 +2177,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Thank you! I've recorded your message and will make sure it's delivered right away. Goodbye!</Say>
+  <Hangup/>
 </Response>`);
 
     // Send message to user via email and SMS
@@ -2203,6 +2217,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Sorry, there was an error. Please try calling back later.</Say>
+  <Hangup/>
 </Response>`);
   }
 });
@@ -2721,6 +2736,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
   <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
+  <Hangup/>
 </Response>`);
   } catch (error) {
     console.error("[PIN] Verification error:", error);
@@ -2783,6 +2799,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
     <Say voice="${voice}">Please leave your message.</Say>
   </Gather>
   <Say voice="${voice}">I didn't hear a message. Goodbye!</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -2839,6 +2856,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -2851,6 +2869,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
     <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
   <Say voice="${voice}">I didn't catch that. Please call back and try again.</Say>
+  <Hangup/>
 </Response>`);
   } catch (error) {
     console.error("[VOICE-PREMIUM] Error:", error);
@@ -3276,6 +3295,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
     </ConversationRelay>
   </Connect>
   <Say voice="Polly.Joanna-Neural">Sorry, I lost our connection. Please call back and we'll pick up where we left off.</Say>
+  <Hangup/>
 </Response>`);
     }
 
@@ -3291,6 +3311,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
     <Say voice="${voice}">Go ahead, I'm listening.</Say>
   </Gather>
   <Say voice="${voice}">I didn't catch that. Thanks for chatting! Have a great day.</Say>
+  <Hangup/>
 </Response>`);
   } catch (error) {
     console.error("[CHECKIN] Webhook error:", error);
@@ -3630,6 +3651,21 @@ app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) =>
     const { calculateVoiceCost, VOICE_MARKUP: voiceMarkup } = await import('./utils/cost-calculator.js');
     const direction: 'inbound' | 'outbound' = Direction?.includes('inbound') ? 'inbound' : 'outbound';
     const realCost = calculateVoiceCost(durationSeconds, direction);
+
+    // Dedup: prevent double-billing if Twilio retries the StatusCallback
+    const { data: existingLog } = await supabase
+      .from('ai_cost_log')
+      .select('id')
+      .eq('provider', 'twilio')
+      .eq('purpose', `voice_${direction}`)
+      .eq('user_id', userId)
+      .gte('created_at', new Date(Date.now() - 60000).toISOString()) // within last 60s
+      .limit(1);
+
+    if (existingLog && existingLog.length > 0) {
+      console.log(`[CALL-END] Dedup: cost already logged for ${direction} call within 60s for user ${maskUserId(userId)}`);
+      return;
+    }
 
     // Log the actual cost with VOICE_MARKUP (1.5×) on top of base 1.296× = 1.944× total
     await trackServiceCost(userId, 'twilio', `voice_${direction}_actual`, realCost, `voice_${direction}`, undefined, voiceMarkup);

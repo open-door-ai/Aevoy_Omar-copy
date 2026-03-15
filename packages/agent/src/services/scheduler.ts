@@ -684,6 +684,17 @@ async function tryDirectActionExecution(
     console.log(`[SCHEDULER-DIRECT] isCallUser=${isCallUser} (===check: ${lower === 'call_user'}, includes: ${lower.includes('call_user')})`);
 
     if (isCallUser) {
+      // Rate limit: max 2 scheduled calls per user per day to prevent cost runaway
+      const { data: todayCalls } = await getSupabaseClient()
+        .from('call_history')
+        .select('id')
+        .eq('user_id', userId)
+        .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
+        .limit(3);
+      if (todayCalls && todayCalls.length >= 2) {
+        console.log(`[SCHEDULER-DIRECT] call_user: RATE LIMITED — already ${todayCalls.length} calls today for ${userId.slice(0, 8)}`);
+        return true;
+      }
       const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
       const { callUser } = await import('./twilio.js');
       // Look up phone from profile if not provided
