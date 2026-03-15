@@ -4,6 +4,7 @@
  */
 
 import twilio from "twilio";
+import { trackServiceCost } from './ai.js';
 
 function getTwilioClient() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
@@ -26,7 +27,7 @@ function getWhatsAppNumber(): string {
  * @param to E.164 phone number (e.g. "+12015551234") — "whatsapp:" prefix is added internally
  * @param body Message text
  */
-export async function sendWhatsAppMessage(to: string, body: string): Promise<boolean> {
+export async function sendWhatsAppMessage(to: string, body: string, userId?: string): Promise<boolean> {
   try {
     const client = getTwilioClient();
     const from = getWhatsAppNumber();
@@ -53,6 +54,10 @@ export async function sendWhatsAppMessage(to: string, body: string): Promise<boo
         body: chunk,
       });
     }
+
+    // WhatsApp costs ~$0.005 per message (Twilio sandbox rate)
+    trackServiceCost(userId || 'platform', 'twilio', 'whatsapp_outbound', 0.005, 'whatsapp_outbound', undefined, 1.5).catch(() => {});
+
     return true;
   } catch (err) {
     console.error("[WHATSAPP] sendMessage failed:", err);

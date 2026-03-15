@@ -3040,7 +3040,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
 
 // ---- Telegram Webhook ----
 
-app.post("/webhook/telegram", async (req, res) => {
+app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
   // Validate Telegram webhook secret header
   const { verifyTelegramWebhookSecret, sendTelegramMessage } = await import("./services/telegram.js");
   const headerSecret = req.headers["x-telegram-bot-api-secret-token"] as string || "";
@@ -3100,12 +3100,14 @@ app.post("/webhook/telegram", async (req, res) => {
       return;
     }
 
+    // Track inbound Telegram message for audit trail
+    trackServiceCost(profile.id, 'telegram', 'telegram_inbound', 0.0001, 'telegram_inbound').catch(() => {});
+
     // Determine message body (text or transcribed voice note)
     let body = text;
 
     if (voice && !text) {
-      // Voice note received — transcription coming soon
-      await sendTelegramMessage(chatId, "🎙️ Voice notes coming soon! Please send your message as text for now.");
+      await sendTelegramMessage(chatId, "I can't process voice notes yet — please type your message as text and I'll help you right away!");
       return;
     }
 
@@ -3207,6 +3209,9 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
         "👋 Hi! To use Aevoy AI on WhatsApp:\n\n1. Sign up at aevoy.com\n2. Go to Connected Apps\n3. Scan the WhatsApp QR code\n\nTakes 30 seconds!");
       return;
     }
+
+    // Track inbound WhatsApp cost
+    trackServiceCost(profile.id, 'twilio', 'whatsapp_inbound', 0.005, 'whatsapp_inbound', undefined, 1.5).catch(() => {});
 
     // ── STEP 3: Handle built-in shortcuts ──
     const CALL_ME = /^(call me|call my phone|ring me)\b/i;

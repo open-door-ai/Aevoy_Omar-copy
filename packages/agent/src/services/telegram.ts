@@ -4,6 +4,7 @@
  */
 
 import crypto from "crypto";
+import { trackServiceCost } from './ai.js';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || "";
@@ -13,7 +14,7 @@ const API_BASE = `https://api.telegram.org/bot${BOT_TOKEN}`;
  * Send a text message to a Telegram chat.
  * Splits messages > 4096 chars (Telegram limit).
  */
-export async function sendTelegramMessage(chatId: string, text: string): Promise<boolean> {
+export async function sendTelegramMessage(chatId: string, text: string, userId?: string): Promise<boolean> {
   const MAX_LEN = 4096;
   const chunks = [];
   for (let i = 0; i < text.length; i += MAX_LEN) {
@@ -32,6 +33,10 @@ export async function sendTelegramMessage(chatId: string, text: string): Promise
       return false;
     }
   }
+
+  // Telegram is free but log for audit trail
+  trackServiceCost(userId || 'platform', 'telegram', 'telegram_outbound', 0.0001, 'telegram_outbound').catch(() => {});
+
   return true;
 }
 
