@@ -122,6 +122,15 @@ export async function POST(request: Request) {
 
     const phone = normalizePhone(rawPhone);
 
+    // HARD BLOCK: Only North American (+1) numbers allowed for demo
+    // INCIDENT 2026-03-16: International calls to Israel at $0.31/min burned $55+
+    if (!/^\+1[2-9]\d{9}$/.test(phone)) {
+      return NextResponse.json(
+        { error: 'Demo calls are only available for US and Canada numbers right now.' },
+        { status: 400 }
+      );
+    }
+
     // Check if the caller is a logged-in user (for onboarding calls)
     // SECURITY: Always use session userId — never trust client-supplied userId
     let userId = '';

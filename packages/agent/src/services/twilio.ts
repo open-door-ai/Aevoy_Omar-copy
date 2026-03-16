@@ -188,15 +188,21 @@ export async function callUser(request: VoiceCallRequest): Promise<{
       return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
     }
 
-    // Block premium/toll numbers that charge high per-minute rates
+    // Block ALL non-North-American numbers — international calls cost 10-30x more
+    // INCIDENT 2026-03-16: Israel calls at $0.31/min burned $55+ via demo button
     const cleanedNumber = (request.to || '').replace(/[^\d+]/g, '');
+    const isNorthAmerican = /^\+?1[2-9]\d{9}$/.test(cleanedNumber);
+    if (!isNorthAmerican) {
+      console.warn(`[TWILIO] BLOCKED international number: ${cleanedNumber.slice(0,5)}*** (only +1 NA numbers allowed)`);
+      return { success: false, error: 'International calls are not supported yet. Only US/Canada numbers (+1) are allowed.' };
+    }
+    // Block premium/toll numbers
     if (/^\+?1(900|976|950|540)/.test(cleanedNumber)) {
       console.warn(`[TWILIO] BLOCKED premium number: ${cleanedNumber.slice(0,7)}***`);
       return { success: false, error: 'Premium/toll numbers are not supported for safety.' };
     }
 
-    // Daily call safety cap — prevents runaway automation
-    // Users pay themselves, but this prevents bugs/loops from burning hundreds
+    // Daily call safety cap
     const DEFAULT_DAILY_CALL_LIMIT = 20;
     try {
       const { data: todayCalls } = await getSupabaseClient()
@@ -273,15 +279,19 @@ export async function callExternal(
     return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
   }
 
-  // Block premium/toll numbers that charge high per-minute rates
+  // Block ALL non-North-American numbers — international calls cost 10-30x more
   const cleanedNumber = (to || '').replace(/[^\d+]/g, '');
+  const isNorthAmerican = /^\+?1[2-9]\d{9}$/.test(cleanedNumber);
+  if (!isNorthAmerican) {
+    console.warn(`[TWILIO] BLOCKED international number: ${cleanedNumber.slice(0,5)}*** (only +1 NA numbers allowed)`);
+    return { success: false, error: 'International calls are not supported yet. Only US/Canada numbers (+1) are allowed.' };
+  }
   if (/^\+?1(900|976|950|540)/.test(cleanedNumber)) {
     console.warn(`[TWILIO] BLOCKED premium number: ${cleanedNumber.slice(0,7)}***`);
     return { success: false, error: 'Premium/toll numbers are not supported for safety.' };
   }
 
-  // Daily call safety cap — prevents runaway automation
-  // Users pay themselves, but this prevents bugs/loops from burning hundreds
+  // Daily call safety cap
   const DEFAULT_DAILY_CALL_LIMIT = 20;
   try {
     const { data: todayCalls } = await getSupabaseClient()
