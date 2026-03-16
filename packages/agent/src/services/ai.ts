@@ -149,6 +149,12 @@ function getOpenRouterClient(apiKey: string): OpenAI {
   return openRouterClients.get(apiKey)!;
 }
 
+// Clean up cached OpenRouter clients every 10 minutes
+setInterval(() => {
+  openRouterClients.clear();
+  console.log('[AI] OpenRouter client cache cleared');
+}, 10 * 60 * 1000);
+
 // ---- OpenRouter user settings cache (5-min TTL) ----
 interface OrSettings {
   apiKey: string | null;

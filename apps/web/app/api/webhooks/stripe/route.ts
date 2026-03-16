@@ -29,14 +29,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing signature" }, { status: 400 });
   }
 
-  // Verify signature if secret is configured
-  if (process.env.STRIPE_WEBHOOK_SECRET) {
-    if (!verifyStripeSignature(body, signature, process.env.STRIPE_WEBHOOK_SECRET)) {
-      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-    }
-  } else {
-    // TODO: Stripe webhook secret not configured. Reject in production.
-    return NextResponse.json({ error: "Stripe not configured" }, { status: 500 });
+  // Verify signature — fail closed when secret not set
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!secret || secret.trim() === '') {
+    console.error('[STRIPE] Webhook secret not configured — rejecting all webhooks');
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
+  }
+  if (!verifyStripeSignature(body, signature, secret)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
   let event: { type: string; data: { object: Record<string, unknown> } };

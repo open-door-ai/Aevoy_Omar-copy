@@ -30,6 +30,19 @@ const PROMPT_INJECTION_PATTERNS: RegExp[] = [
   /print\s+(your\s+)?(system\s+prompt|hidden\s+instructions)/i,
   /reveal\s+(your\s+)?(system\s+prompt|hidden\s+instructions|api\s+key)/i,
   /what\s+are\s+your\s+(exact\s+)?(instructions|system\s+prompt|guidelines)/i,
+  // Advanced prompt injection patterns
+  /system\s*prompt/i,
+  /you\s+are\s+now/i,
+  /new\s+instructions?:/i,
+  /override\s+(?:your|the|all)\s+(?:instructions|rules|settings)/i,
+  /disregard\s+(?:previous|all|your)/i,
+  /act\s+as\s+(?:if|though)/i,
+  /pretend\s+(?:you|to\s+be)/i,
+  /(?:reveal|show|display|output)\s+(?:your|the)\s+(?:system|initial|original)\s+(?:prompt|instructions)/i,
+  /(?:what|tell\s+me)\s+(?:is|are)\s+your\s+(?:instructions|rules|prompt)/i,
+  /jailbreak/i,
+  /DAN\s+mode/i,
+  /developer\s+mode\s+enabled/i,
 ];
 
 // SSRF / path traversal patterns in URLs or values

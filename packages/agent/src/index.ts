@@ -267,8 +267,15 @@ app.use('/files', express.static(path.join('/tmp', 'aevoy-files'), {
 // Timing-safe webhook secret comparison
 function verifyWebhookSecret(provided: string | null | undefined): boolean {
   if (!provided || !WEBHOOK_SECRET) return false;
-  if (provided.length !== WEBHOOK_SECRET.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(WEBHOOK_SECRET));
+  // Pad both to same length to prevent length-based timing attacks
+  const maxLen = Math.max(provided.length, WEBHOOK_SECRET.length);
+  const paddedProvided = provided.padEnd(maxLen, '\0');
+  const paddedSecret = WEBHOOK_SECRET.padEnd(maxLen, '\0');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(paddedProvided), Buffer.from(paddedSecret));
+  } catch {
+    return false;
+  }
 }
 
 // Twilio signature validation middleware (async for dynamic import)
@@ -306,7 +313,7 @@ async function validateTwilioSignature(req: express.Request, res: express.Respon
     }
   } catch {
     if (process.env.NODE_ENV === "production") {
-      res.status(500).json({ error: "Twilio validation unavailable" });
+      res.status(500).json({ error: "Service validation unavailable" });
       return;
     }
   }
@@ -764,7 +771,7 @@ app.get("/debug/test-image-gen", async (req, res) => {
     return res.status(401).json({ error: "unauthorized" });
   }
   const googleKey = process.env.GOOGLE_API_KEY;
-  if (!googleKey) return res.json({ error: "GOOGLE_API_KEY not set" });
+  if (!googleKey) return res.json({ error: "Required API key not configured" });
 
   const models = [
     'gemini-2.0-flash-exp-image-generation',
@@ -3474,7 +3481,7 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
   try {
     const config = getTwilioConfig();
     if (!config) {
-      return res.status(503).json({ error: "Twilio not configured" });
+      return res.status(503).json({ error: "Service temporarily unavailable" });
     }
 
     // Initiate call with TwiML URL pointing to gather endpoint

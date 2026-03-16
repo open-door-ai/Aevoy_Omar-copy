@@ -51,5 +51,8 @@ export function checkRateLimit(
 
 export function getClientIp(request: Request): string {
   const headers = new Headers(request.headers);
-  return headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  // Vercel provides the real IP in x-real-ip, which can't be spoofed
+  return headers.get('x-real-ip')
+    || headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || 'unknown';
 }
