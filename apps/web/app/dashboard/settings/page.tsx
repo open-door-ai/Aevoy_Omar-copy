@@ -67,6 +67,7 @@ interface AgentCard {
 }
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState<string>("profile");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [botName, setBotName] = useState("");
@@ -930,6 +931,30 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Tab Navigation */}
+      <div className="flex gap-1 border-b border-border mb-8 overflow-x-auto">
+        {[
+          { id: "profile", label: "Profile" },
+          { id: "ai", label: "AI Settings" },
+          { id: "connections", label: "Connections" },
+          { id: "phone", label: "Phone & Voice" },
+          { id: "advanced", label: "Advanced" },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+              activeTab === tab.id
+                ? "border-foreground text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "profile" && (<>
       {/* Help & Tour */}
       <Card>
         <CardContent className="pt-4 pb-4">
@@ -1033,7 +1058,7 @@ export default function SettingsPage() {
           <div className="flex justify-between items-center">
             <div>
               <p className="font-medium capitalize">
-                {`${profile.subscription_tier || 'Free'} Plan`}
+                {`${(!profile.subscription_tier || profile.subscription_tier === 'beta') ? 'Free' : profile.subscription_tier} Plan`}
               </p>
               <p className="text-sm text-muted-foreground">
                 {`${profile.messages_used} / ${profile.messages_limit} messages used`}
@@ -1045,9 +1070,10 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      </>)}
 
       {/* AI Behavior Settings */}
-      {settings && (
+      {activeTab === "ai" && settings && (
         <Card>
           <CardHeader>
             <CardTitle>AI Behavior</CardTitle>
@@ -1434,7 +1460,7 @@ export default function SettingsPage() {
       )}
 
       {/* Autonomous Features */}
-      {settings && (
+      {activeTab === "advanced" && settings && (
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -1539,7 +1565,7 @@ export default function SettingsPage() {
       )}
 
       {/* Task Execution */}
-      {settings && (
+      {activeTab === "advanced" && settings && (
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -1624,6 +1650,7 @@ export default function SettingsPage() {
       )}
 
       {/* Agent Card */}
+      {activeTab === "advanced" && (
       <Card>
         <CardHeader>
           <CardTitle>Agent Card</CardTitle>
@@ -1722,8 +1749,10 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Quick Inbox Setup */}
+      {activeTab === "connections" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1797,8 +1826,10 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Integrations */}
+      {activeTab === "connections" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -1967,8 +1998,10 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* Inbox Management */}
+      {activeTab === "connections" && (<>
       <InboxManagementSettings />
 
       {/* Credential Vault - Saved Passwords */}
@@ -2101,8 +2134,10 @@ export default function SettingsPage() {
           </p>
         </CardContent>
       </Card>
+      </>)}
 
       {/* Phone & Voice Settings */}
+      {activeTab === "phone" && (
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -2555,8 +2590,10 @@ export default function SettingsPage() {
           </Button>
         </CardFooter>
       </Card>
+      )}
 
       {/* Agent Passwords */}
+      {activeTab === "advanced" && (
       <Card className="border-border">
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -2631,8 +2668,10 @@ export default function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+      )}
 
       {/* Developer Mode */}
+      {activeTab === "advanced" && (
       <div id="developer">
         <Card className="border-border">
           <CardHeader>
@@ -2838,8 +2877,10 @@ export default function SettingsPage() {
           )}
         </Card>
       </div>
+      )}
 
       {/* Developer Portal */}
+      {activeTab === "advanced" && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Code2 className="h-5 w-5" /> Developer</CardTitle>
@@ -2857,8 +2898,10 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Danger Zone */}
+      {activeTab === "advanced" && (
       <Card className="border-red-200">
         <CardHeader>
           <CardTitle className="text-red-600">Danger Zone</CardTitle>
@@ -2884,6 +2927,7 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Purchase Number Modal */}
       <PurchaseNumberModal

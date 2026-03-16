@@ -24,9 +24,12 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/theme";
 
-const navItems = [
+const primaryNavItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, id: "nav-dashboard" },
   { href: "/dashboard/activity", label: "Activity", icon: Activity, id: "nav-activity" },
+];
+
+const secondaryNavItems = [
   { href: "/dashboard/queue", label: "Queue", icon: Clock, id: "nav-queue" },
   { href: "/dashboard/scheduled", label: "Scheduled", icon: Calendar, id: "nav-scheduled" },
   { href: "/dashboard/inbox", label: "Inbox", icon: Mail, id: "nav-inbox" },
@@ -78,7 +81,28 @@ export default function DashboardLayout({
         </Link>
       </div>
       <nav className="p-3 space-y-1 flex-1 overflow-y-auto">
-        {navItems.map((item) => {
+        {primaryNavItems.map((item) => {
+          const active = isActive(item.href);
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              id={item.id}
+              href={item.href}
+              onClick={() => setMobileOpen(false)}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative ${
+                active
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {item.label}
+            </Link>
+          );
+        })}
+        <div className="border-t border-border my-2" />
+        {secondaryNavItems.map((item) => {
           const active = isActive(item.href);
           const Icon = item.icon;
           return (

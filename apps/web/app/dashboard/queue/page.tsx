@@ -213,7 +213,8 @@ export default function TaskQueuePage() {
         </p>
       </div>
 
-      {/* Stats */}
+      {/* Stats — hidden when queue is empty */}
+      {stats.total > 0 && (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4 pb-4">
@@ -252,6 +253,7 @@ export default function TaskQueuePage() {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {/* Filters & Search */}
       <Card>
@@ -295,15 +297,10 @@ export default function TaskQueuePage() {
           </CardContent>
         </Card>
       ) : filteredTasks.length === 0 ? (
-        <Card>
-          <CardContent className="py-6">
-            <EmptyState
-              icon={Inbox}
-              title="Nothing in the queue right now"
-              description="You're all caught up! Send a task via email, SMS, or the dashboard to get started."
-            />
-          </CardContent>
-        </Card>
+        <div className="text-center py-16">
+          <p className="text-lg font-medium">All clear</p>
+          <p className="text-muted-foreground mt-1">No tasks in the queue right now. Send one from the dashboard.</p>
+        </div>
       ) : (
         statusOrder.map((status) => {
           const group = groupedTasks[status];
