@@ -120,8 +120,29 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // ── Security: strip any leaked credentials from response ──
     response = stripCredentialLeaks(response);
 
-    // ── Complete task ──
+    // ── Quality gate: detect fake/hollow responses before marking completed ──
     const executionTime = Date.now() - startTime;
+    const isBrowserTask = classification.tier === 'multi_step' && /\b(go to|browse|sign up|book|register|navigate|create.*account|fill.*form|click|search.*for)\b/i.test(task.subject);
+
+    // Detect fake responses: AI claims success but has no concrete evidence
+    const fakeResponsePatterns = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|having trouble|I apologize)\b/i;
+    const hasConcreteData = /\b(\d{3}[-.)]\d{3}[-.)]\d{4}|\$\d+\.\d{2}|confirmed|booked|reservation|receipt|order|reference|confirmation)\b/i.test(response);
+    const admitsFailure = fakeResponsePatterns.test(response);
+    const credPlaceholderLeaked = /\[CRED_/.test(response);
+
+    let taskStatus: 'completed' | 'needs_review' = 'completed';
+    let verificationStatus = 'verified';
+
+    if (isBrowserTask && (admitsFailure || credPlaceholderLeaked)) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'failed';
+      console.warn(`[V3] Quality gate FAILED for browser task: admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}`);
+    } else if (isBrowserTask && !hasConcreteData && response.length < 200) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'low_confidence';
+      console.warn(`[V3] Quality gate LOW CONFIDENCE: short response (${response.length} chars), no concrete data`);
+    }
+
     await atomicCompleteTask(
       taskId,
       task.inputChannel,
@@ -131,10 +152,10 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       task.subject,
       response,
       {
-        status: 'completed',
+        status: taskStatus,
         completed_at: new Date().toISOString(),
         execution_time_ms: executionTime,
-        verification_status: 'verified',
+        verification_status: verificationStatus,
       },
       { suppressEmail: task.suppressEmail }
     );
