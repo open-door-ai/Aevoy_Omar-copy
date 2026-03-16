@@ -199,6 +199,26 @@ async function pollAutoProceedTasks(): Promise<void> {
 
     for (const task of tasks) {
       try {
+        // LOOP PREVENTION: Check if this task has already been auto-proceeded
+        // Count how many tasks with similar input_text were created for this user today
+        const taskText = (task.input_text || '').substring(0, 100);
+        const { data: similarToday } = await supabase
+          .from('tasks')
+          .select('id')
+          .eq('user_id', task.user_id)
+          .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
+          .ilike('input_text', `%${taskText.substring(0, 50).replace(/[%_]/g, '')}%`)
+          .limit(5);
+
+        if (similarToday && similarToday.length >= 3) {
+          console.warn(`[AUTO-PROCEED] LOOP DETECTED: "${taskText.substring(0, 40)}..." has ${similarToday.length} similar tasks today — killing auto-proceed`);
+          await supabase.from('tasks').update({
+            auto_proceed_at: null,
+            auto_proceed_context: null,
+          }).eq('id', task.id);
+          continue;
+        }
+
         // Look up user profile
         const { data: profile } = await supabase
           .from('profiles')
