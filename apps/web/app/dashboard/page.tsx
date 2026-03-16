@@ -47,6 +47,13 @@ export default async function DashboardPage() {
   return (
     <DashboardWithOnboarding username={username}>
       <div className="space-y-6 sm:space-y-8 max-w-4xl mx-auto">
+        {/* Maintenance banner — remove when done */}
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-center">
+          <p className="text-sm text-amber-800 font-medium">
+            Aevoy is under maintenance — systems may be temporarily slow. We&apos;re making things better.
+          </p>
+        </div>
+
         {/* Takeover Banner — thin, top of page */}
         <TakeoverBanner />
 
