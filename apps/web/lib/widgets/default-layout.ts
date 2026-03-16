@@ -8,12 +8,10 @@ export interface WidgetLayoutItem {
 }
 
 // Default layout given to all new users
+// Minimal by default — users can add more via Customize
 export const DEFAULT_LAYOUT: Omit<WidgetLayoutItem, "id">[] = [
   { widgetId: "send-task",        w: 4, h: 1, visible: true },
-  { widgetId: "quick-stats",      w: 4, h: 1, visible: true },
   { widgetId: "task-stats",       w: 4, h: 1, visible: true },
-  { widgetId: "recent-activity",  w: 2, h: 2, visible: true },
-  { widgetId: "scheduled-tasks",  w: 2, h: 2, visible: true },
-  { widgetId: "ai-contact",       w: 2, h: 1, visible: true },
-  { widgetId: "usage",            w: 2, h: 1, visible: true },
+  { widgetId: "recent-activity",  w: 4, h: 2, visible: true },
+  { widgetId: "ai-contact",       w: 4, h: 1, visible: true },
 ];

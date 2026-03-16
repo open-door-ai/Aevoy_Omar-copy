@@ -7,13 +7,6 @@ import { DEFAULT_LAYOUT } from "@/lib/widgets/default-layout";
 
 export const dynamic = "force-dynamic";
 
-function getGreeting() {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
-}
-
 export default async function DashboardPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -24,7 +17,6 @@ export default async function DashboardPage() {
   ]);
 
   const username = profile?.username || user?.email?.split("@")[0] || "user";
-  const displayName = profile?.display_name || profile?.bot_name || "there";
   const botName = profile?.bot_name || null;
   // Use saved layout or default
   let layout: WidgetLayoutItem[] = [];
@@ -39,19 +31,16 @@ export default async function DashboardPage() {
 
   return (
     <DashboardWithOnboarding username={username}>
-      <div className="space-y-4 sm:space-y-6">
-        {/* Header */}
-        <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold">{getGreeting()}, {displayName}</h1>
-            <p className="text-muted-foreground text-sm">
-              {botName ? `${botName} is ready to help` : "Your AI assistant is ready"}
-            </p>
-          </div>
-        </div>
-
-        {/* Takeover Banner */}
+      <div className="space-y-6 sm:space-y-8 max-w-4xl mx-auto">
+        {/* Takeover Banner — thin, top of page */}
         <TakeoverBanner />
+
+        {/* Hero Greeting — warm, action-oriented */}
+        <div className="pt-2 sm:pt-4">
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
+            What can {botName || "your AI"} do for you?
+          </h1>
+        </div>
 
         {/* Modular Widget Grid */}
         <WidgetGrid initialLayout={layout} />

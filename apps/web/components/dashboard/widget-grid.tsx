@@ -56,15 +56,6 @@ interface WidgetGridProps {
   initialLayout: WidgetLayoutItem[];
 }
 
-// Enumerate all Tailwind col-span classes so JIT won't purge them
-const MD_SPAN: Record<number, string> = { 1: "md:col-span-1", 2: "md:col-span-2" };
-const LG_SPAN: Record<number, string> = { 1: "lg:col-span-1", 2: "lg:col-span-2", 3: "lg:col-span-3", 4: "lg:col-span-4" };
-function getSpanClass(w: number): string {
-  const md = Math.min(w, 2);
-  const lg = Math.min(w, 4);
-  return `col-span-1 ${MD_SPAN[md] ?? "md:col-span-2"} ${LG_SPAN[lg] ?? "lg:col-span-4"}`;
-}
-
 export function WidgetGrid({ initialLayout }: WidgetGridProps) {
   const [layout, setLayout] = useState<WidgetLayoutItem[]>(initialLayout);
   const [isEditing, setIsEditing] = useState(false);
@@ -119,7 +110,6 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
   const handleAdd = useCallback((item: Omit<WidgetLayoutItem, "id">) => {
     const newItem: WidgetLayoutItem = { id: crypto.randomUUID(), ...item };
     setJustAdded(prev => new Set(prev).add(newItem.id));
-    // Clear the "just added" flag after the bounce animation finishes
     setTimeout(() => setJustAdded(prev => { const next = new Set(prev); next.delete(newItem.id); return next; }), 800);
     setLayout(prev => {
       const newLayout = [...prev, newItem];
@@ -132,25 +122,10 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
 
   return (
     <div className="relative">
-      {/* Edit mode toolbar */}
-      <div className="flex items-center justify-between mb-3 sm:mb-6">
-        <div className="flex items-center gap-2">
-          {isSaving && <span className="text-xs text-muted-foreground animate-pulse">Saving...</span>}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsEditing(!isEditing)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${isEditing ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80 text-muted-foreground hover:text-foreground"}`}
-          >
-            {isEditing ? <><Check className="h-3.5 w-3.5" /> Done</> : <><Pencil className="h-3.5 w-3.5" /> Customize</>}
-          </button>
-        </div>
-      </div>
-
-      {/* Widget Grid */}
+      {/* Widget Grid — clean, full-width stacked layout */}
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
         <SortableContext items={layout.map(i => i.id)} strategy={rectSortingStrategy}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-auto">
+          <div className="space-y-4">
             <AnimatePresence>
               {layout.map(item => {
                 const WidgetComponent = WIDGET_COMPONENTS[item.widgetId];
@@ -160,17 +135,17 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
                   <motion.div
                     key={item.id}
                     layout
-                    initial={isNew ? { opacity: 0, scale: 0.5, y: 30 } : { opacity: 0, scale: 0.95 }}
+                    initial={isNew ? { opacity: 0, scale: 0.95, y: 20 } : { opacity: 0 }}
                     animate={isNew
-                      ? { opacity: 1, scale: [0.5, 1.08, 0.96, 1.02, 1], y: 0 }
-                      : { opacity: 1, scale: 1 }
+                      ? { opacity: 1, scale: 1, y: 0 }
+                      : { opacity: 1 }
                     }
-                    exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+                    exit={{ opacity: 0, scale: 0.98, transition: { duration: 0.15 } }}
                     transition={isNew
-                      ? { type: "spring", stiffness: 300, damping: 15, mass: 0.8 }
-                      : { type: "spring", stiffness: 400, damping: 30 }
+                      ? { type: "spring", stiffness: 300, damping: 20 }
+                      : { duration: 0.3 }
                     }
-                    className={`min-w-0 ${getSpanClass(item.w)}`}
+                    className="w-full"
                   >
                     <WidgetContainer item={item} onRemove={handleRemove} isEditing={isEditing}>
                       <WidgetComponent />
@@ -183,7 +158,22 @@ export function WidgetGrid({ initialLayout }: WidgetGridProps) {
         </SortableContext>
       </DndContext>
 
-      {/* Add Widget FAB */}
+      {/* Customize link — minimal, at the bottom */}
+      <div className="flex items-center justify-end mt-6 gap-2">
+        {isSaving && <span className="text-xs text-muted-foreground animate-pulse">Saving...</span>}
+        <button
+          onClick={() => setIsEditing(!isEditing)}
+          className={`inline-flex items-center gap-1.5 text-xs transition-colors ${
+            isEditing
+              ? "text-primary font-medium"
+              : "text-muted-foreground/50 hover:text-muted-foreground"
+          }`}
+        >
+          {isEditing ? <><Check className="h-3 w-3" /> Done</> : <><Pencil className="h-3 w-3" /> Customize</>}
+        </button>
+      </div>
+
+      {/* Add Widget FAB — only in edit mode */}
       <AnimatePresence>
         {isEditing && (
           <motion.button

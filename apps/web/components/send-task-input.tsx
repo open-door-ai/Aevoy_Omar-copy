@@ -1,9 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { Send, Loader2 } from "lucide-react";
 
@@ -42,29 +40,43 @@ export function SendTaskInput() {
   };
 
   return (
-    <Card>
-      <CardContent className="pt-4 pb-4">
-        <form onSubmit={handleSubmit} className="flex gap-3">
-          <Input
-            placeholder="Tell your AI what to do..."
-            value={taskText}
-            onChange={(e) => setTaskText(e.target.value)}
-            className="flex-1"
-            disabled={submitting}
-          />
+    <form onSubmit={handleSubmit} className="relative">
+      <div className="relative rounded-2xl border border-border bg-card shadow-sm hover:shadow-md focus-within:shadow-md focus-within:border-primary/30 transition-all duration-200">
+        <textarea
+          placeholder="Book a restaurant, research competitors, draft an email..."
+          value={taskText}
+          onChange={(e) => setTaskText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              if (taskText.trim() && !submitting) {
+                handleSubmit(e);
+              }
+            }
+          }}
+          rows={2}
+          className="w-full resize-none bg-transparent px-5 pt-5 pb-14 text-base placeholder:text-muted-foreground/60 focus:outline-none"
+          disabled={submitting}
+        />
+        <div className="absolute bottom-3 right-3 flex items-center gap-2">
+          <span className="text-xs text-muted-foreground/40 hidden sm:block">
+            Enter to send
+          </span>
           <Button
             type="submit"
+            size="sm"
             disabled={submitting || !taskText.trim()}
+            className="rounded-xl px-4 h-9"
           >
             {submitting ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Send className="w-4 h-4" />
             )}
-            <span className="ml-2 hidden sm:inline">Send</span>
+            <span className="ml-2">Send</span>
           </Button>
-        </form>
-      </CardContent>
-    </Card>
+        </div>
+      </div>
+    </form>
   );
 }

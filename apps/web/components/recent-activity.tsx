@@ -1,12 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StaggerContainer, StaggerItem } from "@/components/ui/motion";
 import { SkeletonList } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Button } from "@/components/ui/button";
-import { Mail, Filter } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import Link from "next/link";
 
 interface Task {
@@ -39,16 +36,13 @@ function cleanTaskName(name: string) {
   return name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
 }
 
-function truncateText(text: string, max: number = 80) {
+function truncateText(text: string, max: number = 60) {
   return text.length > max ? text.slice(0, max) + '...' : text;
 }
 
 export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityProps) {
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [loading, setLoading] = useState(!initialTasks.length);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [channelFilter, setChannelFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -56,7 +50,6 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
       const data = await response.json();
       if (data.tasks) {
         setTasks(data.tasks);
-        setLastUpdate(new Date());
       }
     } catch (err) {
       console.error("Error fetching tasks:", err);
@@ -66,19 +59,15 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
   }, []);
 
   useEffect(() => {
-    // Initial fetch if no initial tasks
     if (!initialTasks.length) {
       fetchTasks();
     }
 
-    // Check if there are any pending/processing tasks
     const hasPendingTasks = tasks.some(
       (t) => t.status === "pending" || t.status === "processing"
     );
 
-    // Poll more frequently if there are pending tasks
     const pollInterval = hasPendingTasks ? 3000 : 10000;
-
     const interval = setInterval(fetchTasks, pollInterval);
     return () => clearInterval(interval);
   }, [tasks, fetchTasks, initialTasks.length]);
@@ -100,230 +89,124 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
     return date.toLocaleDateString();
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusIndicator = (status: string) => {
     switch (status) {
       case "completed":
-        return "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center shrink-0">
+            <svg className="w-3 h-3 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+        );
       case "failed":
-        return "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-red-100 dark:bg-red-900/40 flex items-center justify-center shrink-0">
+            <svg className="w-3 h-3 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </div>
+        );
       case "processing":
-        return "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center shrink-0">
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+          </div>
+        );
       case "pending":
-        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-yellow-100 dark:bg-yellow-900/40 flex items-center justify-center shrink-0">
+            <div className="w-2 h-2 rounded-full bg-yellow-500" />
+          </div>
+        );
       case "needs_review":
-        return "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-orange-100 dark:bg-orange-900/40 flex items-center justify-center shrink-0">
+            <span className="text-[10px] font-bold text-orange-600 dark:text-orange-400">!</span>
+          </div>
+        );
       case "awaiting_confirmation":
-        return "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center shrink-0">
+            <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400">?</span>
+          </div>
+        );
       default:
-        return "bg-gray-100 text-gray-800 dark:bg-gray-800/40 dark:text-gray-300";
+        return (
+          <div className="w-5 h-5 rounded-full bg-gray-100 dark:bg-gray-800/40 flex items-center justify-center shrink-0">
+            <div className="w-2 h-2 rounded-full bg-gray-400" />
+          </div>
+        );
     }
   };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "OK";
-      case "failed":
-        return "X";
-      case "processing":
-        return "...";
-      case "pending":
-        return "o";
-      case "needs_review":
-        return "!";
-      case "awaiting_confirmation":
-        return "?";
-      default:
-        return "-";
-    }
-  };
-
-  const getChannelBadge = (channel: string | null) => {
-    switch (channel) {
-      case "sms":
-        return <span className="text-xs bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300 px-1.5 py-0.5 rounded">SMS</span>;
-      case "voice":
-        return <span className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 px-1.5 py-0.5 rounded">Voice</span>;
-      case "chat":
-        return <span className="text-xs bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 px-1.5 py-0.5 rounded">Chat</span>;
-      case "proactive":
-        return <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 px-1.5 py-0.5 rounded">Proactive</span>;
-      default:
-        return null; // email is default, no badge needed
-    }
-  };
-
-  const getVerificationBadge = (status: string | null) => {
-    if (!status) return null;
-    if (status === "verified") {
-      return <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 px-1.5 py-0.5 rounded">Verified</span>;
-    }
-    if (status === "unverified") {
-      return <span className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 px-1.5 py-0.5 rounded">Unverified</span>;
-    }
-    return null;
-  };
-
-  // Filter tasks
-  const filteredTasks = tasks.filter((task) => {
-    if (channelFilter !== "all" && task.input_channel !== channelFilter) return false;
-    if (statusFilter !== "all" && task.status !== statusFilter) return false;
-    return true;
-  });
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
-          <div>
-            <CardTitle>Recent Activity</CardTitle>
-            <CardDescription>
-              Your latest tasks and their status
-            </CardDescription>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={channelFilter}
-              onChange={(e) => setChannelFilter(e.target.value)}
-              className="text-xs border border-border rounded-md px-2 py-1.5 min-h-[36px] bg-background text-foreground"
-            >
-              <option value="all">All Channels</option>
-              <option value="email">Email</option>
-              <option value="sms">SMS</option>
-              <option value="voice">Voice</option>
-              <option value="proactive">Proactive</option>
-            </select>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="text-xs border border-border rounded-md px-2 py-1.5 min-h-[36px] bg-background text-foreground"
-            >
-              <option value="all">All Status</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-              <option value="processing">Processing</option>
-              <option value="pending">Pending</option>
-            </select>
-            <Link href="/dashboard/activity">
-              <Button variant="outline" size="sm">View All</Button>
-            </Link>
-          </div>
-        </div>
-        <div className="text-xs text-muted-foreground mt-2">
-          Updated {formatTime(lastUpdate.toISOString())}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <SkeletonList count={3} variant="task" />
-        ) : filteredTasks.length > 0 ? (
-          <StaggerContainer className="space-y-3 max-h-[500px] overflow-y-auto" staggerDelay={0.05}>
-            {filteredTasks.map((task) => (
-              <StaggerItem key={task.id}>
-                <Link href={`/dashboard/tasks/${task.id}`} className="block">
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-muted-foreground">Recent Activity</h2>
+        {tasks.length > 0 && (
+          <Link
+            href="/dashboard/activity"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            View all
+          </Link>
+        )}
+      </div>
+
+      {/* Task list */}
+      {loading ? (
+        <SkeletonList count={3} variant="task" />
+      ) : tasks.length > 0 ? (
+        <StaggerContainer className="space-y-1" staggerDelay={0.03}>
+          {tasks.map((task) => (
+            <StaggerItem key={task.id}>
+              <Link href={`/dashboard/tasks/${task.id}`} className="block">
                 <div
-                  className={`p-4 border rounded-lg transition-all hover:bg-muted/50 cursor-pointer ${
-                    task.status === "processing" ? "border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 animate-pulse" : ""
+                  className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-colors hover:bg-muted/50 ${
+                    task.status === "processing" ? "bg-blue-50/50 dark:bg-blue-950/10" : ""
                   }`}
                 >
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm break-words">
+                  {getStatusIndicator(task.status)}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">
                       {truncateText(cleanTaskName(task.email_subject || "Task"))}
                     </p>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className="text-sm text-muted-foreground">
-                        {formatTime(task.created_at)}
-                      </span>
-                      {getChannelBadge(task.input_channel)}
-                      {task.type && (
-                        <span className="text-xs bg-muted px-2 py-0.5 rounded">
-                          {task.type.charAt(0).toUpperCase() + task.type.slice(1).replace(/_/g, ' ')}
-                        </span>
-                      )}
-                      {getVerificationBadge(task.verification_status)}
-                      {task.tokens_used > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          {task.tokens_used.toLocaleString()} tokens
-                        </span>
-                      )}
-                      {task.cost_usd != null && task.cost_usd > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          ${task.cost_usd.toFixed(4)}
-                        </span>
-                      )}
-                      <span
-                        className={`px-2 py-0.5 text-xs rounded-full inline-flex items-center gap-1 ${getStatusColor(
-                          task.status
-                        )}`}
-                      >
-                        <span>{getStatusIcon(task.status)}</span>
-                        {task.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
-                      </span>
-                    </div>
                     {task.status === "processing" && task.progress_message && (
-                      <div className="mt-1.5 space-y-1">
-                        <p className="text-xs text-blue-600 dark:text-blue-400">
-                          {task.progress_message}
-                        </p>
-                        {task.progress_total != null && task.progress_total > 0 && (
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-blue-100 dark:bg-blue-900/40 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                                style={{ width: `${Math.min(100, ((task.progress_step || 0) / task.progress_total) * 100)}%` }}
-                              />
-                            </div>
-                            <span className="text-xs text-muted-foreground whitespace-nowrap">
-                              {task.action_success_count || 0}/{task.action_count || 0} actions
-                            </span>
-                          </div>
-                        )}
-                        {task.live_view_url && (
-                          <a
-                            href={task.live_view_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-500 hover:underline"
-                          >
-                            Watch live
-                          </a>
-                        )}
-                      </div>
+                      <p className="text-xs text-blue-600 dark:text-blue-400 truncate mt-0.5">
+                        {task.progress_message}
+                      </p>
                     )}
-                    {task.error_message && (
-                      <p className="text-xs text-red-500 mt-1 truncate">
+                    {task.error_message && task.status === "failed" && (
+                      <p className="text-xs text-red-500 truncate mt-0.5">
                         {task.error_message}
                       </p>
                     )}
                   </div>
+                  <span className="text-xs text-muted-foreground/60 shrink-0">
+                    {formatTime(task.created_at)}
+                  </span>
                 </div>
-                </Link>
-              </StaggerItem>
-            ))}
-          </StaggerContainer>
-        ) : (
-          <EmptyState
-            icon={Mail}
-            title={channelFilter === "all" && statusFilter === "all" ? "No tasks yet" : "No tasks match your filters"}
-            description={
-              channelFilter === "all" && statusFilter === "all"
-                ? `Send an email to ${aiEmail} to get started!`
-                : "Try adjusting your filters to see more tasks."
-            }
-            action={
-              channelFilter === "all" && statusFilter === "all"
-                ? undefined
-                : {
-                    label: "Clear Filters",
-                    onClick: () => {
-                      setChannelFilter("all");
-                      setStatusFilter("all");
-                    },
-                  }
-            }
-          />
-        )}
-      </CardContent>
-    </Card>
+              </Link>
+            </StaggerItem>
+          ))}
+        </StaggerContainer>
+      ) : (
+        <div className="text-center py-12 px-6">
+          <div className="flex justify-center mb-3">
+            <div className="p-3 bg-muted/60 rounded-2xl">
+              <Sparkles className="w-8 h-8 text-muted-foreground/60" />
+            </div>
+          </div>
+          <p className="text-sm font-medium text-foreground mb-1">
+            Your AI is ready
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Give it something to do — type above or email {aiEmail}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
