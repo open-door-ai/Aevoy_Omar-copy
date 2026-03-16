@@ -120,28 +120,74 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // ── Security: strip any leaked credentials from response ──
     response = stripCredentialLeaks(response);
 
-    // ── Quality gate: detect fake/hollow responses before marking completed ──
+    // ── Quality gate: cross-reference AI claims against actual actions ──
     const executionTime = Date.now() - startTime;
     const isMultiStep = classification.tier === 'multi_step';
+    const responseLower = response.toLowerCase();
 
-    // Detect fake responses: AI claims success but has no concrete evidence
-    const fakeResponsePatterns = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|encountered.*notification|JavaScript needed)\b/i;
-    const hasConcreteData = /\b(\d{3}[-.)]\d{3}[-.)]\d{4}|\$\d+\.\d{2}|https?:\/\/\S{10,}|confirmed|booked|reservation|receipt|order|reference|confirmation|password|username|logged in|signed up|account created)\b/i.test(response);
-    const admitsFailure = fakeResponsePatterns.test(response);
+    // 1. Detect explicit failure admissions
+    const admitsFailure = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|encountered.*notification|JavaScript needed)\b/i.test(response);
     const credPlaceholderLeaked = /\[CRED_/.test(response);
+
+    // 2. Detect HALLUCINATED ACTIONS — AI claims it did something the system can't do
+    const claimsPhoneCall = /\b(I called|called them|called the|phone call|spoke with|spoke to|reached them by phone)\b/i.test(response);
+    const claimsEmailSent = /\b(sent.*email|emailed them|confirmation email.*sent)\b/i.test(response);
+    const claimsBooked = /\b(booked|reservation.*made|reservation.*confirmed|table.*reserved|booking.*confirmed)\b/i.test(response);
+    const claimsAccountCreated = /\b(account.*created|signed up|registered|account.*ready)\b/i.test(response);
+
+    // Cross-reference: did the AI actually USE the tools it claims?
+    // Check the conversation history for actual tool calls
+    const toolsUsed = new Set<string>();
+    // The messages array from handleMultiStep contains tool_calls — but we're outside that scope
+    // Use action_count as a proxy: if action_count is 0-1 but AI claims complex actions, it's lying
+    const taskRecord = await getSupabaseClient().from('tasks').select('action_count').eq('id', taskId).single();
+    const actionCount = taskRecord?.data?.action_count || 0;
 
     let taskStatus: 'completed' | 'needs_review' = 'completed';
     let verificationStatus = 'verified';
+    let failReason = '';
 
-    // Quality gate applies to ALL multi-step tasks, not just browser-keyword ones
-    if (isMultiStep && (admitsFailure || credPlaceholderLeaked)) {
-      taskStatus = 'needs_review';
-      verificationStatus = 'failed';
-      console.warn(`[V3] Quality gate FAILED: admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}, response="${response.slice(0, 80)}"`);
-    } else if (isMultiStep && !hasConcreteData && response.length < 200) {
-      taskStatus = 'needs_review';
-      verificationStatus = 'low_confidence';
-      console.warn(`[V3] Quality gate LOW CONFIDENCE: short response (${response.length} chars), no concrete data`);
+    // Quality gate: cross-reference claims vs actions
+    if (isMultiStep) {
+      if (admitsFailure || credPlaceholderLeaked) {
+        taskStatus = 'needs_review';
+        verificationStatus = 'failed';
+        failReason = `admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}`;
+      } else if (claimsPhoneCall) {
+        // AI claims it called someone — verify against call_history
+        const { data: recentCalls } = await getSupabaseClient()
+          .from('call_history')
+          .select('id')
+          .eq('user_id', task.userId)
+          .gte('created_at', new Date(Date.now() - executionTime - 60000).toISOString())
+          .limit(1);
+        if (!recentCalls || recentCalls.length === 0) {
+          taskStatus = 'needs_review';
+          verificationStatus = 'hallucination';
+          failReason = 'AI claims phone call but no call_history entry found';
+        }
+      } else if (claimsBooked && actionCount < 3) {
+        // AI claims booking but did fewer than 3 browser actions — suspicious
+        taskStatus = 'needs_review';
+        verificationStatus = 'low_confidence';
+        failReason = `Claims booking but only ${actionCount} actions taken`;
+      } else if (claimsAccountCreated && actionCount < 3) {
+        taskStatus = 'needs_review';
+        verificationStatus = 'low_confidence';
+        failReason = `Claims account created but only ${actionCount} actions taken`;
+      } else if (actionCount === 0 && responseLower.length > 100) {
+        // AI gave a long response but took ZERO actions — likely fabricated from training data
+        const hasUrl = /https?:\/\/\S{10,}/.test(response);
+        if (!hasUrl) {
+          taskStatus = 'needs_review';
+          verificationStatus = 'no_actions';
+          failReason = 'Long response but zero browser/tool actions — likely fabricated';
+        }
+      }
+    }
+
+    if (failReason) {
+      console.warn(`[V3] Quality gate: ${verificationStatus} — ${failReason}, response="${response.slice(0, 80)}"`);
     }
 
     await atomicCompleteTask(
