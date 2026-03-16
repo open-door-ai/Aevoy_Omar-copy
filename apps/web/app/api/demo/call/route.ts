@@ -58,11 +58,41 @@ export async function POST(request: Request) {
   try {
     const ip = getClientIp(request);
 
+    // In-memory check (fast path, but resets on cold start)
     if (!checkRateLimit('demo-call', ip, 3, DAY_MS)) {
       return NextResponse.json(
         { error: 'Demo limit reached. You can try again tomorrow.' },
         { status: 429 }
       );
+    }
+
+    // DB-backed global demo cap — prevents abuse across serverless instances
+    // Max 20 demo calls per day total (all users combined)
+    try {
+      const { createClient: createAdmin } = await import('@supabase/supabase-js');
+      const admin = createAdmin(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      );
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const { data: todayCalls } = await admin
+        .from('call_history')
+        .select('id')
+        .eq('call_type', 'demo')
+        .gte('created_at', todayStart.toISOString())
+        .limit(21);
+      if (todayCalls && todayCalls.length >= 20) {
+        console.warn(`[DEMO/CALL] GLOBAL daily demo cap reached (${todayCalls.length} calls today)`);
+        return NextResponse.json(
+          { error: 'Demo is temporarily unavailable due to high demand. Try again tomorrow or sign up for a free account.' },
+          { status: 429 }
+        );
+      }
+    } catch (e) {
+      console.error('[DEMO/CALL] DB rate limit check failed:', e);
+      // Continue if DB check fails — don't block on errors
     }
 
     const creds = getTwilioCredentials();

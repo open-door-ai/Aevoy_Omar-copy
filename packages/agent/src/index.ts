@@ -1454,14 +1454,17 @@ const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
 const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
 
-// ---- Demo Daily Minute Cap (cost protection: max 60 min/day ~$3.15) ----
-const DEMO_DAILY_MINUTE_CAP = 60;
+// ---- Demo Daily Minute Cap (cost protection) ----
+// INCIDENT 2026-03-16: Someone spammed "Call Me Now" 27 times in 10 min, burned $33.
+// In-memory cap resets on Railway deploy. DB-backed cap added on Vercel side.
+// This is the agent-side failsafe — Vercel also checks call_history table.
+const DEMO_DAILY_MINUTE_CAP = 20; // 20 min/day max (~$1.20 worst case)
 let demoDailyMinutes = 0;
 let demoDayKey = new Date().toISOString().split('T')[0];
 
 function checkDemoCap(callDurationMinutes: number = 3): boolean {
   const today = new Date().toISOString().split('T')[0];
-  if (today !== demoDayKey) { demoDailyMinutes = 0; demoDayKey = today; } // Reset daily
+  if (today !== demoDayKey) { demoDailyMinutes = 0; demoDayKey = today; }
   if (demoDailyMinutes + callDurationMinutes > DEMO_DAILY_MINUTE_CAP) return false;
   demoDailyMinutes += callDurationMinutes;
   return true;
