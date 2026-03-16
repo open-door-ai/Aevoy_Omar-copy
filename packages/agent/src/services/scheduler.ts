@@ -43,17 +43,12 @@ export function startScheduler(): void {
   
   console.log('[SCHEDULER] Started - checking for due tasks every minute');
 
-  // Start proactive engine (hourly)
-  runProactiveChecks().catch(console.error);
-  proactiveInterval = setInterval(async () => {
-    try {
-      await runProactiveChecks();
-    } catch (error) {
-      console.error('[SCHEDULER] Proactive check error:', error);
-    }
-  }, 60 * 60 * 1000); // Every hour
-
-  console.log('[SCHEDULER] Proactive engine started - checking hourly');
+  // DISABLED: Proactive engine was creating unsolicited tasks and burning money.
+  // Incident 2026-03-16: Proactive tasks fired without user request, sent SMS/emails.
+  // Re-enable ONLY when user explicitly opts in via user_settings.proactive_enabled.
+  // runProactiveChecks().catch(console.error);
+  // proactiveInterval = setInterval(async () => { ... }, 60 * 60 * 1000);
+  console.log('[SCHEDULER] Proactive engine DISABLED (cost control)');
 
   // Start daily check-in calls (every 5 minutes)
   runCheckinCalls().catch(console.error);

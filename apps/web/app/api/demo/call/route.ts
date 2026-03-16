@@ -55,6 +55,13 @@ function getTwilioCredentials() {
  * Rate limit: 3 calls/day per IP
  */
 export async function POST(request: Request) {
+  // DISABLED: Demo calls temporarily suspended. Someone spammed 27 calls in 10 min
+  // and burned $33. Re-enable after Twilio is funded and abuse controls are proven.
+  return NextResponse.json(
+    { error: 'Demo calls are temporarily paused. Sign up for a free account to try Aevoy!' },
+    { status: 503 }
+  );
+
   try {
     const ip = getClientIp(request);
 
