@@ -35,6 +35,14 @@ interface RecentActivityProps {
   initialTasks?: Task[];
 }
 
+function cleanTaskName(name: string) {
+  return name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
+}
+
+function truncateText(text: string, max: number = 80) {
+  return text.length > max ? text.slice(0, max) + '...' : text;
+}
+
 export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityProps) {
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [loading, setLoading] = useState(!initialTasks.length);
@@ -220,7 +228,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                 >
                   <div className="min-w-0">
                     <p className="font-medium text-sm break-words">
-                      {task.email_subject || "Task"}
+                      {truncateText(cleanTaskName(task.email_subject || "Task"))}
                     </p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className="text-sm text-muted-foreground">
@@ -229,7 +237,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                       {getChannelBadge(task.input_channel)}
                       {task.type && (
                         <span className="text-xs bg-muted px-2 py-0.5 rounded">
-                          {task.type}
+                          {task.type.charAt(0).toUpperCase() + task.type.slice(1).replace(/_/g, ' ')}
                         </span>
                       )}
                       {getVerificationBadge(task.verification_status)}
@@ -249,7 +257,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
                         )}`}
                       >
                         <span>{getStatusIcon(task.status)}</span>
-                        {task.status}
+                        {task.status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                       </span>
                     </div>
                     {task.status === "processing" && task.progress_message && (

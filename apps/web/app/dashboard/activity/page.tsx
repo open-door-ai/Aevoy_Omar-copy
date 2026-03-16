@@ -84,6 +84,14 @@ function getChannelBadge(channel: string | null) {
   }
 }
 
+function cleanTaskName(name: string) {
+  return name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
+}
+
+function truncateText(text: string, max: number = 80) {
+  return text.length > max ? text.slice(0, max) + '...' : text;
+}
+
 function getChannelBadgeColor(channel: string | null) {
   switch (channel) {
     case "sms":
@@ -198,7 +206,7 @@ export default async function ActivityPage() {
                       }`}
                     >
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{task.email_subject || "Task"}</p>
+                        <p className="font-medium truncate">{truncateText(cleanTaskName(task.email_subject || "Task"))}</p>
                         <div className="flex items-center gap-2 mt-1 flex-wrap">
                           <span className="text-sm text-muted-foreground">
                             {new Date(task.created_at).toLocaleString()}
@@ -209,8 +217,8 @@ export default async function ActivityPage() {
                             </span>
                           )}
                           {task.type && (
-                            <span className="text-xs bg-muted px-2 py-0.5 rounded capitalize">
-                              {task.type.replace(/_/g, " ")}
+                            <span className="text-xs bg-muted px-2 py-0.5 rounded">
+                              {task.type.charAt(0).toUpperCase() + task.type.slice(1).replace(/_/g, " ")}
                             </span>
                           )}
                           <span className="text-xs text-muted-foreground">

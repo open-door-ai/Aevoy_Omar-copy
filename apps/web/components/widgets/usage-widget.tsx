@@ -29,7 +29,7 @@ export function UsageWidget() {
         <CardContent><div className="w-full bg-muted rounded-full h-2 overflow-hidden"><div className="bg-primary h-2 rounded-full transition-all duration-700" style={{ width: `${pct}%` }} /></div></CardContent>
       </Card>
       <Card>
-        <CardHeader className="pb-2"><CardDescription>Plan</CardDescription><CardTitle className="text-3xl capitalize">{data?.tier || "Free"}</CardTitle></CardHeader>
+        <CardHeader className="pb-2"><CardDescription>Plan</CardDescription><CardTitle className="text-3xl capitalize">{data?.tier === "beta" ? "Free" : (data?.tier || "Free")}</CardTitle></CardHeader>
         <CardContent><p className="text-sm text-muted-foreground">{`${data?.limit || 20} messages/month`}</p></CardContent>
       </Card>
     </div>

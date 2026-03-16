@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 
 interface TakeoverTask {
@@ -18,8 +18,12 @@ const REASON_LABELS: Record<string, string> = {
   low_success_rate: 'Agent is stuck',
 };
 
+const MAX_VISIBLE = 2;
+
 export function TakeoverBanner() {
   const [tasks, setTasks] = useState<TakeoverTask[]>([]);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -49,36 +53,72 @@ export function TakeoverBanner() {
     };
   }, []);
 
-  if (tasks.length === 0) return null;
+  const handleDismiss = useCallback((taskId: string) => {
+    setDismissed((prev) => new Set(prev).add(taskId));
+  }, []);
+
+  const visibleTasks = tasks.filter((t) => !dismissed.has(t.id));
+
+  if (visibleTasks.length === 0) return null;
+
+  const displayedTasks = expanded ? visibleTasks : visibleTasks.slice(0, MAX_VISIBLE);
+  const hiddenCount = visibleTasks.length - MAX_VISIBLE;
 
   return (
     <div className="space-y-2">
-      {tasks.map((task) => {
+      {displayedTasks.map((task) => {
         const reason = task.takeover_reason || 'low_success_rate';
         const label = REASON_LABELS[reason] || reason;
         return (
           <div
             key={task.id}
-            className="flex items-center justify-between p-4 rounded-lg border border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-950/30 animate-pulse"
+            className="flex items-center justify-between p-4 rounded-lg border border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-950/30"
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-3 h-3 rounded-full bg-orange-500 animate-ping shrink-0" />
               <div className="min-w-0">
                 <p className="font-medium text-sm truncate">
-                  Your AI needs help with: {task.email_subject || 'Task'}
+                  Your AI needs help with: {(task.email_subject || 'Task').replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim()}
                 </p>
                 <p className="text-xs text-muted-foreground">{label}</p>
               </div>
             </div>
-            <Link
-              href={`/dashboard/takeover/${task.id}`}
-              className="shrink-0 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              Take Over Browser
-            </Link>
+            <div className="flex items-center gap-2 shrink-0">
+              <Link
+                href={`/dashboard/takeover/${task.id}`}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Take Over Browser
+              </Link>
+              <button
+                onClick={() => handleDismiss(task.id)}
+                className="p-1.5 rounded-md hover:bg-orange-200 dark:hover:bg-orange-800/50 text-orange-600 dark:text-orange-400 transition-colors"
+                aria-label="Dismiss banner"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           </div>
         );
       })}
+      {!expanded && hiddenCount > 0 && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="text-sm text-orange-600 dark:text-orange-400 hover:underline px-4"
+        >
+          and {hiddenCount} more...
+        </button>
+      )}
+      {expanded && hiddenCount > 0 && (
+        <button
+          onClick={() => setExpanded(false)}
+          className="text-sm text-orange-600 dark:text-orange-400 hover:underline px-4"
+        >
+          Show fewer
+        </button>
+      )}
     </div>
   );
 }
