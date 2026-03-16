@@ -64,9 +64,9 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
   };
 
   return (
-    <div className="fixed inset-0 bg-white z-[60] overflow-auto force-light">
+    <div className="fixed inset-0 bg-white z-[100] overflow-auto force-light">
       {/* Progress bar */}
-      <div className="fixed top-0 left-0 right-0 z-[61]">
+      <div className="fixed top-0 left-0 right-0 z-[101]">
         <div className="h-1 bg-gray-100">
           <motion.div
             className="h-full bg-gray-800"
@@ -77,7 +77,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
       </div>
 
       {/* Step counter */}
-      <div className="fixed top-4 right-6 z-[61]">
+      <div className="fixed top-4 right-6 z-[101]">
         <span className="text-sm text-gray-600 font-medium tabular-nums">
           <motion.span
             key={step}

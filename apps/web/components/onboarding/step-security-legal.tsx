@@ -187,7 +187,7 @@ export default function StepSecurityLegal({
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline underline-offset-2 font-medium text-gray-900 hover:text-gray-700 inline-flex items-center gap-0.5"
-                    onClick={(e) => e.stopPropagation()}
+                    /* No stopPropagation — click bubbles to parent div which toggles checkbox */
                   >
                     Terms of Service
                     <ExternalLink className="w-3 h-3" />
@@ -209,7 +209,7 @@ export default function StepSecurityLegal({
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline underline-offset-2 font-medium text-gray-900 hover:text-gray-700 inline-flex items-center gap-0.5"
-                    onClick={(e) => e.stopPropagation()}
+                    /* No stopPropagation — click bubbles to parent div which toggles checkbox */
                   >
                     Privacy Policy
                     <ExternalLink className="w-3 h-3" />
@@ -270,7 +270,10 @@ function CheckboxItem({
   return (
     <div
       className="flex items-start gap-3 group cursor-pointer"
-      onClick={() => onChange(!checked)}
+      onClick={(e) => {
+        // If user clicked a link, let it open AND toggle the checkbox
+        onChange(!checked);
+      }}
     >
       <div className="relative flex-shrink-0 mt-0.5">
         <input
