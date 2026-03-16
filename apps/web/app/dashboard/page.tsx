@@ -7,17 +7,32 @@ import { DEFAULT_LAYOUT } from "@/lib/widgets/default-layout";
 
 export const dynamic = "force-dynamic";
 
+function formatTimeSaved(taskCount: number): string {
+  const minutesSaved = taskCount * 15;
+  if (minutesSaved >= 60) {
+    const hours = Math.round(minutesSaved / 60 * 10) / 10;
+    return `~${hours} hour${hours !== 1 ? "s" : ""}`;
+  }
+  return `~${minutesSaved} min`;
+}
+
 export default async function DashboardPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  const [{ data: profile }, { data: layoutRow }] = await Promise.all([
+  const weekStart = new Date();
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  weekStart.setHours(0, 0, 0, 0);
+
+  const [{ data: profile }, { data: layoutRow }, { count: weeklyCompleted }] = await Promise.all([
     supabase.from("profiles").select("username, display_name, bot_name, subscription_status").eq("id", user?.id ?? "").single(),
     supabase.from("dashboard_widget_layouts").select("layout").eq("user_id", user?.id ?? "").single(),
+    supabase.from("tasks").select("*", { count: "exact", head: true }).eq("user_id", user?.id ?? "").eq("status", "completed").gte("created_at", weekStart.toISOString()),
   ]);
 
   const username = profile?.username || user?.email?.split("@")[0] || "user";
   const botName = profile?.bot_name || null;
+  const completedThisWeek = weeklyCompleted || 0;
   // Use saved layout or default
   let layout: WidgetLayoutItem[] = [];
   if (layoutRow?.layout && Array.isArray(layoutRow.layout) && layoutRow.layout.length > 0) {
@@ -40,6 +55,11 @@ export default async function DashboardPage() {
           <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
             What can {botName || "your AI"} do for you?
           </h1>
+          {completedThisWeek > 0 && (
+            <p className="text-sm text-muted-foreground mt-1">
+              {completedThisWeek} task{completedThisWeek !== 1 ? "s" : ""} completed this week — saving you {formatTimeSaved(completedThisWeek)}
+            </p>
+          )}
         </div>
 
         {/* Modular Widget Grid */}

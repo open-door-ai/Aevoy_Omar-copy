@@ -143,6 +143,10 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
     }
   };
 
+  const completedTasks = tasks.filter((t) => t.status === "completed");
+  const completedCount = completedTasks.length;
+  const hoursSaved = Math.round(completedCount * 0.25 * 10) / 10;
+
   return (
     <div className="space-y-3">
       {/* Header */}
@@ -158,43 +162,60 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
         )}
       </div>
 
+      {/* First task celebration */}
+      {completedCount === 1 && (
+        <div className="text-center py-5 bg-green-50 dark:bg-green-950/20 rounded-xl">
+          <p className="text-base font-semibold text-green-800 dark:text-green-300">Your first task is done!</p>
+          <p className="text-sm text-green-600 dark:text-green-400 mt-1">Your AI just saved you 15 minutes. Imagine what it can do with 100 tasks.</p>
+        </div>
+      )}
+
       {/* Task list */}
       {loading ? (
         <SkeletonList count={3} variant="task" />
       ) : tasks.length > 0 ? (
-        <StaggerContainer className="space-y-1" staggerDelay={0.03}>
-          {tasks.map((task) => (
-            <StaggerItem key={task.id}>
-              <Link href={`/dashboard/tasks/${task.id}`} className="block">
-                <div
-                  className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-colors hover:bg-muted/50 ${
-                    task.status === "processing" ? "bg-blue-50/50 dark:bg-blue-950/10" : ""
-                  }`}
-                >
-                  {getStatusIndicator(task.status)}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
-                      {truncateText(cleanTaskName(task.email_subject || "Task"))}
-                    </p>
-                    {task.status === "processing" && task.progress_message && (
-                      <p className="text-xs text-blue-600 dark:text-blue-400 truncate mt-0.5">
-                        {task.progress_message}
+        <>
+          <StaggerContainer className="space-y-1" staggerDelay={0.03}>
+            {tasks.map((task) => (
+              <StaggerItem key={task.id}>
+                <Link href={`/dashboard/tasks/${task.id}`} className="block">
+                  <div
+                    className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-colors hover:bg-muted/50 ${
+                      task.status === "processing" ? "bg-blue-50/50 dark:bg-blue-950/10" : ""
+                    }`}
+                  >
+                    {getStatusIndicator(task.status)}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">
+                        {truncateText(cleanTaskName(task.email_subject || "Task"))}
                       </p>
-                    )}
-                    {task.error_message && task.status === "failed" && (
-                      <p className="text-xs text-red-500 truncate mt-0.5">
-                        {task.error_message}
-                      </p>
-                    )}
+                      {task.status === "processing" && task.progress_message && (
+                        <p className="text-xs text-blue-600 dark:text-blue-400 truncate mt-0.5">
+                          {task.progress_message}
+                        </p>
+                      )}
+                      {task.error_message && task.status === "failed" && (
+                        <p className="text-xs text-red-500 truncate mt-0.5">
+                          {task.error_message}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground/60 shrink-0">
+                      {formatTime(task.created_at)}
+                    </span>
                   </div>
-                  <span className="text-xs text-muted-foreground/60 shrink-0">
-                    {formatTime(task.created_at)}
-                  </span>
-                </div>
-              </Link>
-            </StaggerItem>
-          ))}
-        </StaggerContainer>
+                </Link>
+              </StaggerItem>
+            ))}
+          </StaggerContainer>
+
+          {/* Value summary — ROI reinforcement */}
+          {completedCount > 1 && (
+            <div className="text-center pt-3 pb-1 text-sm text-muted-foreground">
+              <p>{completedCount} tasks completed · ~{hoursSaved} hours saved</p>
+            </div>
+          )}
+        </>
       ) : (
         <div className="text-center py-12 px-6">
           <div className="flex justify-center mb-3">

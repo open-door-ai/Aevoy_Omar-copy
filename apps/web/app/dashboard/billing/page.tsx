@@ -212,10 +212,10 @@ export default function BillingPage() {
             </div>
 
             {balanceCents <= 0 && (
-              <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-950/20 rounded-lg border border-red-200 dark:border-red-800">
-                <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
-                <p className="text-sm text-red-600 dark:text-red-400">
-                  No credits remaining. Top up to continue.
+              <div className="flex items-center gap-2 p-3 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+                <p className="text-sm text-amber-700 dark:text-amber-300">
+                  Your AI is paused — add $5 to resume instantly.
                 </p>
               </div>
             )}
@@ -241,6 +241,10 @@ export default function BillingPage() {
         <Card>
           <CardContent className="pt-6 space-y-4">
             <p className="text-sm text-muted-foreground">Add Credits</p>
+            <div className="text-sm text-muted-foreground mb-3 space-y-1">
+              <p>Average task costs $0.15 — a restaurant booked, a form filled, or research done.</p>
+              <p>$5 gets you ~33 tasks. $25 gets you ~166 tasks.</p>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               {TOPUP_PRESETS.map((preset) => (
                 <Button

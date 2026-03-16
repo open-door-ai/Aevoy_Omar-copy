@@ -78,7 +78,7 @@ export function TaskStatsWidget() {
               : "bg-yellow-50 dark:bg-yellow-950/20 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-100 dark:hover:bg-yellow-950/30"
           }`}>
             <span>
-              {showNoBalance ? "Add credits to keep your AI running" : "Running low on credits"}
+              {showNoBalance ? "Your AI is paused \u2014 add credits to resume" : "Your AI will pause when credits run out"}
             </span>
             <span className="text-xs font-medium opacity-70">Top up &rarr;</span>
           </div>

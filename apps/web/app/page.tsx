@@ -2037,6 +2037,14 @@ export default function AevoyLanding() {
                 See it work
               </MagneticButton>
             </div>
+            <p
+              className="text-sm text-stone-400 mt-4"
+              style={{
+                opacity: Math.max(0, 1 - scrollY / 350),
+              }}
+            >
+              $4 free credit &middot; No credit card required &middot; Cancel anytime
+            </p>
           </div>
         </div>
         
@@ -3008,8 +3016,11 @@ export default function AevoyLanding() {
           <MagneticButton href="/signup" className="px-10 py-5 bg-white text-stone-900 rounded-full font-semibold text-lg hover:shadow-2xl hover:shadow-white/20 transition-all inline-block">
             Get Started
           </MagneticButton>
-          
-          <p className="mt-10 text-sm text-stone-600">
+          <p className="mt-4 text-sm text-stone-400">
+            $4 free credit &middot; No credit card required &middot; Cancel anytime
+          </p>
+
+          <p className="mt-8 text-sm text-stone-600">
             Questions? hello@aevoy.com — a human will respond.
             <br />
             (We haven&apos;t automated ourselves yet. Also, see exact pricing above—no hidden costs.)
