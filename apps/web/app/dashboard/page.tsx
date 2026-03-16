@@ -26,8 +26,6 @@ export default async function DashboardPage() {
   const username = profile?.username || user?.email?.split("@")[0] || "user";
   const displayName = profile?.display_name || profile?.bot_name || "there";
   const botName = profile?.bot_name || null;
-  const isBetaUser = profile?.subscription_status === "beta";
-
   // Use saved layout or default
   let layout: WidgetLayoutItem[] = [];
   if (layoutRow?.layout && Array.isArray(layoutRow.layout) && layoutRow.layout.length > 0) {
@@ -50,11 +48,7 @@ export default async function DashboardPage() {
               {botName ? `${botName} is at your service` : "Here's your AI assistant overview"}
             </p>
           </div>
-          {isBetaUser && (
-            <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2 shrink-0">
-              <span>Beta User</span>
-            </div>
-          )}
+          {/* Beta badge removed — Stripe billing is live */}
         </div>
 
         {/* Takeover Banner */}

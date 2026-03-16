@@ -1033,12 +1033,10 @@ export default function SettingsPage() {
           <div className="flex justify-between items-center">
             <div>
               <p className="font-medium capitalize">
-                {profile.subscription_status === 'beta' ? 'Beta User' : `${profile.subscription_tier} Plan`}
+                {`${profile.subscription_tier || 'Free'} Plan`}
               </p>
               <p className="text-sm text-muted-foreground">
-                {profile.subscription_status === 'beta' 
-                  ? 'Unlimited during beta' 
-                  : `${profile.messages_used} / ${profile.messages_limit} messages used`}
+                {`${profile.messages_used} / ${profile.messages_limit} messages used`}
               </p>
             </div>
             <Button variant="outline" disabled>
