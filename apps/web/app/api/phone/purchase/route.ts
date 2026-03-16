@@ -20,6 +20,21 @@ export async function POST(request: Request) {
       );
     }
 
+    // Check if user already has an active number
+    const { data: existingNumber } = await supabase
+      .from("user_twilio_numbers")
+      .select("phone_number")
+      .eq("user_id", user.id)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (existingNumber) {
+      return NextResponse.json(
+        { error: "You already have an active phone number. Release it first to get a new one." },
+        { status: 409 }
+      );
+    }
+
     // 1. Purchase number from Twilio
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;

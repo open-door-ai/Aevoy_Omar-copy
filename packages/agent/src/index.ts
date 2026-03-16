@@ -806,7 +806,7 @@ app.get("/debug/test-image-gen", async (req, res) => {
     }
   }
 
-  res.json({ models: results, keyPrefix: googleKey.substring(0, 8) });
+  res.json({ models: results });
 });
 
 // ---- Voice diagnostic endpoint (for verifying TwiML generation) ----

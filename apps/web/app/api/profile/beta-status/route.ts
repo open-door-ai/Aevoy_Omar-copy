@@ -24,9 +24,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // Users can set their own status to beta (self-service during beta phase).
-    // Admins can set any user's status.
-    const isSelfBeta = !targetUserId && status === "beta";
+    // Self-beta disabled — billing is live, no more free tier via status change
+    const isSelfBeta = false;
     const isAdmin = ADMIN_USER_IDS.includes(user.id);
 
     if (!isSelfBeta && !isAdmin) {

@@ -51,16 +51,23 @@ export async function POST(request: NextRequest) {
 
     switch (event.type) {
       case "checkout.session.completed": {
-        const email = obj.customer_email as string;
         const customerId = obj.customer as string;
-        if (email) {
-          await getSupabase().from("profiles").update({
-            stripe_customer_id: customerId,
-            subscription_status: "active",
-            subscription_tier: "pro",
-            messages_limit: 1000,
-            subscription_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-          }).eq("email", email);
+        if (customerId) {
+          // Match by stripe_customer_id, NOT email — prevents email hijacking
+          const { data: existingProfile } = await getSupabase()
+            .from("profiles")
+            .select("id")
+            .eq("stripe_customer_id", customerId)
+            .single();
+
+          if (existingProfile) {
+            await getSupabase().from("profiles").update({
+              subscription_status: "active",
+              subscription_tier: "pro",
+              messages_limit: 1000,
+              subscription_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+            }).eq("id", existingProfile.id);
+          }
         }
         break;
       }
@@ -104,6 +111,18 @@ export async function POST(request: NextRequest) {
           const piId = obj.id as string;
 
           if (amountCents > 0) {
+            // Idempotency check — prevent replay attacks
+            const { data: existingTx } = await getSupabase()
+              .from("credit_transactions")
+              .select("id")
+              .eq("stripe_payment_intent_id", piId)
+              .limit(1);
+
+            if (existingTx && existingTx.length > 0) {
+              console.log(`[STRIPE] Duplicate payment_intent ${piId} — already processed, skipping`);
+              break;
+            }
+
             await getSupabase().rpc("add_credits", {
               p_user_id: userId,
               p_amount_cents: amountCents,

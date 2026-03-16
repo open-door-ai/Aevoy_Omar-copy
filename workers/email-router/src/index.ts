@@ -55,7 +55,7 @@ async function getUser(
   supabaseKey: string
 ): Promise<Profile | null> {
   const url = `${supabaseUrl}/rest/v1/profiles?username=ilike.${encodeURIComponent(username)}&select=*`;
-  console.log(`[LOOKUP] getUser username=${username} keyPrefix=${supabaseKey?.substring(0, 10) || 'MISSING'}`);
+  console.log(`[LOOKUP] getUser username=${username}`);
 
   let response: Response;
   try {
@@ -87,7 +87,7 @@ async function getUserByEmail(
   supabaseUrl: string,
   supabaseKey: string
 ): Promise<Profile | null> {
-  console.log(`[LOOKUP] getUserByEmail email=${maskEmail(email)} keyPrefix=${supabaseKey?.substring(0, 10) || 'MISSING'}`);
+  console.log(`[LOOKUP] getUserByEmail email=${maskEmail(email)}`);
   let response: Response;
   try {
     response = await fetch(
