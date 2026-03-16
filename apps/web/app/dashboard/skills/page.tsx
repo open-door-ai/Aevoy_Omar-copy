@@ -481,7 +481,7 @@ export default function SkillsMarketplacePage() {
               <div className="text-center py-12">
                 <Package className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground text-lg">No skills installed yet</p>
-                <p className="text-muted-foreground text-sm mt-2">Visit the Marketplace tab to install skills</p>
+                <p className="text-muted-foreground text-sm mt-2">Your AI came with the basics — think of skills as power-ups.</p>
                 <button
                   onClick={() => setActiveTab('marketplace')}
                   className="mt-4 px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors"

@@ -299,7 +299,7 @@ export default function TaskQueuePage() {
       ) : filteredTasks.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-lg font-medium">All clear</p>
-          <p className="text-muted-foreground mt-1">No tasks in the queue right now. Send one from the dashboard.</p>
+          <p className="text-muted-foreground mt-1">Your AI is fast. Maybe too fast. Send a task from the dashboard.</p>
         </div>
       ) : (
         statusOrder.map((status) => {

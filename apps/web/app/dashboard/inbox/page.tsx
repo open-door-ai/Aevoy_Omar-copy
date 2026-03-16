@@ -359,7 +359,7 @@ export default function InboxPage() {
           <p className="text-sm font-medium text-foreground">No pending approvals</p>
           <p className="text-xs text-muted-foreground mt-1">
             {enabled
-              ? `Your inbox is up to date. AI checks every ${intervalLabel}.`
+              ? `Inbox zero. Your AI is either very efficient or very lonely.`
               : "Enable AI email management above to get started."}
           </p>
         </div>

@@ -155,6 +155,7 @@ export default function StepTour({ aiEmail, botName, onComplete }: StepTourProps
             <Button onClick={onComplete} className="w-full" size="lg">
               Go to Dashboard
             </Button>
+            <p className="text-xs text-muted-foreground/50 italic mt-3 text-center">Go break it in. Start with something easy, like world domination.</p>
           </motion.div>
         )}
       </AnimatePresence>

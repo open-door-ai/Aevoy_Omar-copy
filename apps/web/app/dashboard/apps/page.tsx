@@ -1097,8 +1097,8 @@ function ConnectedAppsContent() {
           ) : (
             <EmptyState
               icon={Plug}
-              title="No stored credentials"
-              description="Add login credentials for websites so your AI assistant can log in on your behalf."
+              title="Flying solo for now"
+              description="Connect your email and watch the magic happen."
               action={{
                 label: 'Add Credential',
                 onClick: () => setShowAddForm(true),

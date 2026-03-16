@@ -134,9 +134,12 @@ export default function StepSecurityLegal({
             )}
 
             {!pinError && pin.length > 0 && isPinValid && (
-              <p className="text-xs text-green-600 text-center">
-                PIN looks good
-              </p>
+              <>
+                <p className="text-xs text-green-600 text-center">
+                  PIN looks good
+                </p>
+                <p className="text-xs text-muted-foreground/50 italic text-center">Guard this like your Netflix password. Actually, guard it better.</p>
+              </>
             )}
 
             <p className="text-xs text-gray-500 text-center pt-1">

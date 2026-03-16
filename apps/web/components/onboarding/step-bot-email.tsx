@@ -296,10 +296,11 @@ export default function StepBotEmail({
         </div>
         <button
           onClick={() => setShuffleIndex((i) => i + 1)}
-          className="block mx-auto text-sm text-gray-600 hover:text-gray-800 transition-colors mb-6"
+          className="block mx-auto text-sm text-gray-600 hover:text-gray-800 transition-colors mb-1"
         >
           Shuffle names
         </button>
+        <p className="text-xs text-muted-foreground/60 italic text-center mb-6">Not feeling it? Keep shuffling. We won&apos;t judge.</p>
       </FadeIn>
 
       {/* Section 2: Choose an Email (reveals after bot name >= 2 chars) */}

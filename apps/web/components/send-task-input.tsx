@@ -5,9 +5,18 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { Send, Loader2 } from "lucide-react";
 
+const PLACEHOLDERS = [
+  "Book a restaurant, research competitors, draft an email...",
+  "Cancel that subscription you forgot about...",
+  "Find out why your flight is always delayed...",
+  "Do that thing you've been putting off since Tuesday...",
+  "Find the best laptop under $1000...",
+];
+
 export function SendTaskInput() {
   const [taskText, setTaskText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [placeholder] = useState(() => PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)]);
   const toast = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -43,7 +52,7 @@ export function SendTaskInput() {
     <form onSubmit={handleSubmit} className="relative">
       <div className="relative rounded-2xl border border-border bg-card shadow-sm hover:shadow-md focus-within:shadow-md focus-within:border-primary/30 transition-all duration-200">
         <textarea
-          placeholder="Book a restaurant, research competitors, draft an email..."
+          placeholder={placeholder}
           value={taskText}
           onChange={(e) => setTaskText(e.target.value)}
           onKeyDown={(e) => {

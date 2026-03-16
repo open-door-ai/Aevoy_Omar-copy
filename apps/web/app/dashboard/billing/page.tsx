@@ -275,6 +275,7 @@ export default function BillingPage() {
                 <p className="text-xs text-muted-foreground">
                   Add ${(data.auto_reload.amount_cents / 100).toFixed(0)} when below ${(data.auto_reload.threshold_cents / 100).toFixed(0)}
                 </p>
+                <p className="text-xs text-muted-foreground/50 italic mt-0.5">Set it and forget it. Like a crockpot, but for productivity.</p>
               </div>
               <Switch
                 checked={autoReloadEnabled}

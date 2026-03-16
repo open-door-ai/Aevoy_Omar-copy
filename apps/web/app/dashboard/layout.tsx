@@ -128,6 +128,7 @@ export default function DashboardLayout({
           variant="ghost"
           className="w-full justify-start gap-3 text-muted-foreground hover:text-foreground"
           onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+          title="Easy on the eyes. Your AI works in any lighting."
         >
           {resolvedTheme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           {resolvedTheme === "dark" ? "Light mode" : "Dark mode"}
@@ -137,6 +138,7 @@ export default function DashboardLayout({
           className="w-full justify-start gap-3 text-muted-foreground hover:text-foreground"
           onClick={handleSignOut}
           disabled={signingOut}
+          title="Leaving already? Your AI will keep working while you're gone."
         >
           <LogOut className="w-4 h-4" />
           {signingOut ? "Signing out..." : "Sign out"}

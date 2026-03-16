@@ -299,8 +299,8 @@ export default function ScheduledTasksPage() {
           ) : (
             <EmptyState
               icon={Calendar}
-              title="No active scheduled tasks"
-              description="Create recurring tasks that run automatically on a schedule."
+              title="Nothing scheduled yet"
+              description="Your AI doesn't need sleep, so don't be shy."
               action={{
                 label: 'Create Schedule',
                 onClick: () => setShowForm(true),

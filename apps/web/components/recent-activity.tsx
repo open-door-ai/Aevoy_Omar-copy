@@ -145,6 +145,7 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
 
   const completedTasks = tasks.filter((t) => t.status === "completed");
   const completedCount = completedTasks.length;
+  const failedCount = tasks.filter((t) => t.status === "failed").length;
   const hoursSaved = Math.round(completedCount * 0.25 * 10) / 10;
 
   return (
@@ -213,6 +214,9 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
           {completedCount > 1 && (
             <div className="text-center pt-3 pb-1 text-sm text-muted-foreground">
               <p>{completedCount} tasks completed · ~{hoursSaved} hours saved</p>
+              {failedCount === 0 && completedCount > 3 && (
+                <p className="text-xs text-muted-foreground/50 italic text-center mt-1">Flawless so far. Your AI hasn&apos;t dropped the ball yet.</p>
+              )}
             </div>
           )}
         </>
@@ -226,8 +230,8 @@ export function RecentActivity({ aiEmail, initialTasks = [] }: RecentActivityPro
           <p className="text-sm font-medium text-foreground mb-1">
             Your AI is ready
           </p>
-          <p className="text-xs text-muted-foreground">
-            Give it something to do — type above or email {aiEmail}
+          <p className="text-sm text-muted-foreground">
+            Your AI is twiddling its thumbs. Give it something to do.
           </p>
         </div>
       )}

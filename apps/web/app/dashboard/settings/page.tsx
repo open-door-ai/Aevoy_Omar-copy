@@ -994,7 +994,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle>Profile</CardTitle>
           <CardDescription>
-            Your personal information
+            The basics. We promise not to sell this to anyone. Not even a little bit.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1088,7 +1088,7 @@ export default function SettingsPage() {
           <CardHeader>
             <CardTitle>AI Behavior</CardTitle>
             <CardDescription>
-              Control how your AI assistant handles tasks
+              Teach your AI how much hand-holding you need. No shame in &quot;a lot.&quot;
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -1467,6 +1467,11 @@ export default function SettingsPage() {
             </Button>
           </CardFooter>
         </Card>
+      )}
+
+      {/* Advanced tab intro */}
+      {activeTab === "advanced" && (
+        <p className="text-sm text-muted-foreground/60 italic mb-6">Welcome to the engine room. You probably don&apos;t need to be here, but we respect the curiosity.</p>
       )}
 
       {/* Autonomous Features */}
@@ -2227,6 +2232,7 @@ export default function SettingsPage() {
                   Works across: Voice • Email • Telegram • WhatsApp
                 </p>
               )}
+              <p className="text-xs text-muted-foreground/50 italic mt-1">Your PIN keeps strangers out. Even the charming ones.</p>
             </div>
           )}
 
@@ -2283,6 +2289,7 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground mt-2">
               All voices powered by ElevenLabs — natural, human-like speech on every call.
             </p>
+            <p className="text-xs text-muted-foreground/50 italic">Pick a voice. Your AI won&apos;t be offended if you change it later.</p>
           </div>
 
           {/* Greeting Style */}
@@ -2690,7 +2697,7 @@ export default function SettingsPage() {
                 <Code2 className="w-5 h-5 text-muted-foreground" />
                 <div>
                   <CardTitle>Developer Mode</CardTitle>
-                  <CardDescription>Custom model routing via OpenRouter and advanced AI configuration</CardDescription>
+                  <CardDescription>Raw API access, webhook logs, and settings that can break things in creative ways.</CardDescription>
                 </div>
               </div>
               <button
@@ -2705,6 +2712,7 @@ export default function SettingsPage() {
 
           {devModeOpen && (
             <CardContent className="space-y-6">
+              <p className="text-xs text-amber-600 italic">I solemnly swear I know what I&apos;m doing.</p>
               {/* Warning banner */}
               <div className="flex items-start gap-3 p-4 bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                 <AlertTriangle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
@@ -2916,7 +2924,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-red-600">Danger Zone</CardTitle>
           <CardDescription>
-            Irreversible actions
+            This is permanent. Like, actually permanent. Not &quot;Facebook permanent.&quot;
           </CardDescription>
         </CardHeader>
         <CardContent>
