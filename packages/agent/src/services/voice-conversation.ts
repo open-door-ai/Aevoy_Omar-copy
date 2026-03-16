@@ -70,18 +70,31 @@ async function sendSpendAlert(amount: number): Promise<void> {
  * Without this, closing the WebSocket leaves the Twilio call leg active and billing.
  */
 async function forceHangupCall(callSid: string): Promise<void> {
+  if (!callSid || callSid.length < 10) {
+    // CRITICAL: Empty or placeholder callSid means we can't terminate the Twilio call.
+    // Log loudly so we can track this. The call will continue billing until Twilio's own timeout.
+    console.error(`[VOICE] FORCE-HANGUP FAILED: callSid is empty/invalid (${callSid || 'none'}). Call may still be billing!`);
+    return;
+  }
   try {
     const config = getTwilioConfig();
-    if (!config || !callSid) return;
+    if (!config) {
+      console.error(`[VOICE] FORCE-HANGUP FAILED: Twilio not configured. Call ${callSid} may still be billing!`);
+      return;
+    }
     const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls/${callSid}.json`;
     const auth = Buffer.from(`${config.accountSid}:${config.authToken}`).toString('base64');
-    await fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'Status=completed',
     });
-    console.log(`[VOICE] Force-hangup: call ${callSid} terminated`);
-  } catch (e) { console.warn(`[VOICE] Force-hangup failed for ${callSid}:`, e); }
+    if (!res.ok) {
+      console.error(`[VOICE] Force-hangup HTTP ${res.status} for ${callSid}: ${await res.text().catch(() => 'no body')}`);
+    } else {
+      console.log(`[VOICE] Force-hangup: call ${callSid} terminated`);
+    }
+  } catch (e) { console.error(`[VOICE] Force-hangup EXCEPTION for ${callSid}:`, e); }
 }
 
 // ---- Types ----
@@ -189,7 +202,7 @@ setInterval(() => {
       session.intentionalClose = true;
       // Track voice spend for the timed-out session
       const durationMin = (now - session.startedAt) / 60000;
-      const estimatedCost = durationMin * 0.10; // ~$0.10/min (Twilio voice + ElevenLabs)
+      const estimatedCost = durationMin * 0.0585; // FULL_BUNDLE_OUTBOUND_PER_MIN from cost-calculator.ts
       trackVoiceSpend(estimatedCost);
       // Force-terminate the Twilio call FIRST to stop billing immediately
       forceHangupCall(session.callSid).catch(() => {});
@@ -298,7 +311,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} closed after ${duration}s (${session.conversationHistory.length} exchanges)`);
       // Track voice spend on every session close
       const closeDurationMin = duration / 60;
-      const closeEstimatedCost = closeDurationMin * 0.10; // ~$0.10/min (Twilio voice + ElevenLabs)
+      const closeEstimatedCost = closeDurationMin * 0.0585; // FULL_BUNDLE_OUTBOUND_PER_MIN from cost-calculator.ts
       trackVoiceSpend(closeEstimatedCost);
       logCallHistory(session, duration);
       // Save conversation to memory (async, non-blocking)
