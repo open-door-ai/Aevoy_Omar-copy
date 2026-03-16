@@ -114,7 +114,7 @@ export function WidgetPicker({ isOpen, onClose, onAdd, currentWidgetIds }: Widge
 
               {/* Store CTA */}
               <div className="border border-dashed border-border rounded-xl p-3 text-center mt-2">
-                <p className="text-xs text-muted-foreground">More widgets coming soon</p>
+                <p className="text-xs text-muted-foreground">More widgets available</p>
                 <a href="/store" className="text-xs text-primary hover:underline mt-1 block">Browse the App Store →</a>
               </div>
             </div>

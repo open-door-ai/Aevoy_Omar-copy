@@ -355,7 +355,7 @@ export default function HowItWorksPage() {
             <div className="inline-block px-3 py-1 bg-white/10 rounded-full text-sm font-medium mb-6">
               Pay As You Go
             </div>
-            <div className="text-6xl font-bold mb-2">$10</div>
+            <div className="text-6xl font-bold mb-2">$4</div>
             <p className="text-stone-400 mb-8">
               free credit to start &mdash; then pay as you go
             </p>

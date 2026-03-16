@@ -156,6 +156,9 @@ export default function SettingsPage() {
   const [integrationsLoading, setIntegrationsLoading] = useState(true);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
 
+  // Wallet state (for plan display)
+  const [walletLifetimeTopup, setWalletLifetimeTopup] = useState(0);
+
   // OpenRouter Developer Mode state
   const [devModeOpen, setDevModeOpen] = useState(false);
   const [agentPasswordSlots, setAgentPasswordSlots] = useState({ primary: false, secondary: false, tertiary: false });
@@ -314,6 +317,13 @@ export default function SettingsPage() {
     loadCredentials();
     loadVoicemail();
     loadOpenRouter();
+    // Load wallet for plan display
+    fetch("/api/billing/balance").then(r => r.ok ? r.json() : null).then(d => {
+      if (d) {
+        const topup = parseFloat(d.lifetime_topup_usd || "0");
+        setWalletLifetimeTopup(Math.round(topup * 100));
+      }
+    }).catch(() => {});
     // Load agent password slots
     fetch("/api/settings/agent-passwords").then(r => r.ok ? r.json() : null).then(d => { if (d) setAgentPasswordSlots(d); }).catch(() => {});
   }, []);
@@ -1058,14 +1068,14 @@ export default function SettingsPage() {
           <div className="flex justify-between items-center">
             <div>
               <p className="font-medium capitalize">
-                {`${(!profile.subscription_tier || profile.subscription_tier === 'beta') ? 'Free' : profile.subscription_tier} Plan`}
+                {walletLifetimeTopup > 0 ? 'Pay As You Go' : 'Free Plan'}
               </p>
               <p className="text-sm text-muted-foreground">
                 {`${profile.messages_used} / ${profile.messages_limit} messages used`}
               </p>
             </div>
-            <Button variant="outline" disabled>
-              Upgrade (Coming Soon)
+            <Button variant="outline" onClick={() => router.push('/dashboard/billing')}>
+              Upgrade
             </Button>
           </div>
         </CardContent>

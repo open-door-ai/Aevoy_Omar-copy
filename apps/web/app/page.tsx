@@ -2868,7 +2868,7 @@ export default function AevoyLanding() {
               <h3 className="text-2xl font-bold text-stone-900 mb-6">How Pricing Works</h3>
               <div className="space-y-6">
                 <div>
-                  <p className="text-lg font-semibold text-stone-900 mb-2">1. Sign up → Get $10 free credit</p>
+                  <p className="text-lg font-semibold text-stone-900 mb-2">1. Sign up → Get $4 free credit</p>
                   <p className="text-stone-600">(No credit card required)</p>
                 </div>
                 <div>
@@ -2959,7 +2959,7 @@ export default function AevoyLanding() {
               Try 25 tasks free — No credit card
             </MagneticButton>
             <p className="mt-4 text-sm text-stone-500">
-              Takes 30 seconds. $10 free credit. See costs before every task.
+              Takes 30 seconds. $4 free credit. See costs before every task.
             </p>
           </div>
         </div>

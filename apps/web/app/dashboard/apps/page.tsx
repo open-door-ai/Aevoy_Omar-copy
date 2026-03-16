@@ -416,7 +416,7 @@ function ConnectedAppsContent() {
 
       {/* Integrations */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Google (Coming Soon) */}
+        {/* Google (IMAP migration) */}
         <Card className="opacity-60">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -434,7 +434,7 @@ function ConnectedAppsContent() {
                   <CardDescription>Gmail, Calendar, Drive</CardDescription>
                 </div>
               </div>
-              <span className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-0.5 rounded-full">Coming soon</span>
+              <span className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-0.5 rounded-full">Use IMAP</span>
             </div>
           </CardHeader>
           <CardContent>
@@ -454,7 +454,7 @@ function ConnectedAppsContent() {
           </CardContent>
         </Card>
 
-        {/* Microsoft (Coming Soon) */}
+        {/* Microsoft (IMAP migration) */}
         <Card className="opacity-60">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -472,7 +472,7 @@ function ConnectedAppsContent() {
                   <CardDescription>Outlook, Calendar, OneDrive</CardDescription>
                 </div>
               </div>
-              <span className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-0.5 rounded-full">Coming soon</span>
+              <span className="text-[10px] font-medium bg-muted text-muted-foreground px-2 py-0.5 rounded-full">Use IMAP</span>
             </div>
           </CardHeader>
           <CardContent>

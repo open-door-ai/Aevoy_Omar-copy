@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
 
     // Tier limits (cents)
     const tierLimits = {
-      free: 1000, // $10
+      free: 400, // $4
       beta: 5000, // $50
       paid: Infinity,
     } as const;

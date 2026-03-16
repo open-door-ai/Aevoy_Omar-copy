@@ -39,10 +39,10 @@ export async function POST(req: NextRequest) {
 
     // Check if Stripe is configured
     if (!process.env.STRIPE_SECRET_KEY) {
-      return NextResponse.json({
-        beta_mode: true,
-        message: "Payment processing is coming soon. Your costs are tracked and your free credits are active.",
-      });
+      return NextResponse.json(
+        { error: "Payment processing is not configured. Please contact support." },
+        { status: 503 }
+      );
     }
 
     // Dynamic import of Stripe

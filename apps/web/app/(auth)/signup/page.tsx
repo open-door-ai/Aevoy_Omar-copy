@@ -97,7 +97,7 @@ export default function SignupPage() {
             Get your AI employee
           </h1>
           <p className="mt-2 text-muted-foreground">
-            <span className="text-[oklch(0.55_0.15_270)] font-semibold">$10 free credit</span>
+            <span className="text-[oklch(0.55_0.15_270)] font-semibold">$4 free credit</span>
             {" "}&mdash; create your account to get started
           </p>
         </FadeIn>
