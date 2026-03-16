@@ -344,8 +344,8 @@ export default function TaskQueuePage() {
                             {formatTime(task.created_at)}
                           </span>
                           {task.type && (
-                            <span className="text-xs bg-muted px-2 py-0.5 rounded">
-                              {task.type}
+                            <span className="text-xs bg-muted px-2 py-0.5 rounded capitalize">
+                              {task.type.replace(/_/g, " ")}
                             </span>
                           )}
                           <span

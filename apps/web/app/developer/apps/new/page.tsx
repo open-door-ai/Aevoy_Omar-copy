@@ -39,7 +39,7 @@ export default function NewAppPage() {
   const canNext = () => {
     if (step === 0) return form.name.trim() && form.description.trim();
     if (step === 1) return true;
-    if (step === 2) return true; // code upload optional in Beta
+    if (step === 2) return true; // code upload optional
     if (step === 3) return true;
     return true;
   };
@@ -138,7 +138,7 @@ export default function NewAppPage() {
                     </label>
                     {form.codeFile && <p className="text-xs text-green-600 mt-2 flex items-center justify-center gap-1"><Check className="h-3 w-3" /> {form.codeFile.name}</p>}
                   </div>
-                  <p className="text-xs text-amber-600 dark:text-amber-400">Beta: Code upload is optional. You can submit metadata-only and add code later.</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400">Code upload is optional. You can submit metadata-only and add code later.</p>
                 </>)}
 
                 {step === 3 && (<>
@@ -171,7 +171,7 @@ export default function NewAppPage() {
                     <p className="text-sm font-medium">Estimated Review Cost</p>
                     <p className="text-2xl font-bold">$5.00</p>
                     <p className="text-xs text-muted-foreground">AI security review by Opus 4.6 — billed after review completes</p>
-                    <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">Beta: Review fees are waived</p>
+                    <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">Review fees are currently waived</p>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" className="rounded border-border" /><span className="text-xs text-muted-foreground">I consent to the review process and agree to the developer terms</span></label>
                 </>)}

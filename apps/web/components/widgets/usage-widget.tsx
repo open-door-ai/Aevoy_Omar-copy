@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function UsageWidget() {
-  const [data, setData] = useState<{ used: number; limit: number; isBeta: boolean; tier: string } | null>(null);
+  const [data, setData] = useState<{ used: number; limit: number; tier: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -15,7 +15,6 @@ export function UsageWidget() {
       setData({
         used: profile?.messages_used || 0,
         limit: profile?.messages_limit || 20,
-        isBeta: profile?.subscription_status === "beta",
         tier: profile?.subscription_tier || "free",
       });
     })();
@@ -29,9 +28,9 @@ export function UsageWidget() {
         <CardHeader className="pb-2"><CardDescription>Messages Used</CardDescription><CardTitle className="text-3xl">{data ? `${data.used} / ${data.limit}` : "—"}</CardTitle></CardHeader>
         <CardContent><div className="w-full bg-muted rounded-full h-2 overflow-hidden"><div className="bg-primary h-2 rounded-full transition-all duration-700" style={{ width: `${pct}%` }} /></div></CardContent>
       </Card>
-      <Card className={data?.isBeta ? "border-purple-300 dark:border-purple-700 bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-950/30 dark:to-pink-950/30" : ""}>
-        <CardHeader className="pb-2"><CardDescription>Plan</CardDescription><CardTitle className="text-3xl capitalize">{data?.isBeta ? "Beta" : (data?.tier || "Free")}</CardTitle></CardHeader>
-        <CardContent><p className="text-sm text-muted-foreground">{data?.isBeta ? "Unlimited during beta" : `${data?.limit || 20} messages/month`}</p></CardContent>
+      <Card>
+        <CardHeader className="pb-2"><CardDescription>Plan</CardDescription><CardTitle className="text-3xl capitalize">{data?.tier || "Free"}</CardTitle></CardHeader>
+        <CardContent><p className="text-sm text-muted-foreground">{`${data?.limit || 20} messages/month`}</p></CardContent>
       </Card>
     </div>
   );

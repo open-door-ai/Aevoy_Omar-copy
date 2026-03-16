@@ -26,7 +26,6 @@ export function StoreWidget() {
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Store className="h-4 w-4 text-indigo-500" /> App Store
-          <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full font-medium ml-1">Beta</span>
         </CardTitle>
       </CardHeader>
       <CardContent>

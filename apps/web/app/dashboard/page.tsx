@@ -45,10 +45,9 @@ export default async function DashboardPage() {
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold">{getGreeting()}, {displayName}</h1>
             <p className="text-muted-foreground text-sm">
-              {botName ? `${botName} is at your service` : "Here's your AI assistant overview"}
+              {botName ? `${botName} is ready to help` : "Your AI assistant is ready"}
             </p>
           </div>
-          {/* Beta badge removed — Stripe billing is live */}
         </div>
 
         {/* Takeover Banner */}

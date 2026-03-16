@@ -34,7 +34,7 @@ export function TaskStatsWidget() {
         <p className="text-xs text-muted-foreground">7-Day Success Rate</p>
         {!data ? <span className="animate-pulse bg-muted rounded h-7 w-16 inline-block mt-1" /> :
           rate !== null ? <div className="flex items-end gap-1 mt-1"><p className={`text-2xl font-bold ${rateColor}`}>{rate}%</p><p className="text-xs text-muted-foreground mb-1">({data.completed} done)</p></div>
-          : <p className="text-2xl font-bold text-muted-foreground mt-1">—</p>}
+          : <div className="mt-1"><p className="text-lg font-semibold text-muted-foreground">No tasks yet</p><p className="text-xs text-muted-foreground">Complete your first task to see stats</p></div>}
       </CardContent></Card>
       <BudgetWidget />
     </div>

@@ -62,14 +62,14 @@ export function BudgetWidget() {
   const balanceColor =
     balanceCents > 500
       ? "text-green-600 dark:text-green-400"
-      : balanceCents > 100
+      : balanceCents > 50
       ? "text-yellow-600 dark:text-yellow-400"
       : "text-red-600 dark:text-red-400";
 
   const borderColor =
     balanceCents <= 0
       ? "border-red-200 dark:border-red-800"
-      : balanceCents <= 100
+      : balanceCents < 50
       ? "border-yellow-200 dark:border-yellow-800"
       : "";
 
@@ -97,10 +97,10 @@ export function BudgetWidget() {
             </div>
           )}
 
-          {balanceCents > 0 && balanceCents <= 100 && (
+          {balanceCents > 0 && balanceCents < 50 && (
             <div className="flex items-center gap-1.5 text-xs text-yellow-600 dark:text-yellow-400">
               <AlertCircle className="h-3.5 w-3.5" />
-              <span>Low balance</span>
+              <span>Low balance — consider topping up</span>
             </div>
           )}
 

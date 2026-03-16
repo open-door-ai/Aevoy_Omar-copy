@@ -120,11 +120,6 @@ export default function BillingPage() {
       });
       const json = await res.json();
 
-      if (json.beta_mode) {
-        alert("Payment processing is coming soon. Your costs are tracked and your free credits are active.");
-        return;
-      }
-
       if (json.checkout_url) {
         // Redirect to Stripe Checkout
         window.location.href = json.checkout_url;
@@ -266,7 +261,7 @@ export default function BillingPage() {
 
             {!data.stripe_configured && (
               <p className="text-xs text-muted-foreground text-center">
-                Payment processing coming soon. Free credits are active.
+                Your free credits are active. Payment will be configured shortly.
               </p>
             )}
 
@@ -337,9 +332,11 @@ export default function BillingPage() {
         </CardHeader>
         <CardContent>
           {data.transactions.length === 0 ? (
-            <p className="text-center text-muted-foreground py-6 text-sm">
-              No activity yet.
-            </p>
+            <div className="text-center py-8">
+              <DollarSign className="h-8 w-8 mx-auto text-muted-foreground/30 mb-2" />
+              <p className="text-sm font-medium">No transactions yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Your billing activity will appear here once you start using your AI</p>
+            </div>
           ) : (
             <div className="space-y-1 max-h-[400px] overflow-y-auto">
               {data.transactions.map((tx) => (

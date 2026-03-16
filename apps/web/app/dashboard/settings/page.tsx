@@ -1961,7 +1961,7 @@ export default function SettingsPage() {
 
               <p className="text-xs text-muted-foreground">
                 Your tokens are encrypted with AES-256-GCM and automatically refreshed. Disconnect anytime.
-                One-Click Email uses Nylas (free for up to 5 users during beta).
+                One-Click Email is powered by Nylas.
               </p>
             </>
           )}

@@ -68,7 +68,7 @@ export default function StorePage() {
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <div className="flex items-center gap-2 mb-4">
               <Sparkles className="h-5 w-5 text-primary" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-primary">Beta</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-primary">New</span>
             </div>
             <h1 className="text-4xl md:text-5xl font-bold mb-4">Aevoy App Store</h1>
             <p className="text-lg text-muted-foreground max-w-xl mb-8">Extend your AI assistant with powerful widgets and integrations built by the community.</p>

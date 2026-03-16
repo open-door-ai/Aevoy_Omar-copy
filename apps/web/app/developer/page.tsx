@@ -100,10 +100,10 @@ export default function DeveloperPortal() {
                     <span className="text-lg font-bold">$5.00</span>
                   </div>
                   <p className="text-xs text-muted-foreground">One-time fee to verify your developer account. This helps maintain store quality.</p>
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 font-medium">Beta: Payment is waived during beta testing</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 font-medium">Verification fee is currently waived</p>
                 </div>
                 <button onClick={handleVerify} disabled={verifying || !bio.trim()} className="w-full bg-primary text-primary-foreground py-3 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
-                  {verifying ? "Verifying..." : "Get Verified — $5.00 (Free during Beta)"}
+                  {verifying ? "Verifying..." : "Get Verified — Free"}
                 </button>
               </CardContent>
             </Card>

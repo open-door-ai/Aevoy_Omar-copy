@@ -42,6 +42,31 @@ function getStatusIcon(status: string) {
   }
 }
 
+function getStatusLabel(status: string) {
+  switch (status) {
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "processing":
+      return "Processing";
+    case "pending":
+      return "Pending";
+    case "needs_review":
+      return "Needs Review";
+    case "awaiting_confirmation":
+      return "Awaiting Confirmation";
+    case "awaiting_user_input":
+      return "Awaiting Input";
+    case "cancelled":
+      return "Cancelled";
+    case "internal_error":
+      return "Error";
+    default:
+      return status.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+  }
+}
+
 function getChannelBadge(channel: string | null) {
   switch (channel) {
     case "sms":
@@ -142,7 +167,7 @@ export default async function ActivityPage() {
         <Card>
           <CardContent className="pt-4 pb-4">
             <p className="text-sm text-muted-foreground">Total Cost</p>
-            <p className="text-2xl font-bold">${totalCost.toFixed(4)}</p>
+            <p className="text-2xl font-bold">${totalCost < 0.01 && totalCost > 0 ? "<0.01" : totalCost.toFixed(2)}</p>
           </CardContent>
         </Card>
       </div>
@@ -184,8 +209,8 @@ export default async function ActivityPage() {
                             </span>
                           )}
                           {task.type && (
-                            <span className="text-xs bg-muted px-2 py-0.5 rounded">
-                              {task.type}
+                            <span className="text-xs bg-muted px-2 py-0.5 rounded capitalize">
+                              {task.type.replace(/_/g, " ")}
                             </span>
                           )}
                           <span className="text-xs text-muted-foreground">
@@ -193,13 +218,13 @@ export default async function ActivityPage() {
                           </span>
                           {task.cost_usd != null && task.cost_usd > 0 && (
                             <span className="text-xs text-muted-foreground">
-                              ${task.cost_usd.toFixed(4)}
+                              {task.cost_usd < 0.01 ? "<$0.01" : `$${task.cost_usd.toFixed(2)}`}
                             </span>
                           )}
                         </div>
                         {task.status === "completed" && !task.error_message && (
                           <p className="text-xs text-green-600 dark:text-green-400 mt-1.5 truncate">
-                            Completed successfully{task.tokens_used ? ` (${task.tokens_used.toLocaleString()} tokens)` : ""}
+                            Completed successfully
                           </p>
                         )}
                         {task.error_message && (
@@ -232,7 +257,7 @@ export default async function ActivityPage() {
                           )}`}
                         >
                           <span>{getStatusIcon(task.status)}</span>
-                          {task.status}
+                          {getStatusLabel(task.status)}
                         </span>
                       </div>
                     </div>
