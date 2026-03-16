@@ -64,9 +64,9 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
   };
 
   return (
-    <div className="fixed inset-0 bg-white z-50 overflow-auto force-light">
+    <div className="fixed inset-0 bg-white z-[60] overflow-auto force-light">
       {/* Progress bar */}
-      <div className="fixed top-0 left-0 right-0 z-10">
+      <div className="fixed top-0 left-0 right-0 z-[61]">
         <div className="h-1 bg-gray-100">
           <motion.div
             className="h-full bg-gray-800"
@@ -77,7 +77,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
       </div>
 
       {/* Step counter */}
-      <div className="fixed top-4 right-6 z-10">
+      <div className="fixed top-4 right-6 z-[61]">
         <span className="text-sm text-gray-600 font-medium tabular-nums">
           <motion.span
             key={step}
@@ -114,7 +114,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
                   setData((d) => ({ ...d, username: newUsername, bot_name: botName }));
                   goTo(2);
                 }}
-                onBack={() => {}} // First step, no back
+                onBack={undefined} // First step, no back
               />
             </motion.div>
           )}
@@ -212,17 +212,7 @@ export default function UnifiedFlow({ username, onComplete }: UnifiedFlowProps) 
         </AnimatePresence>
       </div>
 
-      {/* Accessibility: Skip to dashboard link */}
-      <a
-        href="#skip-onboarding"
-        onClick={(e) => {
-          e.preventDefault();
-          handleComplete();
-        }}
-        className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:bg-gray-800 focus:text-white focus:px-4 focus:py-2 focus:rounded"
-      >
-        Skip to dashboard
-      </a>
+      {/* Skip link removed — users should complete onboarding */}
     </div>
   );
 }

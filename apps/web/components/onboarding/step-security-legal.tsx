@@ -28,8 +28,8 @@ export default function StepSecurityLegal({
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [consentData, setConsentData] = useState(false);
 
-  // Optional checkbox (default ON)
-  const [allowVenting, setAllowVenting] = useState(true);
+  // Optional checkbox (default OFF for GDPR compliance)
+  const [allowVenting, setAllowVenting] = useState(false);
 
   // Save state
   const [isSaving, setIsSaving] = useState(false);
@@ -109,7 +109,7 @@ export default function StepSecurityLegal({
                 onBlur={() => setPinTouched(true)}
                 maxLength={6}
                 autoComplete="off"
-                className={`text-center text-2xl font-mono tracking-[0.3em] h-14 pr-12 ${
+                className={`text-center text-2xl font-mono tracking-[0.3em] h-14 pr-12 text-gray-900 ${
                   pinError && pinTouched
                     ? "border-red-400 focus-visible:border-red-400 focus-visible:ring-red-200"
                     : ""
@@ -240,11 +240,7 @@ export default function StepSecurityLegal({
             Back
           </Button>
           <Button onClick={handleContinue} disabled={!canContinue || isSaving}>
-            {isSaving
-              ? "Saving..."
-              : canContinue
-                ? "Continue"
-                : "Complete all fields to continue"}
+            {isSaving ? "Saving..." : "Continue"}
           </Button>
         </div>
       </FadeIn>
@@ -315,7 +311,11 @@ function CheckboxItem({
         <label
           htmlFor={id}
           className="text-sm text-gray-700 leading-snug cursor-pointer select-none"
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onChange(!checked);
+          }}
         >
           {label}
           {required && <span className="text-red-400 ml-0.5">*</span>}

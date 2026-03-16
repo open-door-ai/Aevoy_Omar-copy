@@ -10,7 +10,7 @@ interface StepBotEmailProps {
   currentUsername: string;
   currentBotName: string | null;
   onNext: (username: string, botName: string) => void;
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 const CURATED_NAMES = [
@@ -244,7 +244,7 @@ export default function StepBotEmail({
               setBotName(e.target.value.replace(/[^a-zA-Z0-9 '-]/g, "").slice(0, 30))
             }
             placeholder="e.g. Aria, Nova, Atlas..."
-            className="text-lg text-center font-medium"
+            className="text-lg text-center font-medium text-gray-900"
             maxLength={30}
           />
           {/* Bot name availability */}
@@ -368,7 +368,7 @@ export default function StepBotEmail({
                     )
                   }
                   placeholder="your-prefix"
-                  className="font-mono text-lg"
+                  className="font-mono text-lg text-gray-900"
                   maxLength={20}
                 />
                 <span className="text-gray-600 font-mono whitespace-nowrap">
@@ -428,9 +428,11 @@ export default function StepBotEmail({
 
       {/* Navigation */}
       <div className="flex gap-4 w-full mt-2">
-        <Button variant="outline" onClick={onBack} className="flex-1">
-          Back
-        </Button>
+        {onBack && (
+          <Button variant="outline" onClick={onBack} className="flex-1">
+            Back
+          </Button>
+        )}
         <Button
           onClick={() => onNext(username, botName.trim())}
           disabled={!isValid}

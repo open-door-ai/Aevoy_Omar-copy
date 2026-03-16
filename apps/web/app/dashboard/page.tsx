@@ -19,11 +19,12 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser();
 
   const [{ data: profile }, { data: layoutRow }] = await Promise.all([
-    supabase.from("profiles").select("username, bot_name, subscription_status").eq("id", user?.id ?? "").single(),
+    supabase.from("profiles").select("username, display_name, bot_name, subscription_status").eq("id", user?.id ?? "").single(),
     supabase.from("dashboard_widget_layouts").select("layout").eq("user_id", user?.id ?? "").single(),
   ]);
 
   const username = profile?.username || user?.email?.split("@")[0] || "user";
+  const displayName = profile?.display_name || profile?.bot_name || "there";
   const botName = profile?.bot_name || null;
   const isBetaUser = profile?.subscription_status === "beta";
 
@@ -44,7 +45,7 @@ export default async function DashboardPage() {
         {/* Header */}
         <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold">{getGreeting()}, {username}</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold">{getGreeting()}, {displayName}</h1>
             <p className="text-muted-foreground text-sm">
               {botName ? `${botName} is at your service` : "Here's your AI assistant overview"}
             </p>

@@ -29,7 +29,7 @@ export function QuickStatsWidget() {
 
   const stats = [
     { label: "Your Email", value: data?.email || "—", icon: Mail, truncate: true },
-    { label: "Your Phone", value: data?.phone || "Not provisioned", icon: Phone },
+    { label: "Your Phone", value: data?.phone || "Not set up yet", icon: Phone },
     { label: "Active Tasks", value: String(data?.activeTasks ?? "—"), icon: Zap, highlight: true },
     { label: "Monthly Cost", value: data ? `$${data.monthlyCost}` : "—", icon: DollarSign },
   ];

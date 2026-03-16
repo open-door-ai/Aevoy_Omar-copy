@@ -57,10 +57,13 @@ function getTwilioCredentials() {
 export async function POST(request: Request) {
   // DISABLED: Demo calls temporarily suspended. Someone spammed 27 calls in 10 min
   // and burned $33. Re-enable after Twilio is funded and abuse controls are proven.
-  return NextResponse.json(
-    { error: 'Demo calls are temporarily paused. Sign up for a free account to try Aevoy!' },
-    { status: 503 }
-  );
+  const DEMO_DISABLED = true;
+  if (DEMO_DISABLED) {
+    return NextResponse.json(
+      { error: 'Demo calls are temporarily paused. Sign up for a free account to try Aevoy!' },
+      { status: 503 }
+    );
+  }
 
   try {
     const ip = getClientIp(request);
@@ -90,8 +93,8 @@ export async function POST(request: Request) {
         .eq('call_type', 'demo')
         .gte('created_at', todayStart.toISOString())
         .limit(21);
-      if (todayCalls && todayCalls.length >= 20) {
-        console.warn(`[DEMO/CALL] GLOBAL daily demo cap reached (${todayCalls.length} calls today)`);
+      if ((todayCalls ?? []).length >= 20) {
+        console.warn(`[DEMO/CALL] GLOBAL daily demo cap reached (${todayCalls?.length ?? 0} calls today)`);
         return NextResponse.json(
           { error: 'Demo is temporarily unavailable due to high demand. Try again tomorrow or sign up for a free account.' },
           { status: 429 }
@@ -136,8 +139,8 @@ export async function POST(request: Request) {
     let userId = '';
     try {
       const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) userId = user.id;
+      const { data: { user: sessionUser } } = await supabase.auth.getUser();
+      if (sessionUser) userId = sessionUser.id;
     } catch { /* not logged in — cold demo */ }
 
     // Twilio callback: when the callee answers, Twilio POSTs to this URL to get TwiML
