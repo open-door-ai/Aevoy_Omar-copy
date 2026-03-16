@@ -122,22 +122,23 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
 
     // ── Quality gate: detect fake/hollow responses before marking completed ──
     const executionTime = Date.now() - startTime;
-    const isBrowserTask = classification.tier === 'multi_step' && /\b(go to|browse|sign up|book|register|navigate|create.*account|fill.*form|click|search.*for)\b/i.test(task.subject);
+    const isMultiStep = classification.tier === 'multi_step';
 
     // Detect fake responses: AI claims success but has no concrete evidence
-    const fakeResponsePatterns = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|having trouble|I apologize)\b/i;
-    const hasConcreteData = /\b(\d{3}[-.)]\d{3}[-.)]\d{4}|\$\d+\.\d{2}|confirmed|booked|reservation|receipt|order|reference|confirmation)\b/i.test(response);
+    const fakeResponsePatterns = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|encountered.*notification|JavaScript needed)\b/i;
+    const hasConcreteData = /\b(\d{3}[-.)]\d{3}[-.)]\d{4}|\$\d+\.\d{2}|https?:\/\/\S{10,}|confirmed|booked|reservation|receipt|order|reference|confirmation|password|username|logged in|signed up|account created)\b/i.test(response);
     const admitsFailure = fakeResponsePatterns.test(response);
     const credPlaceholderLeaked = /\[CRED_/.test(response);
 
     let taskStatus: 'completed' | 'needs_review' = 'completed';
     let verificationStatus = 'verified';
 
-    if (isBrowserTask && (admitsFailure || credPlaceholderLeaked)) {
+    // Quality gate applies to ALL multi-step tasks, not just browser-keyword ones
+    if (isMultiStep && (admitsFailure || credPlaceholderLeaked)) {
       taskStatus = 'needs_review';
       verificationStatus = 'failed';
-      console.warn(`[V3] Quality gate FAILED for browser task: admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}`);
-    } else if (isBrowserTask && !hasConcreteData && response.length < 200) {
+      console.warn(`[V3] Quality gate FAILED: admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}, response="${response.slice(0, 80)}"`);
+    } else if (isMultiStep && !hasConcreteData && response.length < 200) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
       console.warn(`[V3] Quality gate LOW CONFIDENCE: short response (${response.length} chars), no concrete data`);
