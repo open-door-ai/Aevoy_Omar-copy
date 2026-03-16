@@ -944,6 +944,11 @@ const LiveDemo = ({ demoType }: { demoType: string }) => {
       else if (/^1[2-9]\d{9}$/.test(cleaned)) cleaned = '+' + cleaned;
       else cleaned = '+' + cleaned;
     }
+    // Block non-NA numbers on the frontend too
+    if (!/^\+1[2-9]\d{9}$/.test(cleaned)) {
+      setError('Demo calls are currently available for US & Canada numbers only.');
+      return;
+    }
     setDemoPhase('progress');
     setError(null);
     apiResolvedRef.current = false;
@@ -1153,7 +1158,7 @@ const LiveDemo = ({ demoType }: { demoType: string }) => {
             )}
             <div className="mb-6">
               <label className="block text-sm font-medium text-stone-700 mb-2">
-                {isCall ? 'Your phone number' : 'Try to stump us'}
+                {isCall ? 'Your phone number (US/Canada only)' : 'Try to stump us'}
               </label>
               {isCall ? (
                 <input
