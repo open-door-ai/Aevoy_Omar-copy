@@ -85,7 +85,9 @@ function getChannelBadge(channel: string | null) {
 }
 
 function cleanTaskName(name: string) {
-  return name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
+  let clean = name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
+  if (/^[a-z_]+$/.test(clean)) clean = clean.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return clean;
 }
 
 function truncateText(text: string, max: number = 80) {

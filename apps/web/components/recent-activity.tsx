@@ -33,7 +33,10 @@ interface RecentActivityProps {
 }
 
 function cleanTaskName(name: string) {
-  return name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
+  let clean = name.replace(/^\[(Proactive|Scheduled|proactive|scheduled)\]\s*/i, '').trim();
+  // Replace underscores with spaces for internal task names
+  if (/^[a-z_]+$/.test(clean)) clean = clean.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return clean;
 }
 
 function truncateText(text: string, max: number = 60) {
