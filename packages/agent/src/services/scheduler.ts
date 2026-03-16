@@ -43,12 +43,27 @@ export function startScheduler(): void {
   
   console.log('[SCHEDULER] Started - checking for due tasks every minute');
 
-  // DISABLED: Proactive engine was creating unsolicited tasks and burning money.
-  // Incident 2026-03-16: Proactive tasks fired without user request, sent SMS/emails.
-  // Re-enable ONLY when user explicitly opts in via user_settings.proactive_enabled.
-  // runProactiveChecks().catch(console.error);
-  // proactiveInterval = setInterval(async () => { ... }, 60 * 60 * 1000);
-  console.log('[SCHEDULER] Proactive engine DISABLED (cost control)');
+  // Proactive engine — REBUILT with strict controls
+  // Rules:
+  // 1. Only runs if user has proactive_enabled=true in user_settings (must opt-in)
+  // 2. Max 2 proactive messages per user per day
+  // 3. Only sends via the user's preferred channel (not all channels)
+  // 4. Must have a genuine reason (not "I noticed you did X" spam)
+  // 5. DB-backed daily count (survives restarts)
+  const PROACTIVE_ENABLED = process.env.PROACTIVE_ENGINE !== 'false'; // Can be disabled via env var
+  if (PROACTIVE_ENABLED) {
+    // Check every 2 hours (not every hour — less aggressive)
+    proactiveInterval = setInterval(async () => {
+      try {
+        await runProactiveChecks();
+      } catch (error) {
+        console.error('[SCHEDULER] Proactive check error:', error);
+      }
+    }, 2 * 60 * 60 * 1000); // Every 2 hours
+    console.log('[SCHEDULER] Proactive engine started — checking every 2 hours (controlled mode)');
+  } else {
+    console.log('[SCHEDULER] Proactive engine DISABLED via PROACTIVE_ENGINE=false');
+  }
 
   // Start daily check-in calls (every 5 minutes)
   runCheckinCalls().catch(console.error);
@@ -127,6 +142,25 @@ async function runProactiveChecks(): Promise<void> {
   if (!acquired) {
     console.log("[SCHEDULER] Proactive check skipped — another instance holds the lock");
     return;
+  }
+
+  // Hard daily cap: max 10 proactive messages globally per day
+  try {
+    const { data: todayProactive } = await getSupabaseClient()
+      .from('tasks')
+      .select('id')
+      .eq('input_channel', 'proactive')
+      .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
+      .limit(20);
+
+    if (todayProactive && todayProactive.length >= 10) {
+      console.log(`[PROACTIVE] Global daily cap reached (${todayProactive.length} today) — skipping`);
+      await releaseDistributedLock("scheduler_proactive");
+      return;
+    }
+  } catch (capError) {
+    console.error('[PROACTIVE] Daily cap check error:', capError);
+    // Continue anyway — better to run with a failed cap check than skip entirely
   }
 
   try {
