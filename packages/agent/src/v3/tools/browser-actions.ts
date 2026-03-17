@@ -352,7 +352,29 @@ registerTool({
       const snapshot = await getPageSnapshot(page);
       return { success: true, data: `${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: captcha.cost };
     } catch (err) {
-      return { success: false, error: `Navigation failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
+      const errMsg = err instanceof Error ? err.message : 'unknown';
+      // Protocol/network errors (ERR_HTTP2, ERR_CONNECTION, etc.) — try BrightData
+      const isNetworkError = /ERR_|net::|Protocol|PROTOCOL|timeout|crashed|closed/i.test(errMsg);
+      if (isNetworkError && process.env.BRIGHT_DATA_BROWSER_WS && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
+        console.log(`[V3-BROWSER] Navigation threw ${errMsg} — escalating to BrightData`);
+        try { await cleanupTaskPage(ctx.taskId); } catch {}
+        const savedCdp = process.env.REMOTE_BROWSER_CDP;
+        delete process.env.REMOTE_BROWSER_CDP;
+        try {
+          const { page: bdPage } = await getOrCreatePage(ctx, url);
+          process.env.REMOTE_BROWSER_CDP = savedCdp;
+          await bdPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          await bdPage.waitForTimeout(2000);
+          const captcha = await autoSolveCaptcha(bdPage, ctx);
+          const snapshot = await getPageSnapshot(bdPage);
+          return { success: true, data: `(Escalated to residential browser)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: 0.055 + (captcha.cost || 0) };
+        } catch (bdErr) {
+          process.env.REMOTE_BROWSER_CDP = savedCdp;
+          try { await cleanupTaskPage(ctx.taskId); } catch {}
+          return { success: false, error: `Site blocks automated browsers. Even residential proxy failed. Try Google search: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`, cost: 0 };
+        }
+      }
+      return { success: false, error: `Navigation failed: ${errMsg}. Try a different site or Google search.`, cost: 0 };
     }
   },
 });
