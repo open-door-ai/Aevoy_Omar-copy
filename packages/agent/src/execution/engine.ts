@@ -97,17 +97,19 @@ export class ExecutionEngine {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
 
-    // Priority: BrightData (residential + CAPTCHA solving) > VPS Chrome (fast fallback) > Local
-    // BrightData Scraping Browser has BUILT-IN CAPTCHA solving at no extra cost.
-    // VPS Chrome is fast but gets Cloudflare-blocked and can't solve CAPTCHAs.
-    // Single-session lock REMOVED — BrightData supports concurrent sessions.
+    // Priority: VPS Chrome (fast, free) > BrightData (CAPTCHA solving, $8/GB) > Local
+    // VPS Chrome is fast and free but gets Cloudflare-blocked on some commercial sites.
+    // BrightData has residential IPs + built-in CAPTCHA solving but costs $8/GB (~$0.04/page).
+    // Strategy: Start with VPS Chrome. If page is blocked, the V3 browser_go tool
+    // detects the block and the AI pivots (Google search, alternative site, etc.).
+    // BrightData is available as engine fallback when forceLocalBrowser() is called.
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
-    // PRIORITY 0: BrightData Scraping Browser (residential proxy + CAPTCHA solving)
-    this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    // PRIORITY 0: Remote CDP browser (VPS Chrome — fast, free)
+    this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
 
-    // PRIORITY 1: Remote CDP browser (VPS Chrome — fallback when BrightData unavailable)
-    this.useRemoteCDP = !forceLocal && !this.useBrightData && !!(process.env.REMOTE_BROWSER_CDP);
+    // PRIORITY 1: BrightData Scraping Browser (residential + CAPTCHA, used as fallback)
+    this.useBrightData = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_BROWSER_WS);
     if (process.env.BRIGHT_DATA_BROWSER_WS) {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
     } else {

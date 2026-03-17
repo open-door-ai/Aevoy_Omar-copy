@@ -270,11 +270,64 @@ registerTool({
         || (bodyText.length === 0 && currentUrl === 'about:blank');
       if (isConnectionFailure) {
           console.log(`[V3-BROWSER] Connection failure for ${url}: "${bodyText.substring(0, 100)}"`);
+
+          // Escalate to BrightData (residential IP + CAPTCHA solving) if available
+          const bdWs = process.env.BRIGHT_DATA_BROWSER_WS;
+          if (bdWs && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
+            console.log(`[V3-BROWSER] Escalating to BrightData for ${url}`);
+            await cleanupTaskPage(ctx.taskId);
+            // Force BrightData by temporarily hiding VPS CDP
+            const savedCdp = process.env.REMOTE_BROWSER_CDP;
+            delete process.env.REMOTE_BROWSER_CDP;
+            try {
+              const { page: bdPage } = await getOrCreatePage(ctx, url);
+              process.env.REMOTE_BROWSER_CDP = savedCdp;
+              await bdPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+              await bdPage.waitForTimeout(2000);
+              const bdUrl = bdPage.url();
+              if (!bdUrl.startsWith('chrome-error://') && bdUrl !== 'about:blank') {
+                console.log(`[V3-BROWSER] BrightData SUCCESS for ${url}`);
+                const captcha = await autoSolveCaptcha(bdPage, ctx);
+                const snapshot = await getPageSnapshot(bdPage);
+                return { success: true, data: `${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: 0.055 + (captcha.cost || 0) };
+              }
+              // BrightData also failed
+              await cleanupTaskPage(ctx.taskId);
+            } catch (bdErr) {
+              process.env.REMOTE_BROWSER_CDP = savedCdp;
+              console.warn(`[V3-BROWSER] BrightData escalation failed:`, bdErr instanceof Error ? bdErr.message : bdErr);
+              try { await cleanupTaskPage(ctx.taskId); } catch {}
+            }
+          }
+
           return {
             success: false,
-            error: `Connection failed: ${url}. The site may be down or blocking this connection. Try: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
+            error: `Connection failed: ${url}. Try: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
             cost: 0,
           };
+      }
+
+      // Detect CAPTCHA/block pages that loaded but need BrightData to bypass
+      const isCaptchaPage = /captcha|verify.*human|security check|access denied|403 forbidden|just a moment|checking your browser/i.test(bodyText);
+      if (isCaptchaPage && process.env.BRIGHT_DATA_BROWSER_WS && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
+        console.log(`[V3-BROWSER] CAPTCHA/block page on VPS Chrome for ${url} — escalating to BrightData`);
+        await cleanupTaskPage(ctx.taskId);
+        const savedCdp = process.env.REMOTE_BROWSER_CDP;
+        delete process.env.REMOTE_BROWSER_CDP;
+        try {
+          const { page: bdPage } = await getOrCreatePage(ctx, url);
+          process.env.REMOTE_BROWSER_CDP = savedCdp;
+          await bdPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          await bdPage.waitForTimeout(2000);
+          const captcha = await autoSolveCaptcha(bdPage, ctx);
+          const snapshot = await getPageSnapshot(bdPage);
+          return { success: true, data: `(Switched to residential proxy to bypass block)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: 0.055 + (captcha.cost || 0) };
+        } catch (bdErr) {
+          process.env.REMOTE_BROWSER_CDP = savedCdp;
+          console.warn(`[V3-BROWSER] BrightData CAPTCHA bypass failed:`, bdErr instanceof Error ? bdErr.message : bdErr);
+          try { await cleanupTaskPage(ctx.taskId); } catch {}
+          // Fall through to show the CAPTCHA page to the AI
+        }
       }
 
       // Auto-dismiss cookie banners and overlays that block interaction
