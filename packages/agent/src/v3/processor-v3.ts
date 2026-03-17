@@ -692,10 +692,15 @@ This is NOT optional — deliver results or explain the blocker.`
         const hasConcreteResult = /(\$\d|\£\d|\€\d|\d+\.\d{2}|https?:\/\/\S{10,}|confirmation|successfully|completed|here (are|is) (the|your))/.test(response);
         const isVagueGiveUp = !hasConcreteResult && iterations < 15 && response.length < 300 && /\b(typically|generally|unfortunately|however)\b/i.test(response);
 
-        const shouldReject = isGiveUp || isVagueGiveUp;
+        // Also reject mid-thought responses that aren't real answers
+        const isMidThought = /\b(let me|let's see|I'll try|I'm on|I'm going to|I need to|I should|I'm currently|I've typed|I just|I'm now|I'm still|I'm about to)\b/i.test(response) && !hasConcreteResult;
+
+        const shouldReject = isGiveUp || isVagueGiveUp || isMidThought;
         const giveUpCount = messages.filter(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('DO NOT GIVE UP')).length;
 
-        if (shouldReject && giveUpCount < 3 && iterations < 50) {
+        // Reject give-ups and mid-thoughts up to 5 times, no iteration limit
+        // After 5 rejections, accept whatever the AI says
+        if (shouldReject && giveUpCount < 5) {
           const domainsStr = [...triedDomains].join(', ');
           console.log(`[V3] Rejected give-up (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
           messages.push({ role: 'assistant', content: response });
