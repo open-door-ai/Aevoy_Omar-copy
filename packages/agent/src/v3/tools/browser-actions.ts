@@ -53,8 +53,29 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
     allowedActions: ['browse', 'fill_form', 'click', 'screenshot', 'extract'],
   });
 
+  // Use BrightData residential IP when available — datacenter IPs get blocked on most real sites.
+  // BrightData is slower but has residential IPs that bypass Cloudflare/Akamai/DataDome.
+  // VPS Chrome is only useful for simple/open sites (Wikipedia, gov sites, small businesses).
+  const hasBrightData = !!process.env.BRIGHT_DATA_BROWSER_WS;
+
   const engine = new ExecutionEngine(lockedIntent);
-  await engine.initialize(ctx.userId, domain, ctx.taskId);
+  if (hasBrightData) {
+    // BrightData first — residential IPs work on 95% of sites
+    // VPS Chrome (datacenter IP) gets blocked by Cloudflare/Akamai on most commercial sites
+    const savedCdp = process.env.REMOTE_BROWSER_CDP;
+    delete process.env.REMOTE_BROWSER_CDP;
+    try {
+      await engine.initialize(ctx.userId, domain, ctx.taskId);
+      process.env.REMOTE_BROWSER_CDP = savedCdp; // Restore for other tasks/engines
+    } catch (bdErr) {
+      // BrightData failed (in use, connection error) — fall back to VPS Chrome
+      process.env.REMOTE_BROWSER_CDP = savedCdp;
+      console.log(`[V3-BROWSER] BrightData init failed, falling back to VPS: ${bdErr instanceof Error ? bdErr.message : bdErr}`);
+      await engine.initialize(ctx.userId, domain, ctx.taskId);
+    }
+  } else {
+    await engine.initialize(ctx.userId, domain, ctx.taskId);
+  }
   const page = engine.getPage();
   if (!page) throw new Error('Failed to create browser page');
 
@@ -259,48 +280,9 @@ registerTool({
         || (bodyText.length === 0 && currentUrl === 'about:blank');
       if (isConnectionFailure) {
           console.log(`[V3-BROWSER] Connection failure for ${url}: "${bodyText.substring(0, 100)}"`);
-
-          // Try BrightData fallback (residential IP) if available
-          const bdWs = process.env.BRIGHT_DATA_BROWSER_WS;
-          if (bdWs && !taskPages.get(ctx.taskId)?.engine?.['useBrightData']) {
-            console.log(`[V3-BROWSER] Attempting BrightData fallback for ${url}`);
-            try {
-              // Cleanup current engine and create BrightData one
-              await cleanupTaskPage(ctx.taskId);
-              // Temporarily set force BrightData by removing REMOTE_BROWSER_CDP for this task's engine
-              const savedCdp = process.env.REMOTE_BROWSER_CDP;
-              delete process.env.REMOTE_BROWSER_CDP;
-              try {
-                const { page: bdPage } = await getOrCreatePage(ctx, url);
-                await bdPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-                await bdPage.waitForTimeout(2000);
-                const bdUrl = bdPage.url();
-                const bdBody = await bdPage.evaluate(() => (document.body?.innerText || '').substring(0, 200)).catch(() => '');
-                const bdBlocked = bdUrl.startsWith('chrome-error://') || /access denied|blocked|forbidden/i.test(bdBody);
-                if (bdBlocked) {
-                  console.log(`[V3-BROWSER] BrightData also blocked for ${url}`);
-                  await cleanupTaskPage(ctx.taskId);
-                  // Restore and report failure
-                  process.env.REMOTE_BROWSER_CDP = savedCdp;
-                } else {
-                  // BrightData worked! Keep using it for this task
-                  console.log(`[V3-BROWSER] BrightData SUCCESS for ${url}`);
-                  process.env.REMOTE_BROWSER_CDP = savedCdp; // Restore for other tasks
-                  const captcha = await autoSolveCaptcha(bdPage, ctx);
-                  const snapshot = await getPageSnapshot(bdPage);
-                  return { success: true, data: `(Used residential proxy for anti-bot bypass)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: captcha.cost + 0.055 };
-                }
-              } catch (bdErr) {
-                console.warn(`[V3-BROWSER] BrightData fallback failed:`, bdErr instanceof Error ? bdErr.message : bdErr);
-                process.env.REMOTE_BROWSER_CDP = savedCdp;
-                await cleanupTaskPage(ctx.taskId);
-              }
-            } catch { /* ignore BrightData errors */ }
-          }
-
           return {
             success: false,
-            error: `Connection failed: ${url} (${currentUrl}). Try Google search: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
+            error: `Connection failed: ${url}. The site may be down or blocking this connection. Try: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
             cost: 0,
           };
       }
