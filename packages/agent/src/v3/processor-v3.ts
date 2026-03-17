@@ -604,19 +604,39 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         : 'I ran out of time working on your task. Could you try a simpler version of the request?';
     }
 
-    // ── Hard iteration cap: force wrap-up at 50, force completion at 70 ──
+    // ── Goal progress checks + iteration caps ──
+    // At iteration 20: ask AI to self-assess progress
+    if (iterations === 20) {
+      messages.push({
+        role: 'user',
+        content: `PROGRESS CHECK (iteration 20): Are you making REAL progress toward the goal? Specifically:
+- If this is a signup: have you filled the form and clicked submit?
+- If this is a search: have you found at least 1 concrete result?
+- If this is a booking: have you selected a date/time and started the booking?
+If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver what you have.`
+      });
+    }
+    // At iteration 30: harder wrap-up
     if (iterations === 30 && !wrapUpInjected) {
       wrapUpInjected = true;
       messages.push({
         role: 'user',
-        content: `You have used 30 iterations. WRAP UP NOW:
-1. If you have partial results, report them immediately
-2. If you're stuck on bot detection/CAPTCHA, report that and suggest alternatives
-3. Do NOT keep retrying the same site — summarize what you found and deliver it
-4. Your final response must contain CONCRETE data, not a DOM dump`
+        content: `FINAL WARNING (iteration 30 of max 50). You MUST deliver results in the next 20 steps:
+1. If your current approach is working → finish it NOW
+2. If it's NOT working → STOP and deliver what you have
+3. DO NOT keep clicking around hoping something will work
+4. Your response must have CONCRETE DATA or an honest explanation of what blocked you
+This is NOT optional — deliver results or explain the blocker.`
       });
     }
-    if (iterations >= 70) {
+    // At iteration 45: absolute last chance
+    if (iterations === 45) {
+      messages.push({
+        role: 'user',
+        content: `LAST CHANCE (iteration 45 of 50). Deliver your FINAL response NOW. No more tool calls after this. Summarize everything you found and accomplished.`
+      });
+    }
+    if (iterations >= 50) {
       const partial = ledger.getPartialResults();
       const hasUsefulData = partial !== 'No results gathered yet.' && !/^\[?\d+\]\s*(link|button|input|textbox)/m.test(partial);
       return hasUsefulData
@@ -624,14 +644,9 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         : 'I wasn\'t able to complete this task after many attempts. The site may have strong bot detection or the task may need a different approach.';
     }
 
-    // Cost ceiling: stop burning money on tasks that aren't making progress
-    if (budget.totalSpent > 0.15 && iterations > 20) {
-      console.warn(`[V3] Cost ceiling hit: $${budget.totalSpent.toFixed(3)} at iteration ${iterations}`);
-      const partial = ledger.getPartialResults();
-      return partial !== 'No results gathered yet.'
-        ? `I've spent $${budget.totalSpent.toFixed(2)} on this task. Here's what I found so far:\n\n${partial}`
-        : 'This task is proving expensive without results. The site may require a different approach.';
-    }
+    // No hard cost ceiling — user pays for themselves.
+    // The iteration cap (50) naturally limits spend.
+    // Cost is tracked for billing but doesn't terminate tasks.
 
     // ── Call AI model with tools ──
     let modelResponse;
