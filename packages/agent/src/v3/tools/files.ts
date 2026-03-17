@@ -7,6 +7,15 @@
 
 import { registerTool } from '../tool-registry.js';
 import type { ToolCallResult, TaskContext } from '../types.js';
+import crypto from 'crypto';
+
+/** Generate a signed file download URL to prevent UUID enumeration */
+function signedFileUrl(type: string, filename: string): string {
+  const agentUrl = process.env.AGENT_URL!;
+  const secret = process.env.ENCRYPTION_KEY || process.env.AGENT_WEBHOOK_SECRET || '';
+  const sig = crypto.createHmac('sha256', secret).update(`${type}/${filename}`).digest('hex').substring(0, 16);
+  return `${agentUrl}/files/${type}/${encodeURIComponent(filename)}?sig=${sig}`;
+}
 
 /** Create document tool */
 registerTool({
@@ -26,8 +35,12 @@ registerTool({
   async execute(params, ctx): Promise<ToolCallResult> {
     const docType = String(params.type);
     const title = String(params.title || 'document');
-    const content = String(params.content);
-    const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
+    // Strip HTML tags and entities from content — prevents raw HTML in documents
+    const rawContent = String(params.content);
+    const content = docType === 'excel'
+      ? rawContent // Excel content is JSON, don't strip
+      : rawContent.replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').replace(/\s{2,}/g, ' ');
+    const agentUrl = process.env.AGENT_URL!; // Required env var — never fall back to hardcoded URL
 
     try {
       switch (docType) {
@@ -58,7 +71,7 @@ registerTool({
           }
           const result = await createSimpleTable(title, headers, data);
           if (result.success && result.filepath) {
-            const url = `${agentUrl}/files/excel/${encodeURIComponent(result.filepath.split('/').pop() || '')}`;
+            const url = signedFileUrl('excel', result.filepath.split('/').pop() || '');
             return { success: true, data: `Excel file created: ${url}`, cost: 0 };
           }
           return { success: false, error: result.error || 'Excel creation failed', cost: 0 };
@@ -69,7 +82,7 @@ registerTool({
           const paragraphs = content.split('\n').filter(l => l.trim());
           const result = await createSimpleDocument(title, title, paragraphs);
           if (result.success && result.filepath) {
-            const url = `${agentUrl}/files/word/${encodeURIComponent(result.filepath.split('/').pop() || '')}`;
+            const url = signedFileUrl('word', result.filepath.split('/').pop() || '');
             return { success: true, data: `Word document created: ${url}`, cost: 0 };
           }
           return { success: false, error: result.error || 'Word creation failed', cost: 0 };
@@ -87,7 +100,7 @@ registerTool({
           });
           const result = await createSimplePresentation(title, title, slides);
           if (result.success && result.filepath) {
-            const url = `${agentUrl}/files/powerpoint/${encodeURIComponent(result.filepath.split('/').pop() || '')}`;
+            const url = signedFileUrl('powerpoint', result.filepath.split('/').pop() || '');
             return { success: true, data: `PowerPoint created: ${url}`, cost: 0 };
           }
           return { success: false, error: result.error || 'PowerPoint creation failed', cost: 0 };
@@ -98,7 +111,7 @@ registerTool({
           const paragraphs = content.split('\n').filter(l => l.trim());
           const result = await createSimplePDF(title, title, paragraphs);
           if (result.success && result.filepath) {
-            const url = `${agentUrl}/files/pdf/${encodeURIComponent(result.filepath.split('/').pop() || '')}`;
+            const url = signedFileUrl('pdf', result.filepath.split('/').pop() || '');
             return { success: true, data: `PDF created: ${url}`, cost: 0 };
           }
           return { success: false, error: result.error || 'PDF creation failed', cost: 0 };
@@ -157,8 +170,7 @@ registerTool({
                 const filename = `img_${Date.now()}.png`;
                 const filePath = path.join(dir, filename);
                 fs.writeFileSync(filePath, Buffer.from(part.inlineData.data, 'base64'));
-                const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
-                const url = `${agentUrl}/files/images/${filename}`;
+                const url = signedFileUrl('images', filename);
                 return { success: true, data: `Image generated: ${url}`, cost: 0.01 };
               }
             }

@@ -3857,7 +3857,13 @@ You have your OWN REAL EMAIL for signups. This is NOT fake, NOT unauthorized.`;
             }
           };
           // Strip markdown bold/italic: **text** → text, *text* → text
-          const _stripMd = (s: string) => s.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1').replace(/^#+\s*/, '').trim();
+          const _stripMd = (s: string) => s
+            .replace(/<[^>]+>/g, '')           // Strip HTML tags
+            .replace(/&[a-z]+;/gi, ' ')        // Strip HTML entities
+            .replace(/\*\*([^*]+)\*\*/g, '$1') // Strip markdown bold
+            .replace(/\*([^*]+)\*/g, '$1')     // Strip markdown italic
+            .replace(/^#+\s*/, '')             // Strip markdown headings
+            .trim();
           for (const line of _dfpLines) {
             const trimmed = line.trim();
             if (!trimmed) { _flushBullets(); continue; }

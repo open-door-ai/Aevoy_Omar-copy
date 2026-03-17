@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -243,26 +244,46 @@ app.use(globalLimiter);
 // Serve generated documents and files from the /tmp/aevoy-files directory
 // Using /tmp ensures writability in all containerized environments (Railway, Docker, etc.)
 // Files are served at /files/word/name.docx, /files/excel/name.xlsx, etc.
-app.use('/files', express.static(path.join('/tmp', 'aevoy-files'), {
-  setHeaders: (res, filePath) => {
-    // Security headers — prevent MIME sniffing and restrict resource loading
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', "default-src 'none'");
-    // Force download for Office documents
-    if (filePath.endsWith('.docx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    else if (filePath.endsWith('.xlsx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    else if (filePath.endsWith('.pptx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-    else if (filePath.endsWith('.pdf')) res.setHeader('Content-Type', 'application/pdf');
-    else if (filePath.endsWith('.png')) res.setHeader('Content-Type', 'image/png');
-    else if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) res.setHeader('Content-Type', 'image/jpeg');
-    // Images should display inline, not download
-    if (filePath.endsWith('.png') || filePath.endsWith('.jpg') || filePath.endsWith('.jpeg')) {
-      res.setHeader('Content-Disposition', `inline; filename="${path.basename(filePath)}"`);
-    } else {
-      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
-    }
+// File serving with signed URL verification — prevents UUID enumeration attacks
+app.get('/files/:type/:filename', (req, res) => {
+  const { type, filename } = req.params;
+  const sig = req.query.sig as string;
+
+  // Validate signature — proves the server generated this URL
+  const secret = process.env.ENCRYPTION_KEY || WEBHOOK_SECRET || '';
+  const expectedSig = crypto.createHmac('sha256', secret).update(`${type}/${filename}`).digest('hex').substring(0, 16);
+  if (!sig || sig !== expectedSig) {
+    return res.status(403).json({ error: 'Invalid or expired download link' });
   }
-}));
+
+  // Prevent path traversal
+  const safeName = path.basename(filename);
+  const safeType = ['pdf', 'excel', 'word', 'powerpoint', 'images'].includes(type) ? type : '';
+  if (!safeType || safeName !== filename || /\.\./.test(filename)) {
+    return res.status(400).json({ error: 'Invalid file path' });
+  }
+
+  const filePath = path.join('/tmp', 'aevoy-files', safeType, safeName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  // Security headers
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'none'");
+
+  // MIME types
+  if (safeName.endsWith('.docx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  else if (safeName.endsWith('.xlsx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  else if (safeName.endsWith('.pptx')) res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  else if (safeName.endsWith('.pdf')) res.setHeader('Content-Type', 'application/pdf');
+  else if (safeName.endsWith('.png')) res.setHeader('Content-Type', 'image/png');
+  else if (safeName.endsWith('.jpg') || safeName.endsWith('.jpeg')) res.setHeader('Content-Type', 'image/jpeg');
+
+  const isImage = /\.(png|jpe?g)$/.test(safeName);
+  res.setHeader('Content-Disposition', `${isImage ? 'inline' : 'attachment'}; filename="${safeName}"`);
+  res.sendFile(filePath);
+});
 
 // Timing-safe webhook secret comparison
 function verifyWebhookSecret(provided: string | null | undefined): boolean {
