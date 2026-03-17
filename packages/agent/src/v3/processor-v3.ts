@@ -571,22 +571,33 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     }
 
     // ── Hard iteration cap: force wrap-up at 50, force completion at 70 ──
-    if (iterations === 50 && !wrapUpInjected) {
+    if (iterations === 30 && !wrapUpInjected) {
       wrapUpInjected = true;
       messages.push({
         role: 'user',
-        content: `You have used 50 iterations. Wrap up soon — fill remaining fields, submit, and report results. Be efficient: call multiple browser_fill() in one step if you have several fields left.`
+        content: `You have used 30 iterations. WRAP UP NOW:
+1. If you have partial results, report them immediately
+2. If you're stuck on bot detection/CAPTCHA, report that and suggest alternatives
+3. Do NOT keep retrying the same site — summarize what you found and deliver it
+4. Your final response must contain CONCRETE data, not a DOM dump`
       });
     }
     if (iterations >= 70) {
       const partial = ledger.getPartialResults();
-      return partial !== 'No results gathered yet.'
+      const hasUsefulData = partial !== 'No results gathered yet.' && !/^\[?\d+\]\s*(link|button|input|textbox)/m.test(partial);
+      return hasUsefulData
         ? `I worked on this for a while. Here's what I found:\n\n${partial}`
-        : 'I spent a lot of time on this but couldn\'t complete the task fully. Please try breaking it into smaller steps.';
+        : 'I wasn\'t able to complete this task after many attempts. The site may have strong bot detection or the task may need a different approach.';
     }
 
-    // No hard budget ceiling — the AI should be efficient but never stop mid-task due to cost.
-    // Cost is tracked for billing but doesn't terminate tasks.
+    // Cost ceiling: stop burning money on tasks that aren't making progress
+    if (budget.totalSpent > 0.15 && iterations > 20) {
+      console.warn(`[V3] Cost ceiling hit: $${budget.totalSpent.toFixed(3)} at iteration ${iterations}`);
+      const partial = ledger.getPartialResults();
+      return partial !== 'No results gathered yet.'
+        ? `I've spent $${budget.totalSpent.toFixed(2)} on this task. Here's what I found so far:\n\n${partial}`
+        : 'This task is proving expensive without results. The site may require a different approach.';
+    }
 
     // ── Call AI model with tools ──
     let modelResponse;
