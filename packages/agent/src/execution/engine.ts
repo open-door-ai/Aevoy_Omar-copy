@@ -87,7 +87,7 @@ export class ExecutionEngine {
   private domain?: string;
   private isMultiUser = false;
   private isRemoteCDP = false; // Whether using remote CDP browser
-  private useBrightData = false;
+  useBrightData = false; // Public so V3 browser tools can check if engine is on BrightData
   private brightDataSessionStart: number = 0;
   private brightDataPageCount: number = 0;
   private brightDataNavFailures: number = 0;
