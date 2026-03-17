@@ -143,8 +143,10 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     const isVague = /\b(typically|generally|usually|I recommend|you could try|you might want|I suggest|here are some tips|in general)\b/i.test(response) && !hasConcreteData;
 
     // Cross-reference: did the AI actually USE the tools it claims?
-    const taskRecord = await getSupabaseClient().from('tasks').select('action_count').eq('id', taskId).single();
+    // Use action_success_count (not total action_count) — failed actions don't prove work was done
+    const taskRecord = await getSupabaseClient().from('tasks').select('action_count, action_success_count').eq('id', taskId).single();
     const actionCount = taskRecord?.data?.action_count || 0;
+    const successCount = taskRecord?.data?.action_success_count || 0;
 
     // Was this a browser-intent task? (from classifier)
     const isBrowserTask = classification.tier === 'multi_step' && (
@@ -156,13 +158,12 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     let verificationStatus = 'verified';
     let failReason = '';
 
-    // Quality gate: cross-reference claims vs actions
+    // Quality gate: cross-reference claims vs SUCCESSFUL actions
     if (admitsFailure || credPlaceholderLeaked) {
       taskStatus = 'needs_review';
       verificationStatus = 'failed';
       failReason = `admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}`;
     } else if (claimsPhoneCall) {
-      // AI claims it called someone — verify against call_history
       const { data: recentCalls } = await getSupabaseClient()
         .from('call_history')
         .select('id')
@@ -174,33 +175,39 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
         verificationStatus = 'hallucination';
         failReason = 'AI claims phone call but no call_history entry found';
       }
-    } else if (claimsBooked && actionCount < 5) {
+    } else if (claimsEmailSent && successCount < 1) {
+      // AI claims email sent but no successful send_email tool call
+      taskStatus = 'needs_review';
+      verificationStatus = 'hallucination';
+      failReason = 'AI claims email sent but no successful send action';
+    } else if (claimsBooked && successCount < 5) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
-      failReason = `Claims booking but only ${actionCount} actions taken`;
-    } else if (claimsAccountCreated && actionCount < 5) {
+      failReason = `Claims booking but only ${successCount} successful actions`;
+    } else if (claimsAccountCreated && successCount < 5) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
-      failReason = `Claims account created but only ${actionCount} actions taken`;
-    } else if (claimsPurchased && actionCount < 5) {
+      failReason = `Claims account created but only ${successCount} successful actions`;
+    } else if (claimsPurchased && successCount < 5) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
-      failReason = `Claims purchase but only ${actionCount} actions taken`;
-    } else if (isBrowserTask && actionCount === 0 && responseLower.length > 50) {
-      // Browser task with ZERO actions — the AI fabricated from training data
+      failReason = `Claims purchase but only ${successCount} successful actions`;
+    } else if (isBrowserTask && successCount === 0 && responseLower.length > 50) {
+      // Browser task with ZERO successful actions — fabricated from training data
       taskStatus = 'needs_review';
       verificationStatus = 'no_actions';
-      failReason = 'Browser task but zero actions taken — response is fabricated';
+      failReason = 'Browser task but zero successful actions — response is fabricated';
     } else if (isBrowserTask && isVague && !hasConcreteData) {
       // Browser task with vague response and no concrete data
       taskStatus = 'needs_review';
       verificationStatus = 'vague';
       failReason = 'Browser task with vague response — no prices, URLs, or confirmations';
-    } else if (isBrowserTask && actionCount === 0 && responseLower.length > 200 && !hasConcreteData) {
-      // Browser task with long response but zero actions and no data — likely fabricated
+    } else if (isBrowserTask && successCount <= 1 && responseLower.length > 200 && !hasConcreteData) {
+      // Browser task with long response but <=1 successful action and no data — likely fabricated
+      // NOTE: having a URL in the response does NOT exempt it — URLs can come from training data
       taskStatus = 'needs_review';
       verificationStatus = 'no_actions';
-      failReason = 'Browser task with long response but zero actions and no concrete data';
+      failReason = `Browser task with long response but only ${successCount} successful actions and no concrete data`;
     }
 
     if (failReason) {
@@ -409,7 +416,7 @@ async function handleInstant(task: TaskRequest, ctx: TaskContext): Promise<strin
   // Use a fast, free model for conversational responses
   const result = await callModel({
     messages: [
-      { role: 'system', content: `You are Aevoy, a friendly AI assistant for ${ctx.username}. Respond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.` },
+      { role: 'system', content: `You are Aevoy, a friendly AI assistant for ${ctx.username}. Respond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.\n\nIMPORTANT: You are NOT connected to the internet. You CANNOT browse websites, check prices, make calls, send emails, or access any external services. Only answer from your training knowledge. If the question requires live data, say "I'd need to look that up online — let me search for you" and nothing more.` },
       { role: 'user', content: taskText },
     ],
     tier: 'instant',
