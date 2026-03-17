@@ -418,6 +418,56 @@ registerTool({
 });
 
 registerTool({
+  name: 'browser_click_text',
+  description: 'Click an element by its visible text or role. Use this when ref-based clicking fails, or for elements inside iframes/widgets that refs cannot reach (like date pickers, booking widgets, calendar days).',
+  category: 'browser',
+  parameters: {
+    text: { type: 'string', description: 'The visible text of the element to click (e.g. "Book Now", "March 22", "7:00 PM", "Submit")' },
+    role: { type: 'string', description: 'Optional: element role — button, link, tab, option, menuitem, checkbox, radio' },
+  },
+  required: ['text'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const existing = taskPages.get(ctx.taskId);
+    if (!existing || existing.page.isClosed()) {
+      return { success: false, error: 'No browser page open. Use browser_go first.', cost: 0 };
+    }
+    const text = String(params.text);
+    const role = params.role ? String(params.role) : '';
+    try {
+      // Use Playwright's getByRole or getByText — same method the Playwright MCP uses
+      // This works through iframes, shadow DOM, and dynamic widgets
+      let locator;
+      if (role) {
+        locator = existing.page.getByRole(role as any, { name: text, exact: false });
+      } else {
+        // Try role-based first (button, link), fall back to text
+        locator = existing.page.getByRole('button', { name: text, exact: false });
+        if (await locator.count() === 0) {
+          locator = existing.page.getByRole('link', { name: text, exact: false });
+        }
+        if (await locator.count() === 0) {
+          locator = existing.page.getByText(text, { exact: false });
+        }
+      }
+
+      const count = await locator.count();
+      if (count === 0) {
+        return { success: false, error: `No element found with text "${text}"${role ? ` and role "${role}"` : ''}. Try browser_snapshot() to see available elements.`, cost: 0 };
+      }
+
+      // Click the first match
+      await locator.first().click({ timeout: 5000 });
+      await existing.page.waitForTimeout(1000);
+      const captcha = await autoSolveCaptcha(existing.page, ctx);
+      const snapshot = await getPageSnapshot(existing.page);
+      return { success: true, data: `Clicked "${text}"${role ? ` (${role})` : ''}${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
+    } catch (err) {
+      return { success: false, error: `Click by text failed: ${err instanceof Error ? err.message : 'unknown'}. Try browser_click(ref) instead.`, cost: 0 };
+    }
+  },
+});
+
+registerTool({
   name: 'browser_fill',
   description: 'Fill a text input field on the page by its ref number. Use this for forms — fill one field at a time.',
   category: 'browser',
