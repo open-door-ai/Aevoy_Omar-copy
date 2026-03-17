@@ -586,6 +586,7 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   let actionCount = 0;    // Total browser/tool actions taken (for quality gate)
   let actionSuccessCount = 0;
   let consecutiveFailures = 0;   // Consecutive failed tool calls
+  let consecutiveModelFailures = 0; // Consecutive failed AI model calls — retry before giving up
   let lastMeaningfulProgress = 0; // Iteration of last successful form fill or navigation
   const progressNotes: string[] = []; // Running log of what was accomplished
   const triedDomains = new Set<string>(); // Domains we've already visited
@@ -673,14 +674,21 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
         maxTokens: tokensForStep,
       });
     } catch (err) {
-      console.error(`[V3] Model call failed at iteration ${iterations}:`, err);
-      if (iterations >= 3) {
-        return 'I encountered an issue with AI services. Please try again shortly.';
+      consecutiveModelFailures++;
+      console.error(`[V3] Model call failed at iteration ${iterations} (failure ${consecutiveModelFailures}):`, err);
+      // Retry up to 3 times with backoff — transient API failures are common
+      // (rate limits recover in 15s, network blips, provider restarts)
+      if (consecutiveModelFailures >= 3) {
+        // 3 consecutive failures — deliver partial results or error
+        const partial = ledger.getPartialResults();
+        return partial !== 'No results gathered yet.'
+          ? `I ran into an issue with AI services, but here's what I found:\n\n${partial}`
+          : 'I encountered an issue with AI services. Please try again shortly.';
       }
-      // Wait briefly and retry
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000 * consecutiveModelFailures)); // 3s, 6s backoff
       continue;
     }
+    consecutiveModelFailures = 0; // Reset on success
 
     // Track AI cost
     if (modelResponse.cost > 0) {
