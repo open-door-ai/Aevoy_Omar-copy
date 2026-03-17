@@ -616,24 +616,27 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
 If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver what you have.`
       });
     }
-    // At iteration 30: harder wrap-up
-    if (iterations === 30 && !wrapUpInjected) {
+    // At iteration 50: second progress check — are you still making progress?
+    if (iterations === 50 && !wrapUpInjected) {
       wrapUpInjected = true;
       messages.push({
         role: 'user',
-        content: `FINAL WARNING (iteration 30 of max 50). You MUST deliver results in the next 20 steps:
-1. If your current approach is working → finish it NOW
-2. If it's NOT working → STOP and deliver what you have
-3. DO NOT keep clicking around hoping something will work
-4. Your response must have CONCRETE DATA or an honest explanation of what blocked you
-This is NOT optional — deliver results or explain the blocker.`
+        content: `PROGRESS CHECK (iteration 50): You've been working for a while. Quick assessment:
+1. Are you making REAL progress? (forms filled, buttons clicked, data found)
+2. If you're stuck in a loop → try a COMPLETELY different approach or site
+3. If you have partial results → keep going but stay focused
+4. DO NOT keep retrying the same failing approach — pivot to something new`
       });
     }
-    // At iteration 45: force text response by removing tools
-    if (iterations === 45) {
+    // At iteration 100: serious wrap-up warning
+    if (iterations === 100) {
       messages.push({
         role: 'user',
-        content: `FINAL RESPONSE REQUIRED. You have reached iteration 45. Do NOT call any more tools. Respond with TEXT ONLY — summarize everything you found, accomplished, and what blocked you. Include any URLs, prices, names, or data you discovered. This is your last chance to deliver value.`
+        content: `EFFICIENCY CHECK (iteration 100): You've had many steps. Focus:
+1. If your current approach is working → finish it NOW, don't add unnecessary steps
+2. If it's NOT working → deliver what you have so far with concrete data
+3. You still have tools available — use them if needed to complete the task
+4. Your response must have CONCRETE DATA (prices, URLs, confirmations, names)`
       });
     }
     // Dynamic iteration management: no hard cap. The progress checks at 20/30/45
@@ -756,12 +759,10 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
 
       let result;
       try {
-        // 60-second timeout per tool call — prevents indefinite hangs
-        // Browser operations (page.goto, BrightData connect) can hang forever
-        result = await Promise.race([
-          executeToolCall(tc, ctx),
-          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool call timeout (60s)')), 60000)),
-        ]);
+        // Tool-registry handles timeouts: 900s for browser tools, 120s for others.
+        // No outer timeout here — the 60s race was killing BrightData escalation
+        // (VPS fail 30s + BrightData connect 30s + navigate 30s = 90s minimum).
+        result = await executeToolCall(tc, ctx);
         ledger.recordObservation(tc.name, tc.arguments, result);
       } catch (toolErr) {
         const errMsg = toolErr instanceof Error ? toolErr.message : 'unknown';
