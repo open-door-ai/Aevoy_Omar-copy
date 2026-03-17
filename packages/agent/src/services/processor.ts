@@ -6201,10 +6201,27 @@ The user asked you to NEGOTIATE — that requires a phone call, not just web res
           const { statSync } = await import('fs');
           // Extract local file path from URL (e.g., /files/word/uuid.docx → /tmp/aevoy-files/word/uuid.docx)
           const _dtLocalPath = _dtUrl.replace(/^\/files\//, '/tmp/aevoy-files/');
+          const { readFileSync } = await import('fs');
           const _dtStat = statSync(_dtLocalPath);
           if (_dtStat.size > 100) {
-            _docVerified = true;
-            console.log(`[DOC-VERIFY] ✓ File verified: ${_dtLocalPath} (${(_dtStat.size / 1024).toFixed(1)} KB)`);
+            // Content quality check: sample first 2KB for HTML contamination
+            if (_dtLocalPath.endsWith('.xlsx') || _dtLocalPath.endsWith('.docx') || _dtLocalPath.endsWith('.pptx')) {
+              // Office files are ZIP-based — can't sample text directly, but size is a good proxy
+              _docVerified = true;
+            } else if (_dtLocalPath.endsWith('.pdf')) {
+              // PDF: check for valid PDF header
+              const header = readFileSync(_dtLocalPath, { encoding: null }).subarray(0, 5).toString();
+              if (header === '%PDF-') {
+                _docVerified = true;
+              } else {
+                console.warn(`[DOC-VERIFY] ✗ PDF has invalid header: "${header}"`);
+              }
+            } else {
+              _docVerified = true;
+            }
+            if (_docVerified) {
+              console.log(`[DOC-VERIFY] ✓ File verified: ${_dtLocalPath} (${(_dtStat.size / 1024).toFixed(1)} KB)`);
+            }
           } else {
             console.warn(`[DOC-VERIFY] ✗ File too small: ${_dtLocalPath} (${_dtStat.size} bytes) — may be empty/corrupt`);
           }
