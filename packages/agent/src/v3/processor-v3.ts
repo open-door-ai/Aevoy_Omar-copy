@@ -756,11 +756,17 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
 
       let result;
       try {
-        result = await executeToolCall(tc, ctx);
+        // 60-second timeout per tool call — prevents indefinite hangs
+        // Browser operations (page.goto, BrightData connect) can hang forever
+        result = await Promise.race([
+          executeToolCall(tc, ctx),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool call timeout (60s)')), 60000)),
+        ]);
         ledger.recordObservation(tc.name, tc.arguments, result);
       } catch (toolErr) {
-        console.error(`[V3] Tool ${tc.name} threw unhandled error:`, toolErr);
-        result = { success: false, error: `Tool crashed: ${toolErr instanceof Error ? toolErr.message : 'unknown'}`, cost: 0 };
+        const errMsg = toolErr instanceof Error ? toolErr.message : 'unknown';
+        console.error(`[V3] Tool ${tc.name} error: ${errMsg}`);
+        result = { success: false, error: `Tool error: ${errMsg}`, cost: 0 };
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
 
