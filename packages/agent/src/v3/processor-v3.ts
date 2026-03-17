@@ -629,19 +629,24 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
 This is NOT optional — deliver results or explain the blocker.`
       });
     }
-    // At iteration 45: absolute last chance
+    // At iteration 45: force text response by removing tools
     if (iterations === 45) {
       messages.push({
         role: 'user',
-        content: `LAST CHANCE (iteration 45 of 50). Deliver your FINAL response NOW. No more tool calls after this. Summarize everything you found and accomplished.`
+        content: `FINAL RESPONSE REQUIRED. You have reached iteration 45. Do NOT call any more tools. Respond with TEXT ONLY — summarize everything you found, accomplished, and what blocked you. Include any URLs, prices, names, or data you discovered. This is your last chance to deliver value.`
       });
     }
     if (iterations >= 50) {
-      const partial = ledger.getPartialResults();
-      const hasUsefulData = partial !== 'No results gathered yet.' && !/^\[?\d+\]\s*(link|button|input|textbox)/m.test(partial);
-      return hasUsefulData
-        ? `I worked on this for a while. Here's what I found:\n\n${partial}`
-        : 'I wasn\'t able to complete this task after many attempts. The site may have strong bot detection or the task may need a different approach.';
+      // Build a meaningful summary from progress notes + last AI response
+      const progressSummary = progressNotes.filter(n => !n.startsWith('✗')).slice(-10).join('\n');
+      const domainsVisited = [...triedDomains].join(', ');
+      const lastAiResponse = messages.filter(m => m.role === 'assistant' && m.content && m.content.length > 20)
+        .pop()?.content?.substring(0, 300) || '';
+
+      if (progressSummary || lastAiResponse) {
+        return `I worked through ${iterations} steps visiting ${domainsVisited || 'multiple sites'}. Here's what I accomplished:\n\n${progressSummary}\n\n${lastAiResponse ? `Last finding: ${lastAiResponse}` : 'I was unable to fully complete the task but made partial progress above.'}`;
+      }
+      return `I spent ${iterations} steps trying to complete this task but couldn't get reliable results. The sites I tried (${domainsVisited || 'various'}) had strong bot detection that blocked me. You may need to complete this task manually or try again later.`;
     }
 
     // No hard cost ceiling — user pays for themselves.
