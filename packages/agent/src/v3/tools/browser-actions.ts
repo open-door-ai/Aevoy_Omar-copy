@@ -53,29 +53,11 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
     allowedActions: ['browse', 'fill_form', 'click', 'screenshot', 'extract'],
   });
 
-  // Use BrightData residential IP when available — datacenter IPs get blocked on most real sites.
-  // BrightData is slower but has residential IPs that bypass Cloudflare/Akamai/DataDome.
-  // VPS Chrome is only useful for simple/open sites (Wikipedia, gov sites, small businesses).
-  const hasBrightData = !!process.env.BRIGHT_DATA_BROWSER_WS;
-
+  // Use VPS Chrome (fast, reliable) as primary. BrightData used as fallback
+  // when VPS Chrome gets blocked (detected by browser_go connection failure check).
+  // The engine handles the priority chain: VPS Chrome → BrightData → Local.
   const engine = new ExecutionEngine(lockedIntent);
-  if (hasBrightData) {
-    // BrightData first — residential IPs work on 95% of sites
-    // VPS Chrome (datacenter IP) gets blocked by Cloudflare/Akamai on most commercial sites
-    const savedCdp = process.env.REMOTE_BROWSER_CDP;
-    delete process.env.REMOTE_BROWSER_CDP;
-    try {
-      await engine.initialize(ctx.userId, domain, ctx.taskId);
-      process.env.REMOTE_BROWSER_CDP = savedCdp; // Restore for other tasks/engines
-    } catch (bdErr) {
-      // BrightData failed (in use, connection error) — fall back to VPS Chrome
-      process.env.REMOTE_BROWSER_CDP = savedCdp;
-      console.log(`[V3-BROWSER] BrightData init failed, falling back to VPS: ${bdErr instanceof Error ? bdErr.message : bdErr}`);
-      await engine.initialize(ctx.userId, domain, ctx.taskId);
-    }
-  } else {
-    await engine.initialize(ctx.userId, domain, ctx.taskId);
-  }
+  await engine.initialize(ctx.userId, domain, ctx.taskId);
   const page = engine.getPage();
   if (!page) throw new Error('Failed to create browser page');
 
