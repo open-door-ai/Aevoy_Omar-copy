@@ -404,11 +404,12 @@ export class ExecutionEngine {
     }
 
     // Log Bright Data Scraping Browser bandwidth cost.
-    // Estimate: ~250KB per page × $9.50/GB = $0.0024/page; floor at $0.003 per session.
-    // (Previous 2MB/page estimate was ~16x too high vs actual Bright Data billing.)
+    // Real-world bandwidth: ~5MB per page (JS/CSS/images/fonts), heavy pages up to 20MB.
+    // BrightData rate: $11/GB (highest tier — some domains $8, some $11, always charge max).
+    // 5MB × $11/GB = $0.055/page. Floor $0.06/session.
     if (this.useBrightData && this.brightDataSessionStart > 0 && this.userId) {
       const pages = Math.max(this.brightDataPageCount, 1);
-      const estimatedCost = Math.max(pages * 0.0024, 0.003);
+      const estimatedCost = Math.max(pages * 0.055, 0.06);
       trackServiceCost(
         this.userId,
         'brightdata',

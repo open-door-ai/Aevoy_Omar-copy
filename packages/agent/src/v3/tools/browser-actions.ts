@@ -288,7 +288,7 @@ registerTool({
                   process.env.REMOTE_BROWSER_CDP = savedCdp; // Restore for other tasks
                   const captcha = await autoSolveCaptcha(bdPage, ctx);
                   const snapshot = await getPageSnapshot(bdPage);
-                  return { success: true, data: `(Used residential proxy for anti-bot bypass)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: captcha.cost + 0.003 };
+                  return { success: true, data: `(Used residential proxy for anti-bot bypass)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: captcha.cost + 0.055 };
                 }
               } catch (bdErr) {
                 console.warn(`[V3-BROWSER] BrightData fallback failed:`, bdErr instanceof Error ? bdErr.message : bdErr);
