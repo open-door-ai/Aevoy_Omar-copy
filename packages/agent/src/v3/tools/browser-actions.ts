@@ -308,7 +308,7 @@ registerTool({
       const bodyText = await page.evaluate(() => (document.body?.innerText || '').substring(0, 500)).catch(() => '');
       const isErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl === 'about:blank';
       const isConnectionFailure = isErrorPage
-        || /ERR_CONNECTION_REFUSED|ERR_NAME_NOT_RESOLVED|ERR_CERT|ERR_SSL|ERR_TIMED_OUT|ERR_INTERNET_DISCONNECTED/i.test(bodyText)
+        || /ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|ERR_CERT|ERR_SSL|ERR_TIMED_OUT|ERR_INTERNET|ERR_HTTP2|ERR_BLOCKED|ERR_ABORTED|ERR_FAILED/i.test(bodyText)
         || (bodyText.length === 0 && currentUrl === 'about:blank');
       if (isConnectionFailure) {
           console.log(`[V3-BROWSER] Connection failure for ${url}: "${bodyText.substring(0, 100)}"`);
@@ -350,7 +350,7 @@ registerTool({
       }
 
       // Detect CAPTCHA/block pages that loaded but need BrightData to bypass
-      const isCaptchaPage = /captcha|verify.*human|security check|access denied|403 forbidden|just a moment|checking your browser/i.test(bodyText);
+      const isCaptchaPage = /captcha|verify.*human|security check|access denied|403 forbidden|just a moment|checking your browser|cloudflare|please wait|ray id|enable javascript|enable cookies|bot detection|imperva|incapsula|datadome|akamai/i.test(bodyText);
       if (isCaptchaPage && process.env.BRIGHT_DATA_BROWSER_WS && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
         console.log(`[V3-BROWSER] CAPTCHA/block page on VPS Chrome for ${url} — escalating to BrightData`);
         await cleanupTaskPage(ctx.taskId);
