@@ -313,6 +313,28 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     return { tier: 'single_tool', tool: 'create_document', reasoning: 'document creation' };
   }
 
+  // ── Browser tasks — MUST go to multi_step for browser tools ──
+
+  // Explicit URL in task (contains .com/.org/.net/.io/.ca/.co/.ai etc.)
+  if (/\b\w+\.(com|org|net|io|ca|co|ai|app|dev|me|us|uk|edu|gov|info|biz)\b/i.test(lower)) {
+    return { tier: 'multi_step', reasoning: 'task contains URL — browser required' };
+  }
+
+  // Navigation intent (go to / browse / visit / open / navigate to / check out)
+  if (/\b(go\s+to|browse|navigate\s+to|visit|open|check\s+out|look\s+at|head\s+to|pull\s+up)\b.*\b(website|site|page|portal|platform|app)\b/i.test(lower)) {
+    return { tier: 'multi_step', reasoning: 'navigation intent — browser required' };
+  }
+
+  // Action-on-website intent (sign up, register, create account, book, reserve, purchase, buy, order, cancel, apply, log in)
+  if (/\b(sign\s*up|signup|register|create\s*(an?\s*)?account|book\s*(a|an|the|me)?|reserv|purchase|buy|order|cancel\s*(my|a|the)?\s*(subscription|account|membership|plan|service)|apply\s*(for|to|on)|log\s*in|login|subscribe|enroll|checkout|add\s*to\s*cart)\b/i.test(lower)) {
+    return { tier: 'multi_step', reasoning: 'website action intent — browser required' };
+  }
+
+  // Research/scrape intent requiring live web data
+  if (/\b(find|search|look\s*up|research|compare|check)\b.*\b(price|cost|availability|review|rating|stock|listing|job|flight|hotel|restaurant|menu|hours|address|phone\s*number|contact)\b/i.test(lower) && lower.length > 20) {
+    return { tier: 'multi_step', reasoning: 'live web research — browser required' };
+  }
+
   // ── For ambiguous tasks, use AI classification ──
   try {
     const classifyPrompt = `Classify this task into exactly one category. Respond with ONLY the category name, nothing else.
@@ -329,7 +351,11 @@ Categories:
 - browser: Task requiring a REAL web browser to interact with a specific website (sign up, book, buy, add to cart, cancel subscription, fill forms, scrape live data from a site)
 - multi_step: Complex task needing multiple different actions in sequence
 
-IMPORTANT: Only use "browser" when the task REQUIRES visiting a website to take action or get LIVE/current data. General knowledge questions should be "instant".
+RULES:
+- "instant" is ONLY for greetings, small talk, or pure knowledge questions (definitions, math, history facts)
+- If the task mentions ANY website, URL, domain, service name, or brand — it's "browser"
+- If the task asks to sign up, book, buy, cancel, apply, check prices, or interact with any online service — it's "browser"
+- When in doubt between "instant" and "browser", ALWAYS choose "browser"
 
 Task: "${taskText.substring(0, 300)}"
 
