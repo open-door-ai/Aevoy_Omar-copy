@@ -122,11 +122,13 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
 
     // ── Quality gate: cross-reference AI claims against actual actions ──
     const executionTime = Date.now() - startTime;
-    const isMultiStep = classification.tier === 'multi_step';
+    // Quality gate applies to ALL tiers — even "instant" can hallucinate
+    // The classifier sometimes misclassifies browser tasks as instant
+    const isMultiStep = true; // Apply to everything — better safe than hallucinated
     const responseLower = response.toLowerCase();
 
     // 1. Detect explicit failure admissions
-    const admitsFailure = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|IP.*blocked|IP.*flagged|Ray ID|access denied|403 forbidden|captcha.*blocked|0 job postings|0 results found|no postings found|encountered.*notification|JavaScript needed|need to resolve|contact.*support)\b/i.test(response);
+    const admitsFailure = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|failed due|process failed|creation.*failed|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|IP.*blocked|IP.*flagged|Ray ID|access denied|403 forbidden|captcha.*blocked|0 job postings|0 results found|no postings found|not available due|browser disconn|encountered.*notification|JavaScript needed|need to resolve|contact.*support|approximate data|exact.*not available)\b/i.test(response);
     const credPlaceholderLeaked = /\[CRED_/.test(response);
 
     // 2. Detect HALLUCINATED ACTIONS — AI claims it did something the system can't do
