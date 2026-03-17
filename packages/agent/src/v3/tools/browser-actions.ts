@@ -169,7 +169,7 @@ async function getPageSnapshot(page: Page): Promise<string> {
         const items: string[] = [];
         let totalCount = 0;
         let ref = 1;
-        const MAX_DISPLAY = 80;
+        const MAX_DISPLAY = 50; // Reduced from 80 to save tokens
 
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {

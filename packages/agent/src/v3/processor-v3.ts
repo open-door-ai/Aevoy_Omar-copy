@@ -894,7 +894,8 @@ PICK ONE NEW STRATEGY and execute it. Do NOT retry what already failed.`
     }
 
     // ── Context compression every 8 iterations ──
-    if (iterations % 8 === 0 && messages.length > 15) {
+    // Compress every 5 iterations to reduce token costs (Gemini charges per token)
+    if (iterations % 5 === 0 && messages.length > 12) {
       const compressed = compressMessagesV2(messages, progressNotes);
       messages.length = 0;
       messages.push(...compressed);
