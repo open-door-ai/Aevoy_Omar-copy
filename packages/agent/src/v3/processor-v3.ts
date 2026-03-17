@@ -582,7 +582,7 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   let screenshotCount = 0;
   let locateCount = 0;
   let wrapUpInjected = false;
-  let strategyPivotInjected = false;
+  // strategyPivotInjected removed — pivot now fires REPEATEDLY (every 20 iters without progress)
   let actionCount = 0;    // Total browser/tool actions taken (for quality gate)
   let actionSuccessCount = 0;
   let consecutiveFailures = 0;   // Consecutive failed tool calls
@@ -851,28 +851,43 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
 
     // ── STRATEGIC THINKING: Force the AI to pivot when stuck ──
 
-    // Strategy pivot: no meaningful progress in 15 iterations → force complete rethink
-    if (!strategyPivotInjected && iterations > 15 && (iterations - lastMeaningfulProgress) > 15) {
-      strategyPivotInjected = true;
+    // Strategy pivot: REPEATING — fires every 20 iterations without meaningful progress.
+    // Previous version only fired once (strategyPivotInjected), letting the AI loop forever.
+    // Now fires at 15, 35, 55, 75... whenever no progress in the last 20 iterations.
+    if (iterations > 15 && (iterations - lastMeaningfulProgress) > 20 && (iterations - lastMeaningfulProgress) % 20 === 0) {
       const domainsStr = [...triedDomains].join(', ');
-      console.log(`[V3] STRATEGY PIVOT at iteration ${iterations}: no progress since iteration ${lastMeaningfulProgress}`);
-      messages.push({
-        role: 'user',
-        content: `STOP. THINK. You've spent ${iterations} iterations without meaningful progress.
+      const pivotCount = Math.floor((iterations - lastMeaningfulProgress) / 20);
+      console.log(`[V3] STRATEGY PIVOT #${pivotCount} at iteration ${iterations}: no progress since iteration ${lastMeaningfulProgress}`);
+
+      if (pivotCount >= 3) {
+        // 3+ pivots without progress — deliver what you have
+        messages.push({
+          role: 'user',
+          content: `FINAL DELIVERY REQUIRED. You've had ${pivotCount} strategy pivots with NO meaningful progress since iteration ${lastMeaningfulProgress}. The site is blocking automated access.
+
+DELIVER PARTIAL RESULTS NOW. Report:
+1. What you DID accomplish (URLs visited, data found, actions completed)
+2. What specifically blocked you (CAPTCHA, bot detection, login required)
+3. Any prices, names, or data you gathered along the way
+
+This is better than burning more time on a blocked approach. Respond with your results NOW.`
+        });
+      } else {
+        messages.push({
+          role: 'user',
+          content: `STRATEGY PIVOT #${pivotCount}: You've spent ${iterations - lastMeaningfulProgress} iterations without meaningful progress.
 
 You already tried: ${domainsStr || 'various approaches'}
 
 A smart human would NOT keep trying the same thing. Think like this:
-1. WHAT specifically is blocking you? (CAPTCHA? Form not loading? Bot detection? Page error?)
-2. Is there a COMPLETELY DIFFERENT way to accomplish this task?
-   - If signup is blocked → try Google OAuth / "Sign in with Google" button
-   - If site blocks bots → try a different site that offers the same service
-   - If form won't submit → try the mobile version of the site (m.site.com)
-   - If the task is "find information" → use Google search instead of navigating the site
-3. Can you accomplish PART of the task even if you can't do everything?
+1. WHAT specifically is blocking you? (CAPTCHA? Bot detection? Login required?)
+2. Try a COMPLETELY DIFFERENT site/approach — there's ALWAYS an alternative
+3. If the task is "add to cart" and the site blocks you → report the product price and link instead
+4. If the task is "sign up" and it keeps failing → try a different service
 
-PICK ONE NEW STRATEGY and execute it. Do NOT retry what already failed.`
-      });
+PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
+        });
+      }
     }
 
     // Consecutive failures: 5 tool calls in a row failed
