@@ -31,8 +31,10 @@ import { logTaskStep } from './task-logger.js';
 import { RetryPolicy } from './retry.js';
 import { validateUrlSafety } from '../utils/url-validator.js';
 
-// Bright Data concurrency limiter — only 1 session at a time to prevent WSS connection hangs
-let brightDataInUse = false;
+// Bright Data concurrency tracking (no lock — BrightData handles concurrency via separate sessions)
+// Each connectOverCDP() creates a NEW session on BrightData infrastructure.
+// Removed the single-session lock that was blocking all concurrent browser tasks.
+let brightDataSessionCount = 0;
 
 // Timeouts — tuned per action type for optimal speed vs reliability
 // Default 40 min — safe ceiling above most dynamic user settings.
@@ -134,22 +136,14 @@ export class ExecutionEngine {
 
     // PRIORITY 0: Bright Data Scraping Browser — managed real Chrome, bypasses DataDome/Akamai
     // Only 1 concurrent session allowed (Bright Data hangs silently with multiple WSS connections)
-    if (this.useBrightData && brightDataInUse) {
-      console.log(`[ENGINE] Bright Data already in use by another task — skipping to local browser`);
-      this.useBrightData = false;
+    // No concurrency lock — BrightData supports multiple sessions
+    if (this.useBrightData) {
+      console.log(`[ENGINE] BrightData sessions active: ${brightDataSessionCount}`);
     }
     if (this.useBrightData) {
       try {
-        brightDataInUse = true;
-        // Safety timeout: auto-release lock after 30 minutes to prevent permanent lock on crash
-        const lockTimeout = setTimeout(() => {
-          if (brightDataInUse) {
-            console.warn('[ENGINE] BrightData lock auto-released after 30 min timeout');
-            brightDataInUse = false;
-          }
-        }, 30 * 60 * 1000);
-        // Store timeout so we can clear it on normal cleanup
-        (this as any)._brightDataLockTimeout = lockTimeout;
+        brightDataSessionCount++;
+        console.log(`[ENGINE] BrightData session started (total: ${brightDataSessionCount})`);
         const wsUrl = process.env.BRIGHT_DATA_BROWSER_WS!;
         console.log(`[ENGINE] Connecting to Bright Data Scraping Browser...`);
 
@@ -191,11 +185,7 @@ export class ExecutionEngine {
         console.warn(`[ENGINE] Bright Data connection failed: ${errorMsg} — falling back`);
         this.browser = null; this.context = null; this.page = null; this.isRemoteCDP = false;
         this.useBrightData = false;
-        brightDataInUse = false; // Release lock on connection failure
-        if ((this as any)._brightDataLockTimeout) {
-          clearTimeout((this as any)._brightDataLockTimeout);
-          (this as any)._brightDataLockTimeout = null;
-        }
+        brightDataSessionCount = Math.max(0, brightDataSessionCount - 1);
       }
     }
 
@@ -393,14 +383,10 @@ export class ExecutionEngine {
     this.context = null;
     this.browser = null;
 
-    // Release Bright Data concurrency lock
+    // Release Bright Data session counter
     if (this.useBrightData) {
-      brightDataInUse = false;
-      if ((this as any)._brightDataLockTimeout) {
-        clearTimeout((this as any)._brightDataLockTimeout);
-        (this as any)._brightDataLockTimeout = null;
-      }
-      console.log('[ENGINE] Released Bright Data concurrency lock');
+      brightDataSessionCount = Math.max(0, brightDataSessionCount - 1);
+      console.log(`[ENGINE] BrightData session ended (remaining: ${brightDataSessionCount})`);
     }
 
     // Log Bright Data Scraping Browser bandwidth cost.
@@ -1309,7 +1295,7 @@ export class ExecutionEngine {
           } catch { /* ignore cleanup errors */ }
           this.browser = null; this.context = null; this.page = null;
           this.useBrightData = false; this.isRemoteCDP = false;
-          brightDataInUse = false; // Release concurrency lock
+          brightDataSessionCount = Math.max(0, brightDataSessionCount - 1); // Release concurrency lock
           await this.initialize(this.userId, this.domain, this.taskId);
           return this._doNavigate(url);
         }
@@ -1340,7 +1326,7 @@ export class ExecutionEngine {
           await this.browser?.close().catch(() => {});
         } catch { /* ignore cleanup errors */ }
         this.browser = null; this.context = null; this.page = null;
-        brightDataInUse = false;
+        brightDataSessionCount = Math.max(0, brightDataSessionCount - 1);
         await this.initialize(this.userId, this.domain, this.taskId);
         return this._doNavigate(url);
       }
@@ -1355,7 +1341,7 @@ export class ExecutionEngine {
         } catch { /* ignore cleanup errors */ }
         this.browser = null; this.context = null; this.page = null;
         this.useBrightData = false; this.isRemoteCDP = false;
-        brightDataInUse = false; // Release concurrency lock
+        brightDataSessionCount = Math.max(0, brightDataSessionCount - 1); // Release concurrency lock
         // Re-initialize with local browser (falls through Bright Data block in initialize())
         await this.initialize(this.userId, this.domain, this.taskId);
         // Retry the navigation on local browser
