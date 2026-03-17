@@ -652,9 +652,14 @@ This is NOT optional — deliver results or explain the blocker.`
       return `I spent ${iterations} steps trying to complete this task but couldn't get reliable results. The sites I tried (${domainsVisited || 'various'}) had strong bot detection that blocked me. You may need to complete this task manually or try again later.`;
     }
 
-    // No hard cost ceiling — user pays for themselves.
-    // The iteration cap (50) naturally limits spend.
-    // Cost is tracked for billing but doesn't terminate tasks.
+    // Cost-aware progress check: if spending big without results, force wrap-up
+    if (budget.totalSpent > 0.50 && iterations > 30 && (iterations - lastMeaningfulProgress) > 10) {
+      console.warn(`[V3] Cost guard: $${budget.totalSpent.toFixed(2)} at iter ${iterations}, no progress since ${lastMeaningfulProgress}`);
+      messages.push({
+        role: 'user',
+        content: `COST ALERT: You've spent $${budget.totalSpent.toFixed(2)} without meaningful progress. Deliver whatever results you have NOW in text. No more tool calls.`
+      });
+    }
 
     // ── Call AI model with tools ──
     let modelResponse;
