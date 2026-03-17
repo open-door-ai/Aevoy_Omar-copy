@@ -3841,15 +3841,17 @@ server.listen(PORT, async () => {
       // 50 min: processor master timeout is 40min, vision agent heartbeats every 10 steps.
       // Tasks that are genuinely running keep updating updated_at via heartbeats.
       // Only truly dead tasks (Railway restart, OOM) go 50+ min without an update.
-      const twentyFiveMinutesAgo = new Date(Date.now() - 50 * 60 * 1000).toISOString();
+      // 10 min threshold: V3 tasks update progress every iteration (~5-15s each).
+      // Any task stuck for 10+ min without an update was killed by a deploy/crash.
+      const stuckThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const { data: stuckTasks } = await getSupabaseClient()
         .from('tasks')
         .select('id, email_subject, input_channel, user_id')
         .eq('status', 'processing')
-        .lt('updated_at', twentyFiveMinutesAgo);
+        .lt('updated_at', stuckThreshold);
 
       if (stuckTasks && stuckTasks.length > 0) {
-        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >50 min) — resolving gracefully...`);
+        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >10 min) — resolving gracefully...`);
 
         // Gracefully complete each stuck task with a helpful message.
         // NEVER mark as "failed" — users should always see a usable response.
