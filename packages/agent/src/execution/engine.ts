@@ -95,15 +95,17 @@ export class ExecutionEngine {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
 
-    // Priority: Remote CDP (VPS) > Bright Data > VPS Multi-User > Local Playwright
-    // VPS Chrome is fastest (1-3s/step). BrightData is slow (60-90s/step) but has residential IPs.
+    // Priority: Bright Data (residential, anti-bot) > Remote CDP (VPS, fast) > Local Playwright
+    // BrightData has residential IPs that pass Cloudflare/anti-bot. VPS is datacenter IP that gets blocked.
+    // CHANGED 2026-03-17: BrightData promoted to primary — VPS datacenter IPs get Cloudflare-blocked on
+    // major sites (Indeed, Amazon, etc.). Better to be slow but work than fast but blocked.
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
-    // PRIORITY 0: Remote CDP browser (connects to VPS Chrome — fastest option)
-    this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
+    // PRIORITY 0: Bright Data Scraping Browser (residential proxy, anti-bot bypass — slower but works)
+    this.useBrightData = !forceLocal && !!(process.env.BRIGHT_DATA_BROWSER_WS);
 
-    // PRIORITY 1: Bright Data Scraping Browser (residential proxy, anti-bot bypass — slow but stealthy)
-    this.useBrightData = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    // PRIORITY 1: Remote CDP browser (connects to VPS Chrome — fast but datacenter IP)
+    this.useRemoteCDP = !forceLocal && !this.useBrightData && !!(process.env.REMOTE_BROWSER_CDP);
     if (process.env.BRIGHT_DATA_BROWSER_WS) {
       console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
     } else {
@@ -217,17 +219,23 @@ export class ExecutionEngine {
         this.browser = await cdpTimeout(chromium.connectOverCDP(wsUrl), 10000, 'connectOverCDP');
         this.isRemoteCDP = true;
 
-        // Use Chrome's default context to inherit proxy settings (--proxy-server flag)
-        // newContext() is isolated and doesn't inherit Chrome-level proxy.
-        // CRITICAL: Always create a NEW page — never reuse existing pages.
-        // Multiple tasks connect to the same Chrome; reusing pages causes cross-task interference.
-        const defaultContext = this.browser.contexts()[0];
-        if (defaultContext) {
-          this.context = defaultContext;
-          this.page = await cdpTimeout(defaultContext.newPage(), 10000, 'cdp-newPage');
-        } else {
-          this.page = await cdpTimeout(this.browser.newPage(), 10000, 'cdp-newPage');
-          this.context = this.page.context();
+        // USER ISOLATION: Each task gets its own browser context with separate cookies/sessions.
+        // This prevents cross-user data leaks (User A's Gmail appearing for User B).
+        // CHANGED 2026-03-17: Was using defaultContext (shared cookies). Now creates isolated context.
+        try {
+          this.context = await cdpTimeout(this.browser.newContext(), 10000, 'cdp-newContext');
+          this.page = await cdpTimeout(this.context.newPage(), 10000, 'cdp-newPage');
+        } catch {
+          // Fallback to default context if newContext() fails (some CDP setups don't support it)
+          const defaultContext = this.browser.contexts()[0];
+          if (defaultContext) {
+            this.context = defaultContext;
+            this.page = await cdpTimeout(defaultContext.newPage(), 10000, 'cdp-newPage');
+            console.warn('[ENGINE] Could not create isolated context — using shared default (less isolated)');
+          } else {
+            this.page = await cdpTimeout(this.browser.newPage(), 10000, 'cdp-newPage');
+            this.context = this.page.context();
+          }
         }
 
         await applyStealthPatches(this.context);
