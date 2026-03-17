@@ -196,11 +196,11 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       taskStatus = 'needs_review';
       verificationStatus = 'vague';
       failReason = 'Browser task with vague response — no prices, URLs, or confirmations';
-    } else if (actionCount === 0 && responseLower.length > 200 && !hasConcreteData) {
-      // Long response with zero actions and no data — likely fabricated
+    } else if (isBrowserTask && actionCount === 0 && responseLower.length > 200 && !hasConcreteData) {
+      // Browser task with long response but zero actions and no data — likely fabricated
       taskStatus = 'needs_review';
       verificationStatus = 'no_actions';
-      failReason = 'Long response but zero actions and no concrete data';
+      failReason = 'Browser task with long response but zero actions and no concrete data';
     }
 
     if (failReason) {
