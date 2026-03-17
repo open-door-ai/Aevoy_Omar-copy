@@ -693,7 +693,7 @@ This is NOT optional — deliver results or explain the blocker.`
         const isVagueGiveUp = !hasConcreteResult && iterations < 15 && response.length < 300 && /\b(typically|generally|unfortunately|however)\b/i.test(response);
 
         // Also reject mid-thought responses that aren't real answers
-        const isMidThought = /\b(let me|let's see|I'll try|I'm on|I'm going to|I need to|I should|I'm currently|I've typed|I just|I'm now|I'm still|I'm about to)\b/i.test(response) && !hasConcreteResult;
+        const isMidThought = /\b(let me|let's see|I'll try|I'll keep|I'm on|I'm going to|I need to|I should|I'm currently|I've typed|I just|I'm now|I'm still|I'm about to|I'll update|keep you updated|working on|in progress)\b/i.test(response) && !hasConcreteResult;
 
         const shouldReject = isGiveUp || isVagueGiveUp || isMidThought;
         const giveUpCount = messages.filter(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('DO NOT GIVE UP')).length;
