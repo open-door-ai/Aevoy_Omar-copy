@@ -188,18 +188,13 @@ async function callProvider(
     requestBody.tool_choice = 'auto';
   }
 
-  // Use AbortController to properly cancel hung requests (not just race)
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let response: OpenAI.Chat.Completions.ChatCompletion;
-  try {
-    response = await client.chat.completions.create({
-      ...requestBody,
-      signal: controller.signal,
-    } as any) as OpenAI.Chat.Completions.ChatCompletion;
-  } finally {
-    clearTimeout(timer);
-  }
+  // Promise.race timeout — more compatible than AbortController across providers
+  const response = await Promise.race([
+    client.chat.completions.create(requestBody),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]) as OpenAI.Chat.Completions.ChatCompletion;
 
   const choice = response.choices[0];
   const content = choice?.message?.content || '';
