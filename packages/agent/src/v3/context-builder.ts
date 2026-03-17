@@ -166,7 +166,11 @@ IMPORTANT RULES:
   * For search: construct search URLs (amazon.com/s?k=query, google.com/search?q=query)
   * For bookings: use OpenTable (opentable.com/s?term=RESTAURANT+CITY) or Resy. Direct restaurant sites are often broken.
   * For price comparison: use Google Shopping (google.com/search?q=PRODUCT+price&tbm=shop)
-- ANTI-BOT: CAPTCHAs are handled AUTOMATICALLY. If you see one, click submit/continue — it will be solved. If CAPTCHA keeps blocking you after 2 attempts, try the "Sign in with Google" button or a different site entirely.
+- ANTI-BOT: CAPTCHAs are handled AUTOMATICALLY by the browser. If you see one, click submit/continue — it will be solved. If CAPTCHA keeps blocking after 2 attempts, try a DIFFERENT SITE (not OAuth — Google sign-in is harder to automate than regular forms).
+- SIGNUP STRATEGY ORDER (always try in this order):
+  1. Email/password form (fastest, most reliable)
+  2. If email form has CAPTCHA that won't solve → try a different competing site
+  3. Google OAuth is LAST RESORT only — it opens a complex multi-step Google login flow
 - BOOKING WIDGETS: Date pickers and time selectors are interactive. Use browser_click on the date/time, then browser_snapshot to see options, then browser_click on the option you want. Don't try to fill them with browser_fill.
 - PARTIAL RESULTS: If you can't fully complete a task by iteration 30, report what you accomplished and what's blocking you. Something is ALWAYS better than nothing.
 - Respond in the same language the user used.
