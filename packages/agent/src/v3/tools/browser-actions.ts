@@ -28,7 +28,14 @@ const INTERACTIVE_SELECTORS = [
 ];
 
 // ── Per-task page cache (shared with browser.ts via engine cache) ──
-const taskPages = new Map<string, { page: Page; engine: ExecutionEngine }>();
+// refMap: stores ref→{text,role,tag} from last snapshot for auto-fallback when refs break
+// failCount: consecutive interaction failures — triggers escalation hint after 3+
+const taskPages = new Map<string, {
+  page: Page;
+  engine: ExecutionEngine;
+  refMap: Map<number, { text: string; role: string; tag: string }>;
+  failCount: number;
+}>();
 
 async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: Page; isNew: boolean }> {
   const existing = taskPages.get(ctx.taskId);
@@ -64,7 +71,7 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
   // Force consistent viewport so vision coordinates match click coordinates
   try { await page.setViewportSize({ width: 1280, height: 720 }); } catch { /* ignore */ }
 
-  taskPages.set(ctx.taskId, { page, engine });
+  taskPages.set(ctx.taskId, { page, engine, refMap: new Map(), failCount: 0 });
   return { page, isNew: true };
 }
 
@@ -155,7 +162,7 @@ export async function cleanupTaskPage(taskId: string): Promise<void> {
  * 150+: summary only + instruction to use browser_screenshot()
  * 0: auto-take screenshot (SPA loading)
  */
-async function getPageSnapshot(page: Page): Promise<string> {
+async function getPageSnapshot(page: Page, taskId?: string): Promise<string> {
   try {
     // DOM-based snapshot with iframe scanning.
     // ariaSnapshot() hangs on remote CDP connections (VPS Chrome) — disabled.
@@ -200,10 +207,35 @@ async function getPageSnapshot(page: Page): Promise<string> {
         const h1 = document.querySelector('h1')?.textContent?.trim() || '';
         const alerts = Array.from(document.querySelectorAll('[role="alert"], .error, .alert'))
           .map(el => el.textContent?.trim()).filter(Boolean).slice(0, 3);
-        return { elements: items, totalCount, title, h1, alerts, url: location.href };
+        // Build ref→element mapping for auto-fallback when refs break (SPA re-renders)
+        const refDetails: Array<{ ref: number; text: string; role: string; tag: string }> = [];
+        document.querySelectorAll('[data-aevoy-ref]').forEach(el => {
+          const r = parseInt(el.getAttribute('data-aevoy-ref') || '0');
+          if (r > 0) {
+            const tag = el.tagName.toLowerCase();
+            const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
+              tag === 'input' ? (el.getAttribute('type') || 'textbox') : tag === 'select' ? 'combobox' :
+              tag === 'textarea' ? 'textbox' : tag);
+            const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+              (el.textContent || '').trim().substring(0, 60) || el.getAttribute('name') || '';
+            refDetails.push({ ref: r, text: name, role, tag });
+          }
+        });
+        return { elements: items, totalCount, title, h1, alerts, url: location.href, refDetails };
       }, INTERACTIVE_SELECTORS),
-      new Promise<any>(r => setTimeout(() => r({ elements: [], totalCount: 0, title: '', h1: '', alerts: [], url: '' }), 5000))
+      new Promise<any>(r => setTimeout(() => r({ elements: [], totalCount: 0, title: '', h1: '', alerts: [], url: '', refDetails: [] }), 5000))
     ]);
+
+    // Populate refMap for auto-fallback when refs break on SPA re-renders
+    if (taskId && result.refDetails?.length) {
+      const entry = taskPages.get(taskId);
+      if (entry) {
+        entry.refMap.clear();
+        for (const d of result.refDetails) {
+          entry.refMap.set(d.ref, { text: d.text, role: d.role, tag: d.tag });
+        }
+      }
+    }
 
     const lines: string[] = [];
     lines.push(`URL: ${result.url}`);
@@ -301,6 +333,9 @@ registerTool({
       const { page } = await getOrCreatePage(ctx, url);
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
       await page.waitForTimeout(1500);
+      // Reset failure counter on successful navigation
+      const entry = taskPages.get(ctx.taskId);
+      if (entry) entry.failCount = 0;
 
       // Detect ACTUAL connection failures — NOT content-level blocks
       // Only flag chrome-error:// and truly empty pages. Let the AI handle 403s and CAPTCHAs.
@@ -330,7 +365,7 @@ registerTool({
               if (!bdUrl.startsWith('chrome-error://') && bdUrl !== 'about:blank') {
                 console.log(`[V3-BROWSER] BrightData SUCCESS for ${url}`);
                 const captcha = await autoSolveCaptcha(bdPage, ctx);
-                const snapshot = await getPageSnapshot(bdPage);
+                const snapshot = await getPageSnapshot(bdPage, ctx.taskId);
                 return { success: true, data: `${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: 0.055 + (captcha.cost || 0) };
               }
               // BrightData also failed
@@ -362,7 +397,7 @@ registerTool({
           await bdPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
           await bdPage.waitForTimeout(2000);
           const captcha = await autoSolveCaptcha(bdPage, ctx);
-          const snapshot = await getPageSnapshot(bdPage);
+          const snapshot = await getPageSnapshot(bdPage, ctx.taskId);
           return { success: true, data: `(Switched to residential proxy to bypass block)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: 0.055 + (captcha.cost || 0) };
         } catch (bdErr) {
           process.env.REMOTE_BROWSER_CDP = savedCdp;
@@ -391,7 +426,7 @@ registerTool({
 
       // Auto-solve any CAPTCHAs that appeared after navigation
       const captcha = await autoSolveCaptcha(page, ctx);
-      const snapshot = await getPageSnapshot(page);
+      const snapshot = await getPageSnapshot(page, ctx.taskId);
       return { success: true, data: `${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: captcha.cost };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'unknown';
@@ -408,7 +443,7 @@ registerTool({
           await bdPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
           await bdPage.waitForTimeout(2000);
           const captcha = await autoSolveCaptcha(bdPage, ctx);
-          const snapshot = await getPageSnapshot(bdPage);
+          const snapshot = await getPageSnapshot(bdPage, ctx.taskId);
           return { success: true, data: `(Escalated to residential browser)\n\n${captcha.note ? captcha.note + '\n\n' : ''}${snapshot}`, cost: 0.055 + (captcha.cost || 0) };
         } catch (bdErr) {
           process.env.REMOTE_BROWSER_CDP = savedCdp;
@@ -432,7 +467,7 @@ registerTool({
       return { success: false, error: 'No browser page open. Use browser_go first.', cost: 0 };
     }
     try {
-      const snapshot = await getPageSnapshot(existing.page);
+      const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
       return { success: true, data: snapshot, cost: 0 };
     } catch (err) {
       return { success: false, error: `Snapshot failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
@@ -468,8 +503,36 @@ registerTool({
           } catch { /* skip */ }
         }
       }
+      // AUTO-FALLBACK: if ref attribute lost (SPA re-render), use saved text/role from last snapshot
       if (count === 0) {
-        return { success: false, error: `Element [${ref}] not found in main page or iframes. Try browser_click_text("element text") which searches everywhere.`, cost: 0 };
+        const savedRef = existing.refMap.get(ref);
+        if (savedRef?.text) {
+          // Try to find the element by its original text and role
+          const roles = savedRef.role === 'link' ? ['link'] : savedRef.role === 'button' ? ['button'] :
+            ['button', 'link', 'tab', 'menuitem', 'option'] as const;
+          let fallbackLoc = null;
+          for (const r of roles) {
+            const loc = existing.page.getByRole(r as any, { name: savedRef.text, exact: false });
+            if (await loc.count() > 0) { fallbackLoc = loc; break; }
+          }
+          if (!fallbackLoc) {
+            const textLoc = existing.page.getByText(savedRef.text, { exact: false });
+            if (await textLoc.count() > 0) fallbackLoc = textLoc;
+          }
+          if (fallbackLoc) {
+            await fallbackLoc.first().click({ timeout: 5000 });
+            existing.failCount = 0;
+            await existing.page.waitForTimeout(1000);
+            const captcha = await autoSolveCaptcha(existing.page, ctx);
+            const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
+            return { success: true, data: `Clicked "${savedRef.text}" (auto-resolved from [${ref}] — page re-rendered)${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
+          }
+        }
+        existing.failCount++;
+        const hint = existing.failCount >= 3
+          ? ' HINT: Multiple clicks failing — the site may have bot detection. Try browser_go to the same URL to re-establish the session (system auto-escalates to residential proxy when blocked).'
+          : '';
+        return { success: false, error: `Element [${ref}] not found (page may have re-rendered). Try browser_click_text("element text") instead.${hint}`, cost: 0 };
       }
       const info = await locator.evaluate((el: HTMLElement) => ({
         tag: el.tagName,
@@ -479,11 +542,12 @@ registerTool({
         // Fallback: JS click for elements obscured by overlays
         await locator.evaluate((el: HTMLElement) => el.click());
       });
+      existing.failCount = 0; // Reset on success
 
       await existing.page.waitForTimeout(1000);
       // Auto-solve CAPTCHAs triggered by the click (signup/submit buttons often trigger them)
       const captcha = await autoSolveCaptcha(existing.page, ctx);
-      const snapshot = await getPageSnapshot(existing.page);
+      const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
       return { success: true, data: `Clicked [${ref}] (${info.tag} "${info.text}")${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Click failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
@@ -554,7 +618,7 @@ registerTool({
       await locator.first().click({ timeout: 5000 });
       await existing.page.waitForTimeout(1000);
       const captcha = await autoSolveCaptcha(existing.page, ctx);
-      const snapshot = await getPageSnapshot(existing.page);
+      const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
       return { success: true, data: `Clicked "${text}"${role ? ` (${role})` : ''}${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Click by text failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
@@ -593,8 +657,30 @@ registerTool({
           } catch { /* skip */ }
         }
       }
+      // AUTO-FALLBACK: if ref lost (SPA re-render), find input by saved label/placeholder
       if (count === 0) {
-        return { success: false, error: `Input [${ref}] not found in main page or iframes. Call browser_snapshot() for fresh refs, or use browser_click_text("field label") to interact with iframe elements.`, cost: 0 };
+        const savedRef = existing.refMap.get(ref);
+        if (savedRef?.text) {
+          // Try getByLabel, getByPlaceholder — common for input fields
+          let fallbackLoc = existing.page.getByLabel(savedRef.text, { exact: false });
+          if (await fallbackLoc.count() === 0) {
+            fallbackLoc = existing.page.getByPlaceholder(savedRef.text, { exact: false });
+          }
+          if (await fallbackLoc.count() > 0) {
+            await fallbackLoc.first().scrollIntoViewIfNeeded().catch(() => {});
+            await fallbackLoc.first().fill(value).catch(async () => {
+              await fallbackLoc.first().click();
+              await fallbackLoc.first().pressSequentially(value, { delay: 30 });
+            });
+            existing.failCount = 0;
+            return { success: true, data: `Filled "${savedRef.text}" with "${value}" (auto-resolved from [${ref}])`, cost: 0 };
+          }
+        }
+        existing.failCount++;
+        const hint = existing.failCount >= 3
+          ? ' HINT: Multiple interactions failing — try browser_go to the same URL to refresh the session.'
+          : '';
+        return { success: false, error: `Input [${ref}] not found (page may have re-rendered). Call browser_snapshot() for fresh refs.${hint}`, cost: 0 };
       }
       await locator.scrollIntoViewIfNeeded().catch(() => {});
       // Clear existing value first, then type the new value
@@ -632,7 +718,7 @@ registerTool({
       const delta = params.direction === 'up' ? -500 : 500;
       await existing.page.mouse.wheel(0, delta);
       await existing.page.waitForTimeout(500);
-      const snapshot = await getPageSnapshot(existing.page);
+      const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
       return { success: true, data: `Scrolled ${params.direction}\n\n${snapshot}`, cost: 0 };
     } catch (err) {
       return { success: false, error: `Scroll failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
@@ -786,7 +872,7 @@ registerTool({
       await existing.page.mouse.click(x, y);
       await existing.page.waitForTimeout(1000);
       const captcha = await autoSolveCaptcha(existing.page, ctx);
-      const snapshot = await getPageSnapshot(existing.page);
+      const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
       return { success: true, data: `Clicked at (${x}, ${y})${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Click at (${x}, ${y}) failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
@@ -886,7 +972,7 @@ registerTool({
     }
     const seconds = Math.max(1, Math.min(10, Number(params.seconds) || 2));
     await existing.page.waitForTimeout(seconds * 1000);
-    const snapshot = await getPageSnapshot(existing.page);
+    const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
     return { success: true, data: `Waited ${seconds}s\n\n${snapshot}`, cost: 0 };
   },
 });
