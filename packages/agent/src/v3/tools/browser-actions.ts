@@ -157,11 +157,33 @@ export async function cleanupTaskPage(taskId: string): Promise<void> {
  */
 async function getPageSnapshot(page: Page): Promise<string> {
   try {
+    // PRIMARY: Playwright's ariaSnapshot — same method Playwright MCP uses.
+    // Sees EVERYTHING: iframes, shadow DOM, dynamic widgets, date pickers, booking calendars.
+    // Returns YAML accessibility tree that the AI reads directly.
+    try {
+      const ariaSnap = await Promise.race([
+        page.locator('body').ariaSnapshot({ timeout: 5000 }),
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error('ariaSnapshot timeout')), 6000)),
+      ]);
+      if (ariaSnap && ariaSnap.length > 30) {
+        const url = page.url();
+        const title = await page.title().catch(() => '');
+        const lines: string[] = [];
+        lines.push(`URL: ${url}`);
+        if (title) lines.push(`Title: ${title}`);
+        // Truncate to save tokens — 6000 chars is plenty for AI to understand the page
+        const truncated = ariaSnap.length > 6000 ? ariaSnap.substring(0, 6000) + '\n... (truncated)' : ariaSnap;
+        lines.push('');
+        lines.push(truncated);
+        lines.push('');
+        lines.push('Use browser_click_text("text", "role") to click elements. Use browser_fill with ref for inputs.');
+        return lines.join('\n');
+      }
+    } catch { /* ariaSnapshot failed — fall through to DOM-based */ }
+
+    // FALLBACK: DOM-based snapshot when ariaSnapshot unavailable (some CDP connections)
     const result = await Promise.race([
       page.evaluate((selectors: string[]) => {
-        // CRITICAL: Stamp each element with data-aevoy-ref attribute.
-        // Click/fill/select use this attribute to find the EXACT element,
-        // eliminating race conditions from DOM mutations between calls.
         // Clear old refs first
         document.querySelectorAll('[data-aevoy-ref]').forEach(el => el.removeAttribute('data-aevoy-ref'));
 
