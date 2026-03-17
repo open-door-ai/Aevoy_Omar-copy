@@ -216,16 +216,58 @@ async function getPageSnapshot(page: Page): Promise<string> {
     if (result.totalCount === 0) {
       lines.push('No interactive elements found. The page may still be loading. Try browser_wait(3) then browser_snapshot() again.');
     } else if (result.totalCount <= 80) {
-      // Simple/medium page — full list
       lines.push(...result.elements);
     } else {
-      // Complex page — show what we have + overflow notice
       const shown = result.elements.length;
       lines.push(`Showing ${shown} of ${result.totalCount} visible elements:`);
       lines.push(...result.elements);
       if (result.totalCount > shown) {
-        lines.push(`\n... ${result.totalCount - shown} more elements not shown. Try scrolling to see more, or use browser_screenshot() for a visual overview.`);
+        lines.push(`\n... ${result.totalCount - shown} more elements not shown.`);
       }
+    }
+
+    // IFRAME SCANNING: If main page has few elements, check iframes
+    // Booking widgets (OpenTable, Resy), payment forms, and date pickers
+    // are often in iframes that document.querySelectorAll can't reach.
+    if (result.totalCount < 15) {
+      try {
+        const frames = page.frames();
+        for (let fi = 0; fi < Math.min(frames.length, 5); fi++) {
+          const frame = frames[fi];
+          if (frame === page.mainFrame()) continue;
+          try {
+            const frameUrl = frame.url();
+            if (!frameUrl || frameUrl === 'about:blank') continue;
+            const frameElements = await Promise.race([
+              frame.evaluate((selectors: string[]) => {
+                const items: string[] = [];
+                let count = 0;
+                for (const sel of selectors) {
+                  document.querySelectorAll(sel).forEach(el => {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) return;
+                    count++;
+                    if (items.length < 20) {
+                      const tag = el.tagName.toLowerCase();
+                      const role = el.getAttribute('role') || tag;
+                      const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+                        (el.textContent || '').trim().substring(0, 60) || '';
+                      items.push(`  [iframe] ${role} "${name}"`);
+                    }
+                  });
+                }
+                return { items, count };
+              }, INTERACTIVE_SELECTORS),
+              new Promise<{ items: string[]; count: number }>(r => setTimeout(() => r({ items: [], count: 0 }), 3000)),
+            ]);
+            if (frameElements.count > 0) {
+              lines.push(`\nIFRAME (${new URL(frameUrl).hostname}): ${frameElements.count} elements`);
+              lines.push('Use browser_click_text("element text") to interact with iframe elements — ref numbers do not work inside iframes.');
+              lines.push(...frameElements.items);
+            }
+          } catch { /* skip inaccessible frames */ }
+        }
+      } catch { /* ignore frame scanning errors */ }
     }
 
     return lines.join('\n');
@@ -413,11 +455,21 @@ registerTool({
     }
     const ref = Number(params.ref);
     try {
-      // Use Playwright's native click for better reliability (waits for actionability, handles overlays)
-      const locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
-      const count = await locator.count();
+      // Use Playwright's native click — search main frame then iframes
+      let locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      let count = await locator.count();
+      // If not in main frame, check iframes
       if (count === 0) {
-        return { success: false, error: `Element [${ref}] not found. The page may have changed — call browser_snapshot() to get fresh refs.`, cost: 0 };
+        for (const frame of existing.page.frames()) {
+          if (frame === existing.page.mainFrame()) continue;
+          try {
+            const fLoc = frame.locator(`[data-aevoy-ref="${ref}"]`);
+            if (await fLoc.count() > 0) { locator = fLoc; count = 1; break; }
+          } catch { /* skip */ }
+        }
+      }
+      if (count === 0) {
+        return { success: false, error: `Element [${ref}] not found in main page or iframes. Try browser_click_text("element text") which searches everywhere.`, cost: 0 };
       }
       const info = await locator.evaluate((el: HTMLElement) => ({
         tag: el.tagName,
@@ -456,35 +508,56 @@ registerTool({
     const text = String(params.text);
     const role = params.role ? String(params.role) : '';
     try {
-      // Use Playwright's getByRole or getByText — same method the Playwright MCP uses
-      // This works through iframes, shadow DOM, and dynamic widgets
-      let locator;
-      if (role) {
-        locator = existing.page.getByRole(role as any, { name: text, exact: false });
-      } else {
-        // Try role-based first (button, link), fall back to text
-        locator = existing.page.getByRole('button', { name: text, exact: false });
-        if (await locator.count() === 0) {
-          locator = existing.page.getByRole('link', { name: text, exact: false });
+      // Strategy: try main frame first, then pierce iframes
+      const findLocator = async () => {
+        // 1. Main frame — role-based search
+        if (role) {
+          const loc = existing.page.getByRole(role as any, { name: text, exact: false });
+          if (await loc.count() > 0) return loc;
+        } else {
+          for (const r of ['button', 'link', 'tab', 'menuitem', 'option'] as const) {
+            const loc = existing.page.getByRole(r, { name: text, exact: false });
+            if (await loc.count() > 0) return loc;
+          }
         }
-        if (await locator.count() === 0) {
-          locator = existing.page.getByText(text, { exact: false });
+        // 2. Main frame — text search
+        const textLoc = existing.page.getByText(text, { exact: false });
+        if (await textLoc.count() > 0) return textLoc;
+
+        // 3. IFRAME PIERCING — search inside all iframes
+        // This is critical for booking widgets, date pickers, payment forms
+        const frames = existing.page.frames();
+        for (const frame of frames) {
+          if (frame === existing.page.mainFrame()) continue;
+          try {
+            if (role) {
+              const fLoc = frame.getByRole(role as any, { name: text, exact: false });
+              if (await fLoc.count() > 0) return fLoc;
+            } else {
+              for (const r of ['button', 'link', 'tab', 'option'] as const) {
+                const fLoc = frame.getByRole(r, { name: text, exact: false });
+                if (await fLoc.count() > 0) return fLoc;
+              }
+            }
+            const fText = frame.getByText(text, { exact: false });
+            if (await fText.count() > 0) return fText;
+          } catch { /* skip inaccessible frames */ }
         }
+        return null;
+      };
+
+      const locator = await findLocator();
+      if (!locator) {
+        return { success: false, error: `No element found with text "${text}"${role ? ` (${role})` : ''} in main page or iframes. Try browser_snapshot() to see available elements.`, cost: 0 };
       }
 
-      const count = await locator.count();
-      if (count === 0) {
-        return { success: false, error: `No element found with text "${text}"${role ? ` and role "${role}"` : ''}. Try browser_snapshot() to see available elements.`, cost: 0 };
-      }
-
-      // Click the first match
       await locator.first().click({ timeout: 5000 });
       await existing.page.waitForTimeout(1000);
       const captcha = await autoSolveCaptcha(existing.page, ctx);
       const snapshot = await getPageSnapshot(existing.page);
       return { success: true, data: `Clicked "${text}"${role ? ` (${role})` : ''}${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
-      return { success: false, error: `Click by text failed: ${err instanceof Error ? err.message : 'unknown'}. Try browser_click(ref) instead.`, cost: 0 };
+      return { success: false, error: `Click by text failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
   },
 });
@@ -508,10 +581,20 @@ registerTool({
     try {
       // Use Playwright's native fill() for React/Vue/Angular compatibility
       // el.value = x doesn't trigger React state updates, but Playwright's fill() does
-      const locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
-      const count = await locator.count();
+      let locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      let count = await locator.count();
+      // If not found in main frame, search iframes
       if (count === 0) {
-        return { success: false, error: `Input [${ref}] not found. The page may have changed — call browser_snapshot() to get fresh refs.`, cost: 0 };
+        for (const frame of existing.page.frames()) {
+          if (frame === existing.page.mainFrame()) continue;
+          try {
+            const frameLoc = frame.locator(`[data-aevoy-ref="${ref}"]`);
+            if (await frameLoc.count() > 0) { locator = frameLoc; count = 1; break; }
+          } catch { /* skip */ }
+        }
+      }
+      if (count === 0) {
+        return { success: false, error: `Input [${ref}] not found in main page or iframes. Call browser_snapshot() for fresh refs, or use browser_click_text("field label") to interact with iframe elements.`, cost: 0 };
       }
       await locator.scrollIntoViewIfNeeded().catch(() => {});
       // Clear existing value first, then type the new value
