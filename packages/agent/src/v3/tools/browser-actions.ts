@@ -246,19 +246,19 @@ registerTool({
     }
     try {
       const { page } = await getOrCreatePage(ctx, url);
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-      await page.waitForTimeout(1000);
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await page.waitForTimeout(1500);
 
-      // Detect proxy-blocked pages — BrightData blocks many sites
-      // Check for: chrome errors, blank pages, proxy error pages, residential blocks
+      // Detect ACTUAL connection failures — NOT content-level blocks
+      // Only flag chrome-error:// and truly empty pages. Let the AI handle 403s and CAPTCHAs.
       const currentUrl = page.url();
       const bodyText = await page.evaluate(() => (document.body?.innerText || '').substring(0, 500)).catch(() => '');
       const isErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl === 'about:blank';
-      const isProxyBlock = isErrorPage
-        || /can't be reached|not available|ERR_|connection refused|dns|access denied|blocked|residential/i.test(bodyText)
-        || (bodyText.length < 50 && !currentUrl.includes(new URL(url).hostname)); // Page loaded but wrong domain
-      if (isProxyBlock) {
-          console.log(`[V3-BROWSER] Blocked page detected for ${url}: "${bodyText.substring(0, 100)}"`);
+      const isConnectionFailure = isErrorPage
+        || /ERR_CONNECTION_REFUSED|ERR_NAME_NOT_RESOLVED|ERR_CERT|ERR_SSL|ERR_TIMED_OUT|ERR_INTERNET_DISCONNECTED/i.test(bodyText)
+        || (bodyText.length === 0 && currentUrl === 'about:blank');
+      if (isConnectionFailure) {
+          console.log(`[V3-BROWSER] Connection failure for ${url}: "${bodyText.substring(0, 100)}"`);
 
           // Try BrightData fallback (residential IP) if available
           const bdWs = process.env.BRIGHT_DATA_BROWSER_WS;
@@ -300,7 +300,7 @@ registerTool({
 
           return {
             success: false,
-            error: `Page blocked or unreachable: ${url}. The site blocks datacenter IPs. Try Google search: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
+            error: `Connection failed: ${url} (${currentUrl}). Try Google search: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
             cost: 0,
           };
       }
