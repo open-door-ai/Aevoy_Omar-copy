@@ -305,6 +305,23 @@ registerTool({
           };
       }
 
+      // Auto-dismiss cookie banners and overlays that block interaction
+      await page.evaluate(() => {
+        const bannerSelectors = [
+          '[class*="cookie"] button', '[id*="cookie"] button',
+          '[class*="consent"] button', '[id*="consent"] button',
+          'button[class*="accept"]', 'button[id*="accept"]',
+          '[class*="gdpr"] button', '[aria-label*="cookie"]',
+          '[data-testid*="cookie"] button', '[class*="banner"] button[class*="close"]',
+          '.onetrust-accept-btn-handler', '#onetrust-accept-btn-handler',
+          '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+        ];
+        for (const sel of bannerSelectors) {
+          const btn = document.querySelector(sel) as HTMLElement;
+          if (btn && btn.offsetHeight > 0) { btn.click(); break; }
+        }
+      }).catch(() => {});
+
       // Auto-solve any CAPTCHAs that appeared after navigation
       const captcha = await autoSolveCaptcha(page, ctx);
       const snapshot = await getPageSnapshot(page);
