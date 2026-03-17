@@ -537,6 +537,8 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   let screenshotCount = 0;
   let locateCount = 0;
   let wrapUpInjected = false;
+  let actionCount = 0;    // Total browser/tool actions taken (for quality gate)
+  let actionSuccessCount = 0;
   const progressNotes: string[] = []; // Running log of what was accomplished
 
   // ── Multi-step loop ──
@@ -662,6 +664,10 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
 
+      // Track action counts for quality gate
+      actionCount++;
+      if (result.success) actionSuccessCount++;
+
       // Track tool cost
       if (result.cost > 0) {
         try { await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`); } catch { /* non-critical */ }
@@ -744,6 +750,8 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
       await getSupabaseClient().from('tasks').update({
         progress_message: `Step ${iterations}: ${modelResponse.toolCalls.map(tc => tc.name).join(', ')}`,
         iteration_count: iterations,
+        action_count: actionCount,
+        action_success_count: actionSuccessCount,
         cost_usd: budget.totalSpent,
       }).eq('id', ctx.taskId);
     } catch { /* non-critical progress update */ }
