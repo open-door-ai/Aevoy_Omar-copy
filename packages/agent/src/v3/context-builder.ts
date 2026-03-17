@@ -171,7 +171,12 @@ IMPORTANT RULES:
   1. Email/password form (fastest, most reliable)
   2. If email form has CAPTCHA that won't solve → try a different competing site
   3. Google OAuth is LAST RESORT only — it opens a complex multi-step Google login flow
-- BOOKING WIDGETS: Date pickers and time selectors are interactive. Use browser_click on the date/time, then browser_snapshot to see options, then browser_click on the option you want. Don't try to fill them with browser_fill.
+- BOOKING WIDGETS & DATE PICKERS: These use custom UI components that DON'T appear in DOM snapshots. Strategy:
+  1. First try browser_click_text("March 22") or browser_click_text("7:00 PM") — this searches by visible text
+  2. If text-based clicking fails, switch to VISION MODE: browser_screenshot() → read the calendar/picker visually → browser_click_xy(x, y) on the date/time
+  3. Never use browser_fill() on date pickers — they require clicking, not typing
+  4. For party size / dropdown selectors: try browser_click_text("2 guests") or browser_select(ref, value)
+  5. If a calendar needs to change month: look for arrow/chevron buttons and click them
 - PARTIAL RESULTS: If you've been trying for a LONG time and nothing is working, report what you accomplished and what's blocking you. Something is ALWAYS better than nothing. But don't give up early — complex tasks (bookings, signups, multi-step research) genuinely need many steps.
 - Respond in the same language the user used.
 

@@ -23,7 +23,12 @@ const INTERACTIVE_SELECTORS = [
   '[role="button"]', '[role="link"]', '[role="textbox"]', '[role="checkbox"]',
   '[role="tab"]', '[role="menuitem"]', '[role="combobox"]', '[role="option"]',
   '[role="listbox"]', '[role="radio"]', '[role="switch"]', '[role="slider"]',
+  // Calendar/picker widgets — standard ARIA roles for date pickers, grids, dialogs
+  '[role="gridcell"]', '[role="cell"]', '[role="dialog"]', '[role="menu"]',
+  '[role="navigation"]', '[role="spinbutton"]', '[role="treeitem"]',
+  // Generic interactivity signals
   '[contenteditable="true"]', '[tabindex]', '[onclick]',
+  '[aria-haspopup]', '[aria-expanded]',
   'li[class*="option"]', 'div[class*="option"]', 'span[class*="option"]',
 ];
 
