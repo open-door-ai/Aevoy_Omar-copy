@@ -478,7 +478,7 @@ app.get("/task/:taskId/status", async (req, res) => {
   try {
     const { data } = await getSupabaseClient()
       .from("tasks")
-      .select("id, status, input_text, email_subject, iteration_count, cost_usd, execution_time_ms, progress_message, verification_data, created_at, completed_at, error_message, stuck_reason")
+      .select("id, status, input_text, email_subject, iteration_count, action_count, action_success_count, cost_usd, execution_time_ms, progress_message, verification_data, verification_status, response_text, created_at, completed_at, error_message, stuck_reason")
       .eq("id", req.params.taskId)
       .single();
     if (!data) return res.status(404).json({ error: "not_found" });
@@ -495,6 +495,10 @@ app.get("/task/:taskId/status", async (req, res) => {
       iterations: data.iteration_count,
       cost: data.cost_usd,
       progress: data.progress_message,
+      actions: data.action_count,
+      actionsSuccess: data.action_success_count,
+      verificationStatus: (data as any).verification_status,
+      response: (data as any).response_text?.substring(0, 2000),
       error: data.error_message || data.stuck_reason,
       visionAgent: vd?.visionAgent ? {
         currentStep: vd.currentStep,
