@@ -139,7 +139,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     const claimsPurchased = /\b(purchased|order.*placed|bought|added to cart.*checked out|payment.*processed)\b/i.test(response);
 
     // 3. Detect VAGUE responses — no concrete data
-    const hasConcreteData = /(\$\d|\£\d|\€\d|\d+\.\d{2}|https?:\/\/\S{10,}|confirmation.*#|order.*#|booking.*#|@\S+\.\S+|\+1\d{10}|\d{3}[-.\s]\d{3}[-.\s]\d{4})/.test(response);
+    const hasConcreteData = /(\$\d|\£\d|\€\d|\d+\.\d{2}|https?:\/\/\S{10,}|confirmation.*#|order.*#|booking.*#|@\S+\.\S+|\+1\d{10}|\d{3}[-.\s]\d{3}[-.\s]\d{4}|\d+\/5|\d+\s*stars?|\d+\s*reviews?|\d+\s*ratings?|Rating:|\bON\s+[A-Z]\d[A-Z]\b|\bCA\s+\d{5}\b)/.test(response);
     const isVague = /\b(typically|generally|usually|I recommend|you could try|you might want|I suggest|here are some tips|in general)\b/i.test(response) && !hasConcreteData;
 
     // Cross-reference: did the AI actually USE the tools it claims?
