@@ -617,10 +617,16 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
       const response = modelResponse.content.trim();
       if (response) {
         // GIVE-UP DETECTION: reject surrender responses and force the AI to keep trying
-        const isGiveUp = /\b(can't complete|cannot complete|unable to|couldn't|can't access|I can't|I cannot|not able to|having trouble|privacy error|blocked|out of stock.*I'll|let you know if|I'll try.*later)\b/i.test(response);
+        const isGiveUp = /\b(can't complete|cannot complete|unable to|couldn't|can't access|I can't|I cannot|not able to|having trouble|privacy error|blocked|unfortunately.*I|I apologize|wasn't able|was unable|I'm sorry.*but|doesn't exist yet|hasn't been (released|announced)|not yet available|no.*results|all.*attempts.*fail|websites.*failing|out of stock.*I'll|let you know if|I'll try.*later|require.*login|require.*account|need to log in|access.*denied)\b/i.test(response);
+
+        // Also reject responses without concrete data when browser tools are available
+        const hasConcreteResult = /(\$\d|\£\d|\€\d|\d+\.\d{2}|https?:\/\/\S{10,}|confirmation|successfully|completed|here (are|is) (the|your))/.test(response);
+        const isVagueGiveUp = !hasConcreteResult && iterations < 15 && response.length < 300 && /\b(typically|generally|unfortunately|however)\b/i.test(response);
+
+        const shouldReject = isGiveUp || isVagueGiveUp;
         const giveUpCount = messages.filter(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('DO NOT GIVE UP')).length;
 
-        if (isGiveUp && giveUpCount < 3 && iterations < 50) {
+        if (shouldReject && giveUpCount < 3 && iterations < 50) {
           console.log(`[V3] Rejected give-up response (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
           messages.push({ role: 'assistant', content: response });
           messages.push({
