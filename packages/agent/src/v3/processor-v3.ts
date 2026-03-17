@@ -652,15 +652,10 @@ This is NOT optional — deliver results or explain the blocker.`
       return `I spent ${iterations} steps trying to complete this task but couldn't get reliable results. The sites I tried (${domainsVisited || 'various'}) had strong bot detection that blocked me. You may need to complete this task manually or try again later.`;
     }
 
-    // HARD cost guard: force completion when spending without progress
-    if (budget.totalSpent > 0.50 && (iterations - lastMeaningfulProgress) > 10) {
-      console.warn(`[V3] HARD COST STOP: $${budget.totalSpent.toFixed(2)} at iter ${iterations}`);
-      const progressSummary = progressNotes.filter(n => !n.startsWith('✗')).slice(-10).join('\n');
-      const domainsVisited = [...triedDomains].join(', ');
-      return progressSummary
-        ? `I've spent $${budget.totalSpent.toFixed(2)} working on this. Here's what I found:\n\n${progressSummary}\n\nSites visited: ${domainsVisited}`
-        : `I've spent $${budget.totalSpent.toFixed(2)} but couldn't complete the task. Sites tried: ${domainsVisited || 'various'}. The sites have strong anti-bot protection.`;
-    }
+    // NO hard cost stops — iterations are necessary to complete complex tasks.
+    // Cost is managed by: making Gemini reliable (fewer Haiku fallbacks),
+    // aggressive context compression, and smaller snapshots.
+    // The AI decides when it's done. The quality gate catches bad results.
 
     // ── Call AI model with tools ──
     let modelResponse;
