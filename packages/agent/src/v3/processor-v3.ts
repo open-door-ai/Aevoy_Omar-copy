@@ -636,7 +636,10 @@ This is NOT optional — deliver results or explain the blocker.`
         content: `FINAL RESPONSE REQUIRED. You have reached iteration 45. Do NOT call any more tools. Respond with TEXT ONLY — summarize everything you found, accomplished, and what blocked you. Include any URLs, prices, names, or data you discovered. This is your last chance to deliver value.`
       });
     }
-    if (iterations >= 50) {
+    // Dynamic iteration management: no hard cap. The progress checks at 20/30/45
+    // guide the AI to deliver results. The 40-minute timeout is the real ceiling.
+    // Only force-stop if we've been running 100+ iterations with zero meaningful progress.
+    if (iterations >= 100 && (iterations - lastMeaningfulProgress) > 50) {
       // Build a meaningful summary from progress notes + last AI response
       const progressSummary = progressNotes.filter(n => !n.startsWith('✗')).slice(-10).join('\n');
       const domainsVisited = [...triedDomains].join(', ');
