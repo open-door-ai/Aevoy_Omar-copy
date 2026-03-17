@@ -258,25 +258,14 @@ registerTool({
         || /can't be reached|not available|ERR_|connection refused|dns|access denied|blocked|residential/i.test(bodyText)
         || (bodyText.length < 50 && !currentUrl.includes(new URL(url).hostname)); // Page loaded but wrong domain
       if (isProxyBlock) {
-          console.log(`[V3-BROWSER] Proxy-blocked page detected for ${url}, trying direct Chrome`);
-          // Try the non-proxy Chrome instance on VPS (port 9225)
-          const directCdp = process.env.REMOTE_BROWSER_CDP_DIRECT || process.env.REMOTE_BROWSER_CDP?.replace(':9223', ':9225');
-          if (directCdp) {
-            await cleanupTaskPage(ctx.taskId);
-            // Switch to direct Chrome — keep it for the rest of this task
-            // (don't restore env var on success — subsequent calls should use direct too)
-            process.env.REMOTE_BROWSER_CDP = directCdp;
-            try {
-              const { page: newPage } = await getOrCreatePage(ctx, url);
-              await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-              await newPage.waitForTimeout(1000);
-              const snapshot = await getPageSnapshot(newPage);
-              return { success: true, data: `(Switched to direct connection — proxy was blocked)\n\n${snapshot}`, cost: 0 };
-            } catch (directErr) {
-              console.warn(`[V3-BROWSER] Direct Chrome also failed for ${url}:`, directErr);
-              return { success: false, error: `Site unreachable via both proxy and direct: ${url}`, cost: 0 };
-            }
-          }
+          console.log(`[V3-BROWSER] Proxy/error page detected for ${url}: "${bodyText.substring(0, 100)}"`);
+          // Don't try to switch browsers — just report the error clearly
+          // The AI will fall back to Google search per its prompt instructions
+          return {
+            success: false,
+            error: `Page blocked or unreachable: ${url}. Try a different site or use Google search: browser_go("https://www.google.com/search?q=${encodeURIComponent(url.replace(/https?:\/\//, ''))}")`,
+            cost: 0,
+          };
       }
 
       // Auto-solve any CAPTCHAs that appeared after navigation
