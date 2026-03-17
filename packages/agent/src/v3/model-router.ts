@@ -112,14 +112,24 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
       return result;
     } catch (err: any) {
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
-        setBackoff(key, 120000); // 2 min backoff
+        // Short backoff: Gemini has high rate limits, brief spike shouldn't cause
+        // 2 minutes of Haiku fallback at 8x the cost. Was 120s → now 15s.
+        const backoffMs = model.provider === 'gemini' ? 15000 : model.provider === 'groq' ? 60000 : 30000;
+        setBackoff(key, backoffMs);
         continue;
       }
       if (err?.status === 503 || err?.status === 500) {
-        setBackoff(key, 30000); // 30s backoff for server errors
+        setBackoff(key, 10000); // 10s backoff for server errors (was 30s)
         continue;
       }
-      console.warn(`[V3-MODEL] ${key} error:`, err?.message || err);
+      // Timeout/abort: don't back off, just skip this attempt (next call retries Gemini)
+      const isTimeout = err?.name === 'AbortError' || err?.message?.includes('abort') || err?.message?.includes('Timeout');
+      if (isTimeout) {
+        console.warn(`[V3-MODEL] ${key} timeout — will retry next call`);
+      } else {
+        console.warn(`[V3-MODEL] ${key} error:`, err?.message || err);
+        setBackoff(key, 5000); // Brief 5s backoff for unknown errors
+      }
       continue;
     }
   }
