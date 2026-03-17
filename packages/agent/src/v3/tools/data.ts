@@ -52,7 +52,7 @@ registerTool({
 /** Web search tool */
 registerTool({
   name: 'web_search',
-  description: 'Search the web for information. Returns search results with titles, URLs, and snippets.',
+  description: 'Search the web for information. Returns search results with titles, URLs, and snippets. For best results on product prices, news, or current events, use browser_go("https://www.google.com/search?q=YOUR+QUERY") instead.',
   category: 'data',
   parameters: {
     query: { type: 'string', description: 'Search query' },
@@ -61,44 +61,65 @@ registerTool({
   async execute(params): Promise<ToolCallResult> {
     const query = String(params.query);
     try {
-      // Use DuckDuckGo instant answer API
-      const res = await fetch(
-        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`,
-        { signal: AbortSignal.timeout(8000) }
-      );
-      if (!res.ok) {
-        return { success: false, error: `Search API returned ${res.status}`, cost: 0 };
-      }
+      // Strategy 1: DuckDuckGo HTML search (scrape actual results, not just instant answers)
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const res = await fetch(ddgUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
 
-      const data = await res.json();
-      const results: string[] = [];
-
-      if (data.AbstractText) {
-        results.push(`Summary: ${data.AbstractText}`);
-        if (data.AbstractURL) results.push(`Source: ${data.AbstractURL}`);
-      }
-
-      if (data.RelatedTopics?.length) {
-        results.push('\nRelated:');
-        for (const topic of data.RelatedTopics.slice(0, 5)) {
-          if (topic.Text) {
-            results.push(`- ${topic.Text.substring(0, 200)}${topic.FirstURL ? ` (${topic.FirstURL})` : ''}`);
+      if (res.ok) {
+        const html = await res.text();
+        // Extract search results from DuckDuckGo HTML
+        const results: string[] = [];
+        const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/gi;
+        let match;
+        let count = 0;
+        while ((match = resultRegex.exec(html)) !== null && count < 8) {
+          const url = match[1]?.replace(/.*uddg=([^&]*).*/, (_, u) => decodeURIComponent(u)) || match[1];
+          const title = match[2]?.replace(/<[^>]+>/g, '').trim();
+          const snippet = match[3]?.replace(/<[^>]+>/g, '').trim();
+          if (title && snippet) {
+            results.push(`${count + 1}. ${title}\n   ${url}\n   ${snippet}`);
+            count++;
           }
+        }
+
+        if (results.length > 0) {
+          return { success: true, data: `Search results for "${query}":\n\n${results.join('\n\n')}`, cost: 0 };
         }
       }
 
-      if (results.length === 0) {
-        // DuckDuckGo had no instant answer — return a message suggesting browser search
-        return {
-          success: true,
-          data: `No instant results for "${query}". Try using browser_session to search Google or visit specific websites.`,
-          cost: 0,
-        };
+      // Strategy 2: DuckDuckGo instant answer API (for factual queries)
+      const instantRes = await fetch(
+        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (instantRes.ok) {
+        const data = await instantRes.json();
+        const lines: string[] = [];
+        if (data.AbstractText) {
+          lines.push(`Summary: ${data.AbstractText}`);
+          if (data.AbstractURL) lines.push(`Source: ${data.AbstractURL}`);
+        }
+        if (data.RelatedTopics?.length) {
+          for (const topic of data.RelatedTopics.slice(0, 5)) {
+            if (topic.Text) lines.push(`- ${topic.Text.substring(0, 200)}${topic.FirstURL ? ` (${topic.FirstURL})` : ''}`);
+          }
+        }
+        if (lines.length > 0) return { success: true, data: lines.join('\n'), cost: 0 };
       }
 
-      return { success: true, data: results.join('\n'), cost: 0 };
+      // No results from either method — suggest browser Google search
+      return {
+        success: true,
+        data: `No web search results for "${query}". Use browser_go("https://www.google.com/search?q=${encodeURIComponent(query)}") to search Google directly in the browser.`,
+        cost: 0,
+      };
     } catch (err) {
-      return { success: false, error: 'Web search failed', cost: 0 };
+      return { success: false, error: `Web search failed: ${err instanceof Error ? err.message : 'unknown'}. Try browser_go("https://www.google.com/search?q=${encodeURIComponent(query)}") instead.`, cost: 0 };
     }
   },
 });

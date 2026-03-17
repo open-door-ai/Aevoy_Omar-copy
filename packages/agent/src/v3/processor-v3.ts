@@ -127,65 +127,80 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     const isMultiStep = true; // Apply to everything — better safe than hallucinated
     const responseLower = response.toLowerCase();
 
-    // 1. Detect explicit failure admissions
-    const admitsFailure = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|failed due|process failed|creation.*failed|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|IP.*blocked|IP.*flagged|Ray ID|access denied|403 forbidden|captcha.*blocked|0 job postings|0 results found|no postings found|not available due|browser disconn|encountered.*notification|JavaScript needed|need to resolve|contact.*support|approximate data|exact.*not available)\b/i.test(response);
+    // 1. Detect explicit failure admissions (expanded patterns)
+    const admitsFailure = /\b(I was unable|couldn't complete|wasn't able to|no login attempt|no specific data|did not yield|could not|failed to|failed due|process failed|creation.*failed|having trouble|I apologize|was unsuccessful|no concrete findings|no results|was blocked|IP.*blocked|IP.*flagged|Ray ID|access denied|403 forbidden|captcha.*blocked|0 job postings|0 results found|no postings found|not available due|browser disconn|encountered.*notification|JavaScript needed|need to resolve|contact.*support|approximate data|exact.*not available|all my attempts|attempts.*are failing|websites.*failing|couldn't access|can't access|unreachable|site.*down|doesn't exist yet|hasn't been (released|announced)|not yet (available|released)|no.*product.*found|external websites.*failing|search results.*failing)\b/i.test(response);
     const credPlaceholderLeaked = /\[CRED_/.test(response);
 
     // 2. Detect HALLUCINATED ACTIONS — AI claims it did something the system can't do
-    const claimsPhoneCall = /\b(I called|called them|called the|phone call|spoke with|spoke to|reached them by phone)\b/i.test(response);
-    const claimsEmailSent = /\b(sent.*email|emailed them|confirmation email.*sent)\b/i.test(response);
-    const claimsBooked = /\b(booked|reservation.*made|reservation.*confirmed|table.*reserved|booking.*confirmed)\b/i.test(response);
-    const claimsAccountCreated = /\b(account.*created|signed up|registered|account.*ready)\b/i.test(response);
+    const claimsPhoneCall = /\b(I called|called them|called the|phone call|spoke with|spoke to|reached them by phone|contacted.*by phone|made a call)\b/i.test(response);
+    const claimsEmailSent = /\b(sent.*email|emailed them|confirmation email.*sent|email.*delivered|forwarded.*email)\b/i.test(response);
+    const claimsBooked = /\b(booked|reservation.*made|reservation.*confirmed|table.*reserved|booking.*confirmed|appointment.*scheduled)\b/i.test(response);
+    const claimsAccountCreated = /\b(account.*created|signed up|registered|account.*ready|successfully.*registered|profile.*created)\b/i.test(response);
+    const claimsPurchased = /\b(purchased|order.*placed|bought|added to cart.*checked out|payment.*processed)\b/i.test(response);
+
+    // 3. Detect VAGUE responses — no concrete data
+    const hasConcreteData = /(\$\d|\£\d|\€\d|\d+\.\d{2}|https?:\/\/\S{10,}|confirmation.*#|order.*#|booking.*#|@\S+\.\S+|\+1\d{10}|\d{3}[-.\s]\d{3}[-.\s]\d{4})/.test(response);
+    const isVague = /\b(typically|generally|usually|I recommend|you could try|you might want|I suggest|here are some tips|in general)\b/i.test(response) && !hasConcreteData;
 
     // Cross-reference: did the AI actually USE the tools it claims?
-    // Check the conversation history for actual tool calls
-    const toolsUsed = new Set<string>();
-    // The messages array from handleMultiStep contains tool_calls — but we're outside that scope
-    // Use action_count as a proxy: if action_count is 0-1 but AI claims complex actions, it's lying
     const taskRecord = await getSupabaseClient().from('tasks').select('action_count').eq('id', taskId).single();
     const actionCount = taskRecord?.data?.action_count || 0;
+
+    // Was this a browser-intent task? (from classifier)
+    const isBrowserTask = classification.tier === 'multi_step' && (
+      /\b(go to|browse|visit|sign up|book|buy|find.*price|check.*price|search.*on|look up)\b/i.test(task.subject) ||
+      /\b\w+\.(com|org|net|io|ca)\b/i.test(task.subject)
+    );
 
     let taskStatus: 'completed' | 'needs_review' = 'completed';
     let verificationStatus = 'verified';
     let failReason = '';
 
     // Quality gate: cross-reference claims vs actions
-    if (isMultiStep) {
-      if (admitsFailure || credPlaceholderLeaked) {
+    if (admitsFailure || credPlaceholderLeaked) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'failed';
+      failReason = `admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}`;
+    } else if (claimsPhoneCall) {
+      // AI claims it called someone — verify against call_history
+      const { data: recentCalls } = await getSupabaseClient()
+        .from('call_history')
+        .select('id')
+        .eq('user_id', task.userId)
+        .gte('created_at', new Date(Date.now() - executionTime - 60000).toISOString())
+        .limit(1);
+      if (!recentCalls || recentCalls.length === 0) {
         taskStatus = 'needs_review';
-        verificationStatus = 'failed';
-        failReason = `admitsFailure=${admitsFailure}, credLeak=${credPlaceholderLeaked}`;
-      } else if (claimsPhoneCall) {
-        // AI claims it called someone — verify against call_history
-        const { data: recentCalls } = await getSupabaseClient()
-          .from('call_history')
-          .select('id')
-          .eq('user_id', task.userId)
-          .gte('created_at', new Date(Date.now() - executionTime - 60000).toISOString())
-          .limit(1);
-        if (!recentCalls || recentCalls.length === 0) {
-          taskStatus = 'needs_review';
-          verificationStatus = 'hallucination';
-          failReason = 'AI claims phone call but no call_history entry found';
-        }
-      } else if (claimsBooked && actionCount < 3) {
-        // AI claims booking but did fewer than 3 browser actions — suspicious
-        taskStatus = 'needs_review';
-        verificationStatus = 'low_confidence';
-        failReason = `Claims booking but only ${actionCount} actions taken`;
-      } else if (claimsAccountCreated && actionCount < 3) {
-        taskStatus = 'needs_review';
-        verificationStatus = 'low_confidence';
-        failReason = `Claims account created but only ${actionCount} actions taken`;
-      } else if (actionCount === 0 && responseLower.length > 100) {
-        // AI gave a long response but took ZERO actions — likely fabricated from training data
-        const hasUrl = /https?:\/\/\S{10,}/.test(response);
-        if (!hasUrl) {
-          taskStatus = 'needs_review';
-          verificationStatus = 'no_actions';
-          failReason = 'Long response but zero browser/tool actions — likely fabricated';
-        }
+        verificationStatus = 'hallucination';
+        failReason = 'AI claims phone call but no call_history entry found';
       }
+    } else if (claimsBooked && actionCount < 5) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'low_confidence';
+      failReason = `Claims booking but only ${actionCount} actions taken`;
+    } else if (claimsAccountCreated && actionCount < 5) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'low_confidence';
+      failReason = `Claims account created but only ${actionCount} actions taken`;
+    } else if (claimsPurchased && actionCount < 5) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'low_confidence';
+      failReason = `Claims purchase but only ${actionCount} actions taken`;
+    } else if (isBrowserTask && actionCount === 0 && responseLower.length > 50) {
+      // Browser task with ZERO actions — the AI fabricated from training data
+      taskStatus = 'needs_review';
+      verificationStatus = 'no_actions';
+      failReason = 'Browser task but zero actions taken — response is fabricated';
+    } else if (isBrowserTask && isVague && !hasConcreteData) {
+      // Browser task with vague response and no concrete data
+      taskStatus = 'needs_review';
+      verificationStatus = 'vague';
+      failReason = 'Browser task with vague response — no prices, URLs, or confirmations';
+    } else if (actionCount === 0 && responseLower.length > 200 && !hasConcreteData) {
+      // Long response with zero actions and no data — likely fabricated
+      taskStatus = 'needs_review';
+      verificationStatus = 'no_actions';
+      failReason = 'Long response but zero actions and no concrete data';
     }
 
     if (failReason) {
