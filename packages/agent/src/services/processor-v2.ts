@@ -18,6 +18,7 @@ import { sendResponse } from "./email.js";
 import { generateResponse } from "./ai.js";
 import { loadMemory } from "./memory.js";
 import { processTask } from "./processor.js";
+import { processTaskV3 } from "../v3/processor-v3.js";
 
 interface TaskRequest {
   userId: string;
@@ -104,7 +105,32 @@ export class ProcessorV2 {
    */
   private async executeAIOnlyTask(request: TaskRequest, _goal: string): Promise<TaskResult> {
     try {
-      console.log(`[PROCESSOR-V2] Delegating to main processor for: ${request.task.substring(0, 80)}`);
+      const useV3 = process.env.PROCESSOR_VERSION === 'v3';
+
+      if (useV3) {
+        console.log(`[PROCESSOR-V2] Routing to V3 for: ${request.task.substring(0, 80)}`);
+        try {
+          const result = await processTaskV3({
+            userId: request.userId,
+            username: request.username,
+            from: request.email || `${request.username}@aevoy.com`,
+            subject: request.task,
+            body: request.task,
+            inputChannel: (request.channel as any) || 'web',
+            suppressEmail: true,
+          });
+          return {
+            success: result.success,
+            response: result.response || "Task completed.",
+            planId: result.taskId,
+          };
+        } catch (v3Err) {
+          console.error(`[PROCESSOR-V2] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
+          // Fall through to V1
+        }
+      }
+
+      console.log(`[PROCESSOR-V2] Delegating to V1 processor for: ${request.task.substring(0, 80)}`);
 
       const result = await processTask({
         userId: request.userId,
@@ -116,7 +142,7 @@ export class ProcessorV2 {
         suppressEmail: true, // Web dashboard gets response directly — no email needed
       });
 
-      console.log(`[PROCESSOR-V2] Main processor result: success=${result.success}, response=${result.response?.substring(0, 100)}`);
+      console.log(`[PROCESSOR-V2] V1 processor result: success=${result.success}, response=${result.response?.substring(0, 100)}`);
 
       return {
         success: result.success,

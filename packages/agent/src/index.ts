@@ -393,7 +393,13 @@ function processQueuedTasks(): void {
     const queued = taskQueue.shift();
     if (queued) {
       activeTasks++;
-      processTask(queued.task)
+      const processFunc = (process.env.PROCESSOR_VERSION === 'v3')
+        ? processTaskV3(queued.task).catch(async (v3Err) => {
+            console.error(`[QUEUE] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
+            return processTask(queued.task);
+          })
+        : processTask(queued.task);
+      processFunc
         .then(queued.resolve)
         .catch(queued.reject)
         .finally(() => {
@@ -1219,20 +1225,23 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
-  // CRITICAL FIX: Use ORIGINAL processor (not V2) to get:
-  // - MAX_ITERATIONS = 30 (not just 1 attempt)
-  // - Strategy tracking (prevents dumb retries)
-  // - Outcome verification (REAL goal checking)
-  // - Memory loading (unified memory)
+  // Route to V3 when enabled, V1 fallback
   activeTasks++;
-  const taskPromise = processTask({
+  const incomingTaskReq = {
     userId: task.userId,
     username: task.username,
     from: task.from,
     subject: sanitizedIncoming.subject,
     body: sanitizedIncoming.body,
     inputChannel: (task.inputChannel as "email" | "sms" | "voice" | "web") || "email",
-  });
+  };
+
+  const taskPromise = (process.env.PROCESSOR_VERSION === 'v3')
+    ? processTaskV3(incomingTaskReq).catch(async (v3Err) => {
+        console.error(`[INCOMING] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
+        return processTask(incomingTaskReq);
+      })
+    : processTask(incomingTaskReq);
 
   // Track with 45-minute timeout (matches processor MASTER_TIMEOUT_MS)
   trackBackgroundJob(
