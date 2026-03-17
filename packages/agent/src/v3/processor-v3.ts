@@ -663,11 +663,14 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
     // ── Call AI model with tools ──
     let modelResponse;
     try {
+      // Reduce maxTokens at high iterations — the AI should be making shorter,
+      // focused decisions, not writing essays. Saves tokens and money.
+      const tokensForStep = iterations > 60 ? 1000 : iterations > 30 ? 1500 : 2000;
       modelResponse = await callModel({
         messages,
         tier: 'multi_step',
         useTools: true,
-        maxTokens: 2000,
+        maxTokens: tokensForStep,
       });
     } catch (err) {
       console.error(`[V3] Model call failed at iteration ${iterations}:`, err);
@@ -892,6 +895,19 @@ PICK ONE NEW STRATEGY and execute it. Do NOT retry what already failed.`
       sameUrlCount = 0;
     }
 
+    // Cost awareness: if spending heavily without completing, the AI should know
+    // This is NOT a hard cap — the AI decides what to do with this information
+    if (iterations === 80 && budget.totalSpent > 0.30) {
+      messages.push({
+        role: 'user',
+        content: `COST AWARENESS: You've spent $${budget.totalSpent.toFixed(2)} across ${iterations} steps. You have budget remaining but be efficient:
+1. If you have PARTIAL results — deliver them now. Something is better than nothing.
+2. If a site keeps blocking you — switch to a DIFFERENT site immediately, don't keep retrying.
+3. Make every remaining step count — no more exploratory browsing.
+4. You CAN keep going if you're close to completing the task. But stop wasting steps on approaches that clearly aren't working.`
+      });
+    }
+
     // Vision tool overuse
     if (screenshotCount > 8 && iterations > 15) {
       messages.push({
@@ -901,9 +917,11 @@ PICK ONE NEW STRATEGY and execute it. Do NOT retry what already failed.`
       screenshotCount = 0;
     }
 
-    // ── Context compression every 8 iterations ──
-    // Compress every 5 iterations to reduce token costs (Gemini charges per token)
-    if (iterations % 5 === 0 && messages.length > 12) {
+    // ── Context compression — more aggressive at high iteration counts ──
+    // Token costs grow quadratically: more iterations = longer context = higher cost per call.
+    // Compress every 5 iterations normally, every 3 after iteration 30, every 2 after 80.
+    const compressInterval = iterations > 80 ? 2 : iterations > 30 ? 3 : 5;
+    if (iterations % compressInterval === 0 && messages.length > 10) {
       const compressed = compressMessagesV2(messages, progressNotes);
       messages.length = 0;
       messages.push(...compressed);
