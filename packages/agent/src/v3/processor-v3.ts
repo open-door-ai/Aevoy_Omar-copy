@@ -582,9 +582,13 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   let screenshotCount = 0;
   let locateCount = 0;
   let wrapUpInjected = false;
+  let strategyPivotInjected = false;
   let actionCount = 0;    // Total browser/tool actions taken (for quality gate)
   let actionSuccessCount = 0;
+  let consecutiveFailures = 0;   // Consecutive failed tool calls
+  let lastMeaningfulProgress = 0; // Iteration of last successful form fill or navigation
   const progressNotes: string[] = []; // Running log of what was accomplished
+  const triedDomains = new Set<string>(); // Domains we've already visited
 
   // ── Multi-step loop ──
   let iterations = 0;
@@ -668,16 +672,21 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         const giveUpCount = messages.filter(m => m.role === 'user' && typeof m.content === 'string' && m.content.includes('DO NOT GIVE UP')).length;
 
         if (shouldReject && giveUpCount < 3 && iterations < 50) {
-          console.log(`[V3] Rejected give-up response (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
+          const domainsStr = [...triedDomains].join(', ');
+          console.log(`[V3] Rejected give-up (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
           messages.push({ role: 'assistant', content: response });
           messages.push({
             role: 'user',
-            content: `DO NOT GIVE UP. You said "${response.substring(0, 100)}" — that is NOT acceptable. You MUST find another way:
-1. If a product is out of stock, find a similar in-stock product on the same site
-2. If a site blocks you, try a competing site (e.g., Best Buy instead of Amazon)
-3. If a search fails, try a different search query
-4. If a page won't load, try Google search for the same info
-NEVER return without a concrete result. Keep trying with browser_go and other tools.`
+            content: `DO NOT GIVE UP. Think like a resourceful human — what would YOU do next?
+
+You already tried: ${domainsStr || 'some approaches'}. That didn't work. So:
+1. Try a DIFFERENT website/service that does the same thing
+2. Try Google search: browser_go("https://www.google.com/search?q=YOUR+QUERY")
+3. If signup is blocked → look for "Sign in with Google" or social login
+4. If a form won't work → try the site's mobile version or API
+5. If the task is informational → extract data from Google search results directly
+
+Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
           });
           continue;
         }
@@ -728,7 +737,21 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
 
       // Track action counts for quality gate
       actionCount++;
-      if (result.success) actionSuccessCount++;
+      if (result.success) {
+        actionSuccessCount++;
+        consecutiveFailures = 0;
+        // Track meaningful progress (form fills, successful clicks, navigation)
+        if (tc.name === 'browser_fill' || tc.name === 'browser_click' || tc.name === 'browser_select') {
+          lastMeaningfulProgress = iterations;
+        }
+      } else {
+        consecutiveFailures++;
+      }
+
+      // Track domains visited
+      if (tc.name === 'browser_go' && tc.arguments?.url) {
+        try { triedDomains.add(new URL(String(tc.arguments.url)).hostname); } catch {}
+      }
 
       // Track tool cost
       if (result.cost > 0) {
@@ -775,29 +798,59 @@ NEVER return without a concrete result. Keep trying with browser_go and other to
       }
     }
 
-    // ── Stall detection: inject course correction ──
+    // ── STRATEGIC THINKING: Force the AI to pivot when stuck ──
+
+    // Strategy pivot: no meaningful progress in 15 iterations → force complete rethink
+    if (!strategyPivotInjected && iterations > 15 && (iterations - lastMeaningfulProgress) > 15) {
+      strategyPivotInjected = true;
+      const domainsStr = [...triedDomains].join(', ');
+      console.log(`[V3] STRATEGY PIVOT at iteration ${iterations}: no progress since iteration ${lastMeaningfulProgress}`);
+      messages.push({
+        role: 'user',
+        content: `STOP. THINK. You've spent ${iterations} iterations without meaningful progress.
+
+You already tried: ${domainsStr || 'various approaches'}
+
+A smart human would NOT keep trying the same thing. Think like this:
+1. WHAT specifically is blocking you? (CAPTCHA? Form not loading? Bot detection? Page error?)
+2. Is there a COMPLETELY DIFFERENT way to accomplish this task?
+   - If signup is blocked → try Google OAuth / "Sign in with Google" button
+   - If site blocks bots → try a different site that offers the same service
+   - If form won't submit → try the mobile version of the site (m.site.com)
+   - If the task is "find information" → use Google search instead of navigating the site
+3. Can you accomplish PART of the task even if you can't do everything?
+
+PICK ONE NEW STRATEGY and execute it. Do NOT retry what already failed.`
+      });
+    }
+
+    // Consecutive failures: 5 tool calls in a row failed
+    if (consecutiveFailures >= 5) {
+      console.log(`[V3] ${consecutiveFailures} consecutive tool failures at iteration ${iterations}`);
+      messages.push({
+        role: 'user',
+        content: `${consecutiveFailures} tool calls in a row have FAILED. Something is fundamentally wrong with your current approach. STOP and try something completely different — different URL, different tool, different strategy entirely.`
+      });
+      consecutiveFailures = 0;
+    }
+
+    // Stall detection: same URL for 6+ rounds
     if (sameUrlCount >= 6 && iterations > 10) {
       console.log(`[V3] Stall detected at iteration ${iterations}: same URL for ${sameUrlCount} rounds`);
       messages.push({
         role: 'user',
-        content: `STALL DETECTED: You've been on the same page for ${sameUrlCount} rounds without progress. SWITCH STRATEGY:
-1. STOP using browser_screenshot/browser_click_xy — the coordinates may be inaccurate on this page
-2. Use browser_snapshot() to get DOM elements with [ref] numbers, then browser_click(ref) for precise clicks
-3. For dropdowns, try browser_select(ref, value)
-4. If you truly can't interact with this page, navigate away and try a different approach
-5. Report what you've accomplished so far — partial progress is better than infinite loops`
+        content: `STALL: Same page for ${sameUrlCount} rounds. Use DOM mode: browser_snapshot() → browser_click(ref). If this page is truly stuck, navigate to a different URL entirely.`
       });
-      sameUrlCount = 0; // Reset to avoid spam
+      sameUrlCount = 0;
     }
 
-    // Vision tool overuse detection — if taking too many screenshots without progress
-    if (screenshotCount > 8 && iterations > 20) {
-      console.log(`[V3] Screenshot overuse at iteration ${iterations}: ${screenshotCount} screenshots taken`);
+    // Vision tool overuse
+    if (screenshotCount > 8 && iterations > 15) {
       messages.push({
         role: 'user',
-        content: `You've taken ${screenshotCount} screenshots. Screenshots are expensive and you keep misidentifying coordinates. SWITCH TO DOM MODE: use browser_snapshot() + browser_click(ref) which is more reliable. Only use screenshots if DOM mode absolutely cannot work.`
+        content: `Too many screenshots (${screenshotCount}). Use browser_snapshot() + browser_click(ref) instead — it's faster and more precise.`
       });
-      screenshotCount = 0; // Reset
+      screenshotCount = 0;
     }
 
     // ── Context compression every 8 iterations ──
