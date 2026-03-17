@@ -323,24 +323,26 @@ registerTool({
     }
     const ref = Number(params.ref);
     try {
-      // Use data-aevoy-ref attribute stamped during snapshot — immune to DOM mutations
-      const clicked = await existing.page.evaluate((targetRef: number) => {
-        const el = document.querySelector(`[data-aevoy-ref="${targetRef}"]`) as HTMLElement;
-        if (!el) return { clicked: false, tag: '', text: '' };
-        el.scrollIntoView({ block: 'center', behavior: 'instant' });
-        el.click();
-        return { clicked: true, tag: el.tagName, text: (el.textContent || '').trim().substring(0, 50) };
-      }, ref);
-
-      if (!clicked.clicked) {
+      // Use Playwright's native click for better reliability (waits for actionability, handles overlays)
+      const locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      const count = await locator.count();
+      if (count === 0) {
         return { success: false, error: `Element [${ref}] not found. The page may have changed — call browser_snapshot() to get fresh refs.`, cost: 0 };
       }
+      const info = await locator.evaluate((el: HTMLElement) => ({
+        tag: el.tagName,
+        text: (el.textContent || '').trim().substring(0, 50),
+      }));
+      await locator.click({ timeout: 5000 }).catch(async () => {
+        // Fallback: JS click for elements obscured by overlays
+        await locator.evaluate((el: HTMLElement) => el.click());
+      });
 
       await existing.page.waitForTimeout(1000);
       // Auto-solve CAPTCHAs triggered by the click (signup/submit buttons often trigger them)
       const captcha = await autoSolveCaptcha(existing.page, ctx);
       const snapshot = await getPageSnapshot(existing.page);
-      return { success: true, data: `Clicked [${ref}] (${clicked.tag} "${clicked.text}")${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
+      return { success: true, data: `Clicked [${ref}] (${info.tag} "${info.text}")${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
     } catch (err) {
       return { success: false, error: `Click failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
@@ -364,23 +366,26 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      // Use data-aevoy-ref for stable element lookup
-      const filled = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
-        const el = document.querySelector(`[data-aevoy-ref="${args.targetRef}"]`) as HTMLInputElement;
-        if (!el) return { filled: false, tag: '', name: '' };
-        el.scrollIntoView({ block: 'center', behavior: 'instant' });
-        el.focus();
-        el.value = args.value;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return { filled: true, tag: el.tagName, name: el.getAttribute('name') || el.getAttribute('placeholder') || '' };
-      }, { targetRef: ref, value });
-
-      if (!filled.filled) {
+      // Use Playwright's native fill() for React/Vue/Angular compatibility
+      // el.value = x doesn't trigger React state updates, but Playwright's fill() does
+      const locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      const count = await locator.count();
+      if (count === 0) {
         return { success: false, error: `Input [${ref}] not found. The page may have changed — call browser_snapshot() to get fresh refs.`, cost: 0 };
       }
+      await locator.scrollIntoViewIfNeeded().catch(() => {});
+      // Clear existing value first, then type the new value
+      await locator.fill(value).catch(async () => {
+        // Fallback: some inputs (date pickers, custom widgets) don't support fill()
+        await locator.click();
+        await locator.evaluate((el: any) => { el.value = ''; });
+        await locator.pressSequentially(value, { delay: 30 });
+      });
+      const name = await locator.evaluate((el: HTMLInputElement) =>
+        el.getAttribute('name') || el.getAttribute('placeholder') || el.getAttribute('aria-label') || ''
+      ).catch(() => '');
 
-      return { success: true, data: `Filled [${ref}] "${filled.name}" with "${value}"`, cost: 0 };
+      return { success: true, data: `Filled [${ref}] "${name}" with "${value}"`, cost: 0 };
     } catch (err) {
       return { success: false, error: `Fill failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
@@ -613,34 +618,30 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      // Use data-aevoy-ref for stable element lookup
-      const result = await existing.page.evaluate((args: { targetRef: number; value: string }) => {
-        const el = document.querySelector(`[data-aevoy-ref="${args.targetRef}"]`) as HTMLSelectElement;
-        let result = { selected: false, options: [] as string[] };
-        if (!el) return result;
-        if (el.tagName === 'SELECT') {
-          const options = Array.from(el.options);
-          result.options = options.map(o => `"${o.text}" (value="${o.value}")`);
-          const byValue = options.find(o => o.value === args.value);
-          const byText = options.find(o => o.text.toLowerCase().includes(args.value.toLowerCase()));
-          const match = byValue || byText;
-          if (match) {
-            el.value = match.value;
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            result.selected = true;
-          }
-        }
-        return result;
-      }, { targetRef: ref, value });
-
-      if (!result.selected) {
+      const locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      const count = await locator.count();
+      if (count === 0) {
+        return { success: false, error: `Dropdown [${ref}] not found. Call browser_snapshot() for fresh refs.`, cost: 0 };
+      }
+      // Try Playwright's native selectOption (works with React/Vue)
+      try {
+        await locator.selectOption({ label: value }, { timeout: 3000 }).catch(async () => {
+          // Fallback: try by value attribute
+          await locator.selectOption(value, { timeout: 3000 });
+        });
+        return { success: true, data: `Selected "${value}" in dropdown [${ref}]`, cost: 0 };
+      } catch {
+        // Show available options if selection failed
+        const options = await locator.evaluate((el: HTMLSelectElement) => {
+          if (el.tagName !== 'SELECT') return [];
+          return Array.from(el.options).map(o => `"${o.text}" (value="${o.value}")`);
+        }).catch(() => [] as string[]);
         return {
           success: false,
-          error: `Could not select "${value}" in dropdown [${ref}]. Available options: ${result.options.join(', ')}`,
+          error: `Could not select "${value}" in dropdown [${ref}]. Available options: ${options.join(', ')}`,
           cost: 0,
         };
       }
-      return { success: true, data: `Selected "${value}" in dropdown [${ref}]`, cost: 0 };
     } catch (err) {
       return { success: false, error: `Select failed: ${err instanceof Error ? err.message : 'unknown'}`, cost: 0 };
     }
