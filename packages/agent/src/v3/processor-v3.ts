@@ -788,13 +788,25 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
       if (tc.name === 'browser_screenshot') screenshotCount++;
       if (tc.name === 'browser_locate') locateCount++;
 
-      // Track meaningful actions for progress log
+      // Track ALL actions for progress log — both successes AND failures
+      // Failed actions MUST survive context compression so the AI doesn't retry them
       if (tc.name === 'browser_fill' && result.success) {
-        progressNotes.push(`Filled: ${JSON.stringify(tc.arguments).substring(0, 80)}`);
+        progressNotes.push(`✓ Filled: ${JSON.stringify(tc.arguments).substring(0, 80)}`);
+      } else if (tc.name === 'browser_fill' && !result.success) {
+        progressNotes.push(`✗ FAILED fill: ${result.error?.substring(0, 60)}`);
       }
       if (tc.name === 'browser_click' && result.success) {
         const clickText = resultContent.match(/Clicked \[.*?\] \(.*?"(.*?)"\)/)?.[1] || '';
-        if (clickText) progressNotes.push(`Clicked: "${clickText}"`);
+        if (clickText) progressNotes.push(`✓ Clicked: "${clickText}"`);
+      } else if (tc.name === 'browser_click' && !result.success) {
+        progressNotes.push(`✗ FAILED click: ${result.error?.substring(0, 60)}`);
+      }
+      if (tc.name === 'browser_go' && !result.success) {
+        progressNotes.push(`✗ FAILED navigate: ${String(tc.arguments?.url).substring(0, 60)} — ${result.error?.substring(0, 40)}`);
+      }
+      // Track CAPTCHA blocks
+      if (resultContent.includes('CAPTCHA BLOCKING')) {
+        progressNotes.push(`⚠ CAPTCHA blocked on ${lastUrl} — must change strategy`);
       }
     }
 

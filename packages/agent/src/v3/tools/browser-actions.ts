@@ -118,7 +118,15 @@ async function autoSolveCaptcha(page: Page, ctx: TaskContext): Promise<{ solved:
             cost: solveResult.cost || 0,
           };
         }
-        return { solved: false, note: `[CAPTCHA detected but solve failed: ${solveResult.error}]`, cost: 0 };
+        return {
+          solved: false,
+          note: `⚠️ CAPTCHA BLOCKING THIS PAGE (${detection.type}). Auto-solve FAILED: ${solveResult.error}. YOU MUST CHANGE STRATEGY:\n` +
+            `1. Look for "Sign in with Google" or social login button — bypasses CAPTCHA\n` +
+            `2. Try a DIFFERENT site that offers the same service\n` +
+            `3. Use Google search to find the info without visiting this site\n` +
+            `DO NOT keep clicking on this page — the CAPTCHA will not go away.`,
+          cost: 0,
+        };
       })(),
       new Promise<{ solved: boolean; note: string; cost: number }>(r =>
         setTimeout(() => r({ solved: false, note: '', cost: 0 }), 15000) // 15s hard timeout
