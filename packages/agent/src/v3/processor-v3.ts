@@ -235,6 +235,29 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     await cleanupTaskEngine(taskId);
     await cleanupTaskPage(taskId);
 
+    // ── Deduct total task cost from credit wallet (single deduction, no rounding loss) ──
+    try {
+      const { data: costData } = await getSupabaseClient()
+        .from('ai_cost_log')
+        .select('cost_usd')
+        .eq('task_id', taskId);
+      if (costData && costData.length > 0) {
+        const totalCostUsd = costData.reduce((sum, row) => sum + (row.cost_usd || 0), 0);
+        const totalCostCents = Math.ceil(totalCostUsd * 100); // ceil to never undercharge
+        if (totalCostCents > 0) {
+          await getSupabaseClient().rpc('deduct_credits', {
+            p_user_id: task.userId,
+            p_amount_cents: totalCostCents,
+            p_description: `Task: ${task.subject.substring(0, 60)} ($${totalCostUsd.toFixed(4)})`,
+            p_task_id: taskId,
+          });
+          console.log(`[V3] Deducted ${totalCostCents}¢ from wallet for task ${taskId.slice(0, 8)}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[V3] Wallet deduction failed for task ${taskId.slice(0, 8)}:`, err);
+    }
+
     // ── Update usage counter ──
     try { await getSupabaseClient().rpc('increment_messages_used', { p_user_id: task.userId }); } catch { /* non-critical */ }
 
