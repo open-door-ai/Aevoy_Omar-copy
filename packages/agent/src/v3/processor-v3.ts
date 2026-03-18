@@ -676,16 +676,20 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
     } catch (err) {
       consecutiveModelFailures++;
       console.error(`[V3] Model call failed at iteration ${iterations} (failure ${consecutiveModelFailures}):`, err);
-      // Retry up to 3 times with backoff — transient API failures are common
-      // (rate limits recover in 15s, network blips, provider restarts)
-      if (consecutiveModelFailures >= 3) {
-        // 3 consecutive failures — deliver partial results or error
+      // Retry up to 5 times with backoff matching model-router's backoff windows:
+      // Gemini: 15s backoff, Haiku: 30s backoff. Retries must OUTLAST these.
+      // Delays: 5s, 10s, 16s, 20s, 25s — ensures at least one retry after Gemini's 15s recovery.
+      if (consecutiveModelFailures >= 5) {
+        // 5 consecutive failures — deliver partial results or error
         const partial = ledger.getPartialResults();
         return partial !== 'No results gathered yet.'
           ? `I ran into an issue with AI services, but here's what I found:\n\n${partial}`
           : 'I encountered an issue with AI services. Please try again shortly.';
       }
-      await new Promise(r => setTimeout(r, 3000 * consecutiveModelFailures)); // 3s, 6s backoff
+      const retryDelays = [5000, 10000, 16000, 20000, 25000];
+      const delay = retryDelays[Math.min(consecutiveModelFailures - 1, retryDelays.length - 1)];
+      console.log(`[V3] Retrying model call in ${delay/1000}s (attempt ${consecutiveModelFailures}/5)`);
+      await new Promise(r => setTimeout(r, delay));
       continue;
     }
     consecutiveModelFailures = 0; // Reset on success
