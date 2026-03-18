@@ -172,24 +172,34 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
     const url = page.url();
     const title = await page.title().catch(() => '');
 
-    // PRIMARY: Use Playwright's built-in _snapshotForAI() — same method Playwright MCP uses.
-    // Returns the COMPLETE accessibility tree with aria-ref numbers for every interactive element.
-    // Handles shadow DOM, iframes, custom widgets, date pickers — everything.
-    // 8-second timeout: if it hangs on remote CDP, fall back to DOM-based snapshot.
-    try {
-      const snapshot = await Promise.race([
-        (page as any)._snapshotForAI(),
-        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('snapshotForAI timeout')), 8000)),
-      ]);
-      const ariaTree = snapshot.full || snapshot;
-      if (ariaTree && typeof ariaTree === 'string' && ariaTree.length > 20) {
-        // Truncate if too large (save tokens)
-        const truncated = ariaTree.length > 6000 ? ariaTree.substring(0, 6000) + '\n\n... [truncated — use browser_click with ref numbers shown above]' : ariaTree;
-        return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
+    // PRIMARY: Use Playwright's _snapshotForAI() — same method Playwright MCP uses.
+    // Returns COMPLETE accessibility tree with aria-ref numbers.
+    // SECONDARY: Try ariaSnapshot() — older API that might work when _snapshotForAI returns empty.
+    // 8-second timeout each: if both hang on remote CDP, fall back to DOM snapshot.
+    for (const method of ['_snapshotForAI', 'ariaSnapshot'] as const) {
+      try {
+        let ariaTree = '';
+        if (method === '_snapshotForAI') {
+          const snapshot = await Promise.race([
+            (page as any)._snapshotForAI(),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+          ]);
+          ariaTree = snapshot?.full || (typeof snapshot === 'string' ? snapshot : '');
+        } else {
+          ariaTree = await Promise.race([
+            page.locator('body').ariaSnapshot(),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+          ]) as string;
+        }
+        if (ariaTree && typeof ariaTree === 'string' && ariaTree.length > 20) {
+          const truncated = ariaTree.length > 6000
+            ? ariaTree.substring(0, 6000) + '\n\n... [truncated — use browser_click with ref numbers shown above]'
+            : ariaTree;
+          return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
+        }
+      } catch (e) {
+        console.log(`[V3-SNAPSHOT] ${method} failed (${e instanceof Error ? e.message : 'unknown'})`);
       }
-    } catch (e) {
-      // _snapshotForAI timed out or not available — fall through to DOM snapshot
-      console.log(`[V3-SNAPSHOT] _snapshotForAI failed (${e instanceof Error ? e.message : 'unknown'}), using DOM fallback`);
     }
 
     // FALLBACK: DOM-based snapshot for when _snapshotForAI hangs (remote CDP)
