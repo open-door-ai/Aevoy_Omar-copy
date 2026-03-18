@@ -182,8 +182,8 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
         let ariaTree = '';
         if (method === '_snapshotForAI') {
           const snapshot = await Promise.race([
-            (page as any)._snapshotForAI(),
-            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+            (page as any)._snapshotForAI({ track: 'response' }),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
           ]);
           ariaTree = snapshot?.full || (typeof snapshot === 'string' ? snapshot : '');
         } else {
@@ -970,5 +970,91 @@ registerTool({
     await existing.page.waitForTimeout(seconds * 1000);
     const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
     return { success: true, data: `Waited ${seconds}s\n\n${snapshot}`, cost: 0 };
+  },
+});
+
+// ── browser_agent: Delegate complex multi-step browser tasks to Stagehand ──
+// Uses Browserbase (managed cloud browser with anti-bot) + AI-driven element targeting.
+// Bypasses our snapshot→click loop — Stagehand handles the entire flow internally.
+// Use for: bookings, signups, checkout flows, multi-step forms.
+registerTool({
+  name: 'browser_agent',
+  description: 'Delegate a complex multi-step browser task to an AI browser agent. Use this for tasks that require many clicks, form fills, and page navigations — like booking a restaurant, signing up for a service, or completing a checkout. The agent handles the entire flow autonomously and returns the result. Much more reliable than manual browser_click/browser_fill for complex flows.',
+  category: 'browser',
+  parameters: {
+    task: { type: 'string', description: 'Full description of what to accomplish (e.g. "Book a table at Earls for 4 people tomorrow at 7pm, name Omar, email omar@aevoy.com")' },
+    url: { type: 'string', description: 'Starting URL to navigate to (e.g. "https://www.opentable.com")' },
+  },
+  required: ['task'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const task = String(params.task);
+    const startUrl = params.url ? String(params.url) : '';
+    try {
+      const { StagehandService } = await import('../../services/stagehand.js');
+      const stagehand = new StagehandService({ userId: ctx.userId });
+      const page = await stagehand.init();
+
+      // Navigate to starting URL if provided
+      if (startUrl) {
+        await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+      }
+
+      console.log(`[V3-BROWSER-AGENT] Starting task: "${task.substring(0, 100)}"`);
+
+      // Try agent() first (multi-step reasoning), fall back to act()
+      let result;
+      try {
+        result = await Promise.race([
+          stagehand.agent(task),
+          new Promise<{ success: boolean; error: string }>((_, rej) =>
+            setTimeout(() => rej(new Error('browser_agent timeout after 5 minutes')), 300000)
+          ),
+        ]);
+      } catch (agentErr) {
+        // agent() not available or timed out — try act() for simpler execution
+        console.log(`[V3-BROWSER-AGENT] agent() failed: ${agentErr instanceof Error ? agentErr.message : 'unknown'}, trying act()`);
+        result = await Promise.race([
+          stagehand.act(task),
+          new Promise<{ success: boolean; error: string }>((_, rej) =>
+            setTimeout(() => rej(new Error('browser_agent act timeout after 3 minutes')), 180000)
+          ),
+        ]);
+      }
+
+      // Get final page state
+      const finalUrl = page.url();
+      const finalTitle = await page.title().catch(() => '');
+      const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
+
+      // Cleanup
+      await stagehand.close().catch(() => {});
+
+      const response = [
+        result.success ? 'Task completed successfully.' : `Task partially completed: ${(result as any).error || (result as any).message || 'unknown issue'}`,
+        `Final URL: ${finalUrl}`,
+        finalTitle ? `Page title: ${finalTitle}` : '',
+        (result as any).message ? `Details: ${(result as any).message}` : '',
+        pageText ? `Page content: ${pageText.substring(0, 500)}` : '',
+      ].filter(Boolean).join('\n');
+
+      // Estimate cost: Browserbase session + AI calls
+      const estimatedCost = 0.05; // ~$0.05 per agent session
+
+      return {
+        success: result.success,
+        data: response,
+        error: result.success ? undefined : ((result as any).error || 'Task did not complete'),
+        cost: estimatedCost,
+      };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'unknown';
+      console.error(`[V3-BROWSER-AGENT] Failed: ${errMsg}`);
+      return {
+        success: false,
+        error: `Browser agent failed: ${errMsg}. Try using browser_go + browser_click instead.`,
+        cost: 0,
+      };
+    }
   },
 });
