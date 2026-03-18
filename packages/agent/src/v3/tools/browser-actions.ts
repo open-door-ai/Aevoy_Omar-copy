@@ -198,9 +198,20 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
             const entry = taskPages.get(_taskId);
             if (entry) entry.useAriaRefs = true;
           }
-          const truncated = ariaTree.length > 6000
-            ? ariaTree.substring(0, 6000) + '\n\n... [truncated — use browser_click with ref numbers shown above]'
-            : ariaTree;
+          // Smart truncation: for large pages (OpenTable: 74K), search for booking/form
+          // sections and prioritize showing those. Generic: show first 15K chars.
+          let truncated = ariaTree;
+          if (ariaTree.length > 15000) {
+            // Try to find the booking/form section in the tree
+            const formIdx = ariaTree.search(/reservation|booking|date.*picker|time.*slot|party.*size|select.*time|find.*table|complete.*reservation/i);
+            if (formIdx > 0 && formIdx < ariaTree.length - 5000) {
+              // Show context around the booking section
+              const start = Math.max(0, formIdx - 2000);
+              truncated = ariaTree.substring(0, 5000) + '\n\n... [skipped to booking section] ...\n\n' + ariaTree.substring(start, start + 10000);
+            } else {
+              truncated = ariaTree.substring(0, 15000) + '\n\n... [truncated — page has ' + ariaTree.length + ' chars total]';
+            }
+          }
           return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
         }
       } catch (e) {
