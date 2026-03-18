@@ -950,11 +950,8 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
       screenshotCount = 0;
     }
 
-    // ── Context compression — more aggressive at high iteration counts ──
-    // Token costs grow quadratically: more iterations = longer context = higher cost per call.
-    // Compress every 5 iterations normally, every 3 after iteration 30, every 2 after 80.
-    const compressInterval = iterations > 80 ? 2 : iterations > 30 ? 3 : 5;
-    if (iterations % compressInterval === 0 && messages.length > 10) {
+    // ── Context compression every 5 iterations ──
+    if (iterations % 5 === 0 && messages.length > 12) {
       const compressed = compressMessagesV2(messages, progressNotes);
       messages.length = 0;
       messages.push(...compressed);
