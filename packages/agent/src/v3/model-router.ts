@@ -257,10 +257,13 @@ async function callAnthropic(
   }));
 
   // Convert messages - handle tool results
-  const anthropicMessages: any[] = nonSystemMsgs.map(m => {
+  // CRITICAL: Anthropic requires alternating user/assistant roles.
+  // Multiple consecutive tool results must be merged into ONE user message
+  // with multiple tool_result blocks. Otherwise Anthropic rejects the request.
+  const rawMapped = nonSystemMsgs.map(m => {
     if (m.role === 'tool') {
       return {
-        role: 'user',
+        role: 'user' as const,
         content: [{ type: 'tool_result', tool_use_id: m.tool_call_id || 'unknown', content: m.content }],
       };
     }
@@ -270,15 +273,35 @@ async function callAnthropic(
       for (const tc of m.tool_calls) {
         content.push({
           type: 'tool_use',
-          id: tc.id || `call_${Date.now()}`,
+          id: tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           name: tc.function?.name || tc.name,
           input: typeof tc.function?.arguments === 'string' ? JSON.parse(tc.function.arguments) : (tc.arguments || {}),
         });
       }
-      return { role: 'assistant', content };
+      return { role: 'assistant' as const, content };
     }
-    return { role: m.role === 'user' ? 'user' : 'assistant', content: m.content };
+    return { role: (m.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant', content: m.content };
   });
+
+  // Merge consecutive same-role messages (especially tool results → single user message)
+  const anthropicMessages: any[] = [];
+  for (const msg of rawMapped) {
+    const prev = anthropicMessages[anthropicMessages.length - 1];
+    if (prev && prev.role === msg.role) {
+      // Merge: combine content arrays or concatenate strings
+      if (Array.isArray(prev.content) && Array.isArray(msg.content)) {
+        prev.content.push(...msg.content);
+      } else if (Array.isArray(prev.content)) {
+        prev.content.push({ type: 'text', text: String(msg.content) });
+      } else if (Array.isArray(msg.content)) {
+        prev.content = [{ type: 'text', text: String(prev.content) }, ...msg.content];
+      } else {
+        prev.content = `${prev.content}\n\n${msg.content}`;
+      }
+    } else {
+      anthropicMessages.push({ ...msg });
+    }
+  }
 
   const response = await Promise.race([
     client.messages.create({
