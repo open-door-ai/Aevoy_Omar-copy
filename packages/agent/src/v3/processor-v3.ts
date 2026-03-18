@@ -144,7 +144,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
 
     // Cross-reference: did the AI actually USE the tools it claims?
     // Use action_success_count (not total action_count) — failed actions don't prove work was done
-    const taskRecord = await getSupabaseClient().from('tasks').select('action_count, action_success_count').eq('id', taskId).single();
+    const taskRecord = await getSupabaseClient().from('tasks').select('action_count, action_success_count, progress_message').eq('id', taskId).single();
     const actionCount = taskRecord?.data?.action_count || 0;
     const successCount = taskRecord?.data?.action_success_count || 0;
 
@@ -157,6 +157,10 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     let taskStatus: 'completed' | 'needs_review' = 'completed';
     let verificationStatus = 'verified';
     let failReason = '';
+
+    // Check if browser_agent was used — it does everything in 1 tool call,
+    // so low action counts are expected and don't indicate hallucination
+    const usedBrowserAgent = /Step \d+: browser_agent/.test(taskRecord?.data?.progress_message || '');
 
     // Quality gate: cross-reference claims vs SUCCESSFUL actions
     if (admitsFailure || credPlaceholderLeaked) {
@@ -180,15 +184,15 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       taskStatus = 'needs_review';
       verificationStatus = 'hallucination';
       failReason = 'AI claims email sent but no successful send action';
-    } else if (claimsBooked && successCount < 5) {
+    } else if (claimsBooked && successCount < 5 && !usedBrowserAgent) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
       failReason = `Claims booking but only ${successCount} successful actions`;
-    } else if (claimsAccountCreated && successCount < 5) {
+    } else if (claimsAccountCreated && successCount < 5 && !usedBrowserAgent) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
       failReason = `Claims account created but only ${successCount} successful actions`;
-    } else if (claimsPurchased && successCount < 5) {
+    } else if (claimsPurchased && successCount < 5 && !usedBrowserAgent) {
       taskStatus = 'needs_review';
       verificationStatus = 'low_confidence';
       failReason = `Claims purchase but only ${successCount} successful actions`;
@@ -202,9 +206,9 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       taskStatus = 'needs_review';
       verificationStatus = 'vague';
       failReason = 'Browser task with vague response — no prices, URLs, or confirmations';
-    } else if (isBrowserTask && successCount <= 1 && responseLower.length > 200 && !hasConcreteData) {
+    } else if (isBrowserTask && successCount <= 1 && responseLower.length > 200 && !hasConcreteData && !usedBrowserAgent) {
       // Browser task with long response but <=1 successful action and no data — likely fabricated
-      // NOTE: having a URL in the response does NOT exempt it — URLs can come from training data
+      // NOTE: browser_agent exempt — it does everything in 1 call
       taskStatus = 'needs_review';
       verificationStatus = 'no_actions';
       failReason = `Browser task with long response but only ${successCount} successful actions and no concrete data`;
