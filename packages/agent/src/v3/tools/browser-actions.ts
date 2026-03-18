@@ -198,18 +198,19 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
             const entry = taskPages.get(_taskId);
             if (entry) entry.useAriaRefs = true;
           }
-          // Smart truncation: for large pages (OpenTable: 74K), search for booking/form
-          // sections and prioritize showing those. Generic: show first 15K chars.
+          // Smart truncation: for large pages, find the INTERACTIVE section
+          // (booking widget, forms, time slots) and show THAT instead of the header.
           let truncated = ariaTree;
-          if (ariaTree.length > 15000) {
-            // Try to find the booking/form section in the tree
-            const formIdx = ariaTree.search(/reservation|booking|date.*picker|time.*slot|party.*size|select.*time|find.*table|complete.*reservation/i);
-            if (formIdx > 0 && formIdx < ariaTree.length - 5000) {
-              // Show context around the booking section
-              const start = Math.max(0, formIdx - 2000);
-              truncated = ariaTree.substring(0, 5000) + '\n\n... [skipped to booking section] ...\n\n' + ariaTree.substring(start, start + 10000);
+          if (ariaTree.length > 12000) {
+            // Search for the actual interactive widget — booking forms, selectors, time slots
+            const widgetIdx = ariaTree.search(/Make a reservation|Party size|Find a table|Complete reservation|p\.m\.\"|a\.m\.\"|combobox.*selector|spinbutton|Select a date|Select a time|Book now/i);
+            if (widgetIdx > 5000) {
+              // Show: first 3K (nav/header) + booking widget section (8K around it)
+              const start = Math.max(0, widgetIdx - 1000);
+              const end = Math.min(ariaTree.length, widgetIdx + 7000);
+              truncated = ariaTree.substring(0, 3000) + '\n\n... [skipped to interactive section] ...\n\n' + ariaTree.substring(start, end);
             } else {
-              truncated = ariaTree.substring(0, 15000) + '\n\n... [truncated — page has ' + ariaTree.length + ' chars total]';
+              truncated = ariaTree.substring(0, 12000) + '\n\n... [' + ariaTree.length + ' chars total]';
             }
           }
           return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
