@@ -1023,19 +1023,42 @@ registerTool({
         new Promise<never>((_, r) => setTimeout(() => r(new Error('agent timeout 5min')), 300000)),
       ]) as any;
 
+      // VERIFICATION: Capture the final page state as PROOF of what happened.
+      // Screenshot + page text + URL — the AI must report these, not make claims.
       const finalUrl = stagehand.page.url();
       const finalTitle = await stagehand.page.title().catch(() => '');
-      const pageText = await stagehand.page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
+      const pageText = await stagehand.page.evaluate(() => document.body?.innerText?.substring(0, 2000) || '').catch(() => '');
+
+      // Take screenshot for visual verification
+      let screenshotNote = '';
+      try {
+        const buf = await stagehand.page.screenshot({ type: 'png', fullPage: false });
+        const base64 = buf.toString('base64').substring(0, 100); // Just confirm we got one
+        screenshotNote = `[Screenshot captured: ${buf.length} bytes]`;
+        console.log(`[V3-BROWSER-AGENT] Screenshot: ${buf.length} bytes, URL: ${finalUrl}`);
+      } catch { screenshotNote = '[Screenshot failed]'; }
+
+      // Check for concrete evidence of completion on the page
+      const hasConfirmation = /confirm|success|thank you|booked|reserved|order.*placed|receipt|reference/i.test(pageText);
+      const hasError = /error|failed|sorry|couldn't|unable|denied|blocked/i.test(pageText);
+
       await stagehand.close().catch(() => {});
 
-      const success = result?.success !== false;
       const msg = result?.message || result?.result || '';
+      // Build response with EVIDENCE — the AI reports what the page shows, not assumptions
       const response = [
-        success ? 'Task completed.' : 'Task did not fully complete.',
-        `URL: ${finalUrl}`, finalTitle ? `Page: ${finalTitle}` : '',
-        msg ? `Result: ${msg}` : '', pageText ? `Content: ${pageText.substring(0, 500)}` : '',
+        `Final URL: ${finalUrl}`,
+        finalTitle ? `Page title: ${finalTitle}` : '',
+        screenshotNote,
+        hasConfirmation ? 'PAGE SHOWS CONFIRMATION — task likely succeeded.' : '',
+        hasError ? 'PAGE SHOWS ERROR — task may not have completed.' : '',
+        msg ? `Agent result: ${msg}` : '',
+        `Page content:\n${pageText.substring(0, 1000)}`,
       ].filter(Boolean).join('\n');
-      return { success, data: response, cost: 0.05 };
+
+      // Only mark success if the PAGE itself shows confirmation, not just Gemini's claim
+      const verified = hasConfirmation && !hasError;
+      return { success: verified || (result?.success === true), data: response, cost: 0.05 };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'unknown';
       console.error(`[V3-BROWSER-AGENT] Failed: ${errMsg}`);

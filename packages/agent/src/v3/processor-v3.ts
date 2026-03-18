@@ -159,8 +159,17 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     let failReason = '';
 
     // Check if browser_agent was used — it does everything in 1 tool call,
-    // so low action counts are expected and don't indicate hallucination
+    // so low action counts are expected and don't indicate hallucination.
+    // BUT: browser_agent results must contain PAGE EVIDENCE (confirmation text, URLs).
+    // If browser_agent claims success but the response has no page evidence, flag it.
     const usedBrowserAgent = /Step \d+: browser_agent/.test(taskRecord?.data?.progress_message || '');
+    const hasPageEvidence = /PAGE SHOWS CONFIRMATION|Final URL: https?:\/\/\S+|Page content:/.test(response);
+    // If browser_agent was used but response has NO page evidence, don't trust it
+    if (usedBrowserAgent && !hasPageEvidence && (claimsBooked || claimsAccountCreated || claimsPurchased)) {
+      taskStatus = 'needs_review';
+      verificationStatus = 'unverified_agent';
+      failReason = 'browser_agent claims action but response has no page evidence';
+    }
 
     // Quality gate: cross-reference claims vs SUCCESSFUL actions
     if (admitsFailure || credPlaceholderLeaked) {
