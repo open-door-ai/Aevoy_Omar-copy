@@ -675,12 +675,18 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       });
     } catch (err) {
       consecutiveModelFailures++;
-      console.error(`[V3] Model call failed at iteration ${iterations} (failure ${consecutiveModelFailures}):`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errStatus = (err as any)?.status;
+      console.error(`[V3] Model call failed at iteration ${iterations} (failure ${consecutiveModelFailures}): status=${errStatus}, msg=${errMsg}`);
+      // Log the error to Supabase for remote debugging
+      try {
+        await getSupabaseClient().from('tasks').update({
+          progress_message: `Model error #${consecutiveModelFailures} at step ${iterations}: ${errMsg.substring(0, 200)}`,
+        }).eq('id', ctx.taskId);
+      } catch { /* non-critical */ }
       // Retry up to 5 times with backoff matching model-router's backoff windows:
       // Gemini: 15s backoff, Haiku: 30s backoff. Retries must OUTLAST these.
-      // Delays: 5s, 10s, 16s, 20s, 25s — ensures at least one retry after Gemini's 15s recovery.
       if (consecutiveModelFailures >= 5) {
-        // 5 consecutive failures — deliver partial results or error
         const partial = ledger.getPartialResults();
         return partial !== 'No results gathered yet.'
           ? `I ran into an issue with AI services, but here's what I found:\n\n${partial}`
