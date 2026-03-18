@@ -268,8 +268,10 @@ registerTool({
       const entry = taskPages.get(ctx.taskId);
       if (entry) entry.failCount = 0;
 
+      // Check if already on a proxy/BrightData engine (don't escalate twice)
+      const alreadyEscalated = taskPages.get(ctx.taskId)?.engine?.useBrightData || taskPages.get(ctx.taskId)?.engine?.useLocalProxy;
+
       // Detect ACTUAL connection failures — NOT content-level blocks
-      // Only flag chrome-error:// and truly empty pages. Let the AI handle 403s and CAPTCHAs.
       const currentUrl = page.url();
       const bodyText = await page.evaluate(() => (document.body?.innerText || '').substring(0, 500)).catch(() => '');
       const isErrorPage = currentUrl.startsWith('chrome-error://') || currentUrl === 'about:blank';
@@ -279,10 +281,10 @@ registerTool({
       if (isConnectionFailure) {
           console.log(`[V3-BROWSER] Connection failure for ${url}: "${bodyText.substring(0, 100)}"`);
 
-          // Escalate to BrightData (residential IP + CAPTCHA solving) if available
-          const bdWs = process.env.BRIGHT_DATA_BROWSER_WS;
-          if (bdWs && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
-            console.log(`[V3-BROWSER] Escalating to BrightData for ${url}`);
+          // Escalate to residential proxy (local Chrome + proxy, or BrightData Scraping Browser)
+          const hasProxy = process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS;
+          if (hasProxy && !alreadyEscalated) {
+            console.log(`[V3-BROWSER] Escalating to residential proxy for ${url}`);
             await cleanupTaskPage(ctx.taskId);
             // Force BrightData by temporarily hiding VPS CDP
             const savedCdp = process.env.REMOTE_BROWSER_CDP;
@@ -317,7 +319,7 @@ registerTool({
 
       // Detect CAPTCHA/block pages that loaded but need BrightData to bypass
       const isCaptchaPage = /captcha|verify.*human|security check|access denied|403 forbidden|just a moment|checking your browser|cloudflare|please wait|ray id|enable javascript|enable cookies|bot detection|imperva|incapsula|datadome|akamai/i.test(bodyText);
-      if (isCaptchaPage && process.env.BRIGHT_DATA_BROWSER_WS && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
+      if (isCaptchaPage && (process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS) && !alreadyEscalated) {
         console.log(`[V3-BROWSER] CAPTCHA/block page on VPS Chrome for ${url} — escalating to BrightData`);
         await cleanupTaskPage(ctx.taskId);
         const savedCdp = process.env.REMOTE_BROWSER_CDP;
@@ -363,7 +365,7 @@ registerTool({
       const errMsg = err instanceof Error ? err.message : 'unknown';
       // Protocol/network errors (ERR_HTTP2, ERR_CONNECTION, etc.) — try BrightData
       const isNetworkError = /ERR_|net::|Protocol|PROTOCOL|timeout|crashed|closed/i.test(errMsg);
-      if (isNetworkError && process.env.BRIGHT_DATA_BROWSER_WS && !taskPages.get(ctx.taskId)?.engine?.useBrightData) {
+      if (isNetworkError && (process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS) && !(taskPages.get(ctx.taskId)?.engine?.useBrightData || taskPages.get(ctx.taskId)?.engine?.useLocalProxy)) {
         console.log(`[V3-BROWSER] Navigation threw ${errMsg} — escalating to BrightData`);
         try { await cleanupTaskPage(ctx.taskId); } catch {}
         const savedCdp = process.env.REMOTE_BROWSER_CDP;

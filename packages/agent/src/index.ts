@@ -618,6 +618,7 @@ app.get("/health/detailed", async (req, res) => {
     agentUrl: process.env.AGENT_URL ? "set" : "NOT SET",
     remoteBrowser: process.env.REMOTE_BROWSER_CDP || "not configured",
     brightData: process.env.BRIGHT_DATA_BROWSER_WS ? "configured" : "not configured",
+    brightDataProxy: process.env.BRIGHT_DATA_PROXY_URL ? "configured" : "not configured",
     dedupMapSize: recentTaskFingerprints.size,
   });
 });

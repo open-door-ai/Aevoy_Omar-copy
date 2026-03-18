@@ -88,6 +88,7 @@ export class ExecutionEngine {
   private isMultiUser = false;
   private isRemoteCDP = false; // Whether using remote CDP browser
   useBrightData = false; // Public so V3 browser tools can check if engine is on BrightData
+  useLocalProxy = false; // Public: using local Chrome + residential proxy (best for interactions)
   private brightDataSessionStart: number = 0;
   private brightDataPageCount: number = 0;
   private brightDataNavFailures: number = 0;
@@ -97,29 +98,32 @@ export class ExecutionEngine {
     this.intent = intent;
     this.validator = new ActionValidator(intent);
 
-    // Priority: VPS Chrome (fast, free) > BrightData (CAPTCHA solving, $8/GB) > Local
-    // VPS Chrome is fast and free but gets Cloudflare-blocked on some commercial sites.
-    // BrightData has residential IPs + built-in CAPTCHA solving but costs $8/GB (~$0.04/page).
-    // Strategy: Start with VPS Chrome. If page is blocked, the V3 browser_go tool
-    // detects the block and the AI pivots (Google search, alternative site, etc.).
-    // BrightData is available as engine fallback when forceLocalBrowser() is called.
+    // Priority chain: VPS Chrome → Local Chrome + Proxy → BrightData Scraping Browser → Local
+    //
+    // VPS Chrome: fast, free, but gets blocked on commercial sites
+    // Local + Proxy: LOCAL browser events (undetectable) + residential IP (bypasses IP blocks)
+    //   → _snapshotForAI works locally, no CDP hang
+    //   → Playwright's native click/fill is local, not remote CDP
+    //   → This is how Claude in Chrome / Vy work: local browser, real events
+    // BrightData Scraping Browser: remote CDP, built-in CAPTCHA, but interactions detectable
+    // Local: no proxy, only for development/testing
     const forceLocal = process.env.FORCE_LOCAL_BROWSER === 'true';
 
     // PRIORITY 0: Remote CDP browser (VPS Chrome — fast, free)
     this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
 
-    // PRIORITY 1: BrightData Scraping Browser (residential + CAPTCHA, used as fallback)
-    this.useBrightData = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_BROWSER_WS);
-    if (process.env.BRIGHT_DATA_BROWSER_WS) {
-      console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: SET (length=' + process.env.BRIGHT_DATA_BROWSER_WS.length + ')');
-    } else {
-      console.log('[ENGINE] BRIGHT_DATA_BROWSER_WS: NOT SET');
-    }
+    // PRIORITY 1: Local Chrome + BrightData residential proxy (local events + residential IP)
+    this.useLocalProxy = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_PROXY_URL);
 
-    // PRIORITY 2: VPS Multi-User Browser (shared Chrome on this process)
-    this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !!(process.env.VPS_BROWSER_HOST);
+    // PRIORITY 2: BrightData Scraping Browser (remote CDP — fallback for sites that need built-in CAPTCHA)
+    this.useBrightData = !forceLocal && !this.useRemoteCDP && !this.useLocalProxy && !!(process.env.BRIGHT_DATA_BROWSER_WS);
 
-    if (this.useBrightData) {
+    // PRIORITY 3: VPS Multi-User Browser (shared Chrome on this process)
+    this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !this.useLocalProxy && !!(process.env.VPS_BROWSER_HOST);
+
+    if (this.useLocalProxy) {
+      console.log('[ENGINE] Will use Local Chrome + Residential Proxy ✓');
+    } else if (this.useBrightData) {
       console.log('[ENGINE] Will use Bright Data Scraping Browser ✓');
     } else if (this.useRemoteCDP) {
       console.log('[ENGINE] Will use Remote CDP Browser (VPS)');
@@ -135,8 +139,42 @@ export class ExecutionEngine {
     this.domain = domain;
     this.taskId = taskId;
 
-    // PRIORITY 0: Bright Data Scraping Browser — managed real Chrome, bypasses DataDome/Akamai
-    // Only 1 concurrent session allowed (Bright Data hangs silently with multiple WSS connections)
+    // PRIORITY 0.5: Local Chrome + BrightData Residential Proxy
+    // Launches a LOCAL patchright browser with the proxy for residential IP.
+    // Benefits: _snapshotForAI works (local, no CDP hang), native Playwright events
+    // (harder for anti-bot to detect), stealth patches applied, CapSolver for CAPTCHAs.
+    if (this.useLocalProxy) {
+      try {
+        const proxyUrl = new URL(process.env.BRIGHT_DATA_PROXY_URL!);
+        console.log(`[ENGINE] Launching local Chrome with residential proxy (${proxyUrl.hostname}:${proxyUrl.port})...`);
+        this.browser = await chromium.launch({
+          headless: true,
+          proxy: {
+            server: `${proxyUrl.protocol}//${proxyUrl.hostname}:${proxyUrl.port}`,
+            username: decodeURIComponent(proxyUrl.username),
+            password: decodeURIComponent(proxyUrl.password),
+          },
+          args: ['--disable-blink-features=AutomationControlled'],
+        });
+        this.context = await this.browser.newContext({
+          viewport: { width: 1280, height: 720 },
+          ignoreHTTPSErrors: true,
+        });
+        this.page = await this.context.newPage();
+        await applyStealthPatches(this.context);
+        await humanizeInteraction(this.page);
+        console.log(`[ENGINE] Local Chrome + residential proxy ready`);
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn(`[ENGINE] Local proxy browser failed: ${errorMsg} — falling back`);
+        this.browser = null; this.context = null; this.page = null;
+        this.useLocalProxy = false;
+        // Fall through to BrightData Scraping Browser or local
+      }
+    }
+
+    // PRIORITY 1: Bright Data Scraping Browser — managed real Chrome, bypasses DataDome/Akamai
     // No concurrency lock — BrightData supports multiple sessions
     if (this.useBrightData) {
       console.log(`[ENGINE] BrightData sessions active: ${brightDataSessionCount}`);
