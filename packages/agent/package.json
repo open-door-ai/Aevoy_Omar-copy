@@ -36,6 +36,7 @@
     "@anthropic-ai/sdk": "^0.30.0",
     "@browserbasehq/sdk": "^2.0.0",
     "@browserbasehq/stagehand": "^2.0.0",
+    "@playwright/mcp": "^0.0.68",
     "@supabase/supabase-js": "^2.93.3",
     "@types/bcrypt": "^6.0.0",
     "@types/pdfkit": "^0.17.5",

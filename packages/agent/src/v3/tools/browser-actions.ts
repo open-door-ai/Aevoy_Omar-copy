@@ -167,22 +167,39 @@ export async function cleanupTaskPage(taskId: string): Promise<void> {
  * 150+: summary only + instruction to use browser_screenshot()
  * 0: auto-take screenshot (SPA loading)
  */
-async function getPageSnapshot(page: Page, taskId?: string): Promise<string> {
+async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
   try {
-    // DOM-based snapshot with iframe scanning.
-    // ariaSnapshot() hangs on remote CDP connections (VPS Chrome) — disabled.
-    // browser_click_text uses page.getByRole/getByText + frame piercing instead.
+    const url = page.url();
+    const title = await page.title().catch(() => '');
+
+    // PRIMARY: Use Playwright's built-in _snapshotForAI() — same method Playwright MCP uses.
+    // Returns the COMPLETE accessibility tree with aria-ref numbers for every interactive element.
+    // Handles shadow DOM, iframes, custom widgets, date pickers — everything.
+    // 8-second timeout: if it hangs on remote CDP, fall back to DOM-based snapshot.
+    try {
+      const snapshot = await Promise.race([
+        (page as any)._snapshotForAI(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('snapshotForAI timeout')), 8000)),
+      ]);
+      const ariaTree = snapshot.full || snapshot;
+      if (ariaTree && typeof ariaTree === 'string' && ariaTree.length > 20) {
+        // Truncate if too large (save tokens)
+        const truncated = ariaTree.length > 6000 ? ariaTree.substring(0, 6000) + '\n\n... [truncated — use browser_click with ref numbers shown above]' : ariaTree;
+        return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
+      }
+    } catch (e) {
+      // _snapshotForAI timed out or not available — fall through to DOM snapshot
+      console.log(`[V3-SNAPSHOT] _snapshotForAI failed (${e instanceof Error ? e.message : 'unknown'}), using DOM fallback`);
+    }
+
+    // FALLBACK: DOM-based snapshot for when _snapshotForAI hangs (remote CDP)
     const result = await Promise.race([
       page.evaluate((selectors: string[]) => {
-        // Clear old refs first
         document.querySelectorAll('[data-aevoy-ref]').forEach(el => el.removeAttribute('data-aevoy-ref'));
-
         const seen = new Set<Element>();
         const items: string[] = [];
         let totalCount = 0;
         let ref = 1;
-        const MAX_DISPLAY = 50; // Reduced from 80 to save tokens
-
         for (const sel of selectors) {
           document.querySelectorAll(sel).forEach(el => {
             if (seen.has(el)) return;
@@ -190,123 +207,32 @@ async function getPageSnapshot(page: Page, taskId?: string): Promise<string> {
             const rect = el.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) return;
             totalCount++;
-            // Stamp element with stable ref
             (el as HTMLElement).setAttribute('data-aevoy-ref', String(ref));
-            if (items.length < MAX_DISPLAY) {
+            if (items.length < 50) {
               const tag = el.tagName.toLowerCase();
               const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
                 tag === 'input' ? (el.getAttribute('type') || 'textbox') : tag === 'select' ? 'combobox' :
                 tag === 'textarea' ? 'textbox' : tag);
-              const name = el.getAttribute('aria-label') ||
-                el.getAttribute('placeholder') ||
-                (el.textContent || '').trim().substring(0, 60) ||
-                el.getAttribute('name') || '';
+              const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+                (el.textContent || '').trim().substring(0, 60) || el.getAttribute('name') || '';
               const value = (el as HTMLInputElement).value || '';
               items.push(`[${ref}] ${role} "${name}"${value ? ` value="${value}"` : ''}`);
             }
             ref++;
           });
         }
-
-        const title = document.title;
-        const h1 = document.querySelector('h1')?.textContent?.trim() || '';
-        const alerts = Array.from(document.querySelectorAll('[role="alert"], .error, .alert'))
-          .map(el => el.textContent?.trim()).filter(Boolean).slice(0, 3);
-        // Build ref→element mapping for auto-fallback when refs break (SPA re-renders)
-        const refDetails: Array<{ ref: number; text: string; role: string; tag: string }> = [];
-        document.querySelectorAll('[data-aevoy-ref]').forEach(el => {
-          const r = parseInt(el.getAttribute('data-aevoy-ref') || '0');
-          if (r > 0) {
-            const tag = el.tagName.toLowerCase();
-            const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
-              tag === 'input' ? (el.getAttribute('type') || 'textbox') : tag === 'select' ? 'combobox' :
-              tag === 'textarea' ? 'textbox' : tag);
-            const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
-              (el.textContent || '').trim().substring(0, 60) || el.getAttribute('name') || '';
-            refDetails.push({ ref: r, text: name, role, tag });
-          }
-        });
-        return { elements: items, totalCount, title, h1, alerts, url: location.href, refDetails };
+        return { elements: items, totalCount, url: location.href };
       }, INTERACTIVE_SELECTORS),
-      new Promise<any>(r => setTimeout(() => r({ elements: [], totalCount: 0, title: '', h1: '', alerts: [], url: '', refDetails: [] }), 5000))
+      new Promise<any>(r => setTimeout(() => r({ elements: [], totalCount: 0, url: '' }), 5000)),
     ]);
 
-    // Populate refMap for auto-fallback when refs break on SPA re-renders
-    if (taskId && result.refDetails?.length) {
-      const entry = taskPages.get(taskId);
-      if (entry) {
-        entry.refMap.clear();
-        for (const d of result.refDetails) {
-          entry.refMap.set(d.ref, { text: d.text, role: d.role, tag: d.tag });
-        }
-      }
-    }
-
-    const lines: string[] = [];
-    lines.push(`URL: ${result.url}`);
-    if (result.title) lines.push(`Title: ${result.title}`);
-    if (result.h1) lines.push(`Heading: ${result.h1}`);
-    if (result.alerts?.length) lines.push(`Alerts: ${result.alerts.join('; ')}`);
-    lines.push(`Interactive elements: ${result.totalCount} found`);
-    lines.push('');
-
+    const lines = [`URL: ${result.url || url}`, `Title: ${title}`, `Interactive elements: ${result.totalCount} (DOM fallback)`, ''];
     if (result.totalCount === 0) {
-      lines.push('No interactive elements found. The page may still be loading. Try browser_wait(3) then browser_snapshot() again.');
-    } else if (result.totalCount <= 80) {
-      lines.push(...result.elements);
+      lines.push('No interactive elements found. Try browser_wait(3) then browser_snapshot().');
     } else {
-      const shown = result.elements.length;
-      lines.push(`Showing ${shown} of ${result.totalCount} visible elements:`);
       lines.push(...result.elements);
-      if (result.totalCount > shown) {
-        lines.push(`\n... ${result.totalCount - shown} more elements not shown.`);
-      }
+      if (result.totalCount > 50) lines.push(`\n... ${result.totalCount - 50} more elements not shown.`);
     }
-
-    // IFRAME SCANNING: If main page has few elements, check iframes
-    // Booking widgets (OpenTable, Resy), payment forms, and date pickers
-    // are often in iframes that document.querySelectorAll can't reach.
-    if (result.totalCount < 15) {
-      try {
-        const frames = page.frames();
-        for (let fi = 0; fi < Math.min(frames.length, 5); fi++) {
-          const frame = frames[fi];
-          if (frame === page.mainFrame()) continue;
-          try {
-            const frameUrl = frame.url();
-            if (!frameUrl || frameUrl === 'about:blank') continue;
-            const frameElements = await Promise.race([
-              frame.evaluate((selectors: string[]) => {
-                const items: string[] = [];
-                let count = 0;
-                for (const sel of selectors) {
-                  document.querySelectorAll(sel).forEach(el => {
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width <= 0 || rect.height <= 0) return;
-                    count++;
-                    if (items.length < 20) {
-                      const tag = el.tagName.toLowerCase();
-                      const role = el.getAttribute('role') || tag;
-                      const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
-                        (el.textContent || '').trim().substring(0, 60) || '';
-                      items.push(`  [iframe] ${role} "${name}"`);
-                    }
-                  });
-                }
-                return { items, count };
-              }, INTERACTIVE_SELECTORS),
-              new Promise<{ items: string[]; count: number }>(r => setTimeout(() => r({ items: [], count: 0 }), 3000)),
-            ]);
-            if (frameElements.count > 0) {
-              lines.push(`\nIFRAME (${new URL(frameUrl).hostname}): ${frameElements.count} elements`);
-              lines.push('Use browser_click_text("element text") to interact with iframe elements — ref numbers do not work inside iframes.');
-              lines.push(...frameElements.items);
-            }
-          } catch { /* skip inaccessible frames */ }
-        }
-      } catch { /* ignore frame scanning errors */ }
-    }
-
     return lines.join('\n');
   } catch (err) {
     return `Error getting page snapshot: ${err instanceof Error ? err.message : 'unknown'}`;
@@ -495,9 +421,15 @@ registerTool({
     }
     const ref = Number(params.ref);
     try {
-      // Use Playwright's native click — search main frame then iframes
-      let locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
-      let count = await locator.count();
+      // PRIMARY: Try aria-ref (Playwright MCP native — works with _snapshotForAI)
+      let locator = existing.page.locator(`aria-ref=${ref}`);
+      let count = 0;
+      try { count = await locator.count(); } catch { count = 0; }
+      // FALLBACK: Try data-aevoy-ref (our DOM-stamped refs from DOM fallback snapshot)
+      if (count === 0) {
+        locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+        count = await locator.count();
+      }
       // If not in main frame, check iframes
       if (count === 0) {
         for (const frame of existing.page.frames()) {
@@ -648,9 +580,12 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      // Use Playwright's native fill() for React/Vue/Angular compatibility
-      // el.value = x doesn't trigger React state updates, but Playwright's fill() does
-      let locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      // PRIMARY: aria-ref (Playwright native from _snapshotForAI)
+      // FALLBACK: data-aevoy-ref (DOM-stamped from fallback snapshot)
+      let locator = existing.page.locator(`aria-ref=${ref}`);
+      let ariaCount = 0;
+      try { ariaCount = await locator.count(); } catch { ariaCount = 0; }
+      if (ariaCount === 0) locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
       let count = await locator.count();
       // If not found in main frame, search iframes
       if (count === 0) {
