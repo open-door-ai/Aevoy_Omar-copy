@@ -990,71 +990,56 @@ registerTool({
     const task = String(params.task);
     const startUrl = params.url ? String(params.url) : '';
     try {
-      const { StagehandService } = await import('../../services/stagehand.js');
-      const stagehand = new StagehandService({ userId: ctx.userId });
-      const page = await stagehand.init();
+      // Use Stagehand v2.5.7 directly — API: agent() for multi-step tasks
+      const { Stagehand } = await import('@browserbasehq/stagehand');
+      const apiKey = process.env.BROWSERBASE_API_KEY;
+      const projectId = process.env.BROWSERBASE_PROJECT_ID;
+      if (!apiKey || !projectId) {
+        return { success: false, error: 'Browserbase not configured. Use browser_go + browser_click instead.', cost: 0 };
+      }
 
-      // Navigate to starting URL if provided
+      console.log(`[V3-BROWSER-AGENT] Init Stagehand for: "${task.substring(0, 80)}"`);
+      const stagehand = new Stagehand({
+        env: 'BROWSERBASE' as const,
+        apiKey,
+        projectId,
+        modelName: 'google/gemini-2.0-flash',
+        modelClientOptions: { apiKey: process.env.GOOGLE_API_KEY || '' },
+      });
+      await Promise.race([
+        stagehand.init(),
+        new Promise<never>((_, r) => setTimeout(() => r(new Error('init timeout 30s')), 30000)),
+      ]);
+
       if (startUrl) {
-        await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-        await page.waitForTimeout(2000);
+        await stagehand.page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        await stagehand.page.waitForTimeout(2000);
       }
 
-      console.log(`[V3-BROWSER-AGENT] Starting task: "${task.substring(0, 100)}"`);
+      console.log(`[V3-BROWSER-AGENT] Running agent(): "${task.substring(0, 100)}"`);
+      // Stagehand v2.5.7: agent() is the ONLY method — handles all multi-step flows
+      const result = await Promise.race([
+        stagehand.agent({ task, maxSteps: 30 }),
+        new Promise<never>((_, r) => setTimeout(() => r(new Error('agent timeout 5min')), 300000)),
+      ]) as any;
 
-      // Try agent() first (multi-step reasoning), fall back to act()
-      let result;
-      try {
-        result = await Promise.race([
-          stagehand.agent(task),
-          new Promise<{ success: boolean; error: string }>((_, rej) =>
-            setTimeout(() => rej(new Error('browser_agent timeout after 5 minutes')), 300000)
-          ),
-        ]);
-      } catch (agentErr) {
-        // agent() not available or timed out — try act() for simpler execution
-        console.log(`[V3-BROWSER-AGENT] agent() failed: ${agentErr instanceof Error ? agentErr.message : 'unknown'}, trying act()`);
-        result = await Promise.race([
-          stagehand.act(task),
-          new Promise<{ success: boolean; error: string }>((_, rej) =>
-            setTimeout(() => rej(new Error('browser_agent act timeout after 3 minutes')), 180000)
-          ),
-        ]);
-      }
-
-      // Get final page state
-      const finalUrl = page.url();
-      const finalTitle = await page.title().catch(() => '');
-      const pageText = await page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
-
-      // Cleanup
+      const finalUrl = stagehand.page.url();
+      const finalTitle = await stagehand.page.title().catch(() => '');
+      const pageText = await stagehand.page.evaluate(() => document.body?.innerText?.substring(0, 1000) || '').catch(() => '');
       await stagehand.close().catch(() => {});
 
+      const success = result?.success !== false;
+      const msg = result?.message || result?.result || '';
       const response = [
-        result.success ? 'Task completed successfully.' : `Task partially completed: ${(result as any).error || (result as any).message || 'unknown issue'}`,
-        `Final URL: ${finalUrl}`,
-        finalTitle ? `Page title: ${finalTitle}` : '',
-        (result as any).message ? `Details: ${(result as any).message}` : '',
-        pageText ? `Page content: ${pageText.substring(0, 500)}` : '',
+        success ? 'Task completed.' : 'Task did not fully complete.',
+        `URL: ${finalUrl}`, finalTitle ? `Page: ${finalTitle}` : '',
+        msg ? `Result: ${msg}` : '', pageText ? `Content: ${pageText.substring(0, 500)}` : '',
       ].filter(Boolean).join('\n');
-
-      // Estimate cost: Browserbase session + AI calls
-      const estimatedCost = 0.05; // ~$0.05 per agent session
-
-      return {
-        success: result.success,
-        data: response,
-        error: result.success ? undefined : ((result as any).error || 'Task did not complete'),
-        cost: estimatedCost,
-      };
+      return { success, data: response, cost: 0.05 };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'unknown';
       console.error(`[V3-BROWSER-AGENT] Failed: ${errMsg}`);
-      return {
-        success: false,
-        error: `Browser agent failed: ${errMsg}. Try using browser_go + browser_click instead.`,
-        cost: 0,
-      };
+      return { success: false, error: `Browser agent failed: ${errMsg}. Use browser_go + browser_click instead.`, cost: 0 };
     }
   },
 });
