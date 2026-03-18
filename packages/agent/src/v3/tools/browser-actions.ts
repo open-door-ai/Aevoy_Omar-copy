@@ -475,29 +475,28 @@ registerTool({
         tag: el.tagName,
         text: (el.textContent || '').trim().substring(0, 50),
       }));
-      // Listen for popups BEFORE clicking — booking/payment/OAuth buttons often open new tabs
-      let popup: Page | null = null;
-      const popupPromise = existing.page.waitForEvent('popup', { timeout: 3000 }).catch(() => null);
-
       await locator.click({ timeout: 5000 }).catch(async () => {
         // Fallback: JS click for elements obscured by overlays
         await locator.evaluate((el: HTMLElement) => el.click());
       });
       existing.failCount = 0; // Reset on success
 
-      // Check if the click opened a new tab/popup
-      popup = await popupPromise;
-      if (popup) {
-        console.log(`[V3-BROWSER] Click opened popup: ${popup.url()}`);
-        // Switch to the popup — it's the new active page (booking form, payment, etc.)
-        taskPages.set(ctx.taskId, { ...existing, page: popup });
-        await popup.waitForTimeout(2000);
-        const captcha = await autoSolveCaptcha(popup, ctx);
-        const snapshot = await getPageSnapshot(popup, ctx.taskId);
-        return { success: true, data: `Clicked [${ref}] (${info.tag} "${info.text}") → opened new page\n${captcha.note ? captcha.note + '\n' : ''}${snapshot}`, cost: captcha.cost };
-      }
-
       await existing.page.waitForTimeout(1000);
+
+      // Check if click opened a new tab/popup (booking widgets, OAuth, payment)
+      // Uses context().pages() — instant check, no 3s wait penalty
+      try {
+        const allPages = existing.page.context().pages();
+        const newPage = allPages.find(p => p !== existing.page && !p.isClosed());
+        if (newPage) {
+          console.log(`[V3-BROWSER] Click opened popup: ${newPage.url()}`);
+          taskPages.set(ctx.taskId, { ...existing, page: newPage });
+          await newPage.waitForTimeout(1500);
+          const captcha = await autoSolveCaptcha(newPage, ctx);
+          const snapshot = await getPageSnapshot(newPage, ctx.taskId);
+          return { success: true, data: `Clicked [${ref}] (${info.tag} "${info.text}") → opened new page\n${captcha.note ? captcha.note + '\n' : ''}${snapshot}`, cost: captcha.cost };
+        }
+      } catch { /* context might be closed */ }
       // Auto-solve CAPTCHAs triggered by the click (signup/submit buttons often trigger them)
       const captcha = await autoSolveCaptcha(existing.page, ctx);
       const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
@@ -568,22 +567,22 @@ registerTool({
         return { success: false, error: `No element found with text "${text}"${role ? ` (${role})` : ''} in main page or iframes. Try browser_snapshot() to see available elements.`, cost: 0 };
       }
 
-      // Listen for popups BEFORE clicking
-      const popupPromise = existing.page.waitForEvent('popup', { timeout: 3000 }).catch(() => null);
       await locator.first().click({ timeout: 5000 });
-
-      // Check if click opened a new tab/popup
-      const popup = await popupPromise;
-      if (popup) {
-        console.log(`[V3-BROWSER] Click text "${text}" opened popup: ${popup.url()}`);
-        taskPages.set(ctx.taskId, { ...existing, page: popup });
-        await popup.waitForTimeout(2000);
-        const captcha = await autoSolveCaptcha(popup, ctx);
-        const snapshot = await getPageSnapshot(popup, ctx.taskId);
-        return { success: true, data: `Clicked "${text}" → opened new page\n${captcha.note ? captcha.note + '\n' : ''}${snapshot}`, cost: captcha.cost };
-      }
-
       await existing.page.waitForTimeout(1000);
+
+      // Check if click opened a new tab/popup — instant check via context().pages()
+      try {
+        const allPages = existing.page.context().pages();
+        const newPage = allPages.find(p => p !== existing.page && !p.isClosed());
+        if (newPage) {
+          console.log(`[V3-BROWSER] Click text "${text}" opened popup: ${newPage.url()}`);
+          taskPages.set(ctx.taskId, { ...existing, page: newPage });
+          await newPage.waitForTimeout(1500);
+          const captcha = await autoSolveCaptcha(newPage, ctx);
+          const snapshot = await getPageSnapshot(newPage, ctx.taskId);
+          return { success: true, data: `Clicked "${text}" → opened new page\n${captcha.note ? captcha.note + '\n' : ''}${snapshot}`, cost: captcha.cost };
+        }
+      } catch { /* context might be closed */ }
       const captcha = await autoSolveCaptcha(existing.page, ctx);
       const snapshot = await getPageSnapshot(existing.page, ctx.taskId);
       return { success: true, data: `Clicked "${text}"${role ? ` (${role})` : ''}${captcha.note ? '\n' + captcha.note : ''}\n\n${snapshot}`, cost: captcha.cost };
