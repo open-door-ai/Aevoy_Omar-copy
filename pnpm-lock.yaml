@@ -182,6 +182,9 @@ importers:
       '@browserbasehq/stagehand':
         specifier: ^2.0.0
         version: 2.5.7(deepmerge@4.3.1)(dotenv@16.6.1)(encoding@0.1.13)(hono@4.11.7)(react@19.2.3)(zod@3.25.76)
+      '@playwright/mcp':
+        specifier: ^0.0.68
+        version: 0.0.68
       '@supabase/supabase-js':
         specifier: ^2.93.3
         version: 2.93.3
@@ -240,8 +243,8 @@ importers:
         specifier: ^4.70.0
         version: 4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@3.25.76)
       patchright:
-        specifier: ^1.57.0
-        version: 1.57.0
+        specifier: ^1.58.2
+        version: 1.58.2
       pdfkit:
         specifier: ^0.17.2
         version: 0.17.2
@@ -1610,6 +1613,11 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
+
+  '@playwright/mcp@0.0.68':
+    resolution: {integrity: sha512-oP9I9ghXKuQEBo4xaC7HgsS2gRTxyMzlBm3UEhYj4VqqrqbPQUX2shATPaNA/am9joBzq9v0OXISzeIgP+zmHA==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@playwright/test@1.58.2':
     resolution: {integrity: sha512-akea+6bHYBBfA9uQqSYmlJXn61cTa+jbO87xVLCWbTqbWadRVmhxlXATaOjOgcBaWU4ePo0wB41KMFv3o35IXA==}
@@ -5517,8 +5525,13 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  patchright@1.57.0:
-    resolution: {integrity: sha512-pxbI/D65QiFuCY3qUXKQONRhplR3rkYFhry5ieimEbzLNxu/xfOYizQRyuMgc6F5ZoZ37QNIwZz9PWEfn6aC1Q==}
+  patchright-core@1.58.2:
+    resolution: {integrity: sha512-f3r0u6as+4nd0Vmr4ndH/zwijMHj7ECxelSa5iMeIJPxtLOwbo22LQPC1qjZZtSIhAVzUDStx4nw/BW3MqhJIQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  patchright@1.58.2:
+    resolution: {integrity: sha512-B1pufT2A5uZKL4e5/s2cykUo4RpVupHfJ8eTvuS560D/B7H8McjLzN9n6ruYFIi5/e17WJL428bFMUOEgPL5OQ==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -5629,6 +5642,11 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
+  playwright-core@1.59.0-alpha-1771104257000:
+    resolution: {integrity: sha512-YiXup3pnpQUCBMSIW5zx8CErwRx4K6O5Kojkw2BzJui8MazoMUDU6E3xGsb1kzFviEAE09LFQ+y1a0RhIJQ5SA==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   playwright@1.58.1:
     resolution: {integrity: sha512-+2uTZHxSCcxjvGc5C891LrS1/NlxglGxzrC4seZiVjcYVQfUa87wBL6rTDqzGjuoWNjnBzRqKmF6zRYGMvQUaQ==}
     engines: {node: '>=18'}
@@ -5636,6 +5654,11 @@ packages:
 
   playwright@1.58.2:
     resolution: {integrity: sha512-vA30H8Nvkq/cPBnNw4Q8TWz1EJyqgpuinBcHET0YVJVFldr8JDNiU9LaWAE1KqSkRYazuaBhTpB5ZzShOezQ6A==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  playwright@1.59.0-alpha-1771104257000:
+    resolution: {integrity: sha512-6SCMMMJaDRsSqiKVLmb2nhtLES7iTYawTWWrQK6UdIGNzXi8lka4sLKRec3L4DnTWwddAvCuRn8035dhNiHzbg==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -8285,6 +8308,11 @@ snapshots:
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
+
+  '@playwright/mcp@0.0.68':
+    dependencies:
+      playwright: 1.59.0-alpha-1771104257000
+      playwright-core: 1.59.0-alpha-1771104257000
 
   '@playwright/test@1.58.2':
     dependencies:
@@ -12514,9 +12542,11 @@ snapshots:
 
   patchright-core@1.57.0: {}
 
-  patchright@1.57.0:
+  patchright-core@1.58.2: {}
+
+  patchright@1.58.2:
     dependencies:
-      patchright-core: 1.57.0
+      patchright-core: 1.58.2
     optionalDependencies:
       fsevents: 2.3.2
 
@@ -12635,6 +12665,8 @@ snapshots:
 
   playwright-core@1.58.2: {}
 
+  playwright-core@1.59.0-alpha-1771104257000: {}
+
   playwright@1.58.1:
     dependencies:
       playwright-core: 1.58.1
@@ -12644,6 +12676,12 @@ snapshots:
   playwright@1.58.2:
     dependencies:
       playwright-core: 1.58.2
+    optionalDependencies:
+      fsevents: 2.3.2
+
+  playwright@1.59.0-alpha-1771104257000:
+    dependencies:
+      playwright-core: 1.59.0-alpha-1771104257000
     optionalDependencies:
       fsevents: 2.3.2
 

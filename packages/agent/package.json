@@ -56,7 +56,7 @@
     "libphonenumber-js": "^1.12.36",
     "nodemailer": "^8.0.0",
     "openai": "^4.70.0",
-    "patchright": "^1.57.0",
+    "patchright": "^1.58.2",
     "pdfkit": "^0.17.2",
     "playwright": "^1.58.1",
     "postal-mime": "^2.7.3",

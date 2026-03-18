@@ -859,7 +859,7 @@ registerTool({
       // Use ghost cursor for human-like movement if available
       try {
         const { createCursor } = await import('ghost-cursor-patchright-core');
-        const cursor = createCursor(existing.page);
+        const cursor = createCursor(existing.page as any);
         await cursor.moveTo({ x, y });
       } catch {
         // Ghost cursor not available, use direct mouse move

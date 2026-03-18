@@ -2097,7 +2097,7 @@ export async function runVisionAgent(
   // ── Ghost cursor: human-like bezier curve mouse movements ──
   let cursor: GhostCursor | null = null;
   try {
-    cursor = createCursor(page);
+    cursor = createCursor(page as any);
     console.log('[BROWSER-AGENT] Ghost cursor initialized (human-like mouse movements)');
   } catch (e) {
     console.warn('[BROWSER-AGENT] Ghost cursor init failed, using standard clicks:', e);
