@@ -40,6 +40,7 @@ const taskPages = new Map<string, {
   engine: ExecutionEngine;
   refMap: Map<number, { text: string; role: string; tag: string }>;
   failCount: number;
+  useAriaRefs: boolean; // true if last snapshot was aria-based, false if DOM-based
 }>();
 
 async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: Page; isNew: boolean }> {
@@ -76,7 +77,7 @@ async function getOrCreatePage(ctx: TaskContext, url?: string): Promise<{ page: 
   // Force consistent viewport so vision coordinates match click coordinates
   try { await page.setViewportSize({ width: 1280, height: 720 }); } catch { /* ignore */ }
 
-  taskPages.set(ctx.taskId, { page, engine, refMap: new Map(), failCount: 0 });
+  taskPages.set(ctx.taskId, { page, engine, refMap: new Map(), failCount: 0, useAriaRefs: false });
   return { page, isNew: true };
 }
 
@@ -192,6 +193,11 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
           ]) as string;
         }
         if (ariaTree && typeof ariaTree === 'string' && ariaTree.length > 20) {
+          // Mark that this snapshot used aria refs — browser_click should use aria-ref selector
+          if (_taskId) {
+            const entry = taskPages.get(_taskId);
+            if (entry) entry.useAriaRefs = true;
+          }
           const truncated = ariaTree.length > 6000
             ? ariaTree.substring(0, 6000) + '\n\n... [truncated — use browser_click with ref numbers shown above]'
             : ariaTree;
@@ -202,7 +208,11 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
       }
     }
 
-    // FALLBACK: DOM-based snapshot for when _snapshotForAI hangs (remote CDP)
+    // FALLBACK: DOM-based snapshot — mark as NOT using aria refs
+    if (_taskId) {
+      const entry = taskPages.get(_taskId);
+      if (entry) entry.useAriaRefs = false;
+    }
     const result = await Promise.race([
       page.evaluate((selectors: string[]) => {
         document.querySelectorAll('[data-aevoy-ref]').forEach(el => el.removeAttribute('data-aevoy-ref'));
@@ -433,13 +443,16 @@ registerTool({
     }
     const ref = Number(params.ref);
     try {
-      // PRIMARY: Try aria-ref (Playwright MCP native — works with _snapshotForAI)
-      let locator = existing.page.locator(`aria-ref=${ref}`);
+      // Use the selector that matches the LAST snapshot type
+      // aria-ref hangs on remote CDP when no aria snapshot exists — NEVER try it blindly
+      let locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
       let count = 0;
-      try { count = await locator.count(); } catch { count = 0; }
-      // FALLBACK: Try data-aevoy-ref (our DOM-stamped refs from DOM fallback snapshot)
+      if (existing.useAriaRefs) {
+        const ariaLoc = existing.page.locator(`aria-ref=${ref}`);
+        try { count = await Promise.race([ariaLoc.count(), new Promise<number>((_, r) => setTimeout(() => r(0), 3000))]); } catch { count = 0; }
+        if (count > 0) locator = ariaLoc;
+      }
       if (count === 0) {
-        locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
         count = await locator.count();
       }
       // If not in main frame, check iframes
@@ -621,12 +634,14 @@ registerTool({
     const ref = Number(params.ref);
     const value = String(params.value);
     try {
-      // PRIMARY: aria-ref (Playwright native from _snapshotForAI)
-      // FALLBACK: data-aevoy-ref (DOM-stamped from fallback snapshot)
-      let locator = existing.page.locator(`aria-ref=${ref}`);
-      let ariaCount = 0;
-      try { ariaCount = await locator.count(); } catch { ariaCount = 0; }
-      if (ariaCount === 0) locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      // Use selector matching the last snapshot type — aria-ref hangs on remote CDP without snapshot
+      let locator = existing.page.locator(`[data-aevoy-ref="${ref}"]`);
+      if (existing.useAriaRefs) {
+        const ariaLoc = existing.page.locator(`aria-ref=${ref}`);
+        let ariaCount = 0;
+        try { ariaCount = await Promise.race([ariaLoc.count(), new Promise<number>((_, r) => setTimeout(() => r(0), 3000))]); } catch { ariaCount = 0; }
+        if (ariaCount > 0) locator = ariaLoc;
+      }
       let count = await locator.count();
       // If not found in main frame, search iframes
       if (count === 0) {
