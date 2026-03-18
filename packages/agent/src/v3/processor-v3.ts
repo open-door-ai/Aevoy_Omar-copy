@@ -798,7 +798,7 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         actionSuccessCount++;
         consecutiveFailures = 0;
         // Track meaningful progress (form fills, successful clicks, navigation)
-        if (tc.name === 'browser_fill' || tc.name === 'browser_click' || tc.name === 'browser_click_text' || tc.name === 'browser_click_xy' || tc.name === 'browser_select' || tc.name === 'browser_go') {
+        if (tc.name === 'browser_fill' || tc.name === 'browser_click' || tc.name === 'browser_click_text' || tc.name === 'browser_select') {
           lastMeaningfulProgress = iterations;
         }
       } else {
