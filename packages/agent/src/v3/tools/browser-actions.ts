@@ -198,21 +198,42 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
             const entry = taskPages.get(_taskId);
             if (entry) entry.useAriaRefs = true;
           }
-          // SMART FILTERING: Extract only interactive elements from the aria tree.
-          // A 75K full tree → ~3-5K interactive elements. Any model can reason about that.
+          // AGGRESSIVE FILTERING: Show only elements the AI should ACTUALLY interact with.
+          // Goal: 75K tree → ~2-4K chars, ~20-40 elements. The AI gets a clean, focused view.
           let truncated = ariaTree;
-          if (ariaTree.length > 15000) {
-            // Filter to lines containing interactive elements (refs, buttons, links, inputs, etc.)
+          if (ariaTree.length > 10000) {
             const lines = ariaTree.split('\n');
-            const interactiveLines = lines.filter(line =>
-              /\[ref=/.test(line) && (
-                /button|link|textbox|combobox|checkbox|radio|option|tab|menuitem|slider|spinbutton|switch|searchbox|treeitem/i.test(line) ||
-                /\[cursor=pointer\]/.test(line)
-              )
-            );
-            // Keep page context (URL, title from first few lines)
+            const actionable = lines.filter(line => {
+              if (!/\[ref=/.test(line)) return false;
+              // INCLUDE: form inputs, submit buttons, time slots, booking elements
+              const isFormElement = /textbox|combobox|checkbox|radio|searchbox|spinbutton/i.test(line);
+              const isActionButton = /button.*".*(?:select|book|complete|confirm|submit|reserve|find|search|next|continue|add|order|checkout|sign up|register|create|save|send|apply|proceed|pay|donate|subscribe)/i.test(line);
+              const isTimeSlot = /button.*".*(?:\d+:\d+\s*[ap]\.m|select.*reservation|select.*table)/i.test(line);
+              const isNavLink = /link.*".*(?:home|about|contact|help|blog|careers|press|terms|privacy|cookie|faq)/i.test(line);
+              const isReviewNoise = /button.*".*(?:read more|upvote|enlarge|view.*reviews?|page.*\d|next|previous)/i.test(line) && !isActionButton;
+              const isSocialFooter = /button.*".*(?:twitter|facebook|instagram|linkedin|youtube|tiktok|opentable\.(com|jp|de|es|hk|ie|sg|nl|fr|it|ae))/i.test(line);
+              const isRestaurantMgmt = /button.*".*(?:restaurant.*(?:management|marketing|event|software|pricing|resources|groups))/i.test(line);
+              const isTabOrMenu = /tab\s/i.test(line) && !/\[selected\]/i.test(line);
+              const isUnselectedOption = /^\s*- option "/.test(line) && !/\[selected\]/.test(line);
+              // KEEP form elements, action buttons, time slots, selected tabs/options
+              if (isFormElement || isActionButton || isTimeSlot) return true;
+              if (/\[selected\]/.test(line)) return true;
+              // SKIP everything noisy
+              if (isNavLink || isReviewNoise || isSocialFooter || isRestaurantMgmt || isTabOrMenu || isUnselectedOption) return false;
+              // SKIP generic cursor=pointer that aren't buttons/links with meaningful text
+              if (/generic \[ref=/.test(line) && /\[cursor=pointer\]/.test(line)) return false;
+              // SKIP image refs
+              if (/^\s*- img /.test(line)) return false;
+              // SKIP FAQ/question buttons (informational, not actionable)
+              if (/button "(?:Does |Is |What |When |How |Are |Can |Has |Were |Will |Would |Should |Could )/i.test(line)) return false;
+              // SKIP generic site chrome
+              if (/button "(?:About|Careers|Press|Affiliate|Contact|Mobile|For Business|Toggle|Notify|Learn more|EN$|Privacy|Terms|Cookie|Accessibility|Dining Rewards|Reserve for Others|OpenTable For|OpenTable Pricing|Google Map)/i.test(line)) return false;
+              // KEEP remaining buttons with meaningful labels (>5 chars, not just icons)
+              if (/button "(.{5,})"/.test(line)) return true;
+              return false;
+            });
             const headerLines = lines.slice(0, 5).join('\n');
-            truncated = headerLines + '\n\nInteractive elements (' + interactiveLines.length + ' found):\n' + interactiveLines.join('\n');
+            truncated = headerLines + '\n\nActionable elements (' + actionable.length + '):\n' + actionable.join('\n');
           }
           return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
         }
