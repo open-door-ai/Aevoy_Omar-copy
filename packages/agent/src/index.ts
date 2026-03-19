@@ -621,8 +621,6 @@ app.get("/health/detailed", async (req, res) => {
     brightDataProxy: process.env.BRIGHT_DATA_PROXY_URL ? "configured" : "not configured",
     geonodeProxy: process.env.PROXY_URL ? "configured" : "not configured",
     display: process.env.DISPLAY || "not set",
-    chromeInstalled: require('child_process').execSync('which google-chrome 2>/dev/null || echo "not found"').toString().trim(),
-    xvfbRunning: require('child_process').execSync('pgrep -x Xvfb >/dev/null && echo "running" || echo "not running"').toString().trim(),
     dedupMapSize: recentTaskFingerprints.size,
   });
 });
