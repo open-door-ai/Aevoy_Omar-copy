@@ -34,10 +34,10 @@ const TIER_MODELS: Record<string, ModelConfig[]> = {
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
   // Tier 3 (multi_step): needs tool calling
+  // Only Gemini 2.5 Flash works on the OpenAI-compatible endpoint with tools.
+  // Haiku is last resort — expensive ($5/M output) and user's account may be empty.
   multi_step: [
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
-    { provider: 'groq', model: 'moonshotai/kimi-k2-instruct-0905', costPerMInput: 0, costPerMOutput: 0, supportsToolCalling: false },
-    { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0, supportsToolCalling: false },
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
 };
@@ -112,10 +112,20 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
       return result;
     } catch (err: any) {
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
-        // Short backoff: Gemini has high rate limits, brief spike shouldn't cause
-        // 2 minutes of Haiku fallback at 8x the cost. Was 120s → now 15s.
-        // Gemini: 5s backoff (high rate limits, recovers fast). Haiku: skip if no budget.
-        const backoffMs = model.provider === 'gemini' ? 5000 : model.provider === 'groq' ? 60000 : 30000;
+        if (model.provider === 'gemini') {
+          // Gemini rate limit: wait 3s and retry IN-PLACE instead of falling to Haiku.
+          // Haiku account may be empty — Gemini is the ONLY working model.
+          console.log(`[V3-MODEL] Gemini 429 — waiting 3s then retrying`);
+          await new Promise(r => setTimeout(r, 3000));
+          try {
+            return await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
+          } catch {
+            // Second try also failed — set short backoff, try next model
+            setBackoff(key, 5000);
+            continue;
+          }
+        }
+        const backoffMs = model.provider === 'groq' ? 60000 : 30000;
         setBackoff(key, backoffMs);
         continue;
       }
