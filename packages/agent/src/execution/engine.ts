@@ -152,22 +152,26 @@ export class ExecutionEngine {
         console.log(`[ENGINE] Launching local Chrome with residential proxy + full stealth...`);
         // Use launchPersistentContext — REQUIRED for patchright stealth patches to work.
         // Regular launch() + newContext() bypasses patchright's anti-detection.
-        const userDataDir = `/tmp/patchright-profile-${Date.now()}`;
+        // Persistent profile per domain — keeps cookies, looks like returning user
+        const safeDomain = (this.domain || 'default').replace(/[^a-z0-9.-]/gi, '_');
+        const userDataDir = `/tmp/patchright-profile-${safeDomain}`;
         this.context = await chromium.launchPersistentContext(userDataDir, {
-          channel: 'chrome', // Use real Chrome binary, not Chromium (better TLS fingerprint)
-          headless: true,
+          channel: 'chrome', // Real Chrome TLS fingerprint (JA3/JA4) — critical for Cloudflare
+          headless: false,   // Headful via Xvfb — anti-bot detects headless mode
           proxy: {
             server: `${proxyUrl.protocol}//${proxyUrl.hostname}:${proxyUrl.port}`,
             username: decodeURIComponent(proxyUrl.username),
             password: decodeURIComponent(proxyUrl.password),
           },
-          viewport: { width: 1280, height: 720 },
           ignoreHTTPSErrors: true,
           args: [
+            '--no-sandbox',
             '--disable-blink-features=AutomationControlled',
             '--disable-features=IsolateOrigins,site-per-process',
             '--disable-site-isolation-trials',
+            '--disable-webrtc',
           ],
+          // noViewport: true — let Chrome use natural viewport from Xvfb display
         });
         this.browser = null; // launchPersistentContext doesn't return a Browser
         this.page = this.context.pages()[0] || await this.context.newPage();

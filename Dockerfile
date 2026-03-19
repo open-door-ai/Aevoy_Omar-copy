@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     wget ca-certificates \
     fonts-liberation fonts-liberation2 fonts-noto-core \
     fontconfig \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MS Core Fonts (Arial, Times New Roman, Verdana, Courier New, etc.)
@@ -58,4 +59,5 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3001}/health || exit 1
 
-CMD ["sh", "-c", "AGENT_PORT=${PORT:-3001} node --max-old-space-size=4096 dist/index.js"]
+# Use Xvfb for headful mode (more stealthy than headless — anti-bot detects headless)
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &>/dev/null & export DISPLAY=:99 && AGENT_PORT=${PORT:-3001} node --max-old-space-size=4096 dist/index.js"]
