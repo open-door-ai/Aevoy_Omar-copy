@@ -34,11 +34,10 @@ const TIER_MODELS: Record<string, ModelConfig[]> = {
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
   // Tier 3 (multi_step): needs tool calling
-  // Gemini 2.5 Flash (cheap) → Gemini 2.5 Pro (separate quota pool) → Haiku (last resort)
-  // Each model has SEPARATE rate limit pools — if Flash is exhausted, Pro still works.
+  // Only Gemini 2.5 Flash works on the OpenAI-compatible endpoint with tools.
+  // Haiku is last resort — expensive ($5/M output) and user's account may be empty.
   multi_step: [
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
-    { provider: 'gemini', model: 'gemini-2.5-pro', costPerMInput: 1.25, costPerMOutput: 10.00, supportsToolCalling: true },
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
 };
