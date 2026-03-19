@@ -513,8 +513,13 @@ registerTool({
         text: (el.textContent || '').trim().substring(0, 50),
       }));
       await locator.click({ timeout: 5000 }).catch(async () => {
-        // Fallback: JS click for elements obscured by overlays
-        await locator.evaluate((el: HTMLElement) => el.click());
+        // Fallback: full MouseEvent dispatch — works on React/SPA click handlers
+        // that don't respond to simple el.click() (e.g., OpenTable time slots)
+        await locator.evaluate((el: HTMLElement) => {
+          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        });
       });
       existing.failCount = 0; // Reset on success
 
@@ -604,7 +609,14 @@ registerTool({
         return { success: false, error: `No element found with text "${text}"${role ? ` (${role})` : ''} in main page or iframes. Try browser_snapshot() to see available elements.`, cost: 0 };
       }
 
-      await locator.first().click({ timeout: 5000 });
+      await locator.first().click({ timeout: 5000 }).catch(async () => {
+        // Fallback: full MouseEvent dispatch for React/SPA handlers
+        await locator.first().evaluate((el: HTMLElement) => {
+          el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+          el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        });
+      });
       await existing.page.waitForTimeout(1000);
 
       // Check if click opened a new tab/popup — instant check via context().pages()
