@@ -118,8 +118,8 @@ export class ExecutionEngine {
     // managed browser with real fingerprints can access these sites.
     this.useBrightData = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_BROWSER_WS);
 
-    // PRIORITY 2: Local Chrome + BrightData residential proxy (for sites that don't need anti-bot)
-    this.useLocalProxy = !forceLocal && !this.useRemoteCDP && !this.useBrightData && !!(process.env.BRIGHT_DATA_PROXY_URL);
+    // PRIORITY 2: Local Chrome + residential proxy (Geonode or BrightData — for anti-bot escalation)
+    this.useLocalProxy = !forceLocal && !this.useRemoteCDP && !this.useBrightData && !!(process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL);
 
     // PRIORITY 3: VPS Multi-User Browser (shared Chrome on this process)
     this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !this.useLocalProxy && !!(process.env.VPS_BROWSER_HOST);
@@ -148,7 +148,7 @@ export class ExecutionEngine {
     // (harder for anti-bot to detect), stealth patches applied, CapSolver for CAPTCHAs.
     if (this.useLocalProxy) {
       try {
-        const proxyUrl = new URL(process.env.BRIGHT_DATA_PROXY_URL!);
+        const proxyUrl = new URL(process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL!);
         console.log(`[ENGINE] Launching local Chrome with residential proxy + full stealth...`);
         // Use launchPersistentContext — REQUIRED for patchright stealth patches to work.
         // Regular launch() + newContext() bypasses patchright's anti-detection.

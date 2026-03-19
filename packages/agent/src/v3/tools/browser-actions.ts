@@ -314,7 +314,7 @@ registerTool({
           console.log(`[V3-BROWSER] Connection failure for ${url}: "${bodyText.substring(0, 100)}"`);
 
           // Escalate to residential proxy (local Chrome + proxy, or BrightData Scraping Browser)
-          const hasProxy = process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS;
+          const hasProxy = process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS;
           if (hasProxy && !alreadyEscalated) {
             console.log(`[V3-BROWSER] Escalating to residential proxy for ${url}`);
             await cleanupTaskPage(ctx.taskId);
@@ -351,7 +351,7 @@ registerTool({
 
       // Detect CAPTCHA/block pages that loaded but need BrightData to bypass
       const isCaptchaPage = /captcha|verify.*human|security check|access denied|403 forbidden|just a moment|checking your browser|cloudflare|please wait|ray id|enable javascript|enable cookies|bot detection|imperva|incapsula|datadome|akamai/i.test(bodyText);
-      if (isCaptchaPage && (process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS) && !alreadyEscalated) {
+      if (isCaptchaPage && (process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS) && !alreadyEscalated) {
         console.log(`[V3-BROWSER] CAPTCHA/block page on VPS Chrome for ${url} — escalating to BrightData`);
         await cleanupTaskPage(ctx.taskId);
         const savedCdp = process.env.REMOTE_BROWSER_CDP;
@@ -397,7 +397,7 @@ registerTool({
       const errMsg = err instanceof Error ? err.message : 'unknown';
       // Protocol/network errors (ERR_HTTP2, ERR_CONNECTION, etc.) — try BrightData
       const isNetworkError = /ERR_|net::|Protocol|PROTOCOL|timeout|crashed|closed/i.test(errMsg);
-      if (isNetworkError && (process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS) && !(taskPages.get(ctx.taskId)?.engine?.useBrightData || taskPages.get(ctx.taskId)?.engine?.useLocalProxy)) {
+      if (isNetworkError && (process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL || process.env.BRIGHT_DATA_BROWSER_WS) && !(taskPages.get(ctx.taskId)?.engine?.useBrightData || taskPages.get(ctx.taskId)?.engine?.useLocalProxy)) {
         console.log(`[V3-BROWSER] Navigation threw ${errMsg} — escalating to BrightData`);
         try { await cleanupTaskPage(ctx.taskId); } catch {}
         const savedCdp = process.env.REMOTE_BROWSER_CDP;
