@@ -198,14 +198,21 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
             const entry = taskPages.get(_taskId);
             if (entry) entry.useAriaRefs = true;
           }
-          // Smart truncation: show beginning + end of page.
-          // Interactive widgets (booking forms, time slots, buttons) are usually
-          // at the END of the aria tree, not the beginning. Header/nav is at top.
+          // SMART FILTERING: Extract only interactive elements from the aria tree.
+          // A 75K full tree → ~3-5K interactive elements. Any model can reason about that.
           let truncated = ariaTree;
-          if (ariaTree.length > 20000) {
-            // Show first 5K (header/search) + last 15K (interactive widgets, forms, buttons)
-            const tail = ariaTree.substring(ariaTree.length - 15000);
-            truncated = ariaTree.substring(0, 5000) + '\n\n... [' + ariaTree.length + ' chars — showing end of page with interactive elements] ...\n\n' + tail;
+          if (ariaTree.length > 15000) {
+            // Filter to lines containing interactive elements (refs, buttons, links, inputs, etc.)
+            const lines = ariaTree.split('\n');
+            const interactiveLines = lines.filter(line =>
+              /\[ref=/.test(line) && (
+                /button|link|textbox|combobox|checkbox|radio|option|tab|menuitem|slider|spinbutton|switch|searchbox|treeitem/i.test(line) ||
+                /\[cursor=pointer\]/.test(line)
+              )
+            );
+            // Keep page context (URL, title from first few lines)
+            const headerLines = lines.slice(0, 5).join('\n');
+            truncated = headerLines + '\n\nInteractive elements (' + interactiveLines.length + ' found):\n' + interactiveLines.join('\n');
           }
           return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
         }
