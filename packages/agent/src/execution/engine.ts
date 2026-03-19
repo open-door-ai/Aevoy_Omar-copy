@@ -149,22 +149,29 @@ export class ExecutionEngine {
     if (this.useLocalProxy) {
       try {
         const proxyUrl = new URL(process.env.BRIGHT_DATA_PROXY_URL!);
-        console.log(`[ENGINE] Launching local Chrome with residential proxy (${proxyUrl.hostname}:${proxyUrl.port})...`);
-        this.browser = await chromium.launch({
+        console.log(`[ENGINE] Launching local Chrome with residential proxy + full stealth...`);
+        // Use launchPersistentContext — REQUIRED for patchright stealth patches to work.
+        // Regular launch() + newContext() bypasses patchright's anti-detection.
+        const userDataDir = `/tmp/patchright-profile-${Date.now()}`;
+        this.context = await chromium.launchPersistentContext(userDataDir, {
+          channel: 'chrome', // Use real Chrome binary, not Chromium (better TLS fingerprint)
           headless: true,
           proxy: {
             server: `${proxyUrl.protocol}//${proxyUrl.hostname}:${proxyUrl.port}`,
             username: decodeURIComponent(proxyUrl.username),
             password: decodeURIComponent(proxyUrl.password),
           },
-          args: ['--disable-blink-features=AutomationControlled'],
-        });
-        this.context = await this.browser.newContext({
           viewport: { width: 1280, height: 720 },
           ignoreHTTPSErrors: true,
+          args: [
+            '--disable-blink-features=AutomationControlled',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-site-isolation-trials',
+          ],
         });
-        this.page = await this.context.newPage();
-        await applyStealthPatches(this.context);
+        this.browser = null; // launchPersistentContext doesn't return a Browser
+        this.page = this.context.pages()[0] || await this.context.newPage();
+        await applyStealthPatches(this.context); // fingerprint-suite injection
         await humanizeInteraction(this.page);
         console.log(`[ENGINE] Local Chrome + residential proxy ready`);
         return;

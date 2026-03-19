@@ -2,11 +2,66 @@
  * Browser Stealth Patches
  *
  * Makes automated browsers indistinguishable from real users.
- * Covers: fingerprinting, navigator overrides, canvas/WebGL noise,
- * WebRTC leak prevention, realistic timing, and human-like interaction.
+ * Uses fingerprint-suite (Apify) for statistically realistic fingerprints
+ * and ghost-cursor for human-like mouse movement.
  */
 
 import type { BrowserContext, Page } from 'patchright';
+
+// ── Fingerprint Suite Integration ──
+// Generates statistically realistic browser fingerprints using a Bayesian
+// network trained on real browser traffic. Injects canvas, WebGL, audio,
+// navigator overrides that are internally consistent (no mismatches).
+let _fingerprintInjector: any = null;
+let _generatedFingerprint: any = null;
+
+async function getOrGenerateFingerprint(): Promise<any> {
+  if (_generatedFingerprint) return _generatedFingerprint;
+  try {
+    const { FingerprintGenerator } = await import('fingerprint-generator');
+    const generator = new FingerprintGenerator();
+    _generatedFingerprint = generator.getFingerprint({
+      browsers: ['chrome'],
+      operatingSystems: ['macos', 'windows'],
+      devices: ['desktop'],
+    });
+    return _generatedFingerprint;
+  } catch (e) {
+    console.warn('[STEALTH] fingerprint-generator not available, using manual profiles');
+    return null;
+  }
+}
+
+async function getFingerprintInjector(): Promise<any> {
+  if (_fingerprintInjector) return _fingerprintInjector;
+  try {
+    const { FingerprintInjector } = await import('fingerprint-injector');
+    _fingerprintInjector = new FingerprintInjector();
+    return _fingerprintInjector;
+  } catch (e) {
+    console.warn('[STEALTH] fingerprint-injector not available');
+    return null;
+  }
+}
+
+/**
+ * Apply fingerprint-suite injection to a browser context.
+ * This replaces our manual JS overrides with statistically realistic values.
+ */
+export async function injectFingerprint(context: BrowserContext): Promise<boolean> {
+  try {
+    const fingerprint = await getOrGenerateFingerprint();
+    const injector = await getFingerprintInjector();
+    if (fingerprint && injector) {
+      await injector.attachFingerprintToPlaywright(context, fingerprint);
+      console.log('[STEALTH] Fingerprint injected (fingerprint-suite)');
+      return true;
+    }
+  } catch (e) {
+    console.warn('[STEALTH] Fingerprint injection failed:', e instanceof Error ? e.message : e);
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // 1. CORRELATED FINGERPRINT PROFILES — Every property matches a real device
@@ -111,6 +166,16 @@ export function getRealisticUserAgent(): string {
 // 3. STEALTH INIT SCRIPT — Injected into every page before any site JS runs
 // ---------------------------------------------------------------------------
 export async function applyStealthPatches(context: BrowserContext): Promise<void> {
+  // TRY fingerprint-suite first (statistically realistic, Bayesian-generated)
+  const injected = await injectFingerprint(context);
+  if (injected) {
+    // fingerprint-suite handles everything — navigator, canvas, WebGL, audio, etc.
+    // Only add cookie auto-dismiss on top
+    await addCookieAutoDismiss(context);
+    return;
+  }
+
+  // FALLBACK: manual overrides (less realistic but better than nothing)
   const profile = getDeviceProfile();
 
   await context.addInitScript((p: DeviceProfile) => {
@@ -596,4 +661,31 @@ export function getTypingDelay(): number {
 /** Get a random pause between actions (ms). */
 export function getActionPause(): number {
   return randomBetween(200, 800);
+}
+
+/**
+ * Auto-dismiss cookie consent banners after page navigation.
+ * Added as an init script so it runs on every page load.
+ */
+async function addCookieAutoDismiss(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    // Run after page loads — dismiss common cookie banners
+    const dismiss = () => {
+      const selectors = [
+        '#onetrust-accept-btn-handler',
+        '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+        'button[class*="accept"]', 'button[id*="accept"]',
+        '[class*="cookie"] button', '[id*="consent"] button',
+        'button[class*="agree"]', '[class*="gdpr"] button',
+      ];
+      for (const sel of selectors) {
+        const btn = document.querySelector(sel) as HTMLElement;
+        if (btn && btn.offsetHeight > 0) { btn.click(); return; }
+      }
+    };
+    // Try immediately and after short delays (banners load async)
+    setTimeout(dismiss, 1000);
+    setTimeout(dismiss, 3000);
+    setTimeout(dismiss, 5000);
+  });
 }
