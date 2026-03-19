@@ -680,10 +680,14 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       // Reduce maxTokens at high iterations — the AI should be making shorter,
       // focused decisions, not writing essays. Saves tokens and money.
       const tokensForStep = iterations > 60 ? 1000 : iterations > 30 ? 1500 : 2000;
+      // Detect if this is a browser task — send only browser tools to save ~4K tokens/request.
+      // 38 tools = ~8K tokens. 6 browser tools = ~1.5K tokens. Saves 75% on tool schemas.
+      const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot/i.test(m.content));
       modelResponse = await callModel({
         messages,
         tier: 'multi_step',
         useTools: true,
+        toolCategory: hasBrowserActivity ? 'browser' : undefined,
         maxTokens: tokensForStep,
       });
     } catch (err) {

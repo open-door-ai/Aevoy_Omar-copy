@@ -87,6 +87,7 @@ export interface CallOptions {
   messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string; tool_calls?: any[] }>;
   tier: string;
   useTools?: boolean;
+  toolCategory?: string; // Filter tools by category (e.g., 'browser') to reduce token usage
   maxTokens?: number;
   temperature?: number;
 }
@@ -97,7 +98,7 @@ export interface CallOptions {
  */
 export async function callModel(opts: CallOptions): Promise<ModelResponse> {
   const models = TIER_MODELS[opts.tier] || TIER_MODELS.instant;
-  const tools = opts.useTools ? buildFunctionSchemas() : undefined;
+  const tools = opts.useTools ? buildFunctionSchemas(opts.toolCategory) : undefined;
 
   for (const model of models) {
     const key = `${model.provider}:${model.model}`;
@@ -116,7 +117,9 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
           // Gemini TPM (tokens per minute) rate limit — tool-calling requests are large.
           // Wait 10s first, then 30s, then 60s. The per-minute limit resets over ~60s.
           // Haiku account is EMPTY — Gemini is the ONLY working model. Must wait and retry.
-          for (const waitMs of [10000, 30000, 60000]) {
+          // With reduced tool schemas (6 instead of 38), requests are 75% smaller.
+          // Shorter waits should work now. Try 5s, 15s, 30s.
+          for (const waitMs of [5000, 15000, 30000]) {
             console.log(`[V3-MODEL] Gemini 429 — waiting ${waitMs/1000}s then retrying`);
             await new Promise(r => setTimeout(r, waitMs));
             try {

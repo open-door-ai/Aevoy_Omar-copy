@@ -87,8 +87,10 @@ export function formatToolDescriptions(): string {
 
 /**
  * Build OpenAI-compatible function schemas for native tool calling.
+ * Optional category filter reduces token usage (38 tools = 8K tokens wasted per request).
+ * For browser tasks: pass 'browser' to only include browser tools + web_search.
  */
-export function buildFunctionSchemas(): Array<{
+export function buildFunctionSchemas(category?: string): Array<{
   type: 'function';
   function: {
     name: string;
@@ -100,7 +102,12 @@ export function buildFunctionSchemas(): Array<{
     };
   };
 }> {
-  return getAllTools().map(tool => ({
+  let toolList = getAllTools();
+  if (category) {
+    // Include tools matching the category + always include web_search and ask_user
+    toolList = toolList.filter(t => t.category === category || t.name === 'web_search' || t.name === 'ask_user');
+  }
+  return toolList.map(tool => ({
     type: 'function' as const,
     function: {
       name: tool.name,
