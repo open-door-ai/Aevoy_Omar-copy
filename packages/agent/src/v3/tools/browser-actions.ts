@@ -198,20 +198,14 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
             const entry = taskPages.get(_taskId);
             if (entry) entry.useAriaRefs = true;
           }
-          // Smart truncation: for large pages, find the INTERACTIVE section
-          // (booking widget, forms, time slots) and show THAT instead of the header.
+          // Smart truncation: show beginning + end of page.
+          // Interactive widgets (booking forms, time slots, buttons) are usually
+          // at the END of the aria tree, not the beginning. Header/nav is at top.
           let truncated = ariaTree;
-          if (ariaTree.length > 12000) {
-            // Search for the actual interactive widget — booking forms, selectors, time slots
-            const widgetIdx = ariaTree.search(/Make a reservation|Party size|Find a table|Complete reservation|p\.m\.\"|a\.m\.\"|combobox.*selector|spinbutton|Select a date|Select a time|Book now/i);
-            if (widgetIdx > 5000) {
-              // Show: first 3K (nav/header) + booking widget section (8K around it)
-              const start = Math.max(0, widgetIdx - 1000);
-              const end = Math.min(ariaTree.length, widgetIdx + 7000);
-              truncated = ariaTree.substring(0, 3000) + '\n\n... [skipped to interactive section] ...\n\n' + ariaTree.substring(start, end);
-            } else {
-              truncated = ariaTree.substring(0, 12000) + '\n\n... [' + ariaTree.length + ' chars total]';
-            }
+          if (ariaTree.length > 20000) {
+            // Show first 5K (header/search) + last 15K (interactive widgets, forms, buttons)
+            const tail = ariaTree.substring(ariaTree.length - 15000);
+            truncated = ariaTree.substring(0, 5000) + '\n\n... [' + ariaTree.length + ' chars — showing end of page with interactive elements] ...\n\n' + tail;
           }
           return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
         }
