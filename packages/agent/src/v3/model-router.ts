@@ -113,17 +113,26 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
     } catch (err: any) {
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
         if (model.provider === 'gemini') {
-          // Gemini rate limit: wait 3s and retry IN-PLACE instead of falling to Haiku.
-          // Haiku account may be empty — Gemini is the ONLY working model.
-          console.log(`[V3-MODEL] Gemini 429 — waiting 3s then retrying`);
-          await new Promise(r => setTimeout(r, 3000));
-          try {
-            return await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
-          } catch {
-            // Second try also failed — set short backoff, try next model
-            setBackoff(key, 5000);
-            continue;
+          // Gemini TPM (tokens per minute) rate limit — tool-calling requests are large.
+          // Wait 10s first, then 30s, then 60s. The per-minute limit resets over ~60s.
+          // Haiku account is EMPTY — Gemini is the ONLY working model. Must wait and retry.
+          for (const waitMs of [10000, 30000, 60000]) {
+            console.log(`[V3-MODEL] Gemini 429 — waiting ${waitMs/1000}s then retrying`);
+            await new Promise(r => setTimeout(r, waitMs));
+            try {
+              return await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
+            } catch (retryErr: any) {
+              if (retryErr?.status !== 429) {
+                // Non-rate-limit error — set backoff and try next model
+                setBackoff(key, 5000);
+                break;
+              }
+              // Still 429 — try next wait duration
+            }
           }
+          // All retries exhausted — set backoff and try next model
+          setBackoff(key, 10000);
+          continue;
         }
         const backoffMs = model.provider === 'groq' ? 60000 : 30000;
         setBackoff(key, backoffMs);
