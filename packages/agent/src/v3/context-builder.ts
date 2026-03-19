@@ -151,16 +151,12 @@ IMPORTANT RULES:
 - When a tool fails, try a DIFFERENT approach. Never repeat the same failing action.
 - Always deliver a specific, concrete result. Never respond with just "I'll work on it" or "I'm looking into it."
 - BROWSER TOOLS — strategy order:
-  1. USE browser_agent(task, url) for ANY task that requires interacting with a website:
-     - Booking reservations (OpenTable, Resy, restaurant sites)
-     - Signing up for services (Canva, Spotify, any registration)
-     - Adding items to cart / checkout flows
-     - Filling multi-step forms
-     - Finding availability, prices, or reservations on complex sites
-     - ANY task where you need to click buttons, fill forms, or navigate multi-page flows
-     Pass the FULL task description and starting URL. browser_agent handles everything autonomously.
-  2. For SIMPLE info extraction (read a page, check a single price): Use browser_go → browser_read or web_search.
-  3. Manual clicking (browser_click/fill) is a FALLBACK only if browser_agent fails.
+  1. USE browser_go → browser_snapshot → browser_click/fill for ALL browser tasks.
+     The snapshot shows the full accessibility tree with clickable ref numbers.
+     Click time slots, buttons, and links using their ref numbers.
+     Fill forms using browser_fill with ref numbers.
+  2. For simple info extraction: Use browser_go → browser_read or web_search.
+  3. browser_agent is available as a FALLBACK if manual clicking repeatedly fails.
 - EFFICIENCY — be smart with your steps, but you have plenty of runway for complex tasks:
   * Call multiple browser_fill() in ONE response when filling forms
   * Only call browser_snapshot() after page-changing actions (navigation, click submit)
