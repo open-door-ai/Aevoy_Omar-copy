@@ -112,14 +112,14 @@ export class ExecutionEngine {
     // PRIORITY 0: Remote CDP browser (VPS Chrome — fast, free)
     this.useRemoteCDP = !forceLocal && !!(process.env.REMOTE_BROWSER_CDP);
 
-    // PRIORITY 1: BrightData Scraping Browser (remote CDP — real browser fingerprint, bypasses anti-bot)
-    // Note: local Chrome + residential proxy was tested but anti-bot sites (OpenTable, Amazon)
-    // detect headless Chrome at the JS level, returning empty pages. Only BrightData's
-    // managed browser with real fingerprints can access these sites.
-    this.useBrightData = !forceLocal && !this.useRemoteCDP && !!(process.env.BRIGHT_DATA_BROWSER_WS);
+    // PRIORITY 1: Local Chrome + residential proxy (Geonode)
+    // Real Chrome binary (TLS fingerprint matches real users) + residential IP
+    // + fingerprint-suite + Xvfb headful + patchright stealth + persistent context
+    // No URL restrictions (unlike BrightData Scraping Browser which KYC-blocks /book/ URLs)
+    this.useLocalProxy = !forceLocal && !this.useRemoteCDP && !!(process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL);
 
-    // PRIORITY 2: Local Chrome + residential proxy (Geonode or BrightData — for anti-bot escalation)
-    this.useLocalProxy = !forceLocal && !this.useRemoteCDP && !this.useBrightData && !!(process.env.PROXY_URL || process.env.BRIGHT_DATA_PROXY_URL);
+    // PRIORITY 2: BrightData Scraping Browser (fallback — has KYC URL restrictions)
+    this.useBrightData = !forceLocal && !this.useRemoteCDP && !this.useLocalProxy && !!(process.env.BRIGHT_DATA_BROWSER_WS);
 
     // PRIORITY 3: VPS Multi-User Browser (shared Chrome on this process)
     this.useMultiUser = !forceLocal && !this.useBrightData && !this.useRemoteCDP && !this.useLocalProxy && !!(process.env.VPS_BROWSER_HOST);
