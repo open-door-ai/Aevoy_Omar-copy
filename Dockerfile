@@ -59,5 +59,6 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-3001}/health || exit 1
 
-# Use Xvfb for headful mode (more stealthy than headless — anti-bot detects headless)
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &>/dev/null & export DISPLAY=:99 && AGENT_PORT=${PORT:-3001} node --max-old-space-size=4096 dist/index.js"]
+# Xvfb virtual display — Chrome runs headful (anti-bot detects headless mode)
+ENV DISPLAY=:99
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp & sleep 1 && AGENT_PORT=${PORT:-3001} node --max-old-space-size=4096 dist/index.js"]
