@@ -21,23 +21,23 @@ interface ModelConfig {
 }
 
 const TIER_MODELS: Record<string, ModelConfig[]> = {
-  // Tier 1 (instant): fast, free models
+  // Classification: fast + free
   classify: [
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0, supportsToolCalling: false },
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
   ],
-  // Tier 1/2 (instant/single_tool): quick response
+  // Instant responses: free first, then cheap
   instant: [
     { provider: 'groq', model: 'llama-3.1-8b-instant', costPerMInput: 0, costPerMOutput: 0, supportsToolCalling: false },
     { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct', costPerMInput: 0, costPerMOutput: 0, supportsToolCalling: false },
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
-    { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
-  // Tier 3 (multi_step): needs tool calling
-  // Flash (cheap) → Pro (separate quota pool, more expensive) → Haiku (last resort)
+  // Multi-step browser/tool tasks:
+  // DeepSeek V3.2 (cheap, no quota wall) → Groq 70b (free, fast) → Gemini (quota-limited) → Haiku (absolute last resort)
   multi_step: [
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
-    { provider: 'gemini', model: 'gemini-2.5-pro', costPerMInput: 1.25, costPerMOutput: 10.00, supportsToolCalling: true },
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
 };
@@ -60,6 +60,17 @@ function setBackoff(key: string, durationMs: number): void {
 
 let groqClient: OpenAI | null = null;
 let geminiClient: OpenAI | null = null;
+let deepseekClient: OpenAI | null = null;
+
+function getDeepseekClient(): OpenAI {
+  if (!deepseekClient) {
+    deepseekClient = new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY || '',
+      baseURL: 'https://api.deepseek.com/v1',
+    });
+  }
+  return deepseekClient;
+}
 
 function getGroqClient(): OpenAI {
   if (!groqClient) {
@@ -182,13 +193,15 @@ async function callProvider(
   maxTokens?: number,
   temperature?: number
 ): Promise<ModelResponse> {
-  const timeoutMs = model.provider === 'groq' ? 15000 : model.provider === 'gemini' ? 45000 : 30000;
+  const timeoutMs = model.provider === 'groq' ? 15000 : model.provider === 'deepseek' ? 30000 : model.provider === 'gemini' ? 45000 : 30000;
 
   if (model.provider === 'haiku') {
     return callAnthropic(model, messages, tools, maxTokens, temperature);
   }
 
-  const client = model.provider === 'groq' ? getGroqClient() : getGeminiClient();
+  const client = model.provider === 'deepseek' ? getDeepseekClient()
+    : model.provider === 'groq' ? getGroqClient()
+    : getGeminiClient();
 
   const requestBody: any = {
     model: model.model,
