@@ -198,42 +198,70 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
             const entry = taskPages.get(_taskId);
             if (entry) entry.useAriaRefs = true;
           }
-          // AGGRESSIVE FILTERING: Show only elements the AI should ACTUALLY interact with.
-          // Goal: 75K tree → ~2-4K chars, ~20-40 elements. The AI gets a clean, focused view.
+          // DOM-BASED SMART FILTER: Extract only main-content interactive elements.
+          // Instead of parsing the aria tree text, query the actual DOM for actionable
+          // elements OUTSIDE of nav/footer/header sections. ~20-40 elements, ~2K chars.
           let truncated = ariaTree;
-          if (ariaTree.length > 10000) {
-            const lines = ariaTree.split('\n');
-            const actionable = lines.filter(line => {
-              if (!/\[ref=/.test(line)) return false;
-              // INCLUDE: form inputs, submit buttons, time slots, booking elements
-              const isFormElement = /textbox|combobox|checkbox|radio|searchbox|spinbutton/i.test(line);
-              const isActionButton = /button.*".*(?:select|book|complete|confirm|submit|reserve|find|search|next|continue|add|order|checkout|sign up|register|create|save|send|apply|proceed|pay|donate|subscribe)/i.test(line);
-              const isTimeSlot = /button.*".*(?:\d+:\d+\s*[ap]\.m|select.*reservation|select.*table)/i.test(line);
-              const isNavLink = /link.*".*(?:home|about|contact|help|blog|careers|press|terms|privacy|cookie|faq)/i.test(line);
-              const isReviewNoise = /button.*".*(?:read more|upvote|enlarge|view.*reviews?|page.*\d|next|previous)/i.test(line) && !isActionButton;
-              const isSocialFooter = /button.*".*(?:twitter|facebook|instagram|linkedin|youtube|tiktok|opentable\.(com|jp|de|es|hk|ie|sg|nl|fr|it|ae))/i.test(line);
-              const isRestaurantMgmt = /button.*".*(?:restaurant.*(?:management|marketing|event|software|pricing|resources|groups))/i.test(line);
-              const isTabOrMenu = /tab\s/i.test(line) && !/\[selected\]/i.test(line);
-              const isUnselectedOption = /^\s*- option "/.test(line) && !/\[selected\]/.test(line);
-              // KEEP form elements, action buttons, time slots, selected tabs/options
-              if (isFormElement || isActionButton || isTimeSlot) return true;
-              if (/\[selected\]/.test(line)) return true;
-              // SKIP everything noisy
-              if (isNavLink || isReviewNoise || isSocialFooter || isRestaurantMgmt || isTabOrMenu || isUnselectedOption) return false;
-              // SKIP generic cursor=pointer that aren't buttons/links with meaningful text
-              if (/generic \[ref=/.test(line) && /\[cursor=pointer\]/.test(line)) return false;
-              // SKIP image refs
-              if (/^\s*- img /.test(line)) return false;
-              // SKIP FAQ/question buttons (informational, not actionable)
-              if (/button "(?:Does |Is |What |When |How |Are |Can |Has |Were |Will |Would |Should |Could )/i.test(line)) return false;
-              // SKIP generic site chrome
-              if (/button "(?:About|Careers|Press|Affiliate|Contact|Mobile|For Business|Toggle|Notify|Learn more|EN$|Privacy|Terms|Cookie|Accessibility|Dining Rewards|Reserve for Others|OpenTable For|OpenTable Pricing|Google Map)/i.test(line)) return false;
-              // KEEP remaining buttons with meaningful labels (>5 chars, not just icons)
-              if (/button "(.{5,})"/.test(line)) return true;
-              return false;
-            });
-            const headerLines = lines.slice(0, 5).join('\n');
-            truncated = headerLines + '\n\nActionable elements (' + actionable.length + '):\n' + actionable.join('\n');
+          if (ariaTree.length > 8000) {
+            try {
+              const filtered = await page.evaluate(() => {
+                // Sections to EXCLUDE entirely
+                const excludeSelectors = 'nav, footer, header, [role="navigation"], [role="banner"], [role="contentinfo"], aside, [role="complementary"]';
+                const excludeClassIds = /faq|review|footer|cookie|consent|social|share|newsletter|sidebar|advertisement|breadcrumb|language|region-selector/i;
+                const excludeEls = new Set<Element>();
+                document.querySelectorAll(excludeSelectors).forEach(el => {
+                  el.querySelectorAll('*').forEach(child => excludeEls.add(child));
+                  excludeEls.add(el);
+                });
+                // Also exclude by class/id patterns
+                document.querySelectorAll('[class], [id]').forEach(el => {
+                  const classId = (el.className || '') + ' ' + (el.id || '');
+                  if (excludeClassIds.test(classId)) {
+                    el.querySelectorAll('*').forEach(child => excludeEls.add(child));
+                    excludeEls.add(el);
+                  }
+                });
+
+                // Collect ACTIONABLE elements from non-excluded areas
+                const interactiveSelectors = 'button, input:not([type=hidden]), select, textarea, a[role=button], [role=combobox], [role=checkbox], [role=radio], [contenteditable=true]';
+                const elements: string[] = [];
+                document.querySelectorAll(interactiveSelectors).forEach(el => {
+                  if (excludeEls.has(el)) return;
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width <= 0 || rect.height <= 0) return;
+                  const text = (el.textContent || '').trim().substring(0, 120);
+                  if (!text && el.tagName !== 'INPUT' && el.tagName !== 'SELECT' && el.tagName !== 'TEXTAREA') return;
+                  const tag = el.tagName.toLowerCase();
+                  const role = el.getAttribute('role') || tag;
+                  const type = (el as HTMLInputElement).type || '';
+                  const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '';
+                  const value = (el as HTMLInputElement).value || '';
+                  const ref = el.getAttribute('data-aevoy-ref') || '';
+                  const inView = rect.top >= 0 && rect.top < window.innerHeight;
+                  // Skip noisy elements
+                  if (/^(Does |Is |What |When |How |Are |Can |Has |Were |Should )/i.test(text)) return;
+                  if (/read more|upvote|enlarge image/i.test(text)) return;
+                  // Format the element info
+                  let line = `[${ref || '?'}] ${role}`;
+                  if (name) line += ` "${name}"`;
+                  else if (text && text.length < 80) line += ` "${text}"`;
+                  if (type && type !== 'submit') line += ` type=${type}`;
+                  if (value) line += ` value="${value.substring(0, 40)}"`;
+                  if (!inView) line += ' (scroll needed)';
+                  elements.push(line);
+                });
+                return elements;
+              });
+              if (filtered.length >= 3) {
+                truncated = `Actionable elements (${filtered.length}):\n${filtered.join('\n')}`;
+              }
+              // else: fallback to full ariaTree (too few elements = filter too aggressive)
+            } catch {
+              // DOM filter failed — use aria tree as-is (truncated)
+              if (ariaTree.length > 15000) {
+                truncated = ariaTree.substring(0, 5000) + '\n...\n' + ariaTree.substring(ariaTree.length - 10000);
+              }
+            }
           }
           return `URL: ${url}\nTitle: ${title}\n\n${truncated}`;
         }
