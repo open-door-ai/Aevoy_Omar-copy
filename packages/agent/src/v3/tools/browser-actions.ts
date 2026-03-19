@@ -236,13 +236,15 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
                   const type = (el as HTMLInputElement).type || '';
                   const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || '';
                   const value = (el as HTMLInputElement).value || '';
-                  const ref = el.getAttribute('data-aevoy-ref') || '';
+                  // Stamp ref on element for clicking
+                  const refNum = elements.length + 1;
+                  (el as HTMLElement).setAttribute('data-aevoy-ref', String(refNum));
                   const inView = rect.top >= 0 && rect.top < window.innerHeight;
                   // Skip noisy elements
                   if (/^(Does |Is |What |When |How |Are |Can |Has |Were |Should )/i.test(text)) return;
                   if (/read more|upvote|enlarge image/i.test(text)) return;
                   // Format the element info
-                  let line = `[${ref || '?'}] ${role}`;
+                  let line = `[${refNum}] ${role}`;
                   if (name) line += ` "${name}"`;
                   else if (text && text.length < 80) line += ` "${text}"`;
                   if (type && type !== 'submit') line += ` type=${type}`;
@@ -253,7 +255,12 @@ async function getPageSnapshot(page: Page, _taskId?: string): Promise<string> {
                 return elements;
               });
               if (filtered.length >= 3) {
-                truncated = `Actionable elements (${filtered.length}):\n${filtered.join('\n')}`;
+                truncated = `Actionable elements (${filtered.length}). Use browser_click(ref) or browser_click_text("button text") to interact:\n${filtered.join('\n')}`;
+                // Mark as DOM-ref based (not aria-ref)
+                if (_taskId) {
+                  const entry = taskPages.get(_taskId);
+                  if (entry) entry.useAriaRefs = false;
+                }
               }
               // else: fallback to full ariaTree (too few elements = filter too aggressive)
             } catch {
