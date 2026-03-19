@@ -114,7 +114,8 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
         // Short backoff: Gemini has high rate limits, brief spike shouldn't cause
         // 2 minutes of Haiku fallback at 8x the cost. Was 120s → now 15s.
-        const backoffMs = model.provider === 'gemini' ? 15000 : model.provider === 'groq' ? 60000 : 30000;
+        // Gemini: 5s backoff (high rate limits, recovers fast). Haiku: skip if no budget.
+        const backoffMs = model.provider === 'gemini' ? 5000 : model.provider === 'groq' ? 60000 : 30000;
         setBackoff(key, backoffMs);
         continue;
       }

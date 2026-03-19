@@ -571,7 +571,7 @@ registerTool({
       }));
       await locator.click({ timeout: 5000 }).catch(async () => {
         // Fallback: full MouseEvent dispatch — works on React/SPA click handlers
-        // that don't respond to simple el.click() (e.g., OpenTable time slots)
+        // that don't respond to simple el.click()
         await locator.evaluate((el: HTMLElement) => {
           el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
           el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
@@ -1064,7 +1064,7 @@ registerTool({
   category: 'browser',
   parameters: {
     task: { type: 'string', description: 'Full description of what to accomplish (e.g. "Book a table at Earls for 4 people tomorrow at 7pm, name Omar, email omar@aevoy.com")' },
-    url: { type: 'string', description: 'Starting URL to navigate to (e.g. "https://www.opentable.com")' },
+    url: { type: 'string', description: 'Starting URL to navigate to' },
   },
   required: ['task'],
   async execute(params, ctx): Promise<ToolCallResult> {
