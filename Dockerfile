@@ -38,7 +38,14 @@ COPY packages/agent/ packages/agent/
 WORKDIR /app/packages/agent
 RUN pnpm build
 
-# Install patchright chromium (stealth-patched) + playwright chromium fallback
+# Install REAL Google Chrome — its TLS fingerprint (JA3/JA4) matches real users.
+# Chromium's TLS fingerprint is different and gets flagged by Cloudflare/DataDome.
+RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+    && apt-get update && apt-get install -y /tmp/chrome.deb \
+    && rm /tmp/chrome.deb && rm -rf /var/lib/apt/lists/* \
+    || echo "Chrome install failed — will use Chromium"
+
+# Also install patchright Chromium as fallback
 RUN npx patchright install chromium 2>/dev/null || npx playwright install chromium 2>/dev/null || true
 
 # Create workspaces dir
