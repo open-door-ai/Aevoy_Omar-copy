@@ -20,6 +20,9 @@ interface ModelConfig {
   supportsToolCalling: boolean;
 }
 
+/** Exported cost constants for DeepSeek (used by cost calculators) */
+export const DEEPSEEK_COST = { perMInput: 0.28, perMOutput: 0.42 } as const;
+
 const TIER_MODELS: Record<string, ModelConfig[]> = {
   // Classification: fast + free
   classify: [
@@ -33,14 +36,60 @@ const TIER_MODELS: Record<string, ModelConfig[]> = {
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
   ],
-  // Multi-step browser/tool tasks:
-  // DeepSeek V3.2 (cheap, no quota wall) → Groq 70b (free, fast) → Gemini (quota-limited) → Haiku (absolute last resort)
+  // Simple steps within multi-step (snapshot reads, simple clicks): cheapest model with tool support
+  simple_step: [
+    { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
+  ],
+  // Multi-step browser/tool tasks (complex reasoning, planning, multi-field forms):
+  // DeepSeek V3.2 (cheap, no quota wall) → Gemini (quota-limited) → Haiku (absolute last resort)
   multi_step: [
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
 };
+
+// ── Session-level model performance tracking ──
+// Tracks success/failure per model within a process lifetime.
+// Helps the router learn which models are working for the current session.
+
+interface ModelPerformance {
+  successes: number;
+  failures: number;
+  lastFailure: number; // timestamp
+}
+
+const sessionModelPerf = new Map<string, ModelPerformance>();
+
+function recordModelSuccess(modelKey: string): void {
+  const perf = sessionModelPerf.get(modelKey) || { successes: 0, failures: 0, lastFailure: 0 };
+  perf.successes++;
+  sessionModelPerf.set(modelKey, perf);
+}
+
+function recordModelFailure(modelKey: string): void {
+  const perf = sessionModelPerf.get(modelKey) || { successes: 0, failures: 0, lastFailure: 0 };
+  perf.failures++;
+  perf.lastFailure = Date.now();
+  sessionModelPerf.set(modelKey, perf);
+}
+
+/** Check if a model has been unreliable recently (>60% failure rate, min 3 attempts) */
+function isModelUnreliable(modelKey: string): boolean {
+  const perf = sessionModelPerf.get(modelKey);
+  if (!perf) return false;
+  const total = perf.successes + perf.failures;
+  if (total < 3) return false; // Need enough data
+  const failRate = perf.failures / total;
+  // If it failed >60% of the time and last failure was in the last 5 minutes
+  return failRate > 0.6 && (Date.now() - perf.lastFailure) < 5 * 60 * 1000;
+}
+
+/** Get exported session performance data (for logging/diagnostics) */
+export function getSessionModelStats(): Record<string, ModelPerformance> {
+  return Object.fromEntries(sessionModelPerf);
+}
 
 // ── Rate limit tracking ──
 
@@ -101,14 +150,26 @@ export interface CallOptions {
   toolCategory?: string; // Filter tools by category (e.g., 'browser') to reduce token usage
   maxTokens?: number;
   temperature?: number;
+  /** Step complexity hint: 'simple' for snapshot reads/basic clicks, 'complex' for planning/multi-field forms */
+  stepComplexity?: 'simple' | 'complex';
 }
 
 /**
  * Call an AI model with fast fallback.
  * Tries primary model, immediately falls back to paid model on rate limit.
+ *
+ * Smart model selection: when stepComplexity is provided, routes to the
+ * appropriate tier automatically. 'simple' uses the cheapest models,
+ * 'complex' uses the full multi_step chain.
  */
 export async function callModel(opts: CallOptions): Promise<ModelResponse> {
-  const models = TIER_MODELS[opts.tier] || TIER_MODELS.instant;
+  // Smart tier selection based on step complexity hint
+  let effectiveTier = opts.tier;
+  if (opts.tier === 'multi_step' && opts.stepComplexity === 'simple') {
+    effectiveTier = 'simple_step';
+  }
+
+  const models = TIER_MODELS[effectiveTier] || TIER_MODELS.instant;
   const tools = opts.useTools ? buildFunctionSchemas(opts.toolCategory) : undefined;
 
   for (const model of models) {
@@ -116,13 +177,21 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
     if (isBackedOff(key)) continue;
     if (!hasApiKey(model.provider)) continue;
 
+    // Skip models that have been unreliable this session (>60% failure rate)
+    if (isModelUnreliable(key)) {
+      console.log(`[V3-MODEL] Skipping unreliable model ${key} (session failure rate too high)`);
+      continue;
+    }
+
     // For tool calling, skip models that don't support it (unless no tools needed)
     if (opts.useTools && !model.supportsToolCalling) continue;
 
     try {
       const result = await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
+      recordModelSuccess(key);
       return result;
     } catch (err: any) {
+      recordModelFailure(key);
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
         if (model.provider === 'gemini') {
           // Gemini TPM (tokens per minute) rate limit — tool-calling requests are large.

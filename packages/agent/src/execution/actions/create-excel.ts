@@ -1,7 +1,7 @@
 /**
  * Excel File Generation Action
- * Creates Excel spreadsheets with data, formulas, styling, and charts
- * Beats GenSpark on file creation
+ * Creates professionally styled Excel spreadsheets with bold headers,
+ * alternating row colors, auto-fit columns, number formatting, and borders.
  */
 
 import ExcelJS from 'exceljs';
@@ -41,6 +41,49 @@ export interface ExcelGenerationResult {
   fileSize?: number;
 }
 
+// ── Design Tokens ───────────────────────────────────────────────
+const EXCEL_THEME = {
+  headerBg: 'FF1A1A2E',       // Deep navy (matches PPT dark theme)
+  headerFont: 'FFFFFFFF',     // White text on dark header
+  headerBorderBottom: 'FF00D4AA', // Teal accent under header
+  altRowBg: 'FFF0F4F8',       // Very light blue-gray for alt rows
+  borderColor: 'FFE2E8F0',    // Subtle gray borders
+  accentText: 'FF1A1A2E',     // Navy for emphasis
+  currencyFormat: '#,##0.00',
+  percentFormat: '0.00%',
+  numberFormat: '#,##0',
+  dateFormat: 'yyyy-mm-dd',
+} as const;
+
+/**
+ * Detect if a column likely contains currency values
+ */
+function detectColumnType(header: string, values: (string | number | boolean | null)[]): 'currency' | 'percent' | 'number' | 'date' | 'text' {
+  const headerLower = header.toLowerCase();
+
+  // Check header name hints
+  if (/price|cost|amount|revenue|salary|total|budget|profit|income|expense|fee|tax|balance/i.test(headerLower)) {
+    return 'currency';
+  }
+  if (/percent|rate|ratio|growth|change|margin/i.test(headerLower)) {
+    return 'percent';
+  }
+  if (/date|created|updated|timestamp|time|day|month|year/i.test(headerLower)) {
+    return 'date';
+  }
+
+  // Check actual values
+  const numericValues = values.filter(v => v !== null && v !== '' && !isNaN(Number(v)));
+  if (numericValues.length > values.length * 0.6) {
+    // Mostly numbers — check if they look like currency (have decimals)
+    const hasDecimals = numericValues.some(v => String(v).includes('.'));
+    if (hasDecimals && /\$|price|cost/i.test(headerLower)) return 'currency';
+    return 'number';
+  }
+
+  return 'text';
+}
+
 /**
  * Generate an Excel file with multiple sheets, data, and styling
  */
@@ -48,7 +91,6 @@ export async function createExcelFile(
   params: ExcelGenerationParams
 ): Promise<ExcelGenerationResult> {
   try {
-    // Create new workbook
     const workbook = new ExcelJS.Workbook();
 
     // Set workbook properties
@@ -67,43 +109,61 @@ export async function createExcelFile(
 
     let totalRows = 0;
 
-    // Add each sheet
     for (const sheetDef of params.sheets) {
-      const worksheet = workbook.addWorksheet(sheetDef.name);
+      const worksheet = workbook.addWorksheet(sheetDef.name, {
+        properties: { defaultColWidth: 15 },
+      });
 
-      // Add headers if provided
+      // ── Headers ──────────────────────────────────────────
       let startRow = 1;
       if (sheetDef.headers && sheetDef.headers.length > 0) {
         worksheet.addRow(sheetDef.headers);
 
-        // Style headers
-        if (sheetDef.styles?.headerBold !== false) {
+        const useDefaultStyle = sheetDef.styles?.headerBold !== false;
+        if (useDefaultStyle) {
           const headerRow = worksheet.getRow(1);
-          headerRow.font = { bold: true };
 
           if (sheetDef.styles?.headerBackgroundColor) {
+            // User-specified header color
             headerRow.fill = {
               type: 'pattern',
               pattern: 'solid',
               fgColor: { argb: sheetDef.styles.headerBackgroundColor.replace('#', 'FF') }
             };
+            headerRow.font = { bold: true, size: 11 };
           } else {
-            // Default blue header background
+            // Default: dark navy header with white text
             headerRow.fill = {
               type: 'pattern',
               pattern: 'solid',
-              fgColor: { argb: 'FF4472C4' }
+              fgColor: { argb: EXCEL_THEME.headerBg }
             };
-            headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            headerRow.font = {
+              bold: true,
+              color: { argb: EXCEL_THEME.headerFont },
+              size: 11,
+              name: 'Segoe UI',
+            };
           }
+
+          // Header row height
+          headerRow.height = 28;
+          headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+          // Thick accent border under header
+          headerRow.eachCell((cell) => {
+            cell.border = {
+              bottom: { style: 'medium', color: { argb: EXCEL_THEME.headerBorderBottom } },
+            };
+          });
         }
 
-        // Freeze first row if requested
+        // Freeze first row (on by default)
         if (sheetDef.styles?.freezeFirstRow !== false) {
           worksheet.views = [{ state: 'frozen', ySplit: 1 }];
         }
 
-        // Add auto filter if requested
+        // Auto filter (on by default)
         if (sheetDef.styles?.autoFilter !== false) {
           worksheet.autoFilter = {
             from: { row: 1, column: 1 },
@@ -112,58 +172,96 @@ export async function createExcelFile(
         }
 
         startRow = 2;
+
+        // ── Detect column types for formatting ──────────────
+        const columnTypes = sheetDef.headers.map((header, colIdx) => {
+          const colValues = sheetDef.data.map(row => row[colIdx]);
+          return detectColumnType(header, colValues);
+        });
+
+        // Apply number formats per column
+        columnTypes.forEach((type, colIdx) => {
+          const col = worksheet.getColumn(colIdx + 1);
+          switch (type) {
+            case 'currency':
+              col.numFmt = EXCEL_THEME.currencyFormat;
+              col.alignment = { horizontal: 'right', vertical: 'middle' };
+              break;
+            case 'percent':
+              col.numFmt = EXCEL_THEME.percentFormat;
+              col.alignment = { horizontal: 'right', vertical: 'middle' };
+              break;
+            case 'number':
+              col.numFmt = EXCEL_THEME.numberFormat;
+              col.alignment = { horizontal: 'right', vertical: 'middle' };
+              break;
+            case 'date':
+              col.numFmt = EXCEL_THEME.dateFormat;
+              col.alignment = { horizontal: 'center', vertical: 'middle' };
+              break;
+            default:
+              col.alignment = { vertical: 'middle' };
+              break;
+          }
+        });
       }
 
-      // Add data rows
+      // ── Data rows ────────────────────────────────────────
+      const enableAltRows = sheetDef.styles?.alternateRowColors !== false; // ON by default
       sheetDef.data.forEach((row, index) => {
-        worksheet.addRow(row);
+        const excelRow = worksheet.addRow(row);
+        excelRow.height = 22;
 
-        // Alternate row colors
-        if (sheetDef.styles?.alternateRowColors) {
+        // Alternating row colors (on by default)
+        if (enableAltRows) {
           const rowNumber = startRow + index;
           if (rowNumber % 2 === 0) {
-            const excelRow = worksheet.getRow(rowNumber);
             excelRow.fill = {
               type: 'pattern',
               pattern: 'solid',
-              fgColor: { argb: 'FFF2F2F2' }
+              fgColor: { argb: EXCEL_THEME.altRowBg }
             };
           }
         }
 
+        // Body font
+        excelRow.font = { size: 10, name: 'Segoe UI' };
+
         totalRows++;
       });
 
-      // Auto-fit columns
-      worksheet.columns.forEach(column => {
+      // ── Auto-fit columns ─────────────────────────────────
+      worksheet.columns.forEach((column, colIdx) => {
         let maxLength = 0;
         column.eachCell?.({ includeEmpty: false }, cell => {
           const cellValue = cell.value?.toString() || '';
           maxLength = Math.max(maxLength, cellValue.length);
         });
-        column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+        // Minimum 10, maximum 50, +3 for padding (accounts for filter dropdown)
+        column.width = Math.min(Math.max(maxLength + 3, 12), 50);
       });
 
-      // Add formulas if provided
+      // ── Formulas ─────────────────────────────────────────
       if (sheetDef.formulas && sheetDef.formulas.length > 0) {
         sheetDef.formulas.forEach(({ cell, formula }) => {
           const excelCell = worksheet.getCell(cell);
-          excelCell.value = { formula };
+          excelCell.value = { formula } as any;
         });
       }
 
-      // Add borders to all cells with data
+      // ── Borders ──────────────────────────────────────────
       const lastRow = worksheet.rowCount;
       const lastCol = worksheet.columnCount;
 
-      for (let row = 1; row <= lastRow; row++) {
+      for (let row = 2; row <= lastRow; row++) { // Start at 2 to skip header (has its own border)
         for (let col = 1; col <= lastCol; col++) {
           const cell = worksheet.getCell(row, col);
           cell.border = {
-            top: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-            left: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-            bottom: { style: 'thin', color: { argb: 'FFD3D3D3' } },
-            right: { style: 'thin', color: { argb: 'FFD3D3D3' } }
+            ...cell.border,
+            top: { style: 'thin', color: { argb: EXCEL_THEME.borderColor } },
+            left: { style: 'thin', color: { argb: EXCEL_THEME.borderColor } },
+            bottom: { style: 'thin', color: { argb: EXCEL_THEME.borderColor } },
+            right: { style: 'thin', color: { argb: EXCEL_THEME.borderColor } }
           };
         }
       }
@@ -187,7 +285,7 @@ export async function createExcelFile(
     return {
       success: true,
       filepath,
-      url: `/files/excel/${filename}`, // Relative URL for download
+      url: `/files/excel/${filename}`,
       rowCount: totalRows,
       sheetCount: params.sheets.length,
       fileSize: stats.size
@@ -237,7 +335,7 @@ export async function createFinancialReport(
   const headers = ['Category', 'Amount', 'Percentage'];
   const totalRow = data.length + 2;
 
-  const tableData = data.map((item, index) => [
+  const tableData = data.map((item) => [
     item.category,
     item.amount,
     null // Will be calculated via formula

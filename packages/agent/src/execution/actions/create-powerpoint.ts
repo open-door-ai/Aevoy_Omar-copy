@@ -1,7 +1,7 @@
 /**
  * PowerPoint Generation Action
- * Creates professional presentations with slides, text, images, charts
- * Beats GenSpark on presentation generation
+ * Creates professional presentations with modern design, gradient backgrounds,
+ * accent elements, and polished typography.
  */
 
 import pptxgen from 'pptxgenjs';
@@ -47,6 +47,137 @@ export interface PowerPointResult {
   fileSize?: number;
 }
 
+// ── Modern Design Tokens ────────────────────────────────────────
+// Dark sophisticated palette by default. Users can override via theme param.
+const DESIGN = {
+  // Colors
+  bgDark: '1A1A2E',        // Deep navy-charcoal
+  bgMedium: '16213E',       // Slightly lighter navy
+  bgLight: '0F3460',        // Section accent background
+  titleWhite: 'FFFFFF',     // White for titles on dark bg
+  subtitleGray: 'A0AEC0',   // Muted gray for subtitles
+  bodyText: 'E2E8F0',       // Light gray for body text
+  accent: '00D4AA',         // Teal-green accent
+  accentAlt: '7C5CFC',      // Purple accent for variety
+  accentWarm: 'F59E0B',     // Warm amber for highlights
+  divider: '2D3748',        // Subtle divider color
+
+  // Fonts (system fonts supported by pptxgenjs)
+  fontHeading: 'Segoe UI',
+  fontBody: 'Segoe UI',
+
+  // Spacing (inches)
+  marginX: 0.8,
+  marginY: 0.6,
+  contentW: 8.4,            // 10 - 2*marginX
+} as const;
+
+/**
+ * Add a thin accent bar at the bottom of a slide
+ */
+function addBottomAccent(slide: any, color: string): void {
+  // Bottom accent bar
+  slide.addShape('rect', {
+    x: 0,
+    y: 5.3,
+    w: 10,
+    h: 0.06,
+    fill: { color },
+  });
+}
+
+/**
+ * Add a decorative side accent element
+ */
+function addSideAccent(slide: any, color: string): void {
+  // Left vertical accent stripe
+  slide.addShape('rect', {
+    x: 0,
+    y: 0,
+    w: 0.06,
+    h: 5.63,
+    fill: { color },
+  });
+}
+
+/**
+ * Add slide number in bottom-right corner
+ */
+function addSlideNumber(slide: any, num: number, total: number): void {
+  slide.addText(`${num} / ${total}`, {
+    x: 8.5,
+    y: 5.15,
+    w: 1.2,
+    h: 0.3,
+    fontSize: 9,
+    color: DESIGN.subtitleGray,
+    fontFace: DESIGN.fontBody,
+    align: 'right',
+  });
+}
+
+/**
+ * Build a gradient-style background using overlapping shapes
+ * (pptxgenjs doesn't support true gradients on slide bg, so we layer shapes)
+ */
+function addDarkBackground(slide: any, variant: 'primary' | 'accent' = 'primary'): void {
+  const bgColor = variant === 'accent' ? DESIGN.bgLight : DESIGN.bgDark;
+  slide.background = { color: bgColor };
+
+  // Subtle top-right decorative shape (large faded circle impression via rectangle)
+  slide.addShape('rect', {
+    x: 7.5,
+    y: -1.5,
+    w: 4.5,
+    h: 4.5,
+    fill: { color: variant === 'accent' ? DESIGN.accentAlt : DESIGN.accent, type: 'solid' },
+    rectRadius: 2.25,
+    // @ts-ignore - opacity works at runtime
+    transparency: 92,
+  });
+
+  // Subtle bottom-left decorative shape
+  slide.addShape('rect', {
+    x: -1.5,
+    y: 3.5,
+    w: 3.5,
+    h: 3.5,
+    fill: { color: DESIGN.accentAlt, type: 'solid' },
+    rectRadius: 1.75,
+    // @ts-ignore
+    transparency: 95,
+  });
+}
+
+/**
+ * Resolve theme: merge user-provided colors with dark defaults
+ */
+function resolveTheme(userTheme?: PresentationParams['theme']) {
+  // If user explicitly provides a white/light background, use light-mode text colors
+  const isLightBg = userTheme?.backgroundColor &&
+    ['FFFFFF', 'FFF', 'F5F5F5', 'FAFAFA', 'F0F0F0'].includes(
+      userTheme.backgroundColor.replace('#', '').toUpperCase()
+    );
+
+  if (isLightBg) {
+    return {
+      background: userTheme!.backgroundColor!.replace('#', ''),
+      title: userTheme?.titleColor?.replace('#', '') || '1A1A2E',
+      text: userTheme?.textColor?.replace('#', '') || '333333',
+      accent: userTheme?.accentColor?.replace('#', '') || DESIGN.accent,
+      useDarkBg: false,
+    };
+  }
+
+  return {
+    background: userTheme?.backgroundColor?.replace('#', '') || DESIGN.bgDark,
+    title: userTheme?.titleColor?.replace('#', '') || DESIGN.titleWhite,
+    text: userTheme?.textColor?.replace('#', '') || DESIGN.bodyText,
+    accent: userTheme?.accentColor?.replace('#', '') || DESIGN.accent,
+    useDarkBg: !userTheme?.backgroundColor, // Only use decorative shapes on default dark bg
+  };
+}
+
 /**
  * Generate a PowerPoint presentation
  */
@@ -54,7 +185,6 @@ export async function createPowerPoint(
   params: PresentationParams
 ): Promise<PowerPointResult> {
   try {
-    // Create new presentation
     // @ts-ignore - pptxgenjs types are incorrect
     const pres = new pptxgen();
 
@@ -64,87 +194,158 @@ export async function createPowerPoint(
     pres.title = params.title || params.filename;
     pres.subject = params.subject || 'AI-Generated Presentation';
 
-    // Define theme colors
-    const theme = {
-      background: params.theme?.backgroundColor || 'FFFFFF',
-      title: params.theme?.titleColor || '1F4788',
-      text: params.theme?.textColor || '333333',
-      accent: params.theme?.accentColor || '4472C4'
-    };
+    // Set default slide layout
+    pres.layout = 'LAYOUT_WIDE'; // 13.33 x 7.5 is standard wide, but pptxgenjs uses 10x5.63
+
+    const theme = resolveTheme(params.theme);
+    const totalSlides = params.slides.length;
 
     // Add each slide
-    for (const slideDef of params.slides) {
+    params.slides.forEach((slideDef, slideIndex) => {
       const slide = pres.addSlide();
 
-      // Set slide background
-      slide.background = { color: theme.background };
+      // Apply background
+      if (theme.useDarkBg) {
+        const variant = slideDef.layout === 'section' ? 'accent' : 'primary';
+        addDarkBackground(slide, variant);
+      } else {
+        slide.background = { color: theme.background };
+      }
 
-      // Apply layout based on type
+      // Layout-specific rendering
       switch (slideDef.layout || 'content') {
         case 'title': {
-          // Title slide (centered, large text)
+          // ── TITLE SLIDE ─────────────────────────────────────
+          // Accent line above title
+          slide.addShape('rect', {
+            x: DESIGN.marginX,
+            y: 1.6,
+            w: 1.2,
+            h: 0.06,
+            fill: { color: theme.accent },
+          });
+
           if (slideDef.title) {
             slide.addText(slideDef.title, {
-              x: 0.5,
-              y: 2.0,
-              w: 9.0,
-              h: 1.5,
-              fontSize: 44,
+              x: DESIGN.marginX,
+              y: 1.8,
+              w: DESIGN.contentW,
+              h: 1.6,
+              fontSize: 40,
               bold: true,
               color: theme.title,
-              align: 'center',
-              valign: 'middle'
+              fontFace: DESIGN.fontHeading,
+              align: 'left',
+              valign: 'top',
+              lineSpacingMultiple: 1.1,
             });
           }
 
           if (slideDef.content) {
             const subtitle = typeof slideDef.content === 'string'
               ? slideDef.content
-              : slideDef.content.join('\n');
+              : slideDef.content.join(' | ');
 
             slide.addText(subtitle, {
-              x: 0.5,
-              y: 4.0,
-              w: 9.0,
-              h: 1.0,
-              fontSize: 20,
-              color: theme.text,
-              align: 'center',
-              valign: 'middle'
+              x: DESIGN.marginX,
+              y: 3.5,
+              w: DESIGN.contentW,
+              h: 0.7,
+              fontSize: 18,
+              color: DESIGN.subtitleGray,
+              fontFace: DESIGN.fontBody,
+              align: 'left',
+              valign: 'top',
             });
           }
+
+          // Author / date line at bottom
+          const dateLine = params.author
+            ? `${params.author}  |  ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
+            : new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+          slide.addText(dateLine, {
+            x: DESIGN.marginX,
+            y: 4.8,
+            w: DESIGN.contentW,
+            h: 0.4,
+            fontSize: 11,
+            color: DESIGN.subtitleGray,
+            fontFace: DESIGN.fontBody,
+            align: 'left',
+          });
+
+          addBottomAccent(slide, theme.accent);
           break;
         }
 
         case 'section': {
-          // Section header (bold, centered)
+          // ── SECTION DIVIDER SLIDE ───────────────────────────
+          // Large accent number/icon area
+          slide.addShape('rect', {
+            x: DESIGN.marginX,
+            y: 2.0,
+            w: 0.8,
+            h: 0.06,
+            fill: { color: DESIGN.accentWarm },
+          });
+
           if (slideDef.title) {
             slide.addText(slideDef.title, {
-              x: 0.5,
-              y: 2.5,
-              w: 9.0,
-              h: 2.0,
-              fontSize: 54,
+              x: DESIGN.marginX,
+              y: 2.2,
+              w: DESIGN.contentW,
+              h: 1.5,
+              fontSize: 42,
               bold: true,
-              color: theme.accent,
-              align: 'center',
-              valign: 'middle'
+              color: theme.title,
+              fontFace: DESIGN.fontHeading,
+              align: 'left',
+              valign: 'middle',
             });
           }
+
+          if (slideDef.content) {
+            const sectionContent = typeof slideDef.content === 'string'
+              ? slideDef.content
+              : slideDef.content.join('\n');
+            slide.addText(sectionContent, {
+              x: DESIGN.marginX,
+              y: 3.7,
+              w: 6.0,
+              h: 0.6,
+              fontSize: 16,
+              color: DESIGN.subtitleGray,
+              fontFace: DESIGN.fontBody,
+              align: 'left',
+            });
+          }
+
+          addBottomAccent(slide, DESIGN.accentWarm);
           break;
         }
 
         case 'comparison': {
-          // Two-column layout
+          // ── TWO-COLUMN COMPARISON SLIDE ──────────────────────
           if (slideDef.title) {
             slide.addText(slideDef.title, {
-              x: 0.5,
-              y: 0.5,
-              w: 9.0,
-              h: 0.8,
-              fontSize: 32,
+              x: DESIGN.marginX,
+              y: DESIGN.marginY,
+              w: DESIGN.contentW,
+              h: 0.7,
+              fontSize: 26,
               bold: true,
-              color: theme.title
+              color: theme.title,
+              fontFace: DESIGN.fontHeading,
+            });
+
+            // Accent underline
+            slide.addShape('rect', {
+              x: DESIGN.marginX,
+              y: 1.25,
+              w: 0.8,
+              h: 0.04,
+              fill: { color: theme.accent },
             });
           }
 
@@ -153,90 +354,168 @@ export async function createPowerPoint(
             const leftBullets = slideDef.bullets.slice(0, half);
             const rightBullets = slideDef.bullets.slice(half);
 
-            // Left column
-            slide.addText(leftBullets.map(b => ({ text: b, options: { bullet: true } })), {
-              x: 0.5,
-              y: 1.5,
-              w: 4.25,
-              h: 4.0,
-              fontSize: 18,
-              color: theme.text
+            const colY = 1.5;
+            const colH = 3.6;
+            const colW = 3.9;
+            const gutter = 0.6;
+
+            // Left column background
+            slide.addShape('roundRect', {
+              x: DESIGN.marginX,
+              y: colY,
+              w: colW,
+              h: colH,
+              fill: { color: theme.useDarkBg ? DESIGN.bgMedium : 'F7F8FA' },
+              rectRadius: 0.1,
             });
 
-            // Right column
-            slide.addText(rightBullets.map(b => ({ text: b, options: { bullet: true } })), {
-              x: 5.25,
-              y: 1.5,
-              w: 4.25,
-              h: 4.0,
-              fontSize: 18,
-              color: theme.text
+            // Left column text
+            slide.addText(
+              leftBullets.map(b => ({
+                text: b,
+                options: {
+                  bullet: { code: '2022' },
+                  color: theme.text,
+                  fontSize: 15,
+                  lineSpacingMultiple: 1.4,
+                  paraSpaceAfter: 6,
+                },
+              })),
+              {
+                x: DESIGN.marginX + 0.3,
+                y: colY + 0.3,
+                w: colW - 0.6,
+                h: colH - 0.6,
+                fontFace: DESIGN.fontBody,
+                valign: 'top',
+              }
+            );
+
+            // Right column background
+            slide.addShape('roundRect', {
+              x: DESIGN.marginX + colW + gutter,
+              y: colY,
+              w: colW,
+              h: colH,
+              fill: { color: theme.useDarkBg ? DESIGN.bgMedium : 'F7F8FA' },
+              rectRadius: 0.1,
             });
+
+            // Right column text
+            slide.addText(
+              rightBullets.map(b => ({
+                text: b,
+                options: {
+                  bullet: { code: '2022' },
+                  color: theme.text,
+                  fontSize: 15,
+                  lineSpacingMultiple: 1.4,
+                  paraSpaceAfter: 6,
+                },
+              })),
+              {
+                x: DESIGN.marginX + colW + gutter + 0.3,
+                y: colY + 0.3,
+                w: colW - 0.6,
+                h: colH - 0.6,
+                fontFace: DESIGN.fontBody,
+                valign: 'top',
+              }
+            );
           }
+
+          addSideAccent(slide, theme.accent);
+          addSlideNumber(slide, slideIndex + 1, totalSlides);
           break;
         }
 
         case 'content':
         default: {
-          // Standard content slide
+          // ── STANDARD CONTENT SLIDE ──────────────────────────
           if (slideDef.title) {
             slide.addText(slideDef.title, {
-              x: 0.5,
-              y: 0.5,
-              w: 9.0,
-              h: 0.8,
-              fontSize: 32,
+              x: DESIGN.marginX,
+              y: DESIGN.marginY,
+              w: DESIGN.contentW,
+              h: 0.7,
+              fontSize: 26,
               bold: true,
-              color: theme.title
+              color: theme.title,
+              fontFace: DESIGN.fontHeading,
+            });
+
+            // Accent underline below title
+            slide.addShape('rect', {
+              x: DESIGN.marginX,
+              y: 1.25,
+              w: 0.8,
+              h: 0.04,
+              fill: { color: theme.accent },
             });
           }
 
-          // Add bullets if provided
+          const contentY = slideDef.title ? 1.5 : DESIGN.marginY;
+          const contentH = slideDef.title ? 3.6 : 4.5;
+
           if (slideDef.bullets && slideDef.bullets.length > 0) {
+            // Styled bullet list with custom bullet character and spacing
             slide.addText(
-              slideDef.bullets.map(bullet => ({ text: bullet, options: { bullet: true } })),
+              slideDef.bullets.map(bullet => ({
+                text: bullet,
+                options: {
+                  bullet: { code: '2023' }, // Triangular bullet
+                  color: theme.text,
+                  fontSize: 16,
+                  lineSpacingMultiple: 1.5,
+                  paraSpaceAfter: 8,
+                },
+              })),
               {
-                x: 0.5,
-                y: 1.5,
-                w: 9.0,
-                h: 4.0,
-                fontSize: 18,
-                color: theme.text,
-                bullet: { code: '2022' } // Bullet point character
+                x: DESIGN.marginX + 0.2,
+                y: contentY,
+                w: DESIGN.contentW - 0.4,
+                h: contentH,
+                fontFace: DESIGN.fontBody,
+                valign: 'top',
               }
             );
           } else if (slideDef.content) {
-            // Add plain text content
             const contentText = typeof slideDef.content === 'string'
               ? slideDef.content
               : slideDef.content.join('\n\n');
 
             slide.addText(contentText, {
-              x: 0.5,
-              y: 1.5,
-              w: 9.0,
-              h: 4.0,
-              fontSize: 18,
-              color: theme.text
+              x: DESIGN.marginX + 0.2,
+              y: contentY,
+              w: DESIGN.contentW - 0.4,
+              h: contentH,
+              fontSize: 16,
+              color: theme.text,
+              fontFace: DESIGN.fontBody,
+              lineSpacingMultiple: 1.5,
+              valign: 'top',
             });
           }
 
-          // Add image if provided
+          // Add image if provided (positioned to the right side)
           if (slideDef.image) {
             slide.addImage({
               path: slideDef.image.path,
               x: slideDef.image.x || 6.0,
               y: slideDef.image.y || 1.5,
               w: slideDef.image.w || 3.5,
-              h: slideDef.image.h || 3.5
+              h: slideDef.image.h || 3.5,
+              rounding: true,
             });
           }
+
+          addSideAccent(slide, theme.accent);
+          addSlideNumber(slide, slideIndex + 1, totalSlides);
           break;
         }
 
         case 'blank': {
           // Blank slide - user has full control
-          // Content will be added manually in params
           break;
         }
       }
@@ -245,7 +524,7 @@ export async function createPowerPoint(
       if (slideDef.notes) {
         slide.addNotes(slideDef.notes);
       }
-    }
+    });
 
     // Generate cryptographically random filename to prevent enumeration
     const filename = `${crypto.randomUUID()}.pptx`;
@@ -331,14 +610,9 @@ export async function createPitchDeck(
       { title: 'The Problem', bullets: sections.problem, layout: 'content' },
       { title: 'Our Solution', bullets: sections.solution, layout: 'content' },
       { title: 'Market Opportunity', bullets: sections.market, layout: 'content' },
-      { title: 'Traction', bullets: sections.traction, layout: 'content' },
-      { title: 'Our Team', bullets: sections.team, layout: 'content' },
+      { title: 'Traction & Metrics', bullets: sections.traction, layout: 'content' },
+      { title: 'Our Team', bullets: sections.team, layout: 'comparison' },
       { title: 'The Ask', bullets: sections.ask, layout: 'content' }
-    ],
-    theme: {
-      titleColor: '1F4788',
-      accentColor: '4472C4',
-      textColor: '333333'
-    }
+    ]
   });
 }

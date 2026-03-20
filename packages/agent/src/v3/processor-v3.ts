@@ -43,6 +43,20 @@ const MAX_ITERATIONS = 500; // No artificial limit — budget and timeout are th
 const TASK_TIMEOUT_MS = 40 * 60 * 1000; // 40 minutes (browser sessions can take 13min each)
 const BUDGET_PER_TASK = 5.0;
 
+// ── Dynamic Cost Management ──
+// These are GUIDANCE thresholds, not hard caps. They shape AI behavior dynamically.
+// The system adapts: warns, nudges, and eventually forces delivery — but never blocks.
+const DYNAMIC_COST_CONFIG = {
+  /** If running average cost per iteration exceeds this, log a warning */
+  highCostPerIterWarn: 0.01,
+  /** At this total spend, inject a message telling the AI to wrap up efficiently */
+  wrapUpThreshold: 1.00,
+  /** At this total spend, force deliver partial results */
+  forceDeliverThreshold: 2.00,
+  /** How many recent iterations to include in the running cost average */
+  costWindowSize: 10,
+};
+
 // ══════════════════════════════════════════════════════════════════
 // MAIN ENTRY POINT
 // ══════════════════════════════════════════════════════════════════
@@ -611,6 +625,11 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   const progressNotes: string[] = []; // Running log of what was accomplished
   const triedDomains = new Set<string>(); // Domains we've already visited
 
+  // ── Dynamic cost tracking state ──
+  const iterCosts: number[] = []; // Cost per iteration (sliding window for running average)
+  let costWrapUpInjected = false;  // Whether we've injected the $1 wrap-up message
+  let costForceDelivered = false;  // Whether we've hit the $2 force-deliver threshold
+
   // ── Multi-step loop ──
   let iterations = 0;
 
@@ -690,12 +709,24 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       // Detect if this is a browser task — send only browser tools to save ~4K tokens/request.
       // 38 tools = ~8K tokens. 6 browser tools = ~1.5K tokens. Saves 75% on tool schemas.
       const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot/i.test(m.content));
+
+      // ── Smart step complexity detection ──
+      // After a snapshot or read (simple data), the AI just needs to decide what to click/fill.
+      // After a navigation or form submission (complex), the AI needs to plan its next move.
+      const lastToolResult = messages.filter(m => m.role === 'tool').pop()?.content || '';
+      const lastAssistantAction = messages.filter(m => m.role === 'assistant' && m.tool_calls?.length).pop();
+      const lastToolName = lastAssistantAction?.tool_calls?.[lastAssistantAction.tool_calls.length - 1]?.function?.name || '';
+      const isAfterSimpleRead = ['browser_snapshot', 'browser_read'].includes(lastToolName);
+      const isAfterComplexAction = ['browser_go', 'browser_fill', 'browser_click'].includes(lastToolName) && /new page|redirected|form submitted|navigate/i.test(lastToolResult);
+      const stepComplexity: 'simple' | 'complex' = (isAfterSimpleRead && !isAfterComplexAction && iterations > 3) ? 'simple' : 'complex';
+
       modelResponse = await callModel({
         messages,
         tier: 'multi_step',
         useTools: true,
         toolCategory: hasBrowserActivity ? 'browser' : undefined,
         maxTokens: tokensForStep,
+        stepComplexity,
       });
     } catch (err) {
       consecutiveModelFailures++;
@@ -952,17 +983,49 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
       sameUrlCount = 0;
     }
 
-    // Cost awareness: if spending heavily without completing, the AI should know
-    // This is NOT a hard cap — the AI decides what to do with this information
-    if (iterations === 80 && budget.totalSpent > 0.30) {
+    // ── Dynamic cost awareness ──
+    // Track per-iteration cost and compute running average.
+    // This replaces the old static "iteration 80 + $0.30" check with adaptive guidance.
+    const iterCost = modelResponse.cost; // AI model cost for this iteration
+    iterCosts.push(iterCost);
+
+    // Running average over last N iterations
+    const windowCosts = iterCosts.slice(-DYNAMIC_COST_CONFIG.costWindowSize);
+    const avgCostPerIter = windowCosts.reduce((a, b) => a + b, 0) / windowCosts.length;
+
+    // Warn in logs (not to AI) if per-iteration cost is high
+    if (avgCostPerIter > DYNAMIC_COST_CONFIG.highCostPerIterWarn && iterations > 5) {
+      console.warn(`[V3] High cost/iter: $${avgCostPerIter.toFixed(4)}/iter (avg last ${windowCosts.length}), total $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
+    }
+
+    // At $1.00 total: inject wrap-up guidance (once)
+    if (!costWrapUpInjected && budget.totalSpent >= DYNAMIC_COST_CONFIG.wrapUpThreshold) {
+      costWrapUpInjected = true;
+      console.log(`[V3] Cost wrap-up threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
       messages.push({
         role: 'user',
-        content: `COST AWARENESS: You've spent $${budget.totalSpent.toFixed(2)} across ${iterations} steps. You have budget remaining but be efficient:
+        content: `COST AWARENESS: You've spent $${budget.totalSpent.toFixed(2)} across ${iterations} steps (avg $${avgCostPerIter.toFixed(4)}/step). Be efficient with remaining budget:
 1. If you have PARTIAL results — deliver them now. Something is better than nothing.
 2. If a site keeps blocking you — switch to a DIFFERENT site immediately, don't keep retrying.
 3. Make every remaining step count — no more exploratory browsing.
 4. You CAN keep going if you're close to completing the task. But stop wasting steps on approaches that clearly aren't working.`
       });
+    }
+
+    // At $2.00 total: force deliver partial results
+    if (!costForceDelivered && budget.totalSpent >= DYNAMIC_COST_CONFIG.forceDeliverThreshold) {
+      costForceDelivered = true;
+      console.log(`[V3] Cost force-deliver threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
+      // Build the best partial result we can
+      const progressSummary = progressNotes.filter(n => !n.startsWith('\u2717')).slice(-10).join('\n');
+      const domainsVisited = [...triedDomains].join(', ');
+      const lastAiContent = messages.filter(m => m.role === 'assistant' && m.content && m.content.length > 20)
+        .pop()?.content?.substring(0, 500) || '';
+      const partial = ledger.getPartialResults();
+      const bestResult = partial !== 'No results gathered yet.' ? partial
+        : progressSummary ? progressSummary
+        : lastAiContent || 'I was working on your task but used significant resources without a complete result.';
+      return `I've spent significant effort ($${budget.totalSpent.toFixed(2)}) across ${iterations} steps${domainsVisited ? ` visiting ${domainsVisited}` : ''}. Here's what I accomplished:\n\n${bestResult}`;
     }
 
     // Vision tool overuse

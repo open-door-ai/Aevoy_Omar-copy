@@ -1,10 +1,14 @@
 /**
  * Word Document Generation Action
- * Creates professional Word documents with formatting, tables, images
- * Beats Claude on document generation
+ * Creates professional Word documents with modern heading styles,
+ * styled tables, proper spacing, and consistent typography.
  */
 
-import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
+import {
+  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+  HeadingLevel, AlignmentType, BorderStyle, WidthType, ShadingType,
+  TableLayoutType, convertInchesToTwip
+} from 'docx';
 import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs/promises';
@@ -39,6 +43,123 @@ export interface WordResult {
   fileSize?: number;
 }
 
+// ── Design Tokens ───────────────────────────────────────────────
+const WORD_THEME = {
+  // Colors (matching the overall Aevoy palette)
+  headingColor: '1A1A2E',   // Deep navy
+  accentColor: '00D4AA',    // Teal accent
+  bodyColor: '2D3748',      // Dark gray body text
+  mutedColor: '718096',     // Muted gray for subtle text
+  tableBorderColor: 'E2E8F0',
+  tableHeaderBg: '1A1A2E',
+  tableHeaderFont: 'FFFFFF',
+  tableAltRowBg: 'F7FAFC',
+
+  // Font sizes (half-points)
+  titleSize: 56,   // 28pt
+  h1Size: 44,      // 22pt
+  h2Size: 36,      // 18pt
+  h3Size: 28,      // 14pt
+  bodySize: 22,    // 11pt
+  smallSize: 18,   // 9pt
+
+  // Spacing (twips, 1/20 of a point)
+  titleSpaceAfter: 300,
+  h1SpaceBefore: 360,
+  h1SpaceAfter: 160,
+  h2SpaceBefore: 280,
+  h2SpaceAfter: 120,
+  h3SpaceBefore: 200,
+  h3SpaceAfter: 100,
+  paraSpaceAfter: 160,
+  bulletSpaceAfter: 80,
+  tableSpaceBefore: 200,
+  tableSpaceAfter: 200,
+} as const;
+
+/**
+ * Create a styled table from headers + rows
+ */
+function buildStyledTable(headers: string[], rows: string[][]): Table {
+  const columnCount = headers.length;
+  // Distribute width evenly across columns (page width ~6.5 inches minus margins)
+  const colWidthTwips = Math.floor(convertInchesToTwip(6.5) / columnCount);
+
+  // Header row
+  const headerCells = headers.map(header =>
+    new TableCell({
+      children: [
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: header,
+              bold: true,
+              color: WORD_THEME.tableHeaderFont,
+              font: 'Segoe UI',
+              size: WORD_THEME.bodySize,
+            }),
+          ],
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 60, after: 60 },
+        }),
+      ],
+      shading: {
+        type: ShadingType.SOLID,
+        color: WORD_THEME.tableHeaderBg,
+        fill: WORD_THEME.tableHeaderBg,
+      },
+      width: { size: colWidthTwips, type: WidthType.DXA },
+    })
+  );
+
+  // Data rows with alternating colors
+  const dataRows = rows.map((row, rowIdx) => {
+    const isAlt = rowIdx % 2 === 1;
+    const cells = row.map(cellText =>
+      new TableCell({
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: cellText || '',
+                font: 'Segoe UI',
+                size: WORD_THEME.bodySize,
+                color: WORD_THEME.bodyColor,
+              }),
+            ],
+            spacing: { before: 40, after: 40 },
+          }),
+        ],
+        shading: isAlt
+          ? { type: ShadingType.SOLID, color: WORD_THEME.tableAltRowBg, fill: WORD_THEME.tableAltRowBg }
+          : undefined,
+        width: { size: colWidthTwips, type: WidthType.DXA },
+      })
+    );
+
+    // Pad with empty cells if row is shorter than headers
+    while (cells.length < columnCount) {
+      cells.push(
+        new TableCell({
+          children: [new Paragraph({ text: '' })],
+          width: { size: colWidthTwips, type: WidthType.DXA },
+        })
+      );
+    }
+
+    return new TableRow({ children: cells });
+  });
+
+  return new Table({
+    rows: [
+      new TableRow({ children: headerCells, tableHeader: true }),
+      ...dataRows,
+    ],
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    layout: TableLayoutType.FIXED,
+  });
+}
+
 /**
  * Generate a Word document
  */
@@ -46,38 +167,135 @@ export async function createWordDocument(
   params: WordDocumentParams
 ): Promise<WordResult> {
   try {
-    const children: Paragraph[] = [];
+    const children: (Paragraph | Table)[] = [];
 
-    // Add title if provided
+    // ── Title ───────────────────────────────────────────────
     if (params.title) {
+      // Accent bar above title
       children.push(
         new Paragraph({
-          text: params.title,
+          children: [
+            new TextRun({
+              text: '                              ',
+              font: 'Segoe UI',
+              size: 4,
+            }),
+          ],
+          border: {
+            bottom: {
+              style: BorderStyle.SINGLE,
+              size: 12,
+              color: WORD_THEME.accentColor,
+              space: 1,
+            },
+          },
+          spacing: { after: 120 },
+        })
+      );
+
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: params.title,
+              bold: true,
+              font: 'Segoe UI',
+              size: WORD_THEME.titleSize,
+              color: WORD_THEME.headingColor,
+            }),
+          ],
           heading: HeadingLevel.TITLE,
-          alignment: AlignmentType.CENTER,
-          spacing: { after: 400 }
+          spacing: { after: WORD_THEME.titleSpaceAfter },
+        })
+      );
+
+      // Date line under title
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: new Date().toLocaleDateString('en-US', {
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric',
+              }),
+              font: 'Segoe UI',
+              size: WORD_THEME.smallSize,
+              color: WORD_THEME.mutedColor,
+              italics: true,
+            }),
+          ],
+          spacing: { after: 300 },
         })
       );
     }
 
-    // Process each section
+    // ── Sections ────────────────────────────────────────────
     for (const section of params.sections) {
       switch (section.type) {
         case 'heading': {
-          const headingLevel = section.level === 1 ? HeadingLevel.HEADING_1 :
-                              section.level === 2 ? HeadingLevel.HEADING_2 :
-                              section.level === 3 ? HeadingLevel.HEADING_3 :
-                              section.level === 4 ? HeadingLevel.HEADING_4 :
-                              section.level === 5 ? HeadingLevel.HEADING_5 :
+          const level = section.level || 1;
+          const headingLevel = level === 1 ? HeadingLevel.HEADING_1 :
+                              level === 2 ? HeadingLevel.HEADING_2 :
+                              level === 3 ? HeadingLevel.HEADING_3 :
+                              level === 4 ? HeadingLevel.HEADING_4 :
+                              level === 5 ? HeadingLevel.HEADING_5 :
                               HeadingLevel.HEADING_6;
 
-          children.push(
-            new Paragraph({
-              text: section.text || '',
-              heading: headingLevel,
-              spacing: { before: 240, after: 120 }
-            })
-          );
+          const fontSize = level === 1 ? WORD_THEME.h1Size :
+                          level === 2 ? WORD_THEME.h2Size :
+                          WORD_THEME.h3Size;
+
+          const spaceBefore = level === 1 ? WORD_THEME.h1SpaceBefore :
+                             level === 2 ? WORD_THEME.h2SpaceBefore :
+                             WORD_THEME.h3SpaceBefore;
+
+          const spaceAfter = level === 1 ? WORD_THEME.h1SpaceAfter :
+                            level === 2 ? WORD_THEME.h2SpaceAfter :
+                            WORD_THEME.h3SpaceAfter;
+
+          // For H1, add a subtle bottom border as a divider
+          if (level === 1) {
+            children.push(
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: section.text || '',
+                    bold: true,
+                    font: 'Segoe UI',
+                    size: fontSize,
+                    color: WORD_THEME.headingColor,
+                  }),
+                ],
+                heading: headingLevel,
+                spacing: { before: spaceBefore, after: spaceAfter },
+                border: {
+                  bottom: {
+                    style: BorderStyle.SINGLE,
+                    size: 4,
+                    color: WORD_THEME.tableBorderColor,
+                    space: 4,
+                  },
+                },
+              })
+            );
+          } else {
+            children.push(
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: section.text || '',
+                    bold: true,
+                    font: 'Segoe UI',
+                    size: fontSize,
+                    color: WORD_THEME.headingColor,
+                  }),
+                ],
+                heading: headingLevel,
+                spacing: { before: spaceBefore, after: spaceAfter },
+              })
+            );
+          }
           break;
         }
 
@@ -93,11 +311,14 @@ export async function createWordDocument(
                 new TextRun({
                   text: section.text || '',
                   bold: section.bold,
-                  italics: section.italic
-                })
+                  italics: section.italic,
+                  font: 'Segoe UI',
+                  size: WORD_THEME.bodySize,
+                  color: WORD_THEME.bodyColor,
+                }),
               ],
               alignment,
-              spacing: { after: 120 }
+              spacing: { after: WORD_THEME.paraSpaceAfter, line: 300 },
             })
           );
           break;
@@ -105,35 +326,61 @@ export async function createWordDocument(
 
         case 'bullet': {
           if (section.items && section.items.length > 0) {
-            section.items.forEach((item, index) => {
+            section.items.forEach((item) => {
               children.push(
                 new Paragraph({
-                  text: item,
-                  bullet: {
-                    level: 0
-                  },
-                  spacing: { after: 60 }
+                  children: [
+                    new TextRun({
+                      text: item,
+                      font: 'Segoe UI',
+                      size: WORD_THEME.bodySize,
+                      color: WORD_THEME.bodyColor,
+                    }),
+                  ],
+                  bullet: { level: 0 },
+                  spacing: { after: WORD_THEME.bulletSpaceAfter, line: 280 },
                 })
               );
             });
+            // Extra space after bullet list
+            children.push(
+              new Paragraph({
+                text: '',
+                spacing: { after: 80 },
+              })
+            );
           }
           break;
         }
 
         case 'numbered': {
           if (section.items && section.items.length > 0) {
-            section.items.forEach((item, index) => {
+            section.items.forEach((item) => {
               children.push(
                 new Paragraph({
-                  text: item,
+                  children: [
+                    new TextRun({
+                      text: item,
+                      font: 'Segoe UI',
+                      size: WORD_THEME.bodySize,
+                      color: WORD_THEME.bodyColor,
+                    }),
+                  ],
                   numbering: {
                     reference: 'default-numbering',
-                    level: 0
+                    level: 0,
                   },
-                  spacing: { after: 60 }
+                  spacing: { after: WORD_THEME.bulletSpaceAfter, line: 280 },
                 })
               );
             });
+            // Extra space after numbered list
+            children.push(
+              new Paragraph({
+                text: '',
+                spacing: { after: 80 },
+              })
+            );
           }
           break;
         }
@@ -142,79 +389,59 @@ export async function createWordDocument(
           if (section.tableData) {
             const { headers, rows } = section.tableData;
 
-            // Create header row
-            const headerCells = headers.map(header =>
-              new TableCell({
-                children: [
-                  new Paragraph({
-                    children: [
-                      new TextRun({
-                        text: header,
-                        bold: true
-                      })
-                    ],
-                    alignment: AlignmentType.CENTER
-                  })
-                ],
-                shading: {
-                  fill: 'D9E1F2' // Light blue background
-                }
-              })
-            );
-
-            const tableRows: TableRow[] = [
-              new TableRow({
-                children: headerCells,
-                tableHeader: true
-              })
-            ];
-
-            // Create data rows
-            rows.forEach(row => {
-              const cells = row.map(cellText =>
-                new TableCell({
-                  children: [
-                    new Paragraph({
-                      text: cellText
-                    })
-                  ]
-                })
-              );
-
-              tableRows.push(
-                new TableRow({
-                  children: cells
-                })
-              );
-            });
-
+            // Add spacing paragraph before table
             children.push(
               new Paragraph({
-                children: [
-                  new TextRun({ text: '' })
-                ],
-                spacing: { before: 120 }
+                text: '',
+                spacing: { before: WORD_THEME.tableSpaceBefore },
               })
             );
 
-            // Note: Table is not added via children, but via sections
-            // We'll handle this differently below
-            break;
+            // Build and add the styled table
+            children.push(buildStyledTable(headers, rows));
+
+            // Add spacing paragraph after table
+            children.push(
+              new Paragraph({
+                text: '',
+                spacing: { after: WORD_THEME.tableSpaceAfter },
+              })
+            );
           }
           break;
         }
       }
     }
 
-    // Create the document
+    // ── Create Document ─────────────────────────────────────
     const doc = new Document({
       sections: [{
-        properties: {},
-        children
+        properties: {
+          page: {
+            margin: {
+              top: convertInchesToTwip(1),
+              bottom: convertInchesToTwip(1),
+              left: convertInchesToTwip(1),
+              right: convertInchesToTwip(1),
+            },
+          },
+        },
+        children,
       }],
       title: params.title,
       creator: params.author || 'Aevoy AI Agent',
       description: 'AI-Generated Document',
+      styles: {
+        default: {
+          document: {
+            run: {
+              font: 'Segoe UI',
+              size: WORD_THEME.bodySize,
+              color: WORD_THEME.bodyColor,
+            },
+          },
+        },
+      },
       numbering: {
         config: [{
           reference: 'default-numbering',
@@ -222,10 +449,10 @@ export async function createWordDocument(
             level: 0,
             format: 'decimal',
             text: '%1.',
-            alignment: AlignmentType.LEFT
-          }]
-        }]
-      }
+            alignment: AlignmentType.LEFT,
+          }],
+        }],
+      },
     });
 
     // Generate cryptographically random filename to prevent enumeration
@@ -263,19 +490,53 @@ export async function createWordDocument(
 
 /**
  * Quick helper: Create a simple text document
+ * Intelligently parses content: lines starting with # become headings,
+ * lines starting with - or * become bullets, everything else is a paragraph.
  */
 export async function createSimpleDocument(
   filename: string,
   title: string,
   paragraphs: string[]
 ): Promise<WordResult> {
+  const sections: WordSection[] = [];
+
+  for (const p of paragraphs) {
+    const trimmed = p.trim();
+
+    // Detect markdown-style headings
+    if (trimmed.startsWith('### ')) {
+      sections.push({ type: 'heading', text: trimmed.slice(4), level: 3 });
+    } else if (trimmed.startsWith('## ')) {
+      sections.push({ type: 'heading', text: trimmed.slice(3), level: 2 });
+    } else if (trimmed.startsWith('# ')) {
+      sections.push({ type: 'heading', text: trimmed.slice(2), level: 1 });
+    } else if (/^[-*]\s+/.test(trimmed)) {
+      // Collect consecutive bullet items
+      const lastSection = sections[sections.length - 1];
+      const bulletText = trimmed.replace(/^[-*]\s+/, '');
+      if (lastSection && lastSection.type === 'bullet') {
+        lastSection.items!.push(bulletText);
+      } else {
+        sections.push({ type: 'bullet', items: [bulletText] });
+      }
+    } else if (/^\d+\.\s+/.test(trimmed)) {
+      // Numbered list item
+      const lastSection = sections[sections.length - 1];
+      const itemText = trimmed.replace(/^\d+\.\s+/, '');
+      if (lastSection && lastSection.type === 'numbered') {
+        lastSection.items!.push(itemText);
+      } else {
+        sections.push({ type: 'numbered', items: [itemText] });
+      }
+    } else {
+      sections.push({ type: 'paragraph', text: trimmed });
+    }
+  }
+
   return createWordDocument({
     filename,
     title,
-    sections: paragraphs.map(p => ({
-      type: 'paragraph',
-      text: p
-    }))
+    sections,
   });
 }
 
