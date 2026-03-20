@@ -141,6 +141,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // 3. Detect VAGUE responses — no concrete data
     const hasConcreteData = /(\$\d|\£\d|\€\d|\d+\.\d{2}|https?:\/\/\S{10,}|confirmation.*#|order.*#|booking.*#|@\S+\.\S+|\+1\d{10}|\d{3}[-.\s]\d{3}[-.\s]\d{4}|\d+\/5|\d+\s*stars?|\d+\s*reviews?|\d+\s*ratings?|Rating:|\bON\s+[A-Z]\d[A-Z]\b|\bCA\s+\d{5}\b)/.test(response);
     const isVague = /\b(typically|generally|usually|I recommend|you could try|you might want|I suggest|here are some tips|in general)\b/i.test(response) && !hasConcreteData;
+    // Detect "do it yourself" responses — AI should DO the task, not instruct the user
+    const tellsUserToDoIt = /\b(you can|you should|you'll need to|you may want to|you could|I recommend you|try visiting|call them|here'?s (?:the|their) (?:number|phone|email|website|link))\b/i.test(response) && !hasConcreteData && !claimsBooked && !claimsAccountCreated;
 
     // Cross-reference: did the AI actually USE the tools it claims?
     // Use action_success_count (not total action_count) — failed actions don't prove work was done
@@ -210,6 +212,11 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       taskStatus = 'needs_review';
       verificationStatus = 'no_actions';
       failReason = 'Browser task but zero successful actions — response is fabricated';
+    } else if (tellsUserToDoIt) {
+      // AI told user to do it themselves — the whole point is the AI does the work
+      taskStatus = 'needs_review';
+      verificationStatus = 'delegation';
+      failReason = 'AI told user to do the task themselves instead of completing it';
     } else if (isBrowserTask && isVague && !hasConcreteData) {
       // Browser task with vague response and no concrete data
       taskStatus = 'needs_review';
