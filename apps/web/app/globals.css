@@ -251,3 +251,37 @@
   --muted-foreground: oklch(0.556 0 0);
   --border: oklch(0.922 0 0);
 }
+
+/* ─── Aurora Theme Variables ─── */
+:root, [data-theme="light"] {
+  --aurora-bg: #FAFAFA;
+  --aurora-card: #FFFFFF;
+  --aurora-card-border: #E5E5EA;
+  --aurora-text: #1C1C1E;
+  --aurora-text-secondary: #8E8E93;
+}
+
+[data-theme="dark"] {
+  --aurora-bg: #0A0A0B;
+  --aurora-card: #141416;
+  --aurora-card-border: #2A2A2E;
+  --aurora-text: #EDEDEF;
+  --aurora-text-secondary: #8E8E93;
+}
+
+/* ─── Aurora Mic Button Animations ─── */
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+.animate-breathe {
+  animation: breathe 2s ease-in-out infinite;
+}
+
+@keyframes ping-slow {
+  0% { transform: scale(1); opacity: 0.3; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+.animate-ping-slow {
+  animation: ping-slow 2s ease-out infinite;
+}

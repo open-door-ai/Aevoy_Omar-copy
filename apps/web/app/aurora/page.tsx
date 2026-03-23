@@ -3,53 +3,31 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Send as SendIcon, Loader2, AlertTriangle } from "lucide-react";
-
-/* ─────────────────────────── Types ─────────────────────────── */
-interface ChatMessage {
-  id: string;
-  role: "user" | "aurora";
-  text: string;
-  status: string;
-  created_at: string;
-}
-
-/* ─────────────────────────── Helpers ─────────────────────────── */
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-
-  if (diffMs < 60_000) return "Just now";
-  if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
-  if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`;
-
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+import { MicButton } from "@/components/aurora/MicButton";
+import { FeedCard } from "@/components/aurora/FeedCard";
+import { formatTaskForFeed } from "@/lib/feed-formatter";
+import type { FeedItem } from "@/lib/feed-formatter";
 
 /* ─────────────────────────── Component ─────────────────────────── */
 export default function AuroraFeed() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [listening, setListening] = useState(false);
+  const feedEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const supabase = createClient();
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  /* ─── Load initial messages ─── */
-  const loadMessages = useCallback(async () => {
+  /* ─── Load initial feed ─── */
+  const loadFeed = useCallback(async () => {
     try {
       const {
         data: { user },
@@ -63,58 +41,31 @@ export default function AuroraFeed() {
           "id, email_subject, response_text, input_channel, status, created_at"
         )
         .eq("user_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(100);
+        .order("created_at", { ascending: false })
+        .limit(50);
 
       if (tasksError) throw tasksError;
 
-      const chatMessages: ChatMessage[] = [];
+      const items: FeedItem[] = [];
+      // Reverse to get chronological order for display (oldest first)
+      const ordered = [...(tasks || [])].reverse();
+      for (const task of ordered) {
+        items.push(...formatTaskForFeed(task));
+      }
 
-      (tasks || []).forEach((t) => {
-        // User message
-        if (t.email_subject) {
-          chatMessages.push({
-            id: `${t.id}-user`,
-            role: "user",
-            text: t.email_subject,
-            status: t.status,
-            created_at: t.created_at,
-          });
-        }
-
-        // Aurora response
-        if (t.response_text) {
-          chatMessages.push({
-            id: `${t.id}-aurora`,
-            role: "aurora",
-            text: t.response_text,
-            status: t.status,
-            created_at: t.created_at,
-          });
-        } else if (t.status === "processing") {
-          chatMessages.push({
-            id: `${t.id}-aurora`,
-            role: "aurora",
-            text: "",
-            status: "processing",
-            created_at: t.created_at,
-          });
-        }
-      });
-
-      setMessages(chatMessages);
+      setFeedItems(items);
       setLoading(false);
       setTimeout(scrollToBottom, 100);
     } catch (err) {
       console.error("Feed load error:", err);
-      setError("Something went wrong loading your messages.");
+      setError("Something went wrong loading your feed.");
       setLoading(false);
     }
   }, [supabase, scrollToBottom]);
 
   useEffect(() => {
-    loadMessages();
-  }, [loadMessages]);
+    loadFeed();
+  }, [loadFeed]);
 
   /* ─── Realtime subscriptions ─── */
   useEffect(() => {
@@ -134,64 +85,41 @@ export default function AuroraFeed() {
           const t = payload.new as Record<string, unknown>;
           if (!t || !t.id) return;
 
-          const taskId = t.id as string;
-          const subject = (t.email_subject as string) || null;
-          const response = (t.response_text as string) || null;
-          const status = (t.status as string) || "pending";
-          const createdAt =
-            (t.created_at as string) || new Date().toISOString();
+          const newItems = formatTaskForFeed({
+            id: t.id as string,
+            email_subject: (t.email_subject as string) || undefined,
+            response_text: (t.response_text as string) || undefined,
+            input_channel: (t.input_channel as string) || undefined,
+            status: (t.status as string) || "pending",
+            created_at:
+              (t.created_at as string) || new Date().toISOString(),
+          });
 
-          setMessages((prev) => {
+          setFeedItems((prev) => {
             const updated = [...prev];
 
-            // Update or add user message
-            if (subject) {
-              const userIdx = updated.findIndex(
-                (m) => m.id === `${taskId}-user`
+            for (const newItem of newItems) {
+              const existingIdx = updated.findIndex(
+                (m) => m.id === newItem.id
               );
-              if (userIdx >= 0) {
-                updated[userIdx] = {
-                  ...updated[userIdx],
-                  text: subject,
-                  status,
-                };
-              }
-            }
-
-            // Update or add aurora response
-            const auroraIdx = updated.findIndex(
-              (m) => m.id === `${taskId}-aurora`
-            );
-            if (auroraIdx >= 0) {
-              updated[auroraIdx] = {
-                ...updated[auroraIdx],
-                text: response || "",
-                status,
-              };
-            } else if (response) {
-              // Find pending message and replace, or add new
-              const pendingIdx = updated.findIndex(
-                (m) =>
-                  m.id.startsWith("pending-") &&
-                  m.role === "aurora" &&
-                  m.status === "processing"
-              );
-              if (pendingIdx >= 0) {
-                updated[pendingIdx] = {
-                  id: `${taskId}-aurora`,
-                  role: "aurora",
-                  text: response,
-                  status,
-                  created_at: createdAt,
-                };
+              if (existingIdx >= 0) {
+                updated[existingIdx] = newItem;
               } else {
-                updated.push({
-                  id: `${taskId}-aurora`,
-                  role: "aurora",
-                  text: response,
-                  status,
-                  created_at: createdAt,
-                });
+                // Check for pending placeholder
+                const pendingIdx = updated.findIndex(
+                  (m) =>
+                    m.id.startsWith("pending-") &&
+                    m.id.endsWith("-aurora") &&
+                    m.status === "processing"
+                );
+                if (
+                  pendingIdx >= 0 &&
+                  newItem.id.endsWith("-aurora")
+                ) {
+                  updated[pendingIdx] = newItem;
+                } else {
+                  updated.push(newItem);
+                }
               }
             }
 
@@ -219,21 +147,21 @@ export default function AuroraFeed() {
     const pendingId = `pending-${Date.now()}`;
 
     // Optimistic: add user message + processing indicator
-    setMessages((prev) => [
+    setFeedItems((prev) => [
       ...prev,
       {
         id: `${pendingId}-user`,
-        role: "user",
-        text,
+        summary: text,
+        channel: "web",
         status: "processing",
-        created_at: now,
+        timestamp: now,
       },
       {
         id: `${pendingId}-aurora`,
-        role: "aurora",
-        text: "",
+        summary: "",
+        channel: "web",
         status: "processing",
-        created_at: now,
+        timestamp: now,
       },
     ]);
     setTimeout(scrollToBottom, 100);
@@ -260,23 +188,23 @@ export default function AuroraFeed() {
 
       // If we got an immediate response, update the pending aurora message
       if (data.response) {
-        setMessages((prev) =>
+        setFeedItems((prev) =>
           prev.map((m) =>
             m.id === `${pendingId}-aurora`
-              ? { ...m, text: data.response, status: "completed" }
+              ? { ...m, summary: data.response, status: "completed" as const }
               : m
           )
         );
       }
     } catch (err) {
       console.error("Send error:", err);
-      setMessages((prev) =>
+      setFeedItems((prev) =>
         prev.map((m) =>
           m.id === `${pendingId}-aurora`
             ? {
                 ...m,
-                text: "Couldn't reach Aurora. Try again in a moment.",
-                status: "failed",
+                summary: "Couldn't reach Aurora. Try again in a moment.",
+                status: "failed" as const,
               }
             : m
         )
@@ -308,75 +236,55 @@ export default function AuroraFeed() {
         </div>
       )}
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+      {/* Scrollable content area */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 scrollbar-hide">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full gap-4">
-            <div className="w-8 h-8 rounded-full border-2 border-border border-t-muted-foreground animate-spin" />
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3">
-            <div className="w-12 h-12 rounded-full bg-muted border border-border flex items-center justify-center">
-              <span className="text-lg text-muted-foreground/40">A</span>
-            </div>
-            <p className="text-sm text-muted-foreground text-center max-w-xs">
-              This is the start of your conversation with Aurora.
-            </p>
-            <p className="text-xs text-muted-foreground/70">
-              Type something below to begin.
+            <div className="w-8 h-8 rounded-full border-2 border-[--aurora-card-border] border-t-[#6C5CE7] animate-spin" />
+            <p className="text-sm text-[--aurora-text-secondary]">
+              Loading...
             </p>
           </div>
         ) : (
-          <div className="space-y-4 max-w-3xl mx-auto">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div className="flex flex-col gap-1 max-w-[85%] sm:max-w-[75%]">
-                  <div
-                    className={`px-4 py-2.5 text-sm leading-relaxed ${
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground rounded-2xl rounded-br-md"
-                        : "bg-card text-card-foreground rounded-2xl rounded-bl-md"
-                    }`}
-                  >
-                    {msg.status === "processing" && !msg.text ? (
-                      <div className="flex gap-1.5 py-0.5">
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
-                          style={{ animationDelay: "0ms" }}
-                        />
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
-                          style={{ animationDelay: "150ms" }}
-                        />
-                        <span
-                          className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
-                          style={{ animationDelay: "300ms" }}
-                        />
-                      </div>
-                    ) : (
-                      <span className="whitespace-pre-wrap">{msg.text}</span>
-                    )}
-                  </div>
-                  <span
-                    className={`text-[10px] text-muted-foreground/70 px-1 ${msg.role === "user" ? "text-right" : "text-left"}`}
-                  >
-                    {formatTime(msg.created_at)}
-                  </span>
+          <div className="max-w-2xl mx-auto space-y-8">
+            {/* Mic Button — the centerpiece */}
+            <div className="flex justify-center pt-4 pb-2">
+              <MicButton onListeningChange={setListening} />
+            </div>
+
+            {/* Feed heading */}
+            {feedItems.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="text-xs font-medium uppercase tracking-wider text-[--aurora-text-secondary] px-1">
+                  Recent Activity
+                </h2>
+
+                {/* Feed cards */}
+                <div className="space-y-2.5">
+                  {feedItems.map((item) => (
+                    <FeedCard key={item.id} item={item} />
+                  ))}
                 </div>
               </div>
-            ))}
-            <div ref={messagesEndRef} />
+            )}
+
+            {/* Empty state */}
+            {feedItems.length === 0 && !listening && (
+              <div className="flex flex-col items-center gap-3 pt-4">
+                <p className="text-sm text-[--aurora-text-secondary] text-center max-w-xs">
+                  No activity yet. Tap the mic or type below to start.
+                </p>
+              </div>
+            )}
+
+            <div ref={feedEndRef} />
           </div>
         )}
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-border bg-background px-4 sm:px-6 py-4">
-        <div className="max-w-3xl mx-auto">
+      <div className="border-t border-[--aurora-card-border] bg-[--aurora-bg] px-4 sm:px-6 py-4">
+        <div className="max-w-2xl mx-auto">
           <div className="relative flex items-center">
             <input
               ref={inputRef}
@@ -385,13 +293,13 @@ export default function AuroraFeed() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Message Aurora..."
-              className="w-full h-11 px-4 pr-12 rounded-xl bg-card border border-border text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all"
+              className="w-full h-11 px-4 pr-12 rounded-xl bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] placeholder:text-[--aurora-text-secondary]/60 outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all"
               autoComplete="off"
             />
             <button
               onClick={handleSend}
               disabled={!input.trim() || sending}
-              className="absolute right-1.5 p-2 rounded-lg text-muted-foreground hover:text-foreground/60 hover:bg-muted disabled:opacity-20 disabled:hover:bg-transparent transition-all"
+              className="absolute right-1.5 p-2 rounded-lg text-[--aurora-text-secondary] hover:text-[--aurora-text]/60 hover:bg-[#6C5CE7]/10 disabled:opacity-20 disabled:hover:bg-transparent transition-all"
             >
               {sending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
