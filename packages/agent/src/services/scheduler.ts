@@ -14,6 +14,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { startMonitoringService } from './monitoring.js';
 import { startAutoProceedPoller, stopAutoProceedPoller } from './auto-proceed.js';
 import { schedulerHeartbeat } from '../utils/scheduler-heartbeat.js';
+import { logger } from '../utils/logger.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
@@ -24,12 +25,12 @@ let checkinInterval: NodeJS.Timeout | null = null;
  */
 export function startScheduler(): void {
   if (schedulerInterval) {
-    console.log('[SCHEDULER] Already running');
+    logger.info('[SCHEDULER] Already running');
     return;
   }
   
   // Run immediately on start
-  runDueScheduledTasks().catch(console.error);
+  runDueScheduledTasks().catch((err: unknown) => logger.error({ err }, 'Scheduler task failed'));
   
   // Then run every minute
   schedulerInterval = setInterval(async () => {
@@ -37,11 +38,11 @@ export function startScheduler(): void {
       await runDueScheduledTasks();
       schedulerHeartbeat.record('scheduler');
     } catch (error) {
-      console.error('[SCHEDULER] Error running scheduled tasks:', error);
+      logger.error('[SCHEDULER] Error running scheduled tasks:', error);
     }
   }, 60 * 1000);
   
-  console.log('[SCHEDULER] Started - checking for due tasks every minute');
+  logger.info('[SCHEDULER] Started - checking for due tasks every minute');
 
   // Proactive engine — REBUILT with strict controls
   // Rules:
@@ -57,32 +58,32 @@ export function startScheduler(): void {
       try {
         await runProactiveChecks();
       } catch (error) {
-        console.error('[SCHEDULER] Proactive check error:', error);
+        logger.error('[SCHEDULER] Proactive check error:', error);
       }
     }, 2 * 60 * 60 * 1000); // Every 2 hours
-    console.log('[SCHEDULER] Proactive engine started — checking every 2 hours (controlled mode)');
+    logger.info('[SCHEDULER] Proactive engine started — checking every 2 hours (controlled mode)');
   } else {
-    console.log('[SCHEDULER] Proactive engine DISABLED via PROACTIVE_ENGINE=false');
+    logger.info('[SCHEDULER] Proactive engine DISABLED via PROACTIVE_ENGINE=false');
   }
 
   // Start daily check-in calls (every 5 minutes)
-  runCheckinCalls().catch(console.error);
+  runCheckinCalls().catch((err: unknown) => logger.error({ err }, 'Scheduler task failed'));
   checkinInterval = setInterval(async () => {
     try {
       await runCheckinCalls();
     } catch (error) {
-      console.error('[SCHEDULER] Check-in call error:', error);
+      logger.error('[SCHEDULER] Check-in call error:', error);
     }
   }, 5 * 60 * 1000); // Every 5 minutes
 
-  console.log('[SCHEDULER] Check-in engine started - checking every 5 minutes');
+  logger.info('[SCHEDULER] Check-in engine started - checking every 5 minutes');
 
   // Start autonomous inbox management (polls every 5 minutes internally)
   import("./inbox-manager.js").then(({ startInboxManager }) => {
     startInboxManager();
-    console.log('[SCHEDULER] Inbox management started');
+    logger.info('[SCHEDULER] Inbox management started');
   }).catch((error: Error) => {
-    console.error('[SCHEDULER] Could not start inbox manager:', error);
+    logger.error('[SCHEDULER] Could not start inbox manager:', error);
   });
 
   // MONITORING SERVICE DISABLED — was the #1 cost burner.
@@ -90,11 +91,11 @@ export function startScheduler(): void {
   // every 15 minutes, each making AI calls + Twilio sends.
   // Monitoring must be explicitly user-requested, not background.
   // startMonitoringService();
-  console.log('[SCHEDULER] Monitoring service DISABLED (cost control)');
+  logger.info('[SCHEDULER] Monitoring service DISABLED (cost control)');
 
   // Start auto-proceed poller (every 5 minutes) — re-triggers tasks where user didn't respond
   startAutoProceedPoller();
-  console.log('[SCHEDULER] Auto-proceed poller started');
+  logger.info('[SCHEDULER] Auto-proceed poller started');
 
   // Daily Twilio cost reconciliation — runs 60s after startup, then every 24h
   setTimeout(async () => {
@@ -110,7 +111,7 @@ export function startScheduler(): void {
       } catch { /* non-critical */ }
     }, 24 * 60 * 60 * 1000);
   }, 60 * 1000);
-  console.log('[SCHEDULER] Twilio reconciliation scheduled (daily)');
+  logger.info('[SCHEDULER] Twilio reconciliation scheduled (daily)');
 }
 
 /**
@@ -130,7 +131,7 @@ export function stopScheduler(): void {
     checkinInterval = null;
   }
   stopAutoProceedPoller();
-  console.log('[SCHEDULER] Stopped');
+  logger.info('[SCHEDULER] Stopped');
 }
 
 /**
@@ -140,7 +141,7 @@ export function stopScheduler(): void {
 async function runProactiveChecks(): Promise<void> {
   const acquired = await acquireDistributedLock("scheduler_proactive", 5 * 60_000);
   if (!acquired) {
-    console.log("[SCHEDULER] Proactive check skipped — another instance holds the lock");
+    logger.info("[SCHEDULER] Proactive check skipped — another instance holds the lock");
     return;
   }
 
@@ -154,12 +155,12 @@ async function runProactiveChecks(): Promise<void> {
       .limit(20);
 
     if (todayProactive && todayProactive.length >= 10) {
-      console.log(`[PROACTIVE] Global daily cap reached (${todayProactive.length} today) — skipping`);
+      logger.info(`[PROACTIVE] Global daily cap reached (${todayProactive.length} today) — skipping`);
       await releaseDistributedLock("scheduler_proactive");
       return;
     }
   } catch (capError) {
-    console.error('[PROACTIVE] Daily cap check error:', capError);
+    logger.error('[PROACTIVE] Daily cap check error:', capError);
     // Continue anyway — better to run with a failed cap check than skip entirely
   }
 
@@ -167,24 +168,24 @@ async function runProactiveChecks(): Promise<void> {
     const engine = getProactiveEngine();
     const count = await engine.runForAllUsers();
     if (count > 0) {
-      console.log(`[SCHEDULER] Proactive: ${count} findings routed`);
+      logger.info(`[SCHEDULER] Proactive: ${count} findings routed`);
     }
   } catch (error) {
-    console.error('[SCHEDULER] Proactive engine error:', error);
+    logger.error('[SCHEDULER] Proactive engine error:', error);
   }
 
   // Also run memory compression + decay
   try {
     await runMemoryCompression();
   } catch (error) {
-    console.error('[SCHEDULER] Memory compression error:', error);
+    logger.error('[SCHEDULER] Memory compression error:', error);
   }
 
   // Run data retention cleanup (daily, checked hourly)
   try {
     await runDataRetention();
   } catch (error) {
-    console.error('[SCHEDULER] Data retention error:', error);
+    logger.error('[SCHEDULER] Data retention error:', error);
   }
 
   // Cleanup expired TFA codes
@@ -204,11 +205,11 @@ async function runProactiveChecks(): Promise<void> {
     if (now.getUTCHours() === 3) {
       const patterns = await detectPatterns();
       if (patterns.length > 0) {
-        console.log(`[SCHEDULER] Pattern detection: found ${patterns.length} cross-task patterns`);
+        logger.info(`[SCHEDULER] Pattern detection: found ${patterns.length} cross-task patterns`);
       }
     }
   } catch (error) {
-    console.error('[SCHEDULER] Pattern detection error:', error);
+    logger.error('[SCHEDULER] Pattern detection error:', error);
   }
 
   // AUTONOMOUS INTELLIGENCE: Run skill recommendations (daily at 4 AM UTC, after pattern detection)
@@ -227,7 +228,7 @@ async function runProactiveChecks(): Promise<void> {
 
       if (activeUsers && activeUsers.length > 0) {
         const uniqueUserIds = [...new Set(activeUsers.map(u => u.user_id))];
-        console.log(`[SCHEDULER] Running skill recommendations for ${uniqueUserIds.length} active users`);
+        logger.info(`[SCHEDULER] Running skill recommendations for ${uniqueUserIds.length} active users`);
 
         for (const userId of uniqueUserIds.slice(0, 100)) { // Limit to 100/day to avoid spam
           try {
@@ -247,7 +248,7 @@ async function runProactiveChecks(): Promise<void> {
                   subject: "[Aevoy] Skill Recommendations",
                   body: `I analyzed your recent task patterns and found ${recommendations.length} skills that could help:\n\n${formattedRecommendations}\n\nInstall skills at: https://www.aevoy.com/dashboard/skills`,
                 });
-                console.log(`[SCHEDULER] Sent ${recommendations.length} skill recommendations to user ${userId.slice(0, 8)}`);
+                logger.info(`[SCHEDULER] Sent ${recommendations.length} skill recommendations to user ${userId.slice(0, 8)}`);
               }
             }
           } catch {
@@ -257,7 +258,7 @@ async function runProactiveChecks(): Promise<void> {
       }
     }
   } catch (error) {
-    console.error('[SCHEDULER] Skill recommendation error:', error);
+    logger.error('[SCHEDULER] Skill recommendation error:', error);
   }
 
   // PROACTIVE ENGAGEMENT: Daily digests (hourly check, sent at user's local 6 PM)
@@ -266,10 +267,10 @@ async function runProactiveChecks(): Promise<void> {
     const engagementEngine = getProactiveEngagementEngine();
     const digestsSent = await engagementEngine.sendDailyDigests();
     if (digestsSent > 0) {
-      console.log(`[SCHEDULER] Daily digests: sent ${digestsSent} digests`);
+      logger.info(`[SCHEDULER] Daily digests: sent ${digestsSent} digests`);
     }
   } catch (error) {
-    console.error('[SCHEDULER] Daily digest error:', error);
+    logger.error('[SCHEDULER] Daily digest error:', error);
   }
 
   // PROACTIVE ENGAGEMENT: Weekly reports (hourly check, sent Sunday 8 PM local time)
@@ -278,10 +279,10 @@ async function runProactiveChecks(): Promise<void> {
     const engagementEngine = getProactiveEngagementEngine();
     const reportsSent = await engagementEngine.sendWeeklyReports();
     if (reportsSent > 0) {
-      console.log(`[SCHEDULER] Weekly reports: sent ${reportsSent} reports`);
+      logger.info(`[SCHEDULER] Weekly reports: sent ${reportsSent} reports`);
     }
   } catch (error) {
-    console.error('[SCHEDULER] Weekly report error:', error);
+    logger.error('[SCHEDULER] Weekly report error:', error);
   }
 
   // META-LEARNING: Analyze learning performance (weekly on Sundays at 5 AM UTC)
@@ -289,14 +290,14 @@ async function runProactiveChecks(): Promise<void> {
     const now = new Date();
     if (now.getUTCHours() === 5 && now.getUTCDay() === 0) { // Sunday
       const { runMetaLearningCycle, formatMetaReport } = await import("./meta-learner.js");
-      console.log(`[SCHEDULER] Running meta-learning cycle (weekly analysis)`);
+      logger.info(`[SCHEDULER] Running meta-learning cycle (weekly analysis)`);
 
       const result = await runMetaLearningCycle(); // Global analysis
-      console.log(formatMetaReport(result.metrics, result.recommendations));
-      console.log(`[SCHEDULER] Meta-learning: ${result.optimizationsApplied} optimizations applied`);
+      logger.info(formatMetaReport(result.metrics, result.recommendations));
+      logger.info(`[SCHEDULER] Meta-learning: ${result.optimizationsApplied} optimizations applied`);
     }
   } catch (error) {
-    console.error('[SCHEDULER] Meta-learning error:', error);
+    logger.error('[SCHEDULER] Meta-learning error:', error);
   }
 
 
@@ -306,18 +307,18 @@ async function runProactiveChecks(): Promise<void> {
     const now = new Date();
     if (now.getUTCHours() === 6) {
       const { detectCapabilityGaps, autoExpandCapabilities, formatCapabilityReport } = await import("./capability-expander.js");
-      console.log(`[SCHEDULER] Running capability expansion (daily scan)`);
+      logger.info(`[SCHEDULER] Running capability expansion (daily scan)`);
 
       const gaps = await detectCapabilityGaps(undefined, 30); // Global scan, last 30 days
       const expandedCount = await autoExpandCapabilities(gaps, "system");
-      console.log(`[SCHEDULER] Capability expansion: ${gaps.length} gaps detected, ${expandedCount} auto-expanded`);
+      logger.info(`[SCHEDULER] Capability expansion: ${gaps.length} gaps detected, ${expandedCount} auto-expanded`);
 
       if (gaps.length > 0) {
-        console.log(formatCapabilityReport(gaps));
+        logger.info(formatCapabilityReport(gaps));
       }
     }
   } catch (error) {
-    console.error('[SCHEDULER] Capability expansion error:', error);
+    logger.error('[SCHEDULER] Capability expansion error:', error);
   }
 
   // PROACTIVE PROBLEM DETECTION: Scan for issues (hourly), notify max once per 24h per user
@@ -333,7 +334,7 @@ async function runProactiveChecks(): Promise<void> {
 
     if (recentUsers && recentUsers.length > 0) {
       const uniqueUserIds = [...new Set(recentUsers.map(u => u.user_id))];
-      console.log(`[SCHEDULER] Running proactive problem detection for ${uniqueUserIds.length} active users`);
+      logger.info(`[SCHEDULER] Running proactive problem detection for ${uniqueUserIds.length} active users`);
 
       for (const userId of uniqueUserIds.slice(0, 50)) {
         try {
@@ -380,10 +381,10 @@ async function runProactiveChecks(): Promise<void> {
                       locked_by: "proactive-detector",
                     }, { onConflict: "lock_name" });
 
-                  console.log(`[SCHEDULER] Proactive alert sent to ${profile.email} (next in 24h)`);
+                  logger.info(`[SCHEDULER] Proactive alert sent to ${profile.email} (next in 24h)`);
                 }
               } else {
-                console.log(`[SCHEDULER] Skipping proactive notify for ${userId.slice(0, 8)} — last sent ${hoursSinceLastNotify.toFixed(1)}h ago`);
+                logger.info(`[SCHEDULER] Skipping proactive notify for ${userId.slice(0, 8)} — last sent ${hoursSinceLastNotify.toFixed(1)}h ago`);
               }
             }
           }
@@ -393,7 +394,7 @@ async function runProactiveChecks(): Promise<void> {
       }
     }
   } catch (error) {
-    console.error('[SCHEDULER] Proactive problem detection error:', error);
+    logger.error('[SCHEDULER] Proactive problem detection error:', error);
   }
 
   // Refresh expiring OAuth tokens
@@ -430,7 +431,7 @@ async function runProactiveChecks(): Promise<void> {
       await runCompletionReports({ includeDaily: true, includeWeekly: isMonday });
     }
   } catch (error) {
-    console.error('[SCHEDULER] Completion reports error:', error);
+    logger.error('[SCHEDULER] Completion reports error:', error);
   }
 
   // Clean up old processed_emails (>7 days)
@@ -499,20 +500,20 @@ async function runCheckinCalls(): Promise<void> {
           .limit(1);
 
         if (recentCalls && recentCalls.length > 0) {
-          console.log(`[SCHEDULER] Already called ${profile.username} for ${callType} check-in today`);
+          logger.info(`[SCHEDULER] Already called ${profile.username} for ${callType} check-in today`);
           continue;
         }
 
         // Make check-in call
-        console.log(`[SCHEDULER] Initiating ${callType} check-in call for ${profile.username}`);
+        logger.info(`[SCHEDULER] Initiating ${callType} check-in call for ${profile.username}`);
         const { makeCheckinCall } = await import("./checkin.js");
         await makeCheckinCall(profile.id, profile.phone_number, callType);
       } catch (error) {
-        console.error(`[SCHEDULER] Error making check-in call for user ${profile.id}:`, error);
+        logger.error(`[SCHEDULER] Error making check-in call for user ${profile.id}:`, error);
       }
     }
   } catch (error) {
-    console.error('[SCHEDULER] Check-in calls error:', error);
+    logger.error('[SCHEDULER] Check-in calls error:', error);
   }
 
   await releaseDistributedLock("scheduler_checkins");
@@ -672,7 +673,7 @@ async function runDataRetention(): Promise<void> {
     .lt("created_at", ninetyDaysAgo);
 
   if (ahError) {
-    console.error("[RETENTION] action_history cleanup error:", ahError);
+    logger.error("[RETENTION] action_history cleanup error:", ahError);
   }
 
   // Delete old completed/failed/cancelled tasks
@@ -684,9 +685,9 @@ async function runDataRetention(): Promise<void> {
     .select("id");
 
   if (taskError) {
-    console.error("[RETENTION] tasks cleanup error:", taskError);
+    logger.error("[RETENTION] tasks cleanup error:", taskError);
   } else if (deleted && deleted.length > 0) {
-    console.log(`[RETENTION] Cleaned up ${deleted.length} old tasks`);
+    logger.info(`[RETENTION] Cleaned up ${deleted.length} old tasks`);
   }
 
   lastRetentionDate = today;
@@ -706,11 +707,11 @@ async function tryDirectActionExecution(
 ): Promise<boolean> {
   try {
     const lower = taskText.toLowerCase().trim();
-    console.log(`[SCHEDULER-DIRECT] Checking taskText="${taskText}" lower="${lower}" (len=${lower.length}) userId=${userId.slice(0,8)} phone=${phoneNumber || 'none'}`);
+    logger.info(`[SCHEDULER-DIRECT] Checking taskText="${taskText}" lower="${lower}" (len=${lower.length}) userId=${userId.slice(0,8)} phone=${phoneNumber || 'none'}`);
 
     // call_user — call the user's phone
     const isCallUser = lower === 'call_user' || lower === 'call user' || lower.startsWith('call_user:') || lower.includes('call_user');
-    console.log(`[SCHEDULER-DIRECT] isCallUser=${isCallUser} (===check: ${lower === 'call_user'}, includes: ${lower.includes('call_user')})`);
+    logger.info(`[SCHEDULER-DIRECT] isCallUser=${isCallUser} (===check: ${lower === 'call_user'}, includes: ${lower.includes('call_user')})`);
 
     if (isCallUser) {
       // Rate limit: max 2 scheduled calls per user per day to prevent cost runaway
@@ -721,7 +722,7 @@ async function tryDirectActionExecution(
         .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
         .limit(3);
       if (todayCalls && todayCalls.length >= 2) {
-        console.log(`[SCHEDULER-DIRECT] call_user: RATE LIMITED — already ${todayCalls.length} calls today for ${userId.slice(0, 8)}`);
+        logger.info(`[SCHEDULER-DIRECT] call_user: RATE LIMITED — already ${todayCalls.length} calls today for ${userId.slice(0, 8)}`);
         return true;
       }
       const message = lower.includes(':') ? taskText.split(':').slice(1).join(':').trim() : undefined;
@@ -737,16 +738,16 @@ async function tryDirectActionExecution(
         phone = p?.phone_number;
       }
       if (!phone) {
-        console.error(`[SCHEDULER-DIRECT] call_user: no phone number for user ${userId.slice(0, 8)}`);
+        logger.error(`[SCHEDULER-DIRECT] call_user: no phone number for user ${userId.slice(0, 8)}`);
         return true; // handled (failed), don't retry via AI
       }
-      console.log(`[SCHEDULER-DIRECT] call_user: calling ${phone} for user ${userId.slice(0, 8)}`);
+      logger.info(`[SCHEDULER-DIRECT] call_user: calling ${phone} for user ${userId.slice(0, 8)}`);
       const result = await callUser({
         to: phone,
         userId,
         message: message || 'Hey, your AI assistant is calling to follow up on your request.',
       });
-      console.log(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone} ${result.error || ''}`);
+      logger.info(`[SCHEDULER-DIRECT] call_user: ${result.success ? 'success' : 'failed'} — ${phone} ${result.error || ''}`);
       return true;
     }
 
@@ -765,11 +766,11 @@ async function tryDirectActionExecution(
         phone = p?.phone_number;
       }
       if (!phone) {
-        console.error(`[SCHEDULER-DIRECT] send_sms: no phone for user ${userId.slice(0, 8)}`);
+        logger.error(`[SCHEDULER-DIRECT] send_sms: no phone for user ${userId.slice(0, 8)}`);
         return true;
       }
       await sendSms({ userId, to: phone, body: message });
-      console.log(`[SCHEDULER-DIRECT] send_sms: sent to ${phone}`);
+      logger.info(`[SCHEDULER-DIRECT] send_sms: sent to ${phone}`);
       return true;
     }
 
@@ -784,7 +785,7 @@ async function tryDirectActionExecution(
         subject: 'Scheduled Reminder',
         body: message,
       });
-      console.log(`[SCHEDULER-DIRECT] send_email: sent to ${email}`);
+      logger.info(`[SCHEDULER-DIRECT] send_email: sent to ${email}`);
       return true;
     }
 
@@ -799,17 +800,17 @@ async function tryDirectActionExecution(
         const { trackServiceCost: trackPhoneFee } = await import('./ai.js');
         // Pass RAW cost — trackServiceCost applies COST_SAFETY_MARGIN × BILLING_MARKUP × PHONE_NUMBER_MARKUP
         await trackPhoneFee(userId, 'twilio', 'phone_number_monthly', MONTHLY_LOCAL_NUMBER_COST, 'phone_number', undefined, PHONE_NUMBER_MARKUP);
-        console.log(`[SCHEDULER-DIRECT] phone_number_fee: billed $${billedAmount.toFixed(4)} for ${phoneNumber_} user=${userId.slice(0, 8)}`);
+        logger.info(`[SCHEDULER-DIRECT] phone_number_fee: billed $${billedAmount.toFixed(4)} for ${phoneNumber_} user=${userId.slice(0, 8)}`);
       } else {
-        console.warn(`[SCHEDULER-DIRECT] phone_number_fee: invalid amount for ${phoneNumber_}`);
+        logger.warn(`[SCHEDULER-DIRECT] phone_number_fee: invalid amount for ${phoneNumber_}`);
       }
       return true;
     }
 
-    console.log(`[SCHEDULER-DIRECT] No match for taskText="${taskText}" — falling through to AI`);
+    logger.info(`[SCHEDULER-DIRECT] No match for taskText="${taskText}" — falling through to AI`);
     return false; // Not a direct action, use AI processing
   } catch (err) {
-    console.error(`[SCHEDULER-DIRECT] CRITICAL ERROR in tryDirectActionExecution:`, err);
+    logger.error(`[SCHEDULER-DIRECT] CRITICAL ERROR in tryDirectActionExecution:`, err);
     return false; // Let AI try as fallback
   }
 }
@@ -843,7 +844,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
     .lte('next_run_at', now);
 
   if (error) {
-    console.error('[SCHEDULER] Error fetching due tasks:', error);
+    logger.error('[SCHEDULER] Error fetching due tasks:', error);
     return;
   }
 
@@ -851,7 +852,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
     return; // No tasks due
   }
 
-  console.log(`[SCHEDULER] Found ${dueTasks.length} due tasks`);
+  logger.info(`[SCHEDULER] Found ${dueTasks.length} due tasks`);
 
   for (const scheduled of dueTasks) {
     try {
@@ -863,7 +864,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
         .single();
 
       if (!profile) {
-        console.error(`[SCHEDULER] No profile found for scheduled task ${scheduled.id} user=${scheduled.user_id}`);
+        logger.error(`[SCHEDULER] No profile found for scheduled task ${scheduled.id} user=${scheduled.user_id}`);
         continue;
       }
 
@@ -876,8 +877,8 @@ async function runDueScheduledTasksInner(): Promise<void> {
       const isOneTime = isOnce || (newRunCount >= effectiveMaxRuns);
 
       // DEBUG: Log raw values and types to diagnose comparison failures
-      console.log(`[SCHEDULER] Task ${scheduled.id} RAW: cron_expression=${JSON.stringify(scheduled.cron_expression)} (type=${typeof scheduled.cron_expression}), task_template=${JSON.stringify(scheduled.task_template)} (type=${typeof scheduled.task_template}), isOnce=${isOnce}, isOneTime=${isOneTime}`);
-      console.log(`[SCHEDULER] Processing task ${scheduled.id}: taskText="${taskText}", cron="${cronExpr}", isOneTime=${isOneTime}, profile=${profile.username}, phone=${profile.phone_number}`);
+      logger.info(`[SCHEDULER] Task ${scheduled.id} RAW: cron_expression=${JSON.stringify(scheduled.cron_expression)} (type=${typeof scheduled.cron_expression}), task_template=${JSON.stringify(scheduled.task_template)} (type=${typeof scheduled.task_template}), isOnce=${isOnce}, isOneTime=${isOneTime}`);
+      logger.info(`[SCHEDULER] Processing task ${scheduled.id}: taskText="${taskText}", cron="${cronExpr}", isOneTime=${isOneTime}, profile=${profile.username}, phone=${profile.phone_number}`);
 
       // PREVENT DOUBLE-FIRING: Update metadata BEFORE processing.
       // For one-time tasks: deactivate immediately. For recurring: calculate next run.
@@ -896,9 +897,9 @@ async function runDueScheduledTasksInner(): Promise<void> {
         .eq('id', scheduled.id);
 
       if (preUpdateError) {
-        console.error(`[SCHEDULER] Failed to pre-update scheduled task ${scheduled.id}:`, preUpdateError);
+        logger.error(`[SCHEDULER] Failed to pre-update scheduled task ${scheduled.id}:`, preUpdateError);
       } else {
-        console.log(`[SCHEDULER] Pre-updated task ${scheduled.id}: is_active=${newIsActive}, next_run=${nextRun}`);
+        logger.info(`[SCHEDULER] Pre-updated task ${scheduled.id}: is_active=${newIsActive}, next_run=${nextRun}`);
       }
 
       // FAST PATH: Direct action execution for known action names.
@@ -911,7 +912,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
         profile.phone_number
       );
 
-      console.log(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}"`);
+      logger.info(`[SCHEDULER] directActionHandled=${directActionHandled} for taskText="${taskText}"`);
 
       if (!directActionHandled) {
         // Fall back to full AI processing for complex/natural-language tasks
@@ -931,9 +932,9 @@ async function runDueScheduledTasksInner(): Promise<void> {
       if (isOneTime) {
         try {
           await getSupabaseClient().rpc('deactivate_one_time_task', { p_task_id: scheduled.id });
-          console.log(`[SCHEDULER] Safety net: deactivated one-time task ${scheduled.id} via RPC`);
+          logger.info(`[SCHEDULER] Safety net: deactivated one-time task ${scheduled.id} via RPC`);
         } catch (rpcErr) {
-          console.error(`[SCHEDULER] Safety net RPC failed for ${scheduled.id}:`, rpcErr);
+          logger.error(`[SCHEDULER] Safety net RPC failed for ${scheduled.id}:`, rpcErr);
           // Last resort: direct update with only the critical fields
           await getSupabaseClient()
             .from('scheduled_tasks')
@@ -943,9 +944,9 @@ async function runDueScheduledTasksInner(): Promise<void> {
         }
       }
 
-      console.log(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${newIsActive}, directAction=${directActionHandled})`);
+      logger.info(`[SCHEDULER] Completed scheduled task: ${scheduled.description} (oneTime=${isOneTime}, active=${newIsActive}, directAction=${directActionHandled})`);
     } catch (error) {
-      console.error(`[SCHEDULER] Error processing scheduled task ${scheduled.id}:`, error);
+      logger.error(`[SCHEDULER] Error processing scheduled task ${scheduled.id}:`, error);
     }
   }
 }
@@ -970,7 +971,7 @@ function calculateNextRun(cronExpression: string, _timezone: string = 'America/L
     const interval = CronExpressionParser.parse(expr);
     return interval.next().toDate().toISOString();
   } catch (error) {
-    console.warn(`[SCHEDULER] Invalid cron expression "${cronExpression}", defaulting to 24h from now:`, error);
+    logger.warn(`[SCHEDULER] Invalid cron expression "${cronExpression}", defaulting to 24h from now:`, error);
     const fallback = new Date(Date.now() + 24 * 60 * 60 * 1000);
     return fallback.toISOString();
   }
@@ -1053,7 +1054,7 @@ async function runCompletionReports(opts: { includeDaily: boolean; includeWeekly
 
   if (eligibleUserIds.length === 0) return;
 
-  console.log(`[SCHEDULER] Sending completion reports to ${eligibleUserIds.length} users`);
+  logger.info(`[SCHEDULER] Sending completion reports to ${eligibleUserIds.length} users`);
 
   for (const userId of eligibleUserIds) {
     try {
@@ -1110,7 +1111,7 @@ async function runCompletionReports(opts: { includeDaily: boolean; includeWeekly
         .update({ last_report_sent_at: new Date().toISOString() })
         .eq("user_id", userId);
 
-      console.log(`[SCHEDULER] Completion report sent to ${profile.username}`);
+      logger.info(`[SCHEDULER] Completion report sent to ${profile.username}`);
     } catch {
       // Non-critical, continue to next user
     }

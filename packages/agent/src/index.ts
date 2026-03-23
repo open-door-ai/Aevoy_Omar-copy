@@ -117,6 +117,21 @@ import crypto from "crypto";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { handleVoiceWebSocket, getActiveSessionCount } from "./services/voice-conversation.js";
+import { logger } from "./utils/logger.js";
+
+// ---- Global Error Handlers ----
+// Prevents uncaught errors from crashing the process silently.
+// CLAUDE.md notes: "No global unhandledRejection handler — fix needed" — this fixes it.
+
+process.on('unhandledRejection', (reason, _promise) => {
+    logger.error({ reason: reason instanceof Error ? reason.message : String(reason) }, 'Unhandled Promise Rejection');
+});
+
+process.on('uncaughtException', (error) => {
+    logger.fatal({ error: error.message, stack: error.stack }, 'Uncaught Exception');
+    // Give logger time to flush, then exit (Railway will restart)
+    setTimeout(() => process.exit(1), 1000);
+});
 
 const app = express();
 const PORT = process.env.AGENT_PORT || 3001;
@@ -144,13 +159,13 @@ async function checkDailyCallLimit(userId: string): Promise<boolean> {
     if (data && typeof data === 'object' && 'allowed' in data) {
       const result = data as { allowed: boolean; calls_today: number; daily_limit: number };
       if (!result.allowed) {
-        console.log(`[SECURITY] User ${userId.slice(0, 8)} exceeded daily call limit (${result.calls_today}/${result.daily_limit})`);
+        logger.info(`[SECURITY] User ${userId.slice(0, 8)} exceeded daily call limit (${result.calls_today}/${result.daily_limit})`);
       }
       return result.allowed;
     }
     return true; // Allow on RPC failure
   } catch (err) {
-    console.error('[CALL-LIMIT] RPC error:', err);
+    logger.error('[CALL-LIMIT] RPC error:', err);
     return true; // Allow on error (fail open)
   }
 }
@@ -228,7 +243,7 @@ app.use(cors({
     if (ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
-      console.warn(`[SECURITY] CORS rejected: ${origin}`);
+      logger.warn(`[SECURITY] CORS rejected: ${origin}`);
       callback(new Error("Not allowed by CORS"));
     }
   },
@@ -416,7 +431,7 @@ function processQueuedTasks(): void {
       activeTasks++;
       const processFunc = (process.env.PROCESSOR_VERSION === 'v3')
         ? processTaskV3(queued.task).catch(async (v3Err) => {
-            console.error(`[QUEUE] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
+            logger.error(`[QUEUE] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
             return processTask(queued.task);
           })
         : processTask(queued.task);
@@ -442,19 +457,19 @@ setInterval(async () => {
     const browserCount = getActiveBrowserTasks();
 
     if (activeTasks < 0) {
-      console.log(`[COUNTER-HEAL] Fixing negative activeTasks: ${activeTasks} → 0`);
+      logger.info(`[COUNTER-HEAL] Fixing negative activeTasks: ${activeTasks} → 0`);
       activeTasks = 0;
     } else if (activeTasks > 0 && dbProcessing === 0) {
-      console.log(`[COUNTER-HEAL] Resetting activeTasks from ${activeTasks} to 0 (DB shows 0 processing)`);
+      logger.info(`[COUNTER-HEAL] Resetting activeTasks from ${activeTasks} to 0 (DB shows 0 processing)`);
       activeTasks = 0;
     } else if (activeTasks > dbProcessing + 2) {
-      console.log(`[COUNTER-HEAL] Adjusting activeTasks from ${activeTasks} to ${dbProcessing} (DB has ${dbProcessing} processing)`);
+      logger.info(`[COUNTER-HEAL] Adjusting activeTasks from ${activeTasks} to ${dbProcessing} (DB has ${dbProcessing} processing)`);
       activeTasks = dbProcessing;
     }
 
     // Browser counter healing: if no tasks processing but browser counter > 0, reset it
     if (dbProcessing === 0 && browserCount > 0) {
-      console.log(`[COUNTER-HEAL] Resetting browser counter from ${browserCount} to 0`);
+      logger.info(`[COUNTER-HEAL] Resetting browser counter from ${browserCount} to 0`);
       // Reset by decrementing to 0
       const { decrementBrowserTasks: decBrowser } = await import("./utils/concurrency.js");
       for (let i = 0; i < browserCount; i++) decBrowser();
@@ -510,7 +525,7 @@ app.get("/task/:taskId/status", async (req, res) => {
       } : null,
     });
   } catch (err) {
-    console.error("[TASK-STATUS] Error:", err);
+    logger.error("[TASK-STATUS] Error:", err);
     res.status(500).json({ error: "internal", message: "Internal error" });
   }
 });
@@ -544,7 +559,7 @@ app.get("/tasks/active", async (req, res) => {
     });
     res.json({ active: tasks, count: tasks.length });
   } catch (err) {
-    console.error("[TASKS-ACTIVE] Error:", err);
+    logger.error("[TASKS-ACTIVE] Error:", err);
     res.status(500).json({ error: "internal", message: "Internal error" });
   }
 });
@@ -625,6 +640,51 @@ app.get("/health/detailed", async (req, res) => {
   });
 });
 
+// ---- Comprehensive Admin Health Check ----
+app.get("/admin/health", async (req, res) => {
+  // Require Bearer token auth using webhook secret
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${process.env.AGENT_WEBHOOK_SECRET}`) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const health: Record<string, unknown> = {
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    version: "aurora-v0",
+    services: {
+      supabase: "unknown" as string,
+      twilio: "unknown" as string,
+      ai_models: "unknown" as string,
+    },
+    memory: process.memoryUsage(),
+    proactive_engine: process.env.PROACTIVE_ENGINE === "true" ? "enabled" : "disabled",
+    processor_version: process.env.PROCESSOR_VERSION || "v3",
+  };
+
+  // Check Supabase connectivity
+  try {
+    const { data, error } = await getSupabaseClient().from("profiles").select("id").limit(1);
+    (health.services as Record<string, string>).supabase = error ? "error: " + error.message : "connected";
+  } catch (e) {
+    (health.services as Record<string, string>).supabase = "unreachable";
+  }
+
+  // Check Twilio config
+  (health.services as Record<string, string>).twilio = process.env.TWILIO_ACCOUNT_SID ? "configured" : "not_configured";
+
+  // Check AI model availability
+  const aiProviders = ["GROQ_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY"];
+  const configuredProviders = aiProviders.filter(k => !!process.env[k]).length;
+  (health.services as Record<string, string>).ai_models = configuredProviders > 0
+    ? `${configuredProviders} provider(s) configured`
+    : "none_configured";
+
+  logger.info({ endpoint: "/admin/health" }, "Admin health check requested");
+  res.json(health);
+});
+
 // ---- Takeover token validation (called by WebSocket handler) ----
 app.post("/takeover/validate-token", async (req, res) => {
   try {
@@ -644,7 +704,7 @@ app.post("/takeover/validate-token", async (req, res) => {
     const hasEngine = !!getEngine(data.task_id);
     return res.json({ valid: true, taskId: data.task_id, userId: data.user_id, hasEngine });
   } catch (err) {
-    console.error('[TAKEOVER] Token validation error:', err);
+    logger.error('[TAKEOVER] Token validation error:', err);
     return res.status(500).json({ valid: false, error: 'Internal error' });
   }
 });
@@ -670,7 +730,7 @@ app.post("/admin/clear-active-tasks", async (req, res) => {
     return res.status(401).json({ error: "unauthorized" });
   }
   const cleared = clearAllActiveTasks();
-  console.log(`[ADMIN] Cleared ${cleared} active task entries`);
+  logger.info(`[ADMIN] Cleared ${cleared} active task entries`);
   return res.json({ cleared, activeTasks });
 });
 
@@ -916,7 +976,7 @@ if (process.env.NODE_ENV !== "production") {
         responseLength: result.response.length,
       });
     } catch (error) {
-      console.error("[SMOKE-TEST] Error:", error);
+      logger.error("[SMOKE-TEST] Error:", error);
       res.status(500).json({ success: false, error: "Internal server error" });
     }
   });
@@ -945,11 +1005,11 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
   // Sanitize + prompt injection check
   const sanitizedV2 = sanitizeTaskInput(subject || '', body || '');
   if (sanitizedV2.injectionDetected) {
-    console.warn(`[SECURITY] Prompt injection blocked for user ${String(userId).substring(0, 8)}: ${sanitizedV2.injectionPattern}`);
+    logger.warn(`[SECURITY] Prompt injection blocked for user ${String(userId).substring(0, 8)}: ${sanitizedV2.injectionPattern}`);
     return res.status(400).json({ error: "invalid_request", message: "Request contains disallowed patterns" });
   }
 
-  console.log(`[TASK-V2] Received`, {
+  logger.info(`[TASK-V2] Received`, {
     userId: maskUserId(userId),
     channel: inputChannel || "email",
     timestamp: new Date().toISOString(),
@@ -959,7 +1019,7 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
   const taskSubjectV2 = sanitizedV2.subject || sanitizedV2.body || '';
   const existingTaskIdV2 = checkAndRecordFingerprint(userId, taskSubjectV2);
   if (existingTaskIdV2) {
-    console.log(`[DEDUP] Duplicate V2 task rejected for user ${String(userId).substring(0, 8)}: "${taskSubjectV2.substring(0, 60)}"`);
+    logger.info(`[DEDUP] Duplicate V2 task rejected for user ${String(userId).substring(0, 8)}: "${taskSubjectV2.substring(0, 60)}"`);
     return res.json({ status: "duplicate", taskId: existingTaskIdV2, message: "Task already received and processing" });
   }
 
@@ -992,7 +1052,7 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("[TASK-V2] Processing failed:", error);
+    logger.error("[TASK-V2] Processing failed:", error);
     res.status(500).json({
       status: "error",
       message: "An unexpected error occurred while processing your task"
@@ -1021,13 +1081,13 @@ app.post("/task", taskLimiter, async (req, res) => {
   // Sanitize + prompt injection check
   const sanitized = sanitizeTaskInput(task.subject || '', task.body || '');
   if (sanitized.injectionDetected) {
-    console.warn(`[SECURITY] Prompt injection blocked for user ${task.userId.substring(0, 8)}: ${sanitized.injectionPattern}`);
+    logger.warn(`[SECURITY] Prompt injection blocked for user ${task.userId.substring(0, 8)}: ${sanitized.injectionPattern}`);
     return res.status(400).json({ error: "invalid_request", message: "Request contains disallowed patterns" });
   }
   task.subject = sanitized.subject;
   task.body = sanitized.body;
 
-  console.log(`[TASK] Received`, {
+  logger.info(`[TASK] Received`, {
     userId: task.userId.substring(0, 8),
     timestamp: new Date().toISOString(),
   });
@@ -1035,18 +1095,18 @@ app.post("/task", taskLimiter, async (req, res) => {
   // ── Webhook idempotency: reject duplicate tasks within 30s window ──
   const existingTaskId = checkAndRecordFingerprint(task.userId, task.subject || '', task.taskId);
   if (existingTaskId) {
-    console.log(`[DEDUP] Duplicate task rejected for user ${task.userId.substring(0, 8)}: "${(task.subject || '').substring(0, 60)}" (existing: ${existingTaskId.substring(0, 8)})`);
+    logger.info(`[DEDUP] Duplicate task rejected for user ${task.userId.substring(0, 8)}: "${(task.subject || '').substring(0, 60)}" (existing: ${existingTaskId.substring(0, 8)})`);
     return res.json({ status: "duplicate", taskId: existingTaskId, message: "Task already received and processing" });
   }
 
   // Gate concurrency — queue if at capacity
   if (activeTasks >= MAX_CONCURRENT_TASKS) {
-    console.log(`[TASK] Queued (${activeTasks}/${MAX_CONCURRENT_TASKS} active, queue=${taskQueue.length})`);
+    logger.info(`[TASK] Queued (${activeTasks}/${MAX_CONCURRENT_TASKS} active, queue=${taskQueue.length})`);
     res.json({ status: "queued", message: "Task queued — processing shortly" });
     taskQueue.push({
       task,
-      resolve: (result) => console.log(`Queued task completed: ${result.taskId}`),
-      reject: (err) => console.error("Queued task failed:", err),
+      resolve: (result) => logger.info(`Queued task completed: ${result.taskId}`),
+      reject: (err) => logger.error("Queued task failed:", err),
     });
     processQueuedTasks();
     return;
@@ -1062,7 +1122,7 @@ app.post("/task", taskLimiter, async (req, res) => {
     if (relevance === 'obvious_update') {
       // Inject silently — short message, clearly a clarification
       injectTaskUpdate(task.userId, newMsg.trim());
-      console.log(`[MID-TASK] Injected obvious update for user ${task.userId.substring(0, 8)}`);
+      logger.info(`[MID-TASK] Injected obvious update for user ${task.userId.substring(0, 8)}`);
       res.json({ status: "update_injected", message: `Got it — I'll incorporate that into the task I'm working on.` });
       return;
     }
@@ -1070,7 +1130,7 @@ app.post("/task", taskLimiter, async (req, res) => {
     if (relevance === 'likely_update') {
       // Inject and tell the user we're treating it as an update
       injectTaskUpdate(task.userId, newMsg.trim());
-      console.log(`[MID-TASK] Injected likely update for user ${task.userId.substring(0, 8)}`);
+      logger.info(`[MID-TASK] Injected likely update for user ${task.userId.substring(0, 8)}`);
       res.json({ status: "update_injected", message: `Got it — I'll factor that into "${activeTask.subject.substring(0, 60)}". Let me know if you meant to start a different task instead.` });
       return;
     }
@@ -1104,7 +1164,7 @@ app.post("/task", taskLimiter, async (req, res) => {
 
       if (_looksLikeNewTask && !isCancelRequest) {
         // This is a new task, not a reply — fall through to normal task processing
-        console.log(`[AUTO-PROCEED-REPLY] Message looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 60)}"`);
+        logger.info(`[AUTO-PROCEED-REPLY] Message looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 60)}"`);
       } else if (isCancelRequest) {
         // User wants to cancel the task
         await getSupabaseClient().from('tasks').update({
@@ -1115,12 +1175,12 @@ app.post("/task", taskLimiter, async (req, res) => {
           completed_at: new Date().toISOString(),
         }).eq('id', awaitingTask.id);
 
-        console.log(`[AUTO-PROCEED-REPLY] User cancelled task ${awaitingTask.id.slice(0, 8)}`);
+        logger.info(`[AUTO-PROCEED-REPLY] User cancelled task ${awaitingTask.id.slice(0, 8)}`);
         res.json({ status: "cancelled", message: "Got it — task cancelled." });
         return;
       } else {
         // User provided an answer — clear auto-proceed timer and re-process with their answer
-        console.log(`[AUTO-PROCEED-REPLY] User replied to awaiting task ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 80)}"`);
+        logger.info(`[AUTO-PROCEED-REPLY] User replied to awaiting task ${awaitingTask.id.slice(0, 8)}: "${newMsg.slice(0, 80)}"`);
 
         await getSupabaseClient().from('tasks').update({
           status: 'processing',
@@ -1142,9 +1202,9 @@ app.post("/task", taskLimiter, async (req, res) => {
           inputChannel: task.inputChannel,
           responsePrefix: `You replied with additional info. Here's what I did:`,
         }).then((result) => {
-          console.log(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} completed: success=${result.success}`);
+          logger.info(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} completed: success=${result.success}`);
         }).catch((err) => {
-          console.error(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} failed:`, err);
+          logger.error(`[AUTO-PROCEED-REPLY] Task ${awaitingTask.id.slice(0, 8)} failed:`, err);
         }).finally(() => { activeTasks--; processQueuedTasks(); });
         return;
       }
@@ -1168,7 +1228,7 @@ app.post("/task", taskLimiter, async (req, res) => {
           return await processTaskV3(t);
         } catch (v3Err) {
           const errMsg = v3Err instanceof Error ? `${v3Err.message}\n${v3Err.stack}` : String(v3Err);
-          console.error(`[V3-CRASH] Falling back to V1. Error: ${errMsg}`);
+          logger.error(`[V3-CRASH] Falling back to V1. Error: ${errMsg}`);
           // Log crash to DB so we can query it
           try {
             await getSupabaseClient().from('tasks').update({
@@ -1182,10 +1242,10 @@ app.post("/task", taskLimiter, async (req, res) => {
 
   processFunc(task)
     .then((result) => {
-      console.log(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
+      logger.info(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
     })
     .catch(async (error) => {
-      console.error("Task processing failed:", error);
+      logger.error("Task processing failed:", error);
       // SAFETY NET: If processTask crashes without updating the DB,
       // mark the task as needs_review so it doesn't stay "processing" forever
       if (task.taskId) {
@@ -1220,11 +1280,11 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
   // Sanitize + prompt injection check
   const sanitizedIncoming = sanitizeTaskInput(task.subject || '', task.body || '');
   if (sanitizedIncoming.injectionDetected) {
-    console.warn(`[SECURITY] Prompt injection blocked for user ${task.userId.substring(0, 8)}: ${sanitizedIncoming.injectionPattern}`);
+    logger.warn(`[SECURITY] Prompt injection blocked for user ${task.userId.substring(0, 8)}: ${sanitizedIncoming.injectionPattern}`);
     return res.status(400).json({ error: "invalid_request", message: "Request contains disallowed patterns" });
   }
 
-  console.log(`[TASK] Incoming (FULL PROCESSOR with 30x iterations)`, {
+  logger.info(`[TASK] Incoming (FULL PROCESSOR with 30x iterations)`, {
     userId: task.userId.substring(0, 8),
     channel: task.inputChannel || "email",
     timestamp: new Date().toISOString(),
@@ -1232,7 +1292,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   // Gate concurrency — queue if at capacity
   if (activeTasks >= MAX_CONCURRENT_TASKS) {
-    console.log(`[TASK] Incoming queued (${activeTasks}/${MAX_CONCURRENT_TASKS} active, queue=${taskQueue.length})`);
+    logger.info(`[TASK] Incoming queued (${activeTasks}/${MAX_CONCURRENT_TASKS} active, queue=${taskQueue.length})`);
     res.json({ status: "queued", message: "Task queued — processing shortly" });
     const incomingTask: TaskRequest = {
       userId: task.userId,
@@ -1244,8 +1304,8 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     };
     taskQueue.push({
       task: incomingTask,
-      resolve: (result) => console.log(`Queued incoming task completed: ${result.taskId || 'unknown'}`),
-      reject: (err) => console.error("Queued incoming task failed:", err),
+      resolve: (result) => logger.info(`Queued incoming task completed: ${result.taskId || 'unknown'}`),
+      reject: (err) => logger.error("Queued incoming task failed:", err),
     });
     processQueuedTasks();
     return;
@@ -1266,7 +1326,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   const taskPromise = (process.env.PROCESSOR_VERSION === 'v3')
     ? processTaskV3(incomingTaskReq).catch(async (v3Err) => {
-        console.error(`[INCOMING] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
+        logger.error(`[INCOMING] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
         return processTask(incomingTaskReq);
       })
     : processTask(incomingTaskReq);
@@ -1284,7 +1344,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
             process.env.RESEND_FROM_EMAIL || 'noreply@aevoy.com',
             task.subject || 'Your Task',
             'This task took longer than expected. I\'m still working on complex tasks, but please try again if you need a faster response.'
-          ).catch((err) => console.error("Failed to send timeout email:", err));
+          ).catch((err) => logger.error("Failed to send timeout email:", err));
         });
       }
     }
@@ -1292,10 +1352,10 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   taskPromise
     .then((result) => {
-      console.log(`Incoming task processed: ${result.taskId || 'unknown'}`, { success: result.success, actions: result.actions?.length || 0 });
+      logger.info(`Incoming task processed: ${result.taskId || 'unknown'}`, { success: result.success, actions: result.actions?.length || 0 });
     })
     .catch(async (error) => {
-      console.error("Incoming task processing failed:", error);
+      logger.error("Incoming task processing failed:", error);
 
       // CRITICAL: Mark the task as completed in DB so it doesn't stay "processing" forever
       // Find the most recent processing task for this user and mark it done
@@ -1328,10 +1388,10 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
               completed_at: new Date().toISOString(),
             })
             .eq('id', stuckTask.id);
-          console.log(`[CRASH-RECOVERY] Marked task ${stuckTask.id} as completed with recovery message`);
+          logger.info(`[CRASH-RECOVERY] Marked task ${stuckTask.id} as completed with recovery message`);
         }
       } catch (dbErr) {
-        console.error('[CRASH-RECOVERY] Failed to update task in DB:', dbErr);
+        logger.error('[CRASH-RECOVERY] Failed to update task in DB:', dbErr);
       }
     })
     .finally(() => { activeTasks--; processQueuedTasks(); });
@@ -1356,8 +1416,8 @@ app.post("/task/confirm", taskLimiter, async (req, res) => {
     
     activeTasks++;
     processorV2.handleConfirmation(planId, userId, action as "yes" | "no" | "modify", replyText)
-      .then((result) => console.log(`[V2] Confirmation processed: ${planId}`, { success: result.success }))
-      .catch((error) => console.error("[V2] Confirmation processing failed:", error))
+      .then((result) => logger.info(`[V2] Confirmation processed: ${planId}`, { success: result.success }))
+      .catch((error) => logger.error("[V2] Confirmation processing failed:", error))
       .finally(() => { activeTasks--; });
     return;
   }
@@ -1371,8 +1431,8 @@ app.post("/task/confirm", taskLimiter, async (req, res) => {
 
   activeTasks++;
   handleConfirmationReply(userId, username, from, replyText, taskId)
-    .then((result) => console.log(`Confirmation processed: ${taskId}`, { success: result.success }))
-    .catch((error) => console.error("Confirmation processing failed:", error))
+    .then((result) => logger.info(`Confirmation processed: ${taskId}`, { success: result.success }))
+    .catch((error) => logger.error("Confirmation processing failed:", error))
     .finally(() => { activeTasks--; });
 });
 
@@ -1391,8 +1451,8 @@ app.post("/task/verification", taskLimiter, async (req, res) => {
 
   activeTasks++;
   handleVerificationCodeReply(userId, username, from, code, taskId)
-    .then((result) => console.log(`Verification processed: ${taskId}`, { success: result.success }))
-    .catch((error) => console.error("Verification processing failed:", error))
+    .then((result) => logger.info(`Verification processed: ${taskId}`, { success: result.success }))
+    .catch((error) => logger.error("Verification processing failed:", error))
     .finally(() => { activeTasks--; });
 });
 
@@ -1418,7 +1478,7 @@ app.post("/api/verify-pin", taskLimiter, async (req, res) => {
 
     res.json({ result, remaining });
   } catch (error) {
-    console.error("[VERIFY-PIN] Error:", error);
+    logger.error("[VERIFY-PIN] Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1446,7 +1506,7 @@ app.post("/email/test", taskLimiter, async (req, res) => {
     const result = await testImapConnection(email, password, provider.imap_host, provider.imap_port);
     return res.json(result);
   } catch (err) {
-    console.error("[IMAP-TEST] Connection test failed:", err);
+    logger.error("[IMAP-TEST] Connection test failed:", err);
     return res.json({ success: false, error: "Email connection test failed" });
   }
 });
@@ -1478,13 +1538,13 @@ app.post("/email/send", taskLimiter, async (req, res) => {
     });
 
     if (error) {
-      console.error("[EMAIL] Resend error:", error);
+      logger.error("[EMAIL] Resend error:", error);
       return res.status(500).json({ error: "Failed to send email" });
     }
 
     res.json({ success: true, message: "Email sent" });
   } catch (error) {
-    console.error("[EMAIL] Failed to send email:", error);
+    logger.error("[EMAIL] Failed to send email:", error);
     res.status(500).json({ error: "Failed to send email" });
   }
 });
@@ -1523,7 +1583,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
   const queryUserId = req.query.userId as string || ""; // Passed from /api/demo/call for logged-in users
   const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
 
-  console.log(`[VOICE-DEMO] Outbound demo call connected to ${callerNumber?.slice(0, 4)}****, queryUserId=${queryUserId?.slice(0, 8) || "none"}`);
+  logger.info(`[VOICE-DEMO] Outbound demo call connected to ${callerNumber?.slice(0, 4)}****, queryUserId=${queryUserId?.slice(0, 8) || "none"}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -1553,21 +1613,21 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
             effectiveGreeting = name
               ? `Hey ${name}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
               : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
-            console.log(`[VOICE-DEMO] Outbound matched logged-in user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
+            logger.info(`[VOICE-DEMO] Outbound matched logged-in user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
           } else {
             effectiveCallType = "demo";
             effectiveUserId = profile.id;
             effectiveGreeting = name
               ? `Hey ${name}! Good to hear from you. What can I help you with?`
               : `Hey there! Good to hear from you. What can I help you with?`;
-            console.log(`[VOICE-DEMO] Outbound user ${profile.id.slice(0, 8)} already onboarded, regular demo`);
+            logger.info(`[VOICE-DEMO] Outbound user ${profile.id.slice(0, 8)} already onboarded, regular demo`);
           }
 
           // Phone number auto-save removed for security — phone numbers should only
           // be set through authenticated channels (onboarding, settings), not webhooks.
         }
       } catch (e: any) {
-        console.error("[VOICE-DEMO] Outbound userId lookup error:", e.message);
+        logger.error("[VOICE-DEMO] Outbound userId lookup error:", e.message);
       }
     }
     // No phone number fallback — cold demo callers stay fully isolated from real accounts
@@ -1582,7 +1642,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
       user_id: effectiveUserId || null,
       pin_required: false,
       pin_success: null,
-    }).then(() => {}, (e: any) => console.error("[VOICE-DEMO] Call history insert failed:", e));
+    }).then(() => {}, (e: any) => logger.error("[VOICE-DEMO] Call history insert failed:", e));
 
     const cappedGreeting = effectiveGreeting.substring(0, 120);
     const escGreeting = cappedGreeting.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1600,10 +1660,10 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
   <Hangup/>
 </Response>`;
 
-    console.log(`[VOICE-DEMO] Outbound TwiML: ${effectiveCallType}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
+    logger.info(`[VOICE-DEMO] Outbound TwiML: ${effectiveCallType}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
     res.type("text/xml").send(twiml);
   } catch (error: any) {
-    console.error("[VOICE-DEMO] Outbound TwiML error:", error.message);
+    logger.error("[VOICE-DEMO] Outbound TwiML error:", error.message);
     // Fallback: simple greeting so the call doesn't fail silently
     const fallback = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1661,7 +1721,7 @@ app.post("/webhook/voice/outbound-twiml", twilioLimiter, validateTwilioSignature
   <Hangup/>
 </Response>`;
 
-  console.log(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}, voice=${voiceId}`);
+  logger.info(`[VOICE] Outbound TwiML served for user ${userId?.slice(0, 8)}, voice=${voiceId}`);
   res.type('text/xml').send(twiml);
 });
 
@@ -1709,7 +1769,7 @@ app.post("/webhook/voice/external-call-twiml", twilioLimiter, validateTwilioSign
   </Connect>
 </Response>`;
 
-  console.log(`[VOICE] External call TwiML for user ${userId?.slice(0, 8)}, business=${businessName}, voice=${voiceId}`);
+  logger.info(`[VOICE] External call TwiML for user ${userId?.slice(0, 8)}, business=${businessName}, voice=${voiceId}`);
   res.type('text/xml').send(twiml);
 });
 
@@ -1722,7 +1782,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   let voice = DEFAULT_VOICE;
   const startTime = Date.now();
 
-  console.log(`[VOICE] Incoming call from ${maskPhone(callerNumber)} to ${maskPhone(twilioNumber)}`);
+  logger.info(`[VOICE] Incoming call from ${maskPhone(callerNumber)} to ${maskPhone(twilioNumber)}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -1737,7 +1797,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     if (isDemoCall) {
       // COST GUARD: Daily minute cap for demo number (max 60 min/day ~$3.15)
       if (!checkDemoCap(3)) {
-        console.warn(`[VOICE-DEMO] Daily minute cap reached (${demoDailyMinutes}/${DEMO_DAILY_MINUTE_CAP} min). Rejecting demo call from ${maskPhone(callerNumber)}`);
+        logger.warn(`[VOICE-DEMO] Daily minute cap reached (${demoDailyMinutes}/${DEMO_DAILY_MINUTE_CAP} min). Rejecting demo call from ${maskPhone(callerNumber)}`);
         res.type("text/xml");
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1751,7 +1811,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       const effectiveUserId = DEMO_USER_ID;
       const effectiveGreeting = DEMO_GREETING.substring(0, 120);
 
-      console.log(`[VOICE-DEMO] ${effectiveCallType} call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
+      logger.info(`[VOICE-DEMO] ${effectiveCallType} call from ${maskPhone(callerNumber)} (${Date.now() - startTime}ms)`);
 
       // Log demo call (fire-and-forget)
       supabase.from("call_history").insert({
@@ -1763,13 +1823,13 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         user_id: effectiveUserId || null,
         pin_required: false,
         pin_success: null
-      }).then(() => {}, (e: any) => console.error("[VOICE] Demo call history insert failed:", e));
+      }).then(() => {}, (e: any) => logger.error("[VOICE] Demo call history insert failed:", e));
 
       res.type("text/xml");
 
       if (USE_CONVERSATION_RELAY) {
         const wsUrl = `${(process.env.AGENT_URL || "https://agent-production-1339.up.railway.app").replace("http", "ws")}/ws/voice`;
-        console.log(`[VOICE-DEMO] ConversationRelay ${effectiveCallType}: voice=${DEMO_VOICE}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
+        logger.info(`[VOICE-DEMO] ConversationRelay ${effectiveCallType}: voice=${DEMO_VOICE}, userId=${effectiveUserId?.slice(0, 8) || "none"}`);
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -1804,11 +1864,11 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
 
       if (!calledUser) {
         // Nobody owns this number
-        console.log(`[VOICE] Unknown caller ${maskPhone(callerNumber)} to unowned number ${maskPhone(twilioNumber)} (${Date.now() - startTime}ms)`);
+        logger.info(`[VOICE] Unknown caller ${maskPhone(callerNumber)} to unowned number ${maskPhone(twilioNumber)} (${Date.now() - startTime}ms)`);
         supabase.from("call_history").insert({
           call_sid: callSid, direction: "inbound", from_number: callerNumber,
           to_number: twilioNumber, call_type: "unknown", pin_required: false, pin_success: false
-        }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
+        }).then(() => {}, (e: any) => logger.error("[VOICE] Call history insert failed:", e));
         res.type("text/xml");
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1823,13 +1883,13 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       voice = await getUserVoice(calledUser.userId);
       const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
 
-      console.log(`[VOICE] Unknown caller ${maskPhone(callerNumber)} to ${calledUser.username}'s number, PIN required: ${hasPinSet} (${Date.now() - startTime}ms)`);
+      logger.info(`[VOICE] Unknown caller ${maskPhone(callerNumber)} to ${calledUser.username}'s number, PIN required: ${hasPinSet} (${Date.now() - startTime}ms)`);
 
       supabase.from("call_history").insert({
         call_sid: callSid, direction: "inbound", from_number: callerNumber,
         to_number: twilioNumber, call_type: hasPinSet ? "pin_challenge" : "receptionist",
         user_id: calledUser.userId, pin_required: hasPinSet, pin_success: null
-      }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
+      }).then(() => {}, (e: any) => logger.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
 
@@ -1874,7 +1934,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     const profile = profileResult?.data;
 
     if (!profile) {
-      console.log(`[VOICE] Failed to load profile for user ${userId.slice(0, 8)} (${Date.now() - startTime}ms)`);
+      logger.info(`[VOICE] Failed to load profile for user ${userId.slice(0, 8)} (${Date.now() - startTime}ms)`);
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -1886,7 +1946,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     const isPinLocked = profile.voice_pin_locked_until && new Date(profile.voice_pin_locked_until) > new Date();
 
     if (!withinLimit) {
-      console.log(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit (${Date.now() - startTime}ms)`);
+      logger.info(`[VOICE] User ${userId.slice(0, 8)} exceeded daily call limit (${Date.now() - startTime}ms)`);
 
       // Fire-and-forget
       supabase.from("call_history").insert({
@@ -1898,7 +1958,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         call_type: "rate_limited",
         pin_required: false,
         pin_success: null
-      }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
+      }).then(() => {}, (e: any) => logger.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1909,7 +1969,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     }
 
     if (isPinLocked) {
-      console.log(`[VOICE] User ${userId.slice(0, 8)} is PIN-locked until ${profile.voice_pin_locked_until} (${Date.now() - startTime}ms)`);
+      logger.info(`[VOICE] User ${userId.slice(0, 8)} is PIN-locked until ${profile.voice_pin_locked_until} (${Date.now() - startTime}ms)`);
 
       // Fire-and-forget
       supabase.from("call_history").insert({
@@ -1921,7 +1981,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         call_type: "blocked",
         pin_required: true,
         pin_success: false
-      }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
+      }).then(() => {}, (e: any) => logger.error("[VOICE] Call history insert failed:", e));
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -1932,7 +1992,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
     }
 
     // Verified caller — route to task handler
-    console.log(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
+    logger.info(`[VOICE] Recognized user: ${profile.username} (${userId.slice(0, 8)})`);
 
     // OPTIMIZATION: Fire call_history insert + settings fetch in parallel (non-blocking)
     const settingsPromise = supabase
@@ -1951,7 +2011,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
       call_type: "task",
       pin_required: false,
       pin_success: null
-    }).then(() => {}, (e: any) => console.error("[VOICE] Call history insert failed:", e));
+    }).then(() => {}, (e: any) => logger.error("[VOICE] Call history insert failed:", e));
 
     const { data: settings } = await settingsPromise;
     const greetingStyle = settings?.greeting_style || 'casual';
@@ -1974,7 +2034,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
         : `Hey ${userName}! What can I help you with?`;
       const greeting = rawGreeting.substring(0, 120);
 
-      console.log(`[VOICE-INCOMING] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
+      logger.info(`[VOICE-INCOMING] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -2031,7 +2091,7 @@ app.post("/webhook/voice/incoming", twilioLimiter, validateTwilioSignature, asyn
   <Hangup/>
 </Response>`);
   } catch (error) {
-    console.error("[VOICE] Incoming call error:", error);
+    logger.error("[VOICE] Incoming call error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2045,7 +2105,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
   const voice = await getUserVoice(userId);
   const callerNum = req.body.From || "";
 
-  console.log(`[TWILIO] Incoming voice call for user ${maskUserId(userId)} from ${maskPhone(callerNum)}`);
+  logger.info(`[TWILIO] Incoming voice call for user ${maskUserId(userId)} from ${maskPhone(callerNum)}`);
 
   try {
     res.type("text/xml");
@@ -2061,7 +2121,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
 
       if (hasPinSet) {
         // Prompt for PIN via DTMF
-        console.log(`[TWILIO] Unknown caller to ${maskUserId(userId)}'s number — PIN challenge`);
+        logger.info(`[TWILIO] Unknown caller to ${maskUserId(userId)}'s number — PIN challenge`);
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">I don't recognize your phone number. Please enter your security PIN using your keypad, then press pound.</Say>
@@ -2077,7 +2137,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
       const { data: ownerProfile } = await getSupabaseClient().from("profiles").select("username").eq("id", userId).single();
       const userName = ownerProfile?.username || "the user";
       const processUrl = `${agentUrl}/webhook/voice/message/${userId}?caller=${encodeURIComponent(callerNum)}`;
-      console.log(`[TWILIO] Unknown caller to ${maskUserId(userId)}'s number — receptionist mode`);
+      logger.info(`[TWILIO] Unknown caller to ${maskUserId(userId)}'s number — receptionist mode`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">Hello! You've reached ${escapeXml(userName)}'s assistant. They're not available right now, but I can take a message.</Say>
@@ -2114,7 +2174,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
         greeting = rawGreeting2.substring(0, 120);
       } catch { greeting = "Hey! What can I help with?"; }
 
-      console.log(`[VOICE] ConversationRelay TwiML for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}, wsUrl=${wsUrl}`);
+      logger.info(`[VOICE] ConversationRelay TwiML for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}, wsUrl=${wsUrl}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -2135,7 +2195,7 @@ app.post("/webhook/voice/:userId", twilioLimiter, validateTwilioSignature, async
     const twiml = await handleIncomingVoice({ from, to, callSid });
     res.send(twiml);
   } catch (error) {
-    console.error("[TWILIO] Voice webhook error:", error);
+    logger.error("[TWILIO] Voice webhook error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2150,7 +2210,7 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
   const voice = await getUserVoice(userId);
   const speechResult = req.body.SpeechResult || "";
 
-  console.log(`[TWILIO] Voice command received for user ${maskUserId(userId)}`);
+  logger.info(`[TWILIO] Voice command received for user ${maskUserId(userId)}`);
 
   try {
     const twiml = await processVoiceCommand(userId, speechResult);
@@ -2176,12 +2236,12 @@ app.post("/webhook/voice/process/:userId", twilioLimiter, validateTwilioSignatur
           body: speechResult,
           inputChannel: "voice",
         })
-          .catch(console.error)
+          .catch((err: unknown) => logger.error({ err }, 'Task processing failed'))
           .finally(() => { activeTasks--; });
       }
     }
   } catch (error) {
-    console.error("[TWILIO] Voice process error:", error);
+    logger.error("[TWILIO] Voice process error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2198,7 +2258,7 @@ app.post("/webhook/voice/email-decision/:userId/:queueId", twilioLimiter, valida
   const queueId = req.params.queueId;
   const speechResult = req.body.SpeechResult || "";
 
-  console.log(`[TWILIO] Email decision received for user ${maskUserId(userId)}, queue ${queueId?.slice(0, 8)}`);
+  logger.info(`[TWILIO] Email decision received for user ${maskUserId(userId)}, queue ${queueId?.slice(0, 8)}`);
 
   try {
     const { processEmailVoiceDecision } = await import("./services/twilio.js");
@@ -2207,7 +2267,7 @@ app.post("/webhook/voice/email-decision/:userId/:queueId", twilioLimiter, valida
     res.type("text/xml");
     res.send(twiml);
   } catch (error) {
-    console.error("[TWILIO] Email decision error:", error);
+    logger.error("[TWILIO] Email decision error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2225,7 +2285,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
   const speechResult = req.body.SpeechResult || "";
   const callerNumber = req.query.caller as string || req.body.From || "unknown";
 
-  console.log(`[TWILIO] Message received for user ${maskUserId(userId)} from ${maskPhone(callerNumber)}`);
+  logger.info(`[TWILIO] Message received for user ${maskUserId(userId)} from ${maskPhone(callerNumber)}`);
 
   try {
     // Respond to the caller
@@ -2264,11 +2324,11 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
           });
         }
 
-        console.log(`[TWILIO] Message delivered to ${profile.username} from ${maskPhone(callerNumber)}`);
+        logger.info(`[TWILIO] Message delivered to ${profile.username} from ${maskPhone(callerNumber)}`);
       }
     }
   } catch (error) {
-    console.error("[TWILIO] Message recording error:", error);
+    logger.error("[TWILIO] Message recording error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2285,7 +2345,7 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
   const to = req.body.To || "";
   const body = req.body.Body || "";
 
-  console.log(`[TWILIO] Incoming SMS received`);
+  logger.info(`[TWILIO] Incoming SMS received`);
 
   try {
     const result = await handleIncomingSms({ from, to, body });
@@ -2337,7 +2397,7 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
               inputChannel: "sms",
               responsePrefix: `You replied with additional info. Here's what I did:`,
             })
-              .catch(console.error)
+              .catch((err: unknown) => logger.error({ err }, 'Task processing failed'))
               .finally(() => { activeTasks--; });
           } else {
             activeTasks++;
@@ -2350,7 +2410,7 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
               taskId: result.taskId,
               inputChannel: "sms",
             })
-              .catch(console.error)
+              .catch((err: unknown) => logger.error({ err }, 'Task processing failed'))
               .finally(() => { activeTasks--; });
           }
         }
@@ -2362,7 +2422,7 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
 </Response>`);
     }
   } catch (error) {
-    console.error("[TWILIO] SMS webhook error:", error);
+    logger.error("[TWILIO] SMS webhook error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2382,7 +2442,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
   const twilioNumber = req.body.To || "";
   const messageSid = req.body.MessageSid || "";
 
-  console.log(`[SMS] Incoming from ${maskPhone(senderNumber)}: "${message.slice(0, 50)}..."`);
+  logger.info(`[SMS] Incoming from ${maskPhone(senderNumber)}: "${message.slice(0, 50)}..."`);
 
   // Track inbound SMS cost for the resolved user (called once per request)
   const { SMS_MARKUP: smsMarkupIncoming, TWILIO_RATES: twilioRatesIncoming } = await import('./utils/cost-calculator.js');
@@ -2401,7 +2461,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       const recipientUser = await resolveUser(twilioNumber);
 
       if (!recipientUser) {
-        console.log(`[SMS] Unknown sender ${maskPhone(senderNumber)} to unowned number ${maskPhone(twilioNumber)}`);
+        logger.info(`[SMS] Unknown sender ${maskPhone(senderNumber)} to unowned number ${maskPhone(twilioNumber)}`);
         res.type("text/xml");
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2425,7 +2485,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
       if (incomingCodeMatch?.[1] && senderLooksAutomated) {
         const verifCode = incomingCodeMatch[1];
-        console.log(`[SMS] Verification code "${verifCode}" intercepted from ${maskPhone(senderNumber)} for user ${recipientUser.userId.slice(0, 8)}`);
+        logger.info(`[SMS] Verification code "${verifCode}" intercepted from ${maskPhone(senderNumber)} for user ${recipientUser.userId.slice(0, 8)}`);
         try {
           const { storeTfaCode } = await import("./services/tfa.js");
           await storeTfaCode(recipientUser.userId, null, verifCode, "sms");
@@ -2452,7 +2512,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
                 verification_code: verifCode,
               },
             }).eq("id", stuckTask.id);
-            console.log(`[SMS] Resumed stuck task ${stuckTask.id.slice(0, 8)} with verification code`);
+            logger.info(`[SMS] Resumed stuck task ${stuckTask.id.slice(0, 8)} with verification code`);
           }
         } catch { /* non-critical */ }
 
@@ -2469,7 +2529,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
       if (!hasPinSet) {
         // No PIN — process message directly for the user
-        console.log(`[SMS] No PIN set for ${recipientUser.username} — processing message from unknown sender`);
+        logger.info(`[SMS] No PIN set for ${recipientUser.username} — processing message from unknown sender`);
         const { processTask: smsProcessTask } = await import("./services/processor.js");
         await smsProcessTask({
           userId: recipientUser.userId, username: recipientUser.username,
@@ -2511,7 +2571,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
       // PIN verified — strip PIN and process
       const cleanMessage = message.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim();
-      console.log(`[SMS] PIN verified for unknown sender ${maskPhone(senderNumber)} -> ${recipientUser.username}`);
+      logger.info(`[SMS] PIN verified for unknown sender ${maskPhone(senderNumber)} -> ${recipientUser.username}`);
 
       const { processTask: smsProcessTask } = await import("./services/processor.js");
       await smsProcessTask({
@@ -2525,7 +2585,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
     const userId = resolved.userId;
     const username = resolved.username;
-    console.log(`[SMS] Recognized user: ${username} (${userId.slice(0, 8)})`);
+    logger.info(`[SMS] Recognized user: ${username} (${userId.slice(0, 8)})`);
 
     // Track inbound SMS cost (Twilio charges us per inbound SMS)
     trackInboundSmsCost(userId);
@@ -2569,7 +2629,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
       // PIN verified — strip PIN from message before processing
       const cleanMessage = message.replace(new RegExp(`\\b${enteredPin}\\b`), "").trim();
-      console.log(`[SMS] PIN verified for unrecognized number ${maskPhone(senderNumber)}`);
+      logger.info(`[SMS] PIN verified for unrecognized number ${maskPhone(senderNumber)}`);
 
       const { processTask } = await import("./services/processor.js");
       await processTask({
@@ -2611,7 +2671,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
             completed_at: new Date().toISOString(),
           }).eq('id', smsAwaitingTask.id);
 
-          console.log(`[SMS-AUTO-PROCEED] User cancelled task ${smsAwaitingTask.id.slice(0, 8)} via SMS`);
+          logger.info(`[SMS-AUTO-PROCEED] User cancelled task ${smsAwaitingTask.id.slice(0, 8)} via SMS`);
           res.type("text/xml");
           return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2620,7 +2680,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
         }
 
         // User provided an answer — clear timer and re-process
-        console.log(`[SMS-AUTO-PROCEED] User replied to awaiting task ${smsAwaitingTask.id.slice(0, 8)} via SMS`);
+        logger.info(`[SMS-AUTO-PROCEED] User replied to awaiting task ${smsAwaitingTask.id.slice(0, 8)} via SMS`);
 
         await supabase.from('tasks').update({
           status: 'processing',
@@ -2639,7 +2699,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
           inputChannel: "sms",
           responsePrefix: `You replied with additional info. Here's what I did:`,
         }).catch((err: Error) => {
-          console.error(`[SMS-AUTO-PROCEED] Task ${smsAwaitingTask.id.slice(0, 8)} failed:`, err);
+          logger.error(`[SMS-AUTO-PROCEED] Task ${smsAwaitingTask.id.slice(0, 8)} failed:`, err);
         });
 
         res.type("text/xml");
@@ -2667,7 +2727,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
   } catch (error) {
-    console.error("[SMS] Incoming SMS error:", error);
+    logger.error("[SMS] Incoming SMS error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2684,7 +2744,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
   let voice = DEFAULT_VOICE;
   const callSid = req.body.CallSid || "";
 
-  console.log(`[PIN] Verification attempt from ${maskPhone(callerNumber)}, entered: ${maskPin(enteredPin)}`);
+  logger.info(`[PIN] Verification attempt from ${maskPhone(callerNumber)}, entered: ${maskPin(enteredPin)}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -2755,7 +2815,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     if (pinResult !== "valid") {
       const { getRemainingAttempts } = await import("./utils/pin-auth.js");
       const remaining = await getRemainingAttempts(userId);
-      console.log(`[PIN] Invalid PIN from ${maskPhone(callerNumber)}, ${remaining} attempts remaining`);
+      logger.info(`[PIN] Invalid PIN from ${maskPhone(callerNumber)}, ${remaining} attempts remaining`);
 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -2768,7 +2828,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
 </Response>`);
     }
 
-    console.log(`[PIN] Successful verification for ${profile.username} (${userId.slice(0, 8)})`);
+    logger.info(`[PIN] Successful verification for ${profile.username} (${userId.slice(0, 8)})`);
 
     // Log successful PIN auth
     await supabase.from("call_history").insert({
@@ -2795,7 +2855,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
   <Hangup/>
 </Response>`);
   } catch (error) {
-    console.error("[PIN] Verification error:", error);
+    logger.error("[PIN] Verification error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2814,7 +2874,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
 
-  console.log(`[VOICE-PREMIUM] Call to user ${userId.slice(0, 8)} from ${maskPhone(from)}`);
+  logger.info(`[VOICE-PREMIUM] Call to user ${userId.slice(0, 8)} from ${maskPhone(from)}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -2828,7 +2888,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
       const agentUrl = process.env.AGENT_URL || 'https://agent-production-1339.up.railway.app';
 
       if (hasPinSet) {
-        console.log(`[VOICE-PREMIUM] Unknown caller ${maskPhone(from)} — PIN challenge`);
+        logger.info(`[VOICE-PREMIUM] Unknown caller ${maskPhone(from)} — PIN challenge`);
         res.type("text/xml");
         return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2845,7 +2905,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
       const { data: ownerProfile } = await supabase.from("profiles").select("username").eq("id", userId).single();
       const userName = ownerProfile?.username || "the user";
       const processUrl = `${agentUrl}/webhook/voice/message/${userId}?caller=${encodeURIComponent(from)}`;
-      console.log(`[VOICE-PREMIUM] Unknown caller ${maskPhone(from)} — receptionist mode`);
+      logger.info(`[VOICE-PREMIUM] Unknown caller ${maskPhone(from)} — receptionist mode`);
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2861,7 +2921,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
 
     // Check daily call limit (50/day per user)
     if (!(await checkDailyCallLimit(userId))) {
-      console.log(`[VOICE-PREMIUM] User ${userId.slice(0, 8)} exceeded daily call limit`);
+      logger.info(`[VOICE-PREMIUM] User ${userId.slice(0, 8)} exceeded daily call limit`);
 
       await supabase.from("call_history").insert({
         user_id: userId,
@@ -2902,7 +2962,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
         if (vs?.voice_preference && !vs.voice_preference.includes('.')) elevenlabsVoice = vs.voice_preference;
       } catch {}
 
-      console.log(`[VOICE-PREMIUM] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
+      logger.info(`[VOICE-PREMIUM] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -2928,7 +2988,7 @@ app.post("/webhook/voice/premium/:userId", twilioLimiter, validateTwilioSignatur
   <Hangup/>
 </Response>`);
   } catch (error) {
-    console.error("[VOICE-PREMIUM] Error:", error);
+    logger.error("[VOICE-PREMIUM] Error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -2946,7 +3006,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
   let smsBody = req.body.Body || "";
   const messageSid = req.body.MessageSid || "";
 
-  console.log(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${maskPhone(from)}: "${smsBody.slice(0, 50)}..."`);
+  logger.info(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${maskPhone(from)}: "${smsBody.slice(0, 50)}..."`);
 
   // Track inbound SMS cost for premium number (Twilio charges us per inbound SMS)
   {
@@ -2985,7 +3045,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
 
       if (verificationCodeMatch?.[1] && isLikelyAutomated) {
         const code = verificationCodeMatch[1];
-        console.log(`[SMS-PREMIUM] Verification code "${code}" intercepted from ${maskPhone(from)} for user ${userId.slice(0, 8)}`);
+        logger.info(`[SMS-PREMIUM] Verification code "${code}" intercepted from ${maskPhone(from)} for user ${userId.slice(0, 8)}`);
         try {
           const { storeTfaCode } = await import("./services/tfa.js");
           await storeTfaCode(userId, null, code, "sms");
@@ -3012,7 +3072,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
                 verification_code: code,
               },
             }).eq("id", stuckTask.id);
-            console.log(`[SMS-PREMIUM] Resumed stuck task ${stuckTask.id.slice(0, 8)} with verification code`);
+            logger.info(`[SMS-PREMIUM] Resumed stuck task ${stuckTask.id.slice(0, 8)} with verification code`);
           }
         } catch { /* non-critical */ }
 
@@ -3057,7 +3117,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
 
         // Strip PIN from message
         smsBody = smsBody.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || smsBody;
-        console.log(`[SMS-PREMIUM] PIN verified for ${maskPhone(from)} -> user ${userId.slice(0, 8)}`);
+        logger.info(`[SMS-PREMIUM] PIN verified for ${maskPhone(from)} -> user ${userId.slice(0, 8)}`);
       }
     }
 
@@ -3076,7 +3136,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
   } catch (error) {
-    console.error("[SMS-PREMIUM] Error:", error);
+    logger.error("[SMS-PREMIUM] Error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -3092,7 +3152,7 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
   const { verifyTelegramWebhookSecret, sendTelegramMessage } = await import("./services/telegram.js");
   const headerSecret = req.headers["x-telegram-bot-api-secret-token"] as string || "";
   if (!verifyTelegramWebhookSecret(headerSecret)) {
-    console.warn("[TELEGRAM] Invalid webhook secret");
+    logger.warn("[TELEGRAM] Invalid webhook secret");
     return res.status(401).json({ ok: false });
   }
 
@@ -3184,11 +3244,11 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
       body,
       inputChannel: "telegram",
     })
-      .catch(console.error)
+      .catch((err: unknown) => logger.error({ err }, 'Task processing failed'))
       .finally(() => { activeTasks--; });
 
   } catch (err) {
-    console.error("[TELEGRAM] Webhook error:", err);
+    logger.error("[TELEGRAM] Webhook error:", err);
   }
 });
 
@@ -3201,7 +3261,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
   // Strip "whatsapp:" prefix to get E.164 phone number
   const fromPhone = rawFrom.replace(/^whatsapp:/i, "");
 
-  console.log(`[WHATSAPP] Incoming from ${maskPhone(fromPhone)}: "${message.slice(0, 50)}"`);
+  logger.info(`[WHATSAPP] Incoming from ${maskPhone(fromPhone)}: "${message.slice(0, 50)}"`);
 
   // Respond immediately with empty TwiML (Twilio requires fast ack)
   res.type("text/xml");
@@ -3285,11 +3345,11 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
       body: message,
       inputChannel: "whatsapp",
     })
-      .catch(console.error)
+      .catch((err: unknown) => logger.error({ err }, 'Task processing failed'))
       .finally(() => { activeTasks--; });
 
   } catch (err) {
-    console.error("[WHATSAPP] Webhook error:", err);
+    logger.error("[WHATSAPP] Webhook error:", err);
   }
 });
 
@@ -3303,7 +3363,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
 
-  console.log(`[CHECKIN] ${callType} call webhook for user ${userId.slice(0, 8)}`);
+  logger.info(`[CHECKIN] ${callType} call webhook for user ${userId.slice(0, 8)}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -3347,7 +3407,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
       }
 
       greeting = greeting.substring(0, 120);
-      console.log(`[VOICE-CHECKIN] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
+      logger.info(`[VOICE-CHECKIN] ConversationRelay for ${userId.slice(0, 8)}: voice=${elevenlabsVoice}`);
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -3376,7 +3436,7 @@ app.post("/webhook/checkin/:userId", twilioLimiter, validateTwilioSignature, asy
   <Hangup/>
 </Response>`);
   } catch (error) {
-    console.error("[CHECKIN] Webhook error:", error);
+    logger.error("[CHECKIN] Webhook error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -3393,7 +3453,7 @@ app.post("/webhook/checkin/response/:userId", twilioLimiter, validateTwilioSigna
   const transcription = req.body.SpeechResult || req.body.TranscriptionText || "";
   const callType = req.query.type as string || "morning";
 
-  console.log(`[CHECKIN] Response from ${userId.slice(0, 8)}: "${transcription.slice(0, 50)}..."`);
+  logger.info(`[CHECKIN] Response from ${userId.slice(0, 8)}: "${transcription.slice(0, 50)}..."`);
 
   try {
     const supabase = getSupabaseClient();
@@ -3445,7 +3505,7 @@ app.post("/webhook/checkin/response/:userId", twilioLimiter, validateTwilioSigna
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
   } catch (error) {
-    console.error("[CHECKIN] Response handler error:", error);
+    logger.error("[CHECKIN] Response handler error:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
   }
@@ -3459,7 +3519,7 @@ app.post("/webhook/interview-call/:userId", twilioLimiter, validateTwilioSignatu
   const to = req.body.To || "";
   const callSid = req.body.CallSid || "";
 
-  console.log(`[ONBOARDING] Interview call initiated for user ${maskUserId(userId)}`);
+  logger.info(`[ONBOARDING] Interview call initiated for user ${maskUserId(userId)}`);
 
   try {
     const { handleInterviewCall } = await import("./services/onboarding-interview.js");
@@ -3467,7 +3527,7 @@ app.post("/webhook/interview-call/:userId", twilioLimiter, validateTwilioSignatu
     res.type("text/xml");
     res.send(twiml);
   } catch (error) {
-    console.error("[ONBOARDING] Interview call error:", error);
+    logger.error("[ONBOARDING] Interview call error:", error);
     const { generateErrorTwiml } = await import("./services/onboarding-interview.js");
     res.type("text/xml");
     res.send(generateErrorTwiml("Sorry, we couldn't start your interview. Please try again from the dashboard."));
@@ -3479,7 +3539,7 @@ app.post("/webhook/interview-call/response/:userId", twilioLimiter, validateTwil
   const transcription = req.body.SpeechResult || req.body.TranscriptionText || "";
   const questionIndex = parseInt(req.query.question as string || "0");
 
-  console.log(`[ONBOARDING] Interview response from ${maskUserId(userId)}, Q${questionIndex}: "${transcription.slice(0, 50)}..."`);
+  logger.info(`[ONBOARDING] Interview response from ${maskUserId(userId)}, Q${questionIndex}: "${transcription.slice(0, 50)}..."`);
 
   try {
     const { processInterviewResponse } = await import("./services/onboarding-interview.js");
@@ -3487,7 +3547,7 @@ app.post("/webhook/interview-call/response/:userId", twilioLimiter, validateTwil
     res.type("text/xml");
     res.send(twiml);
   } catch (error) {
-    console.error("[ONBOARDING] Interview response error:", error);
+    logger.error("[ONBOARDING] Interview response error:", error);
     const { generateErrorTwiml } = await import("./services/onboarding-interview.js");
     res.type("text/xml");
     res.send(generateErrorTwiml("Sorry, something went wrong. Let's continue via email instead."));
@@ -3513,7 +3573,7 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
     return res.status(400).json({ error: "userId and phone are required" });
   }
 
-  console.log(`[PHONE-VERIFY] Initiating verification call to ${maskPhone(phone)} for user ${maskUserId(userId)}`);
+  logger.info(`[PHONE-VERIFY] Initiating verification call to ${maskPhone(phone)} for user ${maskUserId(userId)}`);
 
   try {
     const config = getTwilioConfig();
@@ -3533,16 +3593,16 @@ app.post("/webhook/voice/onboarding-verify", async (req, res) => {
 
     if (!response.ok) {
       const errorData = await response.text();
-      console.error(`[PHONE-VERIFY] Twilio error: ${errorData}`);
+      logger.error(`[PHONE-VERIFY] Twilio error: ${errorData}`);
       return res.status(502).json({ error: "Failed to initiate call" });
     }
 
     const callData = await response.json() as { sid: string };
-    console.log(`[PHONE-VERIFY] Call initiated: ${callData.sid}`);
+    logger.info(`[PHONE-VERIFY] Call initiated: ${callData.sid}`);
 
     res.json({ success: true, callSid: callData.sid });
   } catch (error) {
-    console.error("[PHONE-VERIFY] Error:", error);
+    logger.error("[PHONE-VERIFY] Error:", error);
     res.status(500).json({ error: "Failed to initiate verification call" });
   }
 });
@@ -3555,7 +3615,7 @@ app.post("/webhook/voice/onboarding-gather/:userId", twilioLimiter, validateTwil
   const userId = req.params.userId;
   const voice = await getUserVoice(userId);
 
-  console.log(`[PHONE-VERIFY] Playing gather prompt for user ${maskUserId(userId)}`);
+  logger.info(`[PHONE-VERIFY] Playing gather prompt for user ${maskUserId(userId)}`);
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -3582,7 +3642,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
   const digit = req.body.Digits || "";
   const from = req.body.From || "";
 
-  console.log(`[PHONE-VERIFY] User ${maskUserId(userId)} pressed: ${digit}`);
+  logger.info(`[PHONE-VERIFY] User ${maskUserId(userId)} pressed: ${digit}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -3609,7 +3669,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
         .eq("phone_number", profile?.phone_number || from)
         .eq("status", "initiated");
 
-      console.log(`[PHONE-VERIFY] Phone verified for user ${maskUserId(userId)}`);
+      logger.info(`[PHONE-VERIFY] Phone verified for user ${maskUserId(userId)}`);
 
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -3625,7 +3685,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
         .eq("user_id", userId)
         .eq("status", "initiated");
 
-      console.log(`[PHONE-VERIFY] Verification cancelled by user ${maskUserId(userId)}`);
+      logger.info(`[PHONE-VERIFY] Verification cancelled by user ${maskUserId(userId)}`);
 
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -3641,7 +3701,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
         .eq("user_id", userId)
         .eq("status", "initiated");
 
-      console.log(`[PHONE-VERIFY] Verification timeout for user ${maskUserId(userId)}`);
+      logger.info(`[PHONE-VERIFY] Verification timeout for user ${maskUserId(userId)}`);
 
       res.type("text/xml");
       res.send(`<?xml version="1.0" encoding="UTF-8"?>
@@ -3651,7 +3711,7 @@ app.post("/webhook/voice/onboarding-confirm/:userId", twilioLimiter, validateTwi
 </Response>`);
     }
   } catch (error) {
-    console.error("[PHONE-VERIFY] Error handling confirmation:", error);
+    logger.error("[PHONE-VERIFY] Error handling confirmation:", error);
     res.type("text/xml");
     res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -3674,7 +3734,7 @@ app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) =>
   const durationSeconds = parseInt(CallDuration, 10);
   if (isNaN(durationSeconds) || durationSeconds <= 0) return;
 
-  console.log(`[CALL-END] CallSid=${CallSid} Duration=${durationSeconds}s Direction=${Direction}`);
+  logger.info(`[CALL-END] CallSid=${CallSid} Duration=${durationSeconds}s Direction=${Direction}`);
 
   try {
     const supabase = getSupabaseClient();
@@ -3699,13 +3759,13 @@ app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) =>
         .single();
       if (callRecord?.user_id) {
         userId = callRecord.user_id;
-        console.log(`[CALL-END] Found user via call_history: ${maskUserId(userId)}`);
+        logger.info(`[CALL-END] Found user via call_history: ${maskUserId(userId)}`);
       }
     }
 
     if (!userId) {
       // Demo/platform call — log as platform cost (no user to bill)
-      console.log(`[CALL-END] No user found for phone ${maskPhone(phoneToSearch)} — demo/platform call (${durationSeconds}s, unbilled)`);
+      logger.info(`[CALL-END] No user found for phone ${maskPhone(phoneToSearch)} — demo/platform call (${durationSeconds}s, unbilled)`);
       return;
     }
 
@@ -3725,16 +3785,16 @@ app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) =>
       .limit(1);
 
     if (existingLog && existingLog.length > 0) {
-      console.log(`[CALL-END] Dedup: cost already logged for ${direction} call within 60s for user ${maskUserId(userId)}`);
+      logger.info(`[CALL-END] Dedup: cost already logged for ${direction} call within 60s for user ${maskUserId(userId)}`);
       return;
     }
 
     // Log the actual cost with VOICE_MARKUP (1.5×) on top of base 1.296× = 1.944× total
     await trackServiceCost(userId, 'twilio', `voice_${direction}_actual`, realCost, `voice_${direction}`, undefined, voiceMarkup);
 
-    console.log(`[CALL-END] Logged real cost $${(realCost * 1.944).toFixed(4)} (billed) for ${durationSeconds}s ${direction} call (user ${maskUserId(userId)})`);
+    logger.info(`[CALL-END] Logged real cost $${(realCost * 1.944).toFixed(4)} (billed) for ${durationSeconds}s ${direction} call (user ${maskUserId(userId)})`);
   } catch (err) {
-    console.error('[CALL-END] Failed to log call cost:', err);
+    logger.error('[CALL-END] Failed to log call cost:', err);
   }
 });
 
@@ -3742,13 +3802,13 @@ app.post('/webhook/voice/call-end', validateTwilioSignature, async (req, res) =>
 app.post('/webhook/voice/amd-status', validateTwilioSignature, async (req, res) => {
   res.sendStatus(204);
   const { CallSid, AnsweredBy } = req.body;
-  console.log(`[AMD] CallSid=${CallSid} AnsweredBy=${AnsweredBy}`);
+  logger.info(`[AMD] CallSid=${CallSid} AnsweredBy=${AnsweredBy}`);
   if (AnsweredBy && AnsweredBy.startsWith('machine')) {
     try {
       const { triggerAmdHangup } = await import('./services/voice-conversation.js');
       triggerAmdHangup(CallSid, AnsweredBy);
     } catch (err) {
-      console.error('[AMD] Failed to trigger hangup:', err);
+      logger.error('[AMD] Failed to trigger hangup:', err);
     }
   }
 });
@@ -3760,27 +3820,27 @@ app.use("/skills", skillRoutes);
 // ---- Error Handler ----
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("Unhandled error:", err);
+  logger.error("Unhandled error:", err);
   res.status(500).json({ error: "internal_error", message: "An unexpected error occurred" });
 });
 
 // ---- Process Crash Handlers ----
 
 process.on("uncaughtException", (err) => {
-  console.error("[FATAL] Uncaught exception:", err);
+  logger.error("[FATAL] Uncaught exception:", err);
   // Give time for logs to flush, then exit
   setTimeout(() => process.exit(1), 1000);
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  console.error("[FATAL] Unhandled rejection:", reason);
+  logger.error("[FATAL] Unhandled rejection:", reason);
   if (reason instanceof Error && reason.stack) {
-    console.error("[FATAL] Stack:", reason.stack);
+    logger.error("[FATAL] Stack:", reason.stack);
   }
 });
 
 process.on("SIGTERM", async () => {
-  console.log("[SHUTDOWN] SIGTERM received — cleaning up in-flight tasks before exit...");
+  logger.info("[SHUTDOWN] SIGTERM received — cleaning up in-flight tasks before exit...");
   try {
     await getSupabaseClient()
       .from('tasks')
@@ -3790,15 +3850,15 @@ process.on("SIGTERM", async () => {
         response_text: 'The service was restarted while processing this task. Please try again and I\'ll pick up right where we left off!',
       })
       .eq('status', 'processing');
-    console.log(`[SHUTDOWN] Marked in-flight tasks as needs_review`);
+    logger.info(`[SHUTDOWN] Marked in-flight tasks as needs_review`);
   } catch (e) {
-    console.error("[SHUTDOWN] Failed to clean up tasks:", e);
+    logger.error("[SHUTDOWN] Failed to clean up tasks:", e);
   }
   setTimeout(() => process.exit(0), 1500);
 });
 
 process.on("SIGINT", () => {
-  console.log("[SHUTDOWN] SIGINT received, shutting down...");
+  logger.info("[SHUTDOWN] SIGINT received, shutting down...");
   process.exit(0);
 });
 
@@ -3830,7 +3890,7 @@ server.on("upgrade", (request, socket, head) => {
         const { handleBrowserTakeoverWs } = await import("./services/browser-takeover-ws.js");
         await handleBrowserTakeoverWs(ws, taskId, token);
       } catch (err) {
-        console.error("[TAKEOVER-WS] Handler error:", err);
+        logger.error("[TAKEOVER-WS] Handler error:", err);
         ws.close(4500, "Internal error");
       }
     });
@@ -3844,11 +3904,11 @@ wss.on("connection", (ws, request) => {
 });
 
 server.listen(PORT, async () => {
-  console.log(`Agent server v2.0 running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`WebSocket: ws://localhost:${PORT}/ws/voice`);
-  console.log(`ConversationRelay: ${USE_CONVERSATION_RELAY ? "ENABLED" : "DISABLED (legacy TwiML)"}`);
-  console.log(`[DEPLOY-VERIFY] Voice pipeline v18 — ElevenLabs Sarah, bare voice IDs, TwiML fallback`);
+  logger.info(`Agent server v2.0 running on port ${PORT}`);
+  logger.info(`Health check: http://localhost:${PORT}/health`);
+  logger.info(`WebSocket: ws://localhost:${PORT}/ws/voice`);
+  logger.info(`ConversationRelay: ${USE_CONVERSATION_RELAY ? "ENABLED" : "DISABLED (legacy TwiML)"}`);
+  logger.info(`[DEPLOY-VERIFY] Voice pipeline v18 — ElevenLabs Sarah, bare voice IDs, TwiML fallback`);
 
   // START HEALTH SYSTEM (The Final Boss - Never Fails)
   try {
@@ -3856,9 +3916,9 @@ server.listen(PORT, async () => {
     // Run startup validation FIRST — logs all issues loudly
     await healthSystem.runStartupValidation();
     healthSystem.startMonitoring();
-    console.log(`[HEALTH] ✅ Never-fail health system started (30s monitoring)`);
+    logger.info(`[HEALTH] ✅ Never-fail health system started (30s monitoring)`);
   } catch (e) {
-    console.error(`[HEALTH] Failed to start health system:`, e);
+    logger.error(`[HEALTH] Failed to start health system:`, e);
   }
 
   // START TASK WATCHDOG (Gracefully resolve stuck tasks — users NEVER see "failed")
@@ -3879,7 +3939,7 @@ server.listen(PORT, async () => {
         .lt('updated_at', stuckThreshold);
 
       if (stuckTasks && stuckTasks.length > 0) {
-        console.log(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >10 min) — resolving gracefully...`);
+        logger.info(`[WATCHDOG] Found ${stuckTasks.length} stuck task(s) (no update >10 min) — resolving gracefully...`);
 
         // Gracefully complete each stuck task with a helpful message.
         // NEVER mark as "failed" — users should always see a usable response.
@@ -3900,7 +3960,7 @@ server.listen(PORT, async () => {
             .eq('status', 'processing'); // double-check it's still stuck
 
           if (!updateErr) {
-            console.log(`[WATCHDOG] Gracefully resolved task ${task.id} (channel: ${channel})`);
+            logger.info(`[WATCHDOG] Gracefully resolved task ${task.id} (channel: ${channel})`);
 
             // For email-channel tasks: notify the user so they're not left waiting
             if (channel === 'email' && task.user_id) {
@@ -3919,27 +3979,27 @@ server.listen(PORT, async () => {
                     subject: task.email_subject || 'Your task',
                     body: gracefulResponse,
                   });
-                  console.log(`[WATCHDOG] Sent recovery email to ${maskEmail(profile.email)}`);
+                  logger.info(`[WATCHDOG] Sent recovery email to ${maskEmail(profile.email)}`);
                 }
               } catch (emailErr) {
-                console.warn('[WATCHDOG] Could not send recovery email:', emailErr);
+                logger.warn('[WATCHDOG] Could not send recovery email:', emailErr);
               }
             }
           }
         }
 
-        console.log(`[WATCHDOG] Resolved ${stuckTasks.length} stuck task(s)`);
+        logger.info(`[WATCHDOG] Resolved ${stuckTasks.length} stuck task(s)`);
       }
       recordSchedulerRun('watchdog');
     } catch (e) {
-      console.error('[WATCHDOG] Error in task watchdog:', e);
+      logger.error('[WATCHDOG] Error in task watchdog:', e);
     }
   };
 
   // Run immediately on startup to catch tasks from previous server instance
   runTaskWatchdog();
   setInterval(runTaskWatchdog, 5 * 60 * 1000); // Then every 5 minutes
-  console.log('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 50min updated_at threshold, graceful recovery + email notify)');
+  logger.info('[WATCHDOG] ✅ Task watchdog started (immediate + 5min interval, 50min updated_at threshold, graceful recovery + email notify)');
 
   // WEBHOOK SELF-HEALER — auto-repair phone numbers pointing to wrong URL
   const validateAndRepairWebhooks = async () => {
@@ -3975,7 +4035,7 @@ server.listen(PORT, async () => {
 
           // If webhook is wrong (localhost, dead IP, different host), repair it
           if (data.voice_url !== expectedVoice || data.sms_url !== expectedSms) {
-            console.log(`[WEBHOOK-HEALER] Repairing ${maskPhone(num.phone_number)}: ${data.voice_url} → ${expectedVoice}`);
+            logger.info(`[WEBHOOK-HEALER] Repairing ${maskPhone(num.phone_number)}: ${data.voice_url} → ${expectedVoice}`);
 
             await fetch(
               `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/IncomingPhoneNumbers/${num.twilio_sid}.json`,
@@ -3993,22 +4053,22 @@ server.listen(PORT, async () => {
                 }).toString(),
               }
             );
-            console.log(`[WEBHOOK-HEALER] ✅ Fixed ${maskPhone(num.phone_number)}`);
+            logger.info(`[WEBHOOK-HEALER] ✅ Fixed ${maskPhone(num.phone_number)}`);
           }
         } catch (err) {
-          console.error(`[WEBHOOK-HEALER] Error checking ${maskPhone(num.phone_number)}:`, err);
+          logger.error(`[WEBHOOK-HEALER] Error checking ${maskPhone(num.phone_number)}:`, err);
         }
       }
       recordSchedulerRun('webhook_healer');
     } catch (e) {
-      console.error('[WEBHOOK-HEALER] Error:', e);
+      logger.error('[WEBHOOK-HEALER] Error:', e);
     }
   };
 
   // Run on startup + every 30 minutes
   validateAndRepairWebhooks();
   setInterval(validateAndRepairWebhooks, 30 * 60 * 1000);
-  console.log('[WEBHOOK-HEALER] ✅ Webhook self-healer started (30min interval)');
+  logger.info('[WEBHOOK-HEALER] ✅ Webhook self-healer started (30min interval)');
 
   startScheduler();
   startInboxManager(); // Start AI inbox management (checks user inboxes every 5 min)
@@ -4020,7 +4080,7 @@ server.listen(PORT, async () => {
     const { schedulerHeartbeat } = await import("./utils/scheduler-heartbeat.js");
     schedulerHeartbeat.onBeat = (name: string) => { recordSchedulerRun(name); };
   } catch {
-    console.warn('[HEALTH] Could not wire scheduler heartbeat — health check will show never_ran');
+    logger.warn('[HEALTH] Could not wire scheduler heartbeat — health check will show never_ran');
   }
 
   // Seed default skills (idempotent)

@@ -23,6 +23,7 @@ import { BudgetManager } from './budget-manager.js';
 import { TaskLedger } from './task-ledger.js';
 import { executeToolCall, formatToolDescriptions, buildFunctionSchemas, parseToolCallsFromText } from './tool-registry.js';
 import { callModel, classifyCall } from './model-router.js';
+import { logger } from '../utils/logger.js';
 
 // ── Register all tools on module load ──
 import './tools/communication.js';
@@ -106,7 +107,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
 
     // ── Classify task tier ──
     const classification = await classifyTaskTier(task.subject, task.body);
-    console.log(`[V3] Task ${taskId.slice(0, 8)} classified as ${classification.tier}${classification.tool ? ` (${classification.tool})` : ''}`);
+    logger.info(`[V3] Task ${taskId.slice(0, 8)} classified as ${classification.tier}${classification.tool ? ` (${classification.tool})` : ''}`);
 
     // ── Route by tier ──
     let response: string;
@@ -245,7 +246,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     }
 
     if (failReason) {
-      console.warn(`[V3] Quality gate: ${verificationStatus} — ${failReason}, response="${response.slice(0, 80)}"`);
+      logger.warn(`[V3] Quality gate: ${verificationStatus} — ${failReason}, response="${response.slice(0, 80)}"`);
     }
 
     await atomicCompleteTask(
@@ -285,11 +286,11 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
             p_description: `Task: ${task.subject.substring(0, 60)} ($${totalCostUsd.toFixed(4)})`,
             p_task_id: taskId,
           });
-          console.log(`[V3] Deducted ${totalCostCents}¢ from wallet for task ${taskId.slice(0, 8)}`);
+          logger.info(`[V3] Deducted ${totalCostCents}¢ from wallet for task ${taskId.slice(0, 8)}`);
         }
       }
     } catch (err) {
-      console.warn(`[V3] Wallet deduction failed for task ${taskId.slice(0, 8)}:`, err);
+      logger.warn(`[V3] Wallet deduction failed for task ${taskId.slice(0, 8)}:`, err);
     }
 
     // ── Update usage counter ──
@@ -298,7 +299,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // ── Append to daily log ──
     appendDailyLog(task.userId, `Task: ${task.subject} → ${response.substring(0, 200)}`).catch(() => {});
 
-    console.log(`[V3] Task ${taskId.slice(0, 8)} completed in ${executionTime}ms`);
+    logger.info(`[V3] Task ${taskId.slice(0, 8)} completed in ${executionTime}ms`);
 
     return {
       taskId,
@@ -308,7 +309,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
+    logger.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
 
     // Cleanup browser engine on error
     if (taskId) { await cleanupTaskEngine(taskId); await cleanupTaskPage(taskId); }
@@ -458,7 +459,7 @@ Category:`;
 
     return categoryToTier[category] || { tier: 'multi_step', reasoning: 'AI: default to multi-step' };
   } catch (err) {
-    console.warn('[V3] Classification failed, defaulting to multi_step:', err);
+    logger.warn('[V3] Classification failed, defaulting to multi_step:', err);
     return { tier: 'multi_step', reasoning: 'classification failed' };
   }
 }
@@ -510,7 +511,7 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
       params = JSON.parse(jsonMatch[0]);
     } else {
       // Fall through to multi-step if we can't extract params
-      console.warn(`[V3] Could not extract params for ${toolName}, falling back to multi_step`);
+      logger.warn(`[V3] Could not extract params for ${toolName}, falling back to multi_step`);
       return handleMultiStep(task, ctx);
     }
   } catch {
@@ -529,7 +530,7 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
   }
 
   // Tool failed — fall back to multi-step for a more thorough attempt
-  console.warn(`[V3] ${toolName} failed: ${toolResult.error}, falling back to multi_step`);
+  logger.warn(`[V3] ${toolName} failed: ${toolResult.error}, falling back to multi_step`);
   return handleMultiStep(task, ctx);
 }
 
@@ -732,7 +733,7 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       consecutiveModelFailures++;
       const errMsg = err instanceof Error ? err.message : String(err);
       const errStatus = (err as any)?.status;
-      console.error(`[V3] Model call failed at iteration ${iterations} (failure ${consecutiveModelFailures}): status=${errStatus}, msg=${errMsg}`);
+      logger.error(`[V3] Model call failed at iteration ${iterations} (failure ${consecutiveModelFailures}): status=${errStatus}, msg=${errMsg}`);
       // Log the error to Supabase for remote debugging
       try {
         await getSupabaseClient().from('tasks').update({
@@ -749,7 +750,7 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       }
       const retryDelays = [5000, 10000, 16000, 20000, 25000];
       const delay = retryDelays[Math.min(consecutiveModelFailures - 1, retryDelays.length - 1)];
-      console.log(`[V3] Retrying model call in ${delay/1000}s (attempt ${consecutiveModelFailures}/5)`);
+      logger.info(`[V3] Retrying model call in ${delay/1000}s (attempt ${consecutiveModelFailures}/5)`);
       await new Promise(r => setTimeout(r, delay));
       continue;
     }
@@ -781,7 +782,7 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
         // After 5 rejections, accept whatever the AI says
         if (shouldReject && giveUpCount < 5) {
           const domainsStr = [...triedDomains].join(', ');
-          console.log(`[V3] Rejected give-up (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
+          logger.info(`[V3] Rejected give-up (attempt ${giveUpCount + 1}): "${response.substring(0, 80)}"`);
           messages.push({ role: 'assistant', content: response });
           messages.push({
             role: 'user',
@@ -831,7 +832,7 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
     // Execute each tool call and add results — wrapped in try/catch to NEVER crash V3
     for (let i = 0; i < modelResponse.toolCalls.length; i++) {
       const tc = modelResponse.toolCalls[i];
-      console.log(`[V3] Step ${iterations}.${i + 1}: ${tc.name}(${JSON.stringify(tc.arguments).substring(0, 100)})`);
+      logger.info(`[V3] Step ${iterations}.${i + 1}: ${tc.name}(${JSON.stringify(tc.arguments).substring(0, 100)})`);
 
       let result;
       try {
@@ -842,7 +843,7 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         ledger.recordObservation(tc.name, tc.arguments, result);
       } catch (toolErr) {
         const errMsg = toolErr instanceof Error ? toolErr.message : 'unknown';
-        console.error(`[V3] Tool ${tc.name} error: ${errMsg}`);
+        logger.error(`[V3] Tool ${tc.name} error: ${errMsg}`);
         result = { success: false, error: `Tool error: ${errMsg}`, cost: 0 };
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
@@ -930,7 +931,7 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
     if (iterations > 15 && (iterations - lastMeaningfulProgress) > 20 && (iterations - lastMeaningfulProgress) % 20 === 0) {
       const domainsStr = [...triedDomains].join(', ');
       const pivotCount = Math.floor((iterations - lastMeaningfulProgress) / 20);
-      console.log(`[V3] STRATEGY PIVOT #${pivotCount} at iteration ${iterations}: no progress since iteration ${lastMeaningfulProgress}`);
+      logger.info(`[V3] STRATEGY PIVOT #${pivotCount} at iteration ${iterations}: no progress since iteration ${lastMeaningfulProgress}`);
 
       if (pivotCount >= 3) {
         // 3+ pivots without progress — deliver what you have
@@ -965,7 +966,7 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
 
     // Consecutive failures: 5 tool calls in a row failed
     if (consecutiveFailures >= 5) {
-      console.log(`[V3] ${consecutiveFailures} consecutive tool failures at iteration ${iterations}`);
+      logger.info(`[V3] ${consecutiveFailures} consecutive tool failures at iteration ${iterations}`);
       messages.push({
         role: 'user',
         content: `${consecutiveFailures} tool calls in a row have FAILED. Something is fundamentally wrong with your current approach. STOP and try something completely different — different URL, different tool, different strategy entirely.`
@@ -975,7 +976,7 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
 
     // Stall detection: same URL for 6+ rounds
     if (sameUrlCount >= 6 && iterations > 10) {
-      console.log(`[V3] Stall detected at iteration ${iterations}: same URL for ${sameUrlCount} rounds`);
+      logger.info(`[V3] Stall detected at iteration ${iterations}: same URL for ${sameUrlCount} rounds`);
       messages.push({
         role: 'user',
         content: `STALL: Same page for ${sameUrlCount} rounds. Use DOM mode: browser_snapshot() → browser_click(ref). If this page is truly stuck, navigate to a different URL entirely.`
@@ -995,13 +996,13 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
 
     // Warn in logs (not to AI) if per-iteration cost is high
     if (avgCostPerIter > DYNAMIC_COST_CONFIG.highCostPerIterWarn && iterations > 5) {
-      console.warn(`[V3] High cost/iter: $${avgCostPerIter.toFixed(4)}/iter (avg last ${windowCosts.length}), total $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
+      logger.warn(`[V3] High cost/iter: $${avgCostPerIter.toFixed(4)}/iter (avg last ${windowCosts.length}), total $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
     }
 
     // At $1.00 total: inject wrap-up guidance (once)
     if (!costWrapUpInjected && budget.totalSpent >= DYNAMIC_COST_CONFIG.wrapUpThreshold) {
       costWrapUpInjected = true;
-      console.log(`[V3] Cost wrap-up threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
+      logger.info(`[V3] Cost wrap-up threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
       messages.push({
         role: 'user',
         content: `COST AWARENESS: You've spent $${budget.totalSpent.toFixed(2)} across ${iterations} steps (avg $${avgCostPerIter.toFixed(4)}/step). Be efficient with remaining budget:
@@ -1015,7 +1016,7 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
     // At $2.00 total: force deliver partial results
     if (!costForceDelivered && budget.totalSpent >= DYNAMIC_COST_CONFIG.forceDeliverThreshold) {
       costForceDelivered = true;
-      console.log(`[V3] Cost force-deliver threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
+      logger.info(`[V3] Cost force-deliver threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
       // Build the best partial result we can
       const progressSummary = progressNotes.filter(n => !n.startsWith('\u2717')).slice(-10).join('\n');
       const domainsVisited = [...triedDomains].join(', ');
