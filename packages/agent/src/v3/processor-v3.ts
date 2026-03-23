@@ -21,9 +21,10 @@ import { buildTaskContext, loadTaskMemory, loadPersonality, buildSystemPrompt, b
 import { atomicCompleteTask, sendViaChannel } from './channel-router.js';
 import { BudgetManager } from './budget-manager.js';
 import { TaskLedger } from './task-ledger.js';
-import { executeToolCall, formatToolDescriptions, buildFunctionSchemas, parseToolCallsFromText } from './tool-registry.js';
+import { executeToolCall, formatToolDescriptions, buildFunctionSchemas, parseToolCallsFromText, getAllTools } from './tool-registry.js';
 import { callModel, classifyCall } from './model-router.js';
 import { logger } from '../utils/logger.js';
+import { loadToolsForTier, getToolNamesForTierClassification, expandTools, isToolLoaded } from './tool-loader.js';
 
 // ── Register all tools on module load ──
 import './tools/communication.js';
@@ -101,7 +102,9 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
 
     // ── Classify task tier ──
     const classification = await classifyTaskTier(task.subject, task.body);
-    logger.info(`[V3] Task ${taskId.slice(0, 8)} classified as ${classification.tier}${classification.tool ? ` (${classification.tool})` : ''}`);
+    const tierToolNames = getToolNamesForTierClassification(classification.tier);
+    const totalToolCount = getAllTools().length;
+    logger.info(`[V3] Task ${taskId.slice(0, 8)} classified as ${classification.tier}${classification.tool ? ` (${classification.tool})` : ''} — tools: ${tierToolNames.length}/${totalToolCount}`);
 
     // ── Route by tier ──
     let response: string;
@@ -575,8 +578,17 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   const budget = new BudgetManager(ctx.userId, ctx.taskId, BUDGET_PER_TASK);
   await budget.initialize();
 
-  // ── Build system prompt with tools ──
-  const toolDescriptions = formatToolDescriptions();
+  // ── Dynamic tool loading: only include tools relevant to this tier ──
+  const allToolDefs = getAllTools();
+  let loadedToolNames = getToolNamesForTierClassification('multi_step');
+  // Filter to only names that actually exist in the registry
+  const registeredNames = new Set(allToolDefs.map(t => t.name));
+  loadedToolNames = loadedToolNames.filter(n => registeredNames.has(n));
+  const initialToolCount = allToolDefs.length;
+  console.log(`[V3] Dynamic tool loading: ${loadedToolNames.length}/${initialToolCount} tools for multi_step tier`);
+
+  // ── Build system prompt with filtered tools ──
+  const toolDescriptions = formatToolDescriptions(loadedToolNames);
   const memoryContext = memory.facts ? `Known facts about user:\n${memory.facts}` : '';
   const systemPrompt = buildSystemPrompt(
     personality,
@@ -698,9 +710,11 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       // Reduce maxTokens at high iterations — the AI should be making shorter,
       // focused decisions, not writing essays. Saves tokens and money.
       const tokensForStep = iterations > 60 ? 1000 : iterations > 30 ? 1500 : 2000;
-      // Detect if this is a browser task — send only browser tools to save ~4K tokens/request.
-      // 38 tools = ~8K tokens. 6 browser tools = ~1.5K tokens. Saves 75% on tool schemas.
+      // ── Dynamic tool filtering for LLM call ──
+      // Use the loaded tool names as the filter. If browser activity is detected,
+      // narrow further to just browser tools + web_search + ask_user for ~75% token savings.
       const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot/i.test(m.content));
+      const toolsForCall = hasBrowserActivity ? 'browser' as const : loadedToolNames;
 
       // ── Smart step complexity detection ──
       // After a snapshot or read (simple data), the AI just needs to decide what to click/fill.
@@ -716,7 +730,7 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
         messages,
         tier: 'multi_step',
         useTools: true,
-        toolCategory: hasBrowserActivity ? 'browser' : undefined,
+        toolCategory: toolsForCall,
         maxTokens: tokensForStep,
         stepComplexity,
       });
@@ -800,6 +814,33 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
       }
       messages.push({ role: 'assistant', content: '' });
       messages.push({ role: 'user', content: 'Please provide your response or continue working on the task.' });
+      continue;
+    }
+
+    // ── Dynamic tool expansion: if LLM requested a tool not in the loaded set, expand and retry ──
+    const unloadedTools = modelResponse.toolCalls.filter(tc => !isToolLoaded(tc.name, loadedToolNames));
+    if (unloadedTools.length > 0) {
+      const missingNames = unloadedTools.map(tc => tc.name);
+      console.log(`[V3] Tool expansion triggered: LLM requested unloaded tools [${missingNames.join(', ')}]`);
+
+      // Expand to full tool set
+      const expandedDefs = expandTools(loadedToolNames, missingNames[0], allToolDefs);
+      loadedToolNames = expandedDefs.map(t => t.name);
+
+      // Rebuild system prompt with the expanded tool descriptions
+      const expandedToolDescriptions = formatToolDescriptions(loadedToolNames);
+      const expandedSystemPrompt = buildSystemPrompt(
+        personality,
+        memoryContext,
+        budget.formatForPrompt(),
+        expandedToolDescriptions,
+        ctx.profile.timezone
+      );
+      // Update the system message in conversation
+      messages[0] = { role: 'system', content: expandedSystemPrompt };
+
+      console.log(`[V3] Retrying LLM call with expanded tool set (${loadedToolNames.length} tools)`);
+      // Don't increment iteration — this is a retry, not a new step
       continue;
     }
 
