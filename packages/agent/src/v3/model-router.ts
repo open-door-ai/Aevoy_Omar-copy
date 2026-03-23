@@ -147,7 +147,7 @@ export interface CallOptions {
   messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string; tool_calls?: any[] }>;
   tier: string;
   useTools?: boolean;
-  toolCategory?: string; // Filter tools by category (e.g., 'browser') to reduce token usage
+  toolCategory?: string | string[]; // Filter tools by category string (e.g., 'browser') or by explicit tool name list
   maxTokens?: number;
   temperature?: number;
   /** Step complexity hint: 'simple' for snapshot reads/basic clicks, 'complex' for planning/multi-field forms */

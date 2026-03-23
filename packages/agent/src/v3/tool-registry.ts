@@ -68,9 +68,14 @@ export async function executeToolCall(
 /**
  * Build tool descriptions for the AI system prompt.
  * Returns a formatted string describing all available tools.
+ * Optionally filters to only specific tool names for reduced context window usage.
  */
-export function formatToolDescriptions(): string {
-  const toolList = getAllTools();
+export function formatToolDescriptions(toolNames?: string[]): string {
+  let toolList = getAllTools();
+  if (toolNames) {
+    const nameSet = new Set(toolNames);
+    toolList = toolList.filter(t => nameSet.has(t.name));
+  }
   if (toolList.length === 0) return 'No tools available.';
 
   return toolList.map(tool => {
@@ -87,10 +92,10 @@ export function formatToolDescriptions(): string {
 
 /**
  * Build OpenAI-compatible function schemas for native tool calling.
- * Optional category filter reduces token usage (38 tools = 8K tokens wasted per request).
+ * Supports filtering by category (legacy) or by explicit tool name list (dynamic loading).
  * For browser tasks: pass 'browser' to only include browser tools + web_search.
  */
-export function buildFunctionSchemas(category?: string): Array<{
+export function buildFunctionSchemas(categoryOrNames?: string | string[]): Array<{
   type: 'function';
   function: {
     name: string;
@@ -103,9 +108,13 @@ export function buildFunctionSchemas(category?: string): Array<{
   };
 }> {
   let toolList = getAllTools();
-  if (category) {
-    // Include tools matching the category + always include web_search and ask_user
-    toolList = toolList.filter(t => t.category === category || t.name === 'web_search' || t.name === 'ask_user');
+  if (Array.isArray(categoryOrNames)) {
+    // Filter by explicit tool name list (dynamic tool loading)
+    const nameSet = new Set(categoryOrNames);
+    toolList = toolList.filter(t => nameSet.has(t.name));
+  } else if (categoryOrNames) {
+    // Legacy: filter by ToolDefinition.category + always include web_search and ask_user
+    toolList = toolList.filter(t => t.category === categoryOrNames || t.name === 'web_search' || t.name === 'ask_user');
   }
   return toolList.map(tool => ({
     type: 'function' as const,
