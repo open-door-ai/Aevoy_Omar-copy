@@ -8,6 +8,7 @@ import {
   AlertTriangle, User, Mail, Phone, Calendar, Globe, ArrowUpDown,
   Loader2, Send, Package, RefreshCw, Eye, Ban, Unlock, X,
   BarChart3, TrendingUp, Trash2, PhoneOff, PhoneCall, Wifi,
+  Briefcase, Link as LinkIcon, Plus, Play, FileText,
 } from "lucide-react";
 
 /* ─────────────────────────── Types ─────────────────────────── */
@@ -55,7 +56,19 @@ interface AgentHealth {
   uptime?: number;
 }
 
-type Tab = "overview" | "users" | "tasks" | "costs" | "terminal" | "killswitch";
+type Tab = "overview" | "users" | "tasks" | "costs" | "terminal" | "investors" | "killswitch";
+
+interface Investor {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  linkedin_url: string;
+  research_status: "pending" | "researching" | "done" | "error";
+  research_summary: string | null;
+  personalized_message: string | null;
+  created_at: string;
+}
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
 function timeAgo(date: string | null): string {
@@ -152,6 +165,14 @@ export default function AdminDashboard() {
   const [twilioDisconnectUser, setTwilioDisconnectUser] = useState<{ id: string; username: string } | null>(null);
   const [twilioDisconnectLoading, setTwilioDisconnectLoading] = useState(false);
 
+  // Investor demo
+  const [investors, setInvestors] = useState<Investor[]>([]);
+  const [investorForm, setInvestorForm] = useState({ name: "", phone: "", email: "", linkedin_url: "" });
+  const [investorAdding, setInvestorAdding] = useState(false);
+  const [investorResearchingAll, setInvestorResearchingAll] = useState(false);
+  const [investorSendingDemo, setInvestorSendingDemo] = useState<string | null>(null);
+  const [investorPreview, setInvestorPreview] = useState<string | null>(null);
+
   /* ─── API helper ─── */
   const api = useCallback(async (path: string, opts?: RequestInit) => {
     const res = await fetch(path, opts);
@@ -229,6 +250,11 @@ export default function AdminDashboard() {
     }
   }, []);
 
+  const loadInvestors = useCallback(async () => {
+    const data = await api("/api/x7k9f/investors");
+    if (data?.investors) setInvestors(data.investors);
+  }, [api]);
+
   /* ─── Effects ─── */
   useEffect(() => {
     if (tab === "overview") { loadOverview(); loadAgentHealth(); }
@@ -236,8 +262,9 @@ export default function AdminDashboard() {
     if (tab === "tasks") loadTasks();
     if (tab === "costs") loadCosts();
     if (tab === "killswitch") loadKillswitch();
+    if (tab === "investors") loadInvestors();
     if (tab === "terminal") setTimeout(() => termInputRef.current?.focus(), 100);
-  }, [tab, loadUsers, loadTasks, loadCosts, loadOverview, loadKillswitch, loadAgentHealth]);
+  }, [tab, loadUsers, loadTasks, loadCosts, loadOverview, loadKillswitch, loadAgentHealth, loadInvestors]);
 
   useEffect(() => { if (tab === "users") loadUsers(); }, [usersPage, usersSortBy, usersSortDir]);
   useEffect(() => { if (tab === "tasks") loadTasks(); }, [tasksPage, tasksStatus, tasksChannel]);
@@ -342,6 +369,54 @@ export default function AdminDashboard() {
     }
   };
 
+  /* ─── Investor Demo ─── */
+  const addInvestor = async () => {
+    if (!investorForm.name || !investorForm.email) return;
+    setInvestorAdding(true);
+    const data = await api("/api/x7k9f/investors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(investorForm),
+    });
+    if (data?.investor) {
+      setInvestors(prev => [data.investor, ...prev]);
+      setInvestorForm({ name: "", phone: "", email: "", linkedin_url: "" });
+    }
+    setInvestorAdding(false);
+  };
+
+  const researchAllInvestors = async () => {
+    setInvestorResearchingAll(true);
+    const agentUrl = process.env.NEXT_PUBLIC_AGENT_URL || "https://agent-production-1339.up.railway.app";
+    try {
+      await fetch(`${agentUrl}/admin/investor/research`, { method: "POST" });
+      // Poll for updates
+      setTimeout(loadInvestors, 3000);
+      setTimeout(loadInvestors, 8000);
+      setTimeout(loadInvestors, 15000);
+    } catch { /* */ }
+    setInvestorResearchingAll(false);
+  };
+
+  const sendInvestorDemo = async (investorId: string) => {
+    setInvestorSendingDemo(investorId);
+    const agentUrl = process.env.NEXT_PUBLIC_AGENT_URL || "https://agent-production-1339.up.railway.app";
+    try {
+      await fetch(`${agentUrl}/admin/investor/demo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ investor_id: investorId }),
+      });
+    } catch { /* */ }
+    setInvestorSendingDemo(null);
+    loadInvestors();
+  };
+
+  const removeInvestor = async (investorId: string) => {
+    await api(`/api/x7k9f/investors/${investorId}`, { method: "DELETE" });
+    setInvestors(prev => prev.filter(i => i.id !== investorId));
+  };
+
   /* ─── Logout ─── */
   const handleLogout = async () => {
     await fetch("/api/x7k9f/logout", { method: "POST" });
@@ -355,6 +430,7 @@ export default function AdminDashboard() {
     { id: "tasks", label: "Tasks", icon: Activity },
     { id: "costs", label: "Costs", icon: DollarSign },
     { id: "terminal", label: "Terminal", icon: Terminal },
+    { id: "investors", label: "Investors", icon: Briefcase },
     { id: "killswitch", label: "Kill Switch", icon: Power },
   ];
 
@@ -1058,6 +1134,158 @@ export default function AdminDashboard() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ═══════════════ INVESTOR DEMO ═══════════════ */}
+            {tab === "investors" && (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold">Investor Demo</h2>
+                    <p className="text-xs text-white/30 mt-0.5">Add investors, research them, send personalized demos.</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={researchAllInvestors}
+                      disabled={investorResearchingAll || investors.length === 0}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-400 text-xs font-medium hover:bg-blue-500/20 disabled:opacity-30 transition-all"
+                    >
+                      {investorResearchingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                      Research All
+                    </button>
+                  </div>
+                </div>
+
+                {/* Add Investor Form */}
+                <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4 space-y-3">
+                  <h3 className="text-sm font-medium text-white/60 flex items-center gap-2">
+                    <Plus className="h-4 w-4" /> Add Investor
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      value={investorForm.name}
+                      onChange={e => setInvestorForm(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="Name"
+                      className="px-3 py-2 text-sm bg-white/[0.03] border border-white/[0.08] rounded-lg text-white placeholder:text-white/20 outline-none focus:border-white/20 transition-all"
+                    />
+                    <input
+                      value={investorForm.email}
+                      onChange={e => setInvestorForm(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="Email"
+                      type="email"
+                      className="px-3 py-2 text-sm bg-white/[0.03] border border-white/[0.08] rounded-lg text-white placeholder:text-white/20 outline-none focus:border-white/20 transition-all"
+                    />
+                    <input
+                      value={investorForm.phone}
+                      onChange={e => setInvestorForm(prev => ({ ...prev, phone: e.target.value }))}
+                      placeholder="Phone (optional)"
+                      className="px-3 py-2 text-sm bg-white/[0.03] border border-white/[0.08] rounded-lg text-white placeholder:text-white/20 outline-none focus:border-white/20 transition-all"
+                    />
+                    <input
+                      value={investorForm.linkedin_url}
+                      onChange={e => setInvestorForm(prev => ({ ...prev, linkedin_url: e.target.value }))}
+                      placeholder="LinkedIn URL (optional)"
+                      className="px-3 py-2 text-sm bg-white/[0.03] border border-white/[0.08] rounded-lg text-white placeholder:text-white/20 outline-none focus:border-white/20 transition-all"
+                    />
+                  </div>
+                  <button
+                    onClick={addInvestor}
+                    disabled={!investorForm.name || !investorForm.email || investorAdding}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 disabled:opacity-30 transition-all"
+                  >
+                    {investorAdding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                    Add Investor
+                  </button>
+                </div>
+
+                {/* Investor List */}
+                {investors.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Briefcase className="h-8 w-8 text-white/10 mx-auto mb-3" />
+                    <p className="text-sm text-white/30">No investors added yet.</p>
+                    <p className="text-xs text-white/15 mt-1">Add an investor above to get started.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {investors.map(inv => (
+                      <div key={inv.id} className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.1] transition-all">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="text-sm font-medium text-white">{inv.name}</h4>
+                              {/* Research status badge */}
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                                inv.research_status === "done" ? "bg-emerald-500/10 text-emerald-400" :
+                                inv.research_status === "researching" ? "bg-blue-500/10 text-blue-400" :
+                                inv.research_status === "error" ? "bg-red-500/10 text-red-400" :
+                                "bg-white/5 text-white/30"
+                              }`}>
+                                {inv.research_status === "researching" && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                                {inv.research_status === "done" && <CheckCircle className="h-2.5 w-2.5" />}
+                                {inv.research_status}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-3 mt-1 text-xs text-white/30">
+                              <span className="flex items-center gap-1"><Mail className="h-3 w-3" /> {inv.email}</span>
+                              {inv.phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" /> {inv.phone}</span>}
+                              {inv.linkedin_url && (
+                                <a href={inv.linkedin_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-400/60 hover:text-blue-400 transition-colors">
+                                  <LinkIcon className="h-3 w-3" /> LinkedIn
+                                </a>
+                              )}
+                            </div>
+
+                            {/* Research summary */}
+                            {inv.research_summary && (
+                              <p className="text-xs text-white/40 mt-2 leading-relaxed line-clamp-3">
+                                {inv.research_summary}
+                              </p>
+                            )}
+
+                            {/* Personalized message preview */}
+                            {inv.personalized_message && (
+                              <div className="mt-3">
+                                <button
+                                  onClick={() => setInvestorPreview(investorPreview === inv.id ? null : inv.id)}
+                                  className="text-[11px] text-white/30 hover:text-white/50 flex items-center gap-1 transition-colors"
+                                >
+                                  <FileText className="h-3 w-3" />
+                                  {investorPreview === inv.id ? "Hide preview" : "Preview message"}
+                                </button>
+                                {investorPreview === inv.id && (
+                                  <div className="mt-2 px-3 py-2.5 rounded-lg bg-white/[0.03] border border-white/[0.04] text-xs text-white/50 leading-relaxed whitespace-pre-wrap">
+                                    {inv.personalized_message}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => sendInvestorDemo(inv.id)}
+                              disabled={investorSendingDemo === inv.id || inv.research_status !== "done"}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-[11px] font-medium hover:bg-emerald-500/20 disabled:opacity-30 transition-all"
+                              title={inv.research_status !== "done" ? "Research must complete first" : "Send personalized demo"}
+                            >
+                              {investorSendingDemo === inv.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                              Send Demo
+                            </button>
+                            <button
+                              onClick={() => removeInvestor(inv.id)}
+                              className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
