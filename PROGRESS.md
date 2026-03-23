@@ -81,7 +81,7 @@ Weather, time zones, distance, population, currency, Bitcoin, astronomy
 
 **New keys provided by Omar:**
 - Anthropic: `sk-ant-api03-mVH_...` — tested WORKING locally (200 OK)
-- Gemini: `AIzaSyB0fjr4...` — tested STILL QUOTA EXHAUSTED (429)
+- Gemini: `[REDACTED]` — tested STILL QUOTA EXHAUSTED (429)
 - Updated in local .env. Railway/Vercel env vars need manual dashboard update (CLI tokens expired)
 
 ## Fix 1: PASSIVE-GUARD Bypass (ROOT CAUSE — commit 7ca8633)

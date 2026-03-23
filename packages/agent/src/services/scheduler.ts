@@ -51,16 +51,16 @@ export function startScheduler(): void {
   // 4. Must have a genuine reason (not "I noticed you did X" spam)
   // 5. DB-backed daily count (survives restarts)
   const PROACTIVE_ENABLED = process.env.PROACTIVE_ENGINE !== 'false'; // Can be disabled via env var
+  const PROACTIVE_INTERVAL_MS = parseInt(process.env.PROACTIVE_INTERVAL_MS || '900000', 10); // Default 15 min (was 2 hours)
   if (PROACTIVE_ENABLED) {
-    // Check every 2 hours (not every hour — less aggressive)
     proactiveInterval = setInterval(async () => {
       try {
         await runProactiveChecks();
       } catch (error) {
         console.error('[SCHEDULER] Proactive check error:', error);
       }
-    }, 2 * 60 * 60 * 1000); // Every 2 hours
-    console.log('[SCHEDULER] Proactive engine started — checking every 2 hours (controlled mode)');
+    }, PROACTIVE_INTERVAL_MS);
+    console.log(`[SCHEDULER] Proactive engine started — checking every ${Math.round(PROACTIVE_INTERVAL_MS / 60000)} minutes`);
   } else {
     console.log('[SCHEDULER] Proactive engine DISABLED via PROACTIVE_ENGINE=false');
   }

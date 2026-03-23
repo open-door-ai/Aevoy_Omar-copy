@@ -554,6 +554,29 @@ app.get("/health", async (_req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
+// Debug: trigger proactive checks on demand (requires webhook secret)
+app.post("/debug/proactive", async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  try {
+    const { getProactiveEngine } = await import("./services/proactive.js");
+    const engine = getProactiveEngine();
+    const count = await engine.runForAllUsers();
+
+    const { getProactiveEngagementEngine } = await import("./services/proactive-engagement.js");
+    const engagement = getProactiveEngagementEngine();
+    const digests = await engagement.sendDailyDigests();
+    const reports = await engagement.sendWeeklyReports();
+
+    res.json({ findings: count, digests, reports });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 // Detailed health check — requires webhook secret
 app.get("/health/detailed", async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
