@@ -11,14 +11,14 @@ interface MagicLinkProps {
 
 export function MagicLink({ magicLinkUrl, userEmail }: MagicLinkProps) {
   return (
-    <EmailLayout previewText="Your Aevoy sign-in link">
+    <EmailLayout previewText="Your Aurora sign-in link">
       <EmailHeader />
 
       <Section style={contentStyle}>
-        <Text style={headingStyle}>Sign In to Aevoy</Text>
+        <Text style={headingStyle}>Sign In to Aurora</Text>
 
         <Text style={bodyStyle}>
-          Click the button below to securely sign in to your Aevoy account:
+          Click the button below to securely sign in to your Aurora account:
         </Text>
 
         <Section style={buttonContainerStyle}>

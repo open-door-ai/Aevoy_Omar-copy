@@ -48,7 +48,7 @@ export async function POST(request: Request) {
 
     const htmlBody = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px;">
-        <h2 style="color: #1c1917; margin-bottom: 8px;">Your Aevoy Demo Result</h2>
+        <h2 style="color: #1c1917; margin-bottom: 8px;">Your Aurora Demo Result</h2>
         <p style="color: #78716c; font-size: 14px; margin-bottom: 24px;">Here's what we found for your query.</p>
 
         <div style="background: #fafaf9; border: 1px solid #e7e5e4; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
 
         <hr style="border: none; border-top: 1px solid #e7e5e4; margin: 24px 0;" />
         <p style="color: #a8a29e; font-size: 12px; margin: 0;">
-          This was a demo from <a href="https://aevoy.com" style="color: #78716c;">Aevoy</a>.
+          This was a demo from <a href="https://aevoy.com" style="color: #78716c;">Aurora</a>.
           Sign up to get an AI employee that actually does things.
         </p>
       </div>
@@ -75,9 +75,9 @@ export async function POST(request: Request) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: 'Aevoy Demo <demo@aevoy.com>',
+        from: 'Aurora Demo <demo@aevoy.com>',
         to: [email],
-        subject: 'Your Aevoy Demo Result',
+        subject: 'Your Aurora Demo Result',
         html: htmlBody,
       }),
     });

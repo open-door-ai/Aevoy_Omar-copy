@@ -41,7 +41,7 @@ export async function sendProgressUpdate(
         await sendSms({
           userId,
           to: profile.phone,
-          body: `[Aevoy Progress] ${milestone}`,
+          body: `[Aurora Progress] ${milestone}`,
         });
       }
     }

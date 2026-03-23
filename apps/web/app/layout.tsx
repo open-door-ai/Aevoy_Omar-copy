@@ -23,21 +23,21 @@ export const viewport = {
 export const metadata: Metadata = {
   metadataBase: new URL("https://www.aevoy.com"),
   title: {
-    default: "Aevoy — Your AI Employee",
-    template: "%s | Aevoy",
+    default: "Aurora — Your AI Employee",
+    template: "%s | Aurora",
   },
   description: "Email it. It does it. An AI employee that actually does tasks for you — books reservations, fills forms, researches topics, and calls you when something needs attention.",
   keywords: ["AI employee", "AI assistant", "task automation", "AGI", "AI intern", "email automation"],
   openGraph: {
-    title: "Aevoy — Your AI Employee",
+    title: "Aurora — Your AI Employee",
     description: "Email it. It does it. Not a chatbot. Not an assistant. An employee.",
     url: "https://www.aevoy.com",
-    siteName: "Aevoy",
+    siteName: "Aurora",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Aevoy — Your AI Employee",
+    title: "Aurora — Your AI Employee",
     description: "Email it. It does it. Not a chatbot. An employee.",
   },
   robots: {

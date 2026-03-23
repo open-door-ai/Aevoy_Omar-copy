@@ -171,9 +171,9 @@ async function executeSubtask(
 
   const enrichedDescription = `${prefix}\n\n${subtask.description}${depContext}`;
 
-  const { processTask } = await import('./processor.js');
+  const { processTaskV3 } = await import('../v3/processor-v3.js');
 
-  const result = await processTask({
+  const result = await processTaskV3({
     userId,
     username,
     from: `${username}@aevoy.com`,

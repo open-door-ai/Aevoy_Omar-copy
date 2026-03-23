@@ -5,7 +5,7 @@ export function EmailHeader() {
     <Section style={headerStyle}>
       {/* Text-based logo (matching current branding) */}
       <Heading as="h1" style={logoStyle}>
-        Aevoy
+        Aurora
       </Heading>
       <div style={taglineStyle}>Your AI Employee</div>
     </Section>

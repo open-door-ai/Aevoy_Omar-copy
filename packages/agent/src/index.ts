@@ -90,11 +90,22 @@ function validateEnv(): void {
 
 validateEnv();
 
+// ── Global Error Handlers ──
+// Prevent unhandled errors from crashing the process
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[FATAL] Unhandled Rejection:', reason);
+    // Don't crash — log and continue
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[FATAL] Uncaught Exception:', error);
+    // Don't crash — log and continue
+});
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import { processTask, processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/processor.js";
-import { processorV2 } from "./services/processor-v2.js";
+import { processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/task-router.js";
 import { processTaskV3 } from "./v3/processor-v3.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
@@ -414,13 +425,7 @@ function processQueuedTasks(): void {
     const queued = taskQueue.shift();
     if (queued) {
       activeTasks++;
-      const processFunc = (process.env.PROCESSOR_VERSION === 'v3')
-        ? processTaskV3(queued.task).catch(async (v3Err) => {
-            console.error(`[QUEUE] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
-            return processTask(queued.task);
-          })
-        : processTask(queued.task);
-      processFunc
+      processTaskV3(queued.task)
         .then(queued.resolve)
         .catch(queued.reject)
         .finally(() => {
@@ -663,9 +668,8 @@ app.post("/takeover/validate-token", async (req, res) => {
     if (!data || data.used || new Date(data.expires_at) < new Date()) {
       return res.status(401).json({ valid: false, error: 'Invalid or expired token' });
     }
-    const { getEngine } = await import('./utils/task-engine-registry.js');
-    const hasEngine = !!getEngine(data.task_id);
-    return res.json({ valid: true, taskId: data.task_id, userId: data.user_id, hasEngine });
+    // Browser engine registry removed (Aurora doesn't use browser automation)
+    return res.json({ valid: true, taskId: data.task_id, userId: data.user_id, hasEngine: false });
   } catch (err) {
     console.error('[TAKEOVER] Token validation error:', err);
     return res.status(500).json({ valid: false, error: 'Internal error' });
@@ -678,12 +682,8 @@ app.get("/engines", async (req, res) => {
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized" });
   }
-  try {
-    const { getRegistrySize } = await import('./utils/task-engine-registry.js');
-    return res.json({ activeEngines: getRegistrySize() });
-  } catch {
-    return res.json({ activeEngines: 0 });
-  }
+  // Browser engine registry removed (Aurora doesn't use browser automation)
+  return res.json({ activeEngines: 0 });
 });
 
 // ---- Clear stale active task entries (admin) ----
@@ -928,7 +928,7 @@ if (process.env.NODE_ENV !== "production") {
       const origMock = process.env.AI_MOCK_MODE;
       process.env.AI_MOCK_MODE = "true";
 
-      const result = await processTask(mockTask);
+      const result = await processTaskV3(mockTask);
 
       process.env.AI_MOCK_MODE = origMock;
 
@@ -988,32 +988,23 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
 
   activeTasks++;
 
-  try {
-    const result = await processorV2.processTask({
-      userId,
-      username,
-      email: from,
-      task: sanitizedV2.subject && sanitizedV2.body && sanitizedV2.subject !== sanitizedV2.body
-        ? `${sanitizedV2.subject}\n\n${sanitizedV2.body}`
-        : (sanitizedV2.body || sanitizedV2.subject),
-      channel: inputChannel || "email",
-    });
+  const taskReq: TaskRequest = {
+    userId,
+    username,
+    from,
+    subject: sanitizedV2.subject || '',
+    body: sanitizedV2.body || '',
+    inputChannel: inputChannel || "email",
+  };
 
-    // If plan requires confirmation, return plan details
-    if (result.awaitingConfirmation && result.planId) {
-      res.json({ 
-        status: "awaiting_confirmation", 
-        planId: result.planId,
-        message: "Plan created, awaiting user confirmation",
-        response: result.response,
-      });
-    } else {
-      res.json({ 
-        status: "completed", 
-        success: result.success,
-        response: result.response,
-      });
-    }
+  try {
+    const result = await processTaskV3(taskReq);
+
+    res.json({
+      status: "completed",
+      success: result.success,
+      response: result.response,
+    });
   } catch (error) {
     console.error("[TASK-V2] Processing failed:", error);
     res.status(500).json({
@@ -1154,8 +1145,7 @@ app.post("/task", taskLimiter, async (req, res) => {
         res.json({ status: "update_received", message: "Got it — incorporating your reply and continuing." });
 
         activeTasks++;
-        const { processTask: procTask } = await import("./services/processor.js");
-        procTask({
+        processTaskV3({
           userId: task.userId,
           username: task.username,
           from: task.from,
@@ -1178,38 +1168,16 @@ app.post("/task", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
-  // ── V3 routing: check PROCESSOR_VERSION env var for opt-in ──
-  const processorVersion = process.env.PROCESSOR_VERSION || 'v1';
-  const useV3 = processorVersion === 'v3';
-
   activeTasks++;
   registerActiveTask(task.userId, task.taskId || '', task.subject || '');
 
-  const processFunc = useV3
-    ? async (t: TaskRequest) => {
-        try {
-          return await processTaskV3(t);
-        } catch (v3Err) {
-          const errMsg = v3Err instanceof Error ? `${v3Err.message}\n${v3Err.stack}` : String(v3Err);
-          console.error(`[V3-CRASH] Falling back to V1. Error: ${errMsg}`);
-          // Log crash to DB so we can query it
-          try {
-            await getSupabaseClient().from('tasks').update({
-              stuck_reason: `[V3-CRASH] ${errMsg.substring(0, 500)}`,
-            }).eq('user_id', t.userId).eq('status', 'processing').order('created_at', { ascending: false }).limit(1);
-          } catch { /* non-critical */ }
-          return await processTask(t);
-        }
-      }
-    : processTask;
-
-  processFunc(task)
+  processTaskV3(task)
     .then((result) => {
       console.log(`Task completed: ${result.taskId}`, { success: result.success, actionsExecuted: result.actions.length });
     })
     .catch(async (error) => {
       console.error("Task processing failed:", error);
-      // SAFETY NET: If processTask crashes without updating the DB,
+      // SAFETY NET: If processTaskV3 crashes without updating the DB,
       // mark the task as needs_review so it doesn't stay "processing" forever
       if (task.taskId) {
         try {
@@ -1287,12 +1255,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
     inputChannel: (task.inputChannel as "email" | "sms" | "voice" | "web") || "email",
   };
 
-  const taskPromise = (process.env.PROCESSOR_VERSION === 'v3')
-    ? processTaskV3(incomingTaskReq).catch(async (v3Err) => {
-        console.error(`[INCOMING] V3 crashed, falling back to V1:`, v3Err instanceof Error ? v3Err.message : v3Err);
-        return processTask(incomingTaskReq);
-      })
-    : processTask(incomingTaskReq);
+  const taskPromise = processTaskV3(incomingTaskReq);
 
   // Track with 45-minute timeout (matches processor MASTER_TIMEOUT_MS)
   trackBackgroundJob(
@@ -1372,20 +1335,6 @@ app.post("/task/confirm", taskLimiter, async (req, res) => {
 
   const { userId, username, from, taskId, replyText, action, planId } = req.body;
   
-  // Support both V1 (taskId + replyText) and V2 (planId + action) formats
-  if (planId && action) {
-    // V2 format
-    res.json({ status: "processing", message: "Confirmation received" });
-    
-    activeTasks++;
-    processorV2.handleConfirmation(planId, userId, action as "yes" | "no" | "modify", replyText)
-      .then((result) => console.log(`[V2] Confirmation processed: ${planId}`, { success: result.success }))
-      .catch((error) => console.error("[V2] Confirmation processing failed:", error))
-      .finally(() => { activeTasks--; });
-    return;
-  }
-  
-  // V1 format (legacy)
   if (!userId || !username || !from || !taskId || !replyText) {
     return res.status(400).json({ error: "bad_request", message: "Missing required fields" });
   }
@@ -1515,11 +1464,11 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 // ---- Twilio Voice Webhooks ----
 
 // ---- Demo Number Config ----
-// The website "Call Me Now" demo number — allows ANY caller to talk to Aevoy AI
+// The website "Call Me Now" demo number — allows ANY caller to talk to Aurora AI
 const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+18882981661"; // Toll-free demo number (purchased 2026-03-15)
 const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an account (set on Railway)
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
-const DEMO_GREETING = "Hey! I'm your Aevoy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
+const DEMO_GREETING = "Hey! I'm your Aurora AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
 
 // ---- Demo Daily Minute Cap (cost protection) ----
 // INCIDENT 2026-03-16: Someone spammed "Call Me Now" 27 times in 10 min, burned $33.
@@ -1574,8 +1523,8 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
             effectiveCallType = "onboarding_setup";
             effectiveUserId = profile.id;
             effectiveGreeting = name
-              ? `Hey ${name}! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
-              : `Hey there! Welcome to Aevoy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
+              ? `Hey ${name}! Welcome to Aurora — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
+              : `Hey there! Welcome to Aurora — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
             console.log(`[VOICE-DEMO] Outbound matched logged-in user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
           } else {
             effectiveCallType = "demo";
@@ -1630,7 +1579,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
     // Fallback: simple greeting so the call doesn't fail silently
     const fallback = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">Hey there! I'm Aevoy, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
+  <Say voice="Polly.Joanna-Neural">Hey there! I'm Aurora, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
   <Hangup/>
 </Response>`;
     res.type("text/xml").send(fallback);
@@ -2283,7 +2232,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
           await sendSms({
             userId,
             to: profile.phone_number,
-            body: `[Aevoy] Missed call from ${callerNumber}: "${speechResult.substring(0, 140)}"`,
+            body: `[Aurora] Missed call from ${callerNumber}: "${speechResult.substring(0, 140)}"`,
           });
         }
 
@@ -2349,8 +2298,7 @@ app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (
               .eq('id', result.taskId)
               .single();
 
-            const { processTask: replyProcTask } = await import("./services/processor.js");
-            replyProcTask({
+            processTaskV3({
               userId: profile.userId,
               username: profile.username,
               from: profile.email,
@@ -2420,7 +2368,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     const resolved = await resolveUser(senderNumber);
 
     if (!resolved) {
-      // Unknown sender — look up who owns the Aevoy number being texted
+      // Unknown sender — look up who owns the Aurora number being texted
       const recipientUser = await resolveUser(twilioNumber);
 
       if (!recipientUser) {
@@ -2493,8 +2441,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       if (!hasPinSet) {
         // No PIN — process message directly for the user
         console.log(`[SMS] No PIN set for ${recipientUser.username} — processing message from unknown sender`);
-        const { processTask: smsProcessTask } = await import("./services/processor.js");
-        await smsProcessTask({
+        await processTaskV3({
           userId: recipientUser.userId, username: recipientUser.username,
           from: senderNumber, subject: message.substring(0, 200), body: "", inputChannel: "sms"
         });
@@ -2536,8 +2483,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       const cleanMessage = message.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim();
       console.log(`[SMS] PIN verified for unknown sender ${maskPhone(senderNumber)} -> ${recipientUser.username}`);
 
-      const { processTask: smsProcessTask } = await import("./services/processor.js");
-      await smsProcessTask({
+      await processTaskV3({
         userId: recipientUser.userId, username: recipientUser.username,
         from: senderNumber, subject: (cleanMessage || message).substring(0, 200), body: "", inputChannel: "sms"
       });
@@ -2594,8 +2540,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       const cleanMessage = message.replace(new RegExp(`\\b${enteredPin}\\b`), "").trim();
       console.log(`[SMS] PIN verified for unrecognized number ${maskPhone(senderNumber)}`);
 
-      const { processTask } = await import("./services/processor.js");
-      await processTask({
+      await processTaskV3({
         userId,
         username,
         from: senderNumber,
@@ -2651,8 +2596,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
           auto_proceed_context: null,
         }).eq('id', smsAwaitingTask.id);
 
-        const { processTask: smsProcTask } = await import("./services/processor.js");
-        smsProcTask({
+        processTaskV3({
           userId,
           username,
           from: senderNumber,
@@ -2676,8 +2620,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     }
 
     // Process SMS as task (sender is the account owner or no PIN set)
-    const { processTask } = await import("./services/processor.js");
-    await processTask({
+    await processTaskV3({
       userId,
       username,
       from: senderNumber,
@@ -2716,7 +2659,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     let resolved = await resolveUser(callerNumber);
 
     if (!resolved) {
-      // Unknown caller — resolve by the Aevoy number being called (To)
+      // Unknown caller — resolve by the Aurora number being called (To)
       const calledNumber = req.body.To || req.body.Called || "";
       if (calledNumber) {
         resolved = await resolveUser(calledNumber);
@@ -3086,8 +3029,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
 
     // Process as task — use the SMS body as subject (not "[SMS Premium]" which confuses the AI
     // into searching for "SMS Premium" as a topic)
-    const { processTask } = await import("./services/processor.js");
-    await processTask({
+    await processTaskV3({
       userId,
       username: profile?.username || "user",
       from,
@@ -3134,7 +3076,7 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
 
     const supabase = getSupabaseClient();
 
-    // Handle /start {code} — link Telegram account to Aevoy user
+    // Handle /start {code} — link Telegram account to Aurora user
     if (text.startsWith("/start ") || text.startsWith("/start@")) {
       const parts = text.split(" ");
       const code = parts[1]?.trim();
@@ -3150,15 +3092,15 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
           body: JSON.stringify({ code, chatId }),
         });
         if (linkRes.ok) {
-          await sendTelegramMessage(chatId, "✅ Connected! Your Aevoy AI is now available on Telegram. Send me any message to get started.");
+          await sendTelegramMessage(chatId, "✅ Connected! Your Aurora AI is now available on Telegram. Send me any message to get started.");
         } else {
-          await sendTelegramMessage(chatId, "❌ That link code is invalid or expired. Please get a new code from your Aevoy dashboard.");
+          await sendTelegramMessage(chatId, "❌ That link code is invalid or expired. Please get a new code from your Aurora dashboard.");
         }
         return;
       }
     }
 
-    // Resolve Aevoy user by telegram_chat_id
+    // Resolve Aurora user by telegram_chat_id
     const { data: profile } = await supabase
       .from("profiles")
       .select("id, username, email, phone")
@@ -3166,7 +3108,7 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
       .single();
 
     if (!profile) {
-      await sendTelegramMessage(chatId, "👋 I don't recognize this account. Please connect your Telegram from your Aevoy dashboard at aevoy.com");
+      await sendTelegramMessage(chatId, "👋 I don't recognize this account. Please connect your Telegram from your Aurora dashboard at aevoy.com");
       return;
     }
 
@@ -3188,18 +3130,17 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
     if (CALL_ME.test(body.trim())) {
       if (profile.phone) {
         const { callUser } = await import("./services/twilio.js");
-        await callUser({ userId: profile.id, to: profile.phone, message: "Calling you now from your Aevoy AI assistant." });
+        await callUser({ userId: profile.id, to: profile.phone, message: "Calling you now from your Aurora AI assistant." });
         await sendTelegramMessage(chatId, "📞 Calling you now on " + profile.phone.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") + "...");
       } else {
-        await sendTelegramMessage(chatId, "⚠️ No phone number registered. Add one in your Aevoy settings to enable calling.");
+        await sendTelegramMessage(chatId, "⚠️ No phone number registered. Add one in your Aurora settings to enable calling.");
       }
       return;
     }
 
     // Process as normal task
     activeTasks++;
-    const { processTask } = await import("./services/processor.js");
-    processTask({
+    processTaskV3({
       userId: profile.id,
       username: profile.username,
       from: chatId,
@@ -3253,7 +3194,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
 
         if (linkRes.ok) {
           await sendWhatsAppMessage(fromPhone,
-            "✅ Your WhatsApp is now linked to your Aevoy account!\n\nSend me any message to get started. Try: \"What can you do?\" or \"call me\"");
+            "✅ Your WhatsApp is now linked to your Aurora account!\n\nSend me any message to get started. Try: \"What can you do?\" or \"call me\"");
         } else {
           const err = await linkRes.json().catch(() => ({})) as { error?: string };
           const reason = err?.error === "Code expired"
@@ -3276,7 +3217,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
 
     if (!profile) {
       await sendWhatsAppMessage(fromPhone,
-        "👋 Hi! To use Aevoy AI on WhatsApp:\n\n1. Sign up at aevoy.com\n2. Go to Connected Apps\n3. Scan the WhatsApp QR code\n\nTakes 30 seconds!");
+        "👋 Hi! To use Aurora AI on WhatsApp:\n\n1. Sign up at aevoy.com\n2. Go to Connected Apps\n3. Scan the WhatsApp QR code\n\nTakes 30 seconds!");
       return;
     }
 
@@ -3289,7 +3230,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
       const callTo = profile.phone || fromPhone;
       if (callTo) {
         const { callUser } = await import("./services/twilio.js");
-        await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Aevoy AI." });
+        await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Aurora AI." });
         await sendWhatsAppMessage(fromPhone, "📞 Calling you now...");
       } else {
         await sendWhatsAppMessage(fromPhone, "⚠️ No phone number on file. Add one in Settings to enable calling.");
@@ -3299,8 +3240,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
 
     // ── STEP 4: Process as AI task ──
     activeTasks++;
-    const { processTask } = await import("./services/processor.js");
-    processTask({
+    processTaskV3({
       userId: profile.id,
       username: profile.username,
       from: fromPhone,
@@ -3454,8 +3394,7 @@ app.post("/webhook/checkin/response/:userId", twilioLimiter, validateTwilioSigna
         .eq("id", userId)
         .single();
 
-      const { processTask } = await import("./services/processor.js");
-      await processTask({
+      await processTaskV3({
         userId,
         username: userProfile?.username || "user",
         from: req.body.From || "",
@@ -3583,7 +3522,7 @@ app.post("/webhook/voice/onboarding-gather/:userId", twilioLimiter, validateTwil
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">
-    Hi! This is Aevoy verifying your phone number. 
+    Hi! This is Aurora verifying your phone number. 
     Press 1 to confirm this is your number, or press 2 if this is not your number.
   </Say>
   <Gather numDigits="1" action="${process.env.AGENT_URL || "http://localhost:3001"}/webhook/voice/onboarding-confirm/${userId}" method="POST">
@@ -3850,8 +3789,8 @@ server.on("upgrade", (request, socket, head) => {
     }
     takeoverWss.handleUpgrade(request, socket, head, async (ws) => {
       try {
-        const { handleBrowserTakeoverWs } = await import("./services/browser-takeover-ws.js");
-        await handleBrowserTakeoverWs(ws, taskId, token);
+        // Browser takeover removed (Aurora doesn't use browser automation)
+        ws.close(4404, "Browser takeover not available");
       } catch (err) {
         console.error("[TAKEOVER-WS] Handler error:", err);
         ws.close(4500, "Internal error");
@@ -3935,7 +3874,7 @@ server.listen(PORT, async () => {
                   .single();
                 if (profile?.email) {
                   const { sendResponse } = await import('./services/email.js');
-                  const agentFrom = `${profile.username || 'Aevoy'}@aevoy.com`;
+                  const agentFrom = `${profile.username || 'Aurora'}@aevoy.com`;
                   await sendResponse({
                     to: profile.email,
                     from: agentFrom,

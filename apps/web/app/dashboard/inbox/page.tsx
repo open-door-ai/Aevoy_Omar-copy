@@ -405,7 +405,7 @@ export default function InboxPage() {
           <Mail className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
           <p className="text-sm font-medium">Connect your email to get started</p>
           <p className="text-xs text-muted-foreground mt-1 mb-4">
-            Connect Gmail, Outlook, or any email account so Aevoy can manage your inbox
+            Connect Gmail, Outlook, or any email account so Aurora can manage your inbox
           </p>
           <a
             href="/dashboard/apps"

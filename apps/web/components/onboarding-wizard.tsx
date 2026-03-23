@@ -67,7 +67,7 @@ export default function OnboardingWizard({ username, onComplete }: OnboardingWiz
             ))}
           </div>
           <CardTitle>
-            {step === 1 && "Welcome to Aevoy!"}
+            {step === 1 && "Welcome to Aurora!"}
             {step === 2 && "Verification Codes"}
             {step === 3 && "Agent Card"}
           </CardTitle>

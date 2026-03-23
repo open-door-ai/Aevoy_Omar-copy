@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS inbox_settings (
   
   -- Email identity
   ai_signature_enabled BOOLEAN NOT NULL DEFAULT true,
-  ai_signature_text TEXT DEFAULT 'Sent by {ai_name}, your Aevoy assistant',
+  ai_signature_text TEXT DEFAULT 'Sent by {ai_name}, your Aurora assistant',
   
   -- User-defined rules (natural language → AI prompt)
   user_rules TEXT[] DEFAULT '{}',

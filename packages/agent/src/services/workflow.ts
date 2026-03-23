@@ -351,9 +351,9 @@ export async function executeNextStep(
       suppressEmail: true, // Workflow steps don't send individual emails — one summary at the end
     };
 
-    // Dynamic import to avoid circular dependency with processor.ts
-    const { processTask } = await import("./processor.js");
-    const result = await processTask(taskRequest);
+    // Dynamic import to avoid circular dependency
+    const { processTaskV3 } = await import("../v3/processor-v3.js");
+    const result = await processTaskV3(taskRequest);
 
     // Update step with result
     await getSupabaseClient()
@@ -364,7 +364,7 @@ export async function executeNextStep(
         result_data: {
           success: result.success,
           response: result.response?.substring(0, 5000),
-          actionsCompleted: result.actions?.filter((a) => a.success).length || 0,
+          actionsCompleted: result.actions?.filter((a: { success: boolean }) => a.success).length || 0,
           error: result.error,
         },
         completed_at: new Date().toISOString(),

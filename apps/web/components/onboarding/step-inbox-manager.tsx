@@ -74,7 +74,7 @@ export default function StepInboxManager({
   const [enabled, setEnabled] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [aiSignatureEnabled, setAiSignatureEnabled] = useState(true);
-  const [aiSignatureText, setAiSignatureText] = useState(`Sent by ${botName}, your Aevoy assistant`);
+  const [aiSignatureText, setAiSignatureText] = useState(`Sent by ${botName}, your Aurora assistant`);
   const [userRules, setUserRules] = useState<string[]>([]);
   const [newRule, setNewRule] = useState("");
   

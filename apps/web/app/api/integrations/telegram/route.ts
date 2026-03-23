@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import crypto from "crypto";
 import QRCode from "qrcode";
 
-const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "AevoyBot";
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "AuroraBot";
 const RATE_LIMIT_PER_HOUR = 3;
 
 export async function GET() {

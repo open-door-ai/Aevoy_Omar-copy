@@ -72,7 +72,7 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-2xl font-bold text-gray-900">What Can Aevoy Do For You?</h2>
+        <h2 className="text-2xl font-bold text-gray-900">What Can Aurora Do For You?</h2>
         <p className="text-gray-600">
           Select 1-3 tasks you&apos;ll use most often (helps us personalize your experience)
         </p>
@@ -134,7 +134,7 @@ export function StepUseCases({ onNext, onBack }: StepUseCasesProps) {
       </div>
 
       <div className="text-center text-sm text-gray-600">
-        Don&apos;t worry — Aevoy can handle all of these and more!
+        Don&apos;t worry — Aurora can handle all of these and more!
       </div>
     </div>
   );

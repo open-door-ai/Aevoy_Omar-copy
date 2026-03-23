@@ -17,8 +17,8 @@ test.describe('Production Deployment Verification', () => {
     // Wait for page to load
     await page.waitForLoadState('networkidle');
 
-    // Check title contains "Aevoy"
-    await expect(page).toHaveTitle(/Aevoy/i);
+    // Check title contains "Aurora"
+    await expect(page).toHaveTitle(/Aurora/i);
 
     // Check hero section is visible
     const heroHeading = page.locator('h1').first();
@@ -147,7 +147,7 @@ test.describe('Production Deployment Verification', () => {
     // 1. Website loads
     await page.goto(PRODUCTION_WEB_URL);
     await page.waitForLoadState('networkidle');
-    await expect(page).toHaveTitle(/Aevoy/i);
+    await expect(page).toHaveTitle(/Aurora/i);
     console.log('   ✓ Website: LIVE');
 
     // 2. Agent health

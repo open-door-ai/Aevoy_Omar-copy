@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   robots: { index: false, follow: false },
-  title: "Aevoy",
+  title: "Aurora",
 };
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {

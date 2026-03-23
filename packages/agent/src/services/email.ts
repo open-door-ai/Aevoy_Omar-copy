@@ -171,7 +171,7 @@ export function formatResponseEmail(body: string): string {
             <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width: 560px; width: 100%;">
               <tr>
                 <td align="center" style="padding-bottom: 32px;">
-                  <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1c1917; letter-spacing: -0.02em;">Aevoy</h1>
+                  <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #1c1917; letter-spacing: -0.02em;">Aurora</h1>
                 </td>
               </tr>
             </table>
@@ -191,7 +191,7 @@ export function formatResponseEmail(body: string): string {
               <tr>
                 <td align="center" style="padding-top: 32px;">
                   <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 1.5; color: #a8a29e;">
-                    Sent by your AI assistant at Aevoy
+                    Sent by your AI assistant at Aurora
                   </p>
                   <p style="margin: 0; font-size: 12px; line-height: 1.5;">
                     <a href="https://aevoy.com/dashboard" style="color: #78716c; text-decoration: underline; margin: 0 8px;">Dashboard</a>

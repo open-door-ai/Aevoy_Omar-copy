@@ -366,7 +366,7 @@ export default function AdminDashboard() {
         <div className="p-4 border-b border-white/[0.06]">
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-white/40" />
-            <span className="font-semibold text-sm">Aevoy Admin</span>
+            <span className="font-semibold text-sm">Aurora Admin</span>
           </div>
         </div>
 
@@ -1022,7 +1022,7 @@ export default function AdminDashboard() {
                 <div className="bg-[#111] border border-white/[0.06] rounded-xl overflow-hidden" style={{ height: "calc(100vh - 200px)" }}>
                   {/* Output */}
                   <div ref={termRef} className="p-4 overflow-auto font-mono text-xs" style={{ height: "calc(100% - 48px)" }}>
-                    <p className="text-white/20 mb-2">Aevoy Admin Terminal v1.0 — Type &quot;help&quot; for commands</p>
+                    <p className="text-white/20 mb-2">Aurora Admin Terminal v1.0 — Type &quot;help&quot; for commands</p>
                     {termHistory.map((entry, i) => (
                       <div key={i} className="mb-3">
                         <p className="text-emerald-400/70"><span className="text-white/20">$ </span>{entry.input}</p>

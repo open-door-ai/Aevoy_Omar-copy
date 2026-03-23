@@ -29,13 +29,7 @@ import './tools/communication.js';
 import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
-// Phase 2: Individual browser tools ONLY — no vision agent wrapper
-// browser_session removed to force direct browser control (browser_go, browser_click, browser_fill)
-import './tools/browser-actions.js';
-// Cleanup is handled by cleanupTaskPage from browser-actions.ts
-// No need for cleanupTaskEngine since browser_session is disabled
-const cleanupTaskEngine = async (_taskId: string) => { /* no-op */ };
-import { cleanupTaskPage } from './tools/browser-actions.js';
+// Browser tools removed — Aurora focuses on communication and intelligence, not browser automation
 
 // ── Constants ──
 
@@ -265,9 +259,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       { suppressEmail: task.suppressEmail }
     );
 
-    // ── Cleanup browser engine ──
-    await cleanupTaskEngine(taskId);
-    await cleanupTaskPage(taskId);
+    // ── Cleanup (browser engines removed) ──
 
     // ── Deduct total task cost from credit wallet (single deduction, no rounding loss) ──
     try {
@@ -310,8 +302,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
 
-    // Cleanup browser engine on error
-    if (taskId) { await cleanupTaskEngine(taskId); await cleanupTaskPage(taskId); }
+    // Cleanup (browser engines removed)
 
     // Update task as failed
     if (taskId) {
@@ -473,7 +464,7 @@ async function handleInstant(task: TaskRequest, ctx: TaskContext): Promise<strin
   // Use a fast, free model for conversational responses
   const result = await callModel({
     messages: [
-      { role: 'system', content: `You are Aevoy, a friendly AI assistant for ${ctx.username}. Respond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.\n\nIMPORTANT: You are NOT connected to the internet. You CANNOT browse websites, check prices, make calls, send emails, or access any external services. Only answer from your training knowledge. If the question requires live data, say "I'd need to look that up online — let me search for you" and nothing more.` },
+      { role: 'system', content: `You are Aurora, a friendly AI assistant for ${ctx.username}. Respond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.\n\nIMPORTANT: You are NOT connected to the internet. You CANNOT browse websites, check prices, make calls, send emails, or access any external services. Only answer from your training knowledge. If the question requires live data, say "I'd need to look that up online — let me search for you" and nothing more.` },
       { role: 'user', content: taskText },
     ],
     tier: 'instant',

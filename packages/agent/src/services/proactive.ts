@@ -560,8 +560,8 @@ export class ProactiveEngine {
         .single();
 
       const preferredChannel = settings?.proactive_channel || "sms";
-      const message = `[Aevoy] ${action}`;
-      const emailSubject = "[Aevoy] " + finding.trigger.replace(/_/g, " ");
+      const message = `[Aurora] ${action}`;
+      const emailSubject = "[Aurora] " + finding.trigger.replace(/_/g, " ");
 
       // Helper: send via preferred channel with email fallback
       const sendViaPreferred = async (fallbackToCall = false) => {
@@ -640,7 +640,7 @@ export class ProactiveEngine {
             await sendResponse({
               to: user.email,
               from: `${user.username}@aevoy.com`,
-              subject: "[Aevoy Suggestion] " + finding.trigger.replace(/_/g, " "),
+              subject: "[Aurora Suggestion] " + finding.trigger.replace(/_/g, " "),
               body: action,
             });
           }

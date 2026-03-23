@@ -142,7 +142,7 @@ function getOpenRouterClient(apiKey: string): OpenAI {
       baseURL: "https://openrouter.ai/api/v1",
       defaultHeaders: {
         "HTTP-Referer": "https://www.aevoy.com",
-        "X-Title": "Aevoy AI Assistant",
+        "X-Title": "Aurora AI Assistant",
       },
     }));
   }
@@ -311,7 +311,7 @@ function getPlatformOpenRouterClient(): OpenAI {
       baseURL: "https://openrouter.ai/api/v1",
       defaultHeaders: {
         "HTTP-Referer": "https://www.aevoy.com",
-        "X-Title": "Aevoy AI Assistant",
+        "X-Title": "Aurora AI Assistant",
       },
     });
   }
@@ -1836,7 +1836,7 @@ async function _generateResponseInner(
         provider: 'openrouter',
         model: orModel,
         costPerMInput: 1.00, // conservative fallback — real cost borne by user's OR key
-        costPerMOutput: 3.00, // but Aevoy still tracks for platform fee
+        costPerMOutput: 3.00, // but Aurora still tracks for platform fee
         extra: { apiKey: orSettings.apiKey },
       };
       chain = [orConfig, ...chain];
@@ -1957,7 +1957,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
 
         // "send an email to X"
         const emailMatch = text.match(/(?:send|write)\s+(?:an?\s+)?email\s+to\s+([^\s,]+@[^\s,]+)/i);
-        if (emailMatch) syntheticActions.push({ type: 'send_email', params: { to: emailMatch[1], subject: taskSubject?.substring(0, 80) || 'Message from Aevoy', body: text.substring(0, 500) } } as Action);
+        if (emailMatch) syntheticActions.push({ type: 'send_email', params: { to: emailMatch[1], subject: taskSubject?.substring(0, 80) || 'Message from Aurora', body: text.substring(0, 500) } } as Action);
 
         // "call +1234567890" / "call the restaurant"
         const callMatch = text.match(/(?:call|phone|dial)\s+(?:the\s+)?(?:user|them|him|her|you|back)\b/i);
@@ -2142,7 +2142,7 @@ export async function generateForcedDirectAnswer(
 ): Promise<{ content: string; cost: number; tokensUsed: number }> {
   const hasContext = context && context !== 'No actions completed with results.';
 
-  const systemPrompt = `You are Aevoy, a done-state AI reporter. You have ALREADY run browser and search actions. Your ONLY job is to share results.
+  const systemPrompt = `You are Aurora, a done-state AI reporter. You have ALREADY run browser and search actions. Your ONLY job is to share results.
 
 FORBIDDEN phrases (NEVER use these): "I'll", "I will", "Let me", "I'm going to", "I can try", "I'll search", "I'll find", "Let me look", "Want me to", "Shall I", "Would you like me to", "Do you want me to", "I found an article titled", "I need to search more", "Based on initial search results"
 
