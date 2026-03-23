@@ -2,62 +2,18 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import {
-  Mail, MessageSquare, Phone, Globe, Send as SendIcon,
-  Loader2, AlertTriangle, Clock, CheckCircle, XCircle,
-  Zap, Bot,
-} from "lucide-react";
+import { Send as SendIcon, Loader2, AlertTriangle } from "lucide-react";
 
 /* ─────────────────────────── Types ─────────────────────────── */
-interface FeedItem {
+interface ChatMessage {
   id: string;
-  type: "task" | "proactive" | "context";
-  title: string;
-  detail: string | null;
-  channel: string | null;
+  role: "user" | "aurora";
+  text: string;
   status: string;
   created_at: string;
-  cost_usd: number | null;
 }
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
-function channelBadge(channel: string | null) {
-  const map: Record<string, { icon: typeof Mail; label: string; color: string }> = {
-    email: { icon: Mail, label: "Email", color: "bg-blue-500/10 text-blue-400" },
-    sms: { icon: MessageSquare, label: "SMS", color: "bg-green-500/10 text-green-400" },
-    voice: { icon: Phone, label: "Voice", color: "bg-purple-500/10 text-purple-400" },
-    web: { icon: Globe, label: "Web", color: "bg-white/5 text-white/50" },
-    chat: { icon: Globe, label: "Chat", color: "bg-white/5 text-white/50" },
-    telegram: { icon: SendIcon, label: "Telegram", color: "bg-sky-500/10 text-sky-400" },
-    whatsapp: { icon: MessageSquare, label: "WhatsApp", color: "bg-emerald-500/10 text-emerald-400" },
-    proactive: { icon: Zap, label: "Proactive", color: "bg-amber-500/10 text-amber-400" },
-  };
-  const info = map[channel || "web"] || map.web;
-  const Icon = info.icon;
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${info.color}`}>
-      <Icon className="h-3 w-3" />
-      {info.label}
-    </span>
-  );
-}
-
-function statusIndicator(status: string) {
-  switch (status) {
-    case "completed":
-      return <CheckCircle className="h-3.5 w-3.5 text-emerald-400 shrink-0" />;
-    case "processing":
-      return <Loader2 className="h-3.5 w-3.5 text-blue-400 animate-spin shrink-0" />;
-    case "failed":
-    case "internal_error":
-      return <XCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />;
-    case "pending":
-      return <Clock className="h-3.5 w-3.5 text-amber-400 shrink-0" />;
-    default:
-      return <Clock className="h-3.5 w-3.5 text-white/20 shrink-0" />;
-  }
-}
-
 function formatTime(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
@@ -66,93 +22,99 @@ function formatTime(dateStr: string): string {
   if (diffMs < 60_000) return "Just now";
   if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)}m ago`;
   if (diffMs < 86_400_000) return `${Math.floor(diffMs / 3_600_000)}h ago`;
-  if (diffMs < 604_800_000) return `${Math.floor(diffMs / 86_400_000)}d ago`;
 
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /* ─────────────────────────── Component ─────────────────────────── */
 export default function AuroraFeed() {
-  const [items, setItems] = useState<FeedItem[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
+  const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
-  const feedEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const supabase = createClient();
 
-  /* ─── Load initial feed ─── */
-  const loadFeed = useCallback(async () => {
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  /* ─── Load initial messages ─── */
+  const loadMessages = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) return;
       setUserId(user.id);
 
-      // Fetch recent tasks as feed items
       const { data: tasks, error: tasksError } = await supabase
         .from("tasks")
-        .select("id, email_subject, response_text, input_channel, status, created_at, cost_usd")
+        .select(
+          "id, email_subject, response_text, input_channel, status, created_at"
+        )
         .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(50);
+        .order("created_at", { ascending: true })
+        .limit(100);
 
       if (tasksError) throw tasksError;
 
-      const feedItems: FeedItem[] = (tasks || []).map((t) => ({
-        id: t.id,
-        type: "task" as const,
-        title: t.email_subject || "Task",
-        detail: t.response_text,
-        channel: t.input_channel,
-        status: t.status,
-        created_at: t.created_at,
-        cost_usd: t.cost_usd ? parseFloat(t.cost_usd) : null,
-      }));
+      const chatMessages: ChatMessage[] = [];
 
-      // Also fetch proactive queue items if the table exists
-      try {
-        const { data: proactive } = await supabase
-          .from("proactive_queue")
-          .select("id, action_type, message, status, created_at, channel")
-          .eq("user_id", user.id)
-          .order("created_at", { ascending: false })
-          .limit(20);
-
-        if (proactive) {
-          proactive.forEach((p) => {
-            feedItems.push({
-              id: `proactive-${p.id}`,
-              type: "proactive",
-              title: p.action_type || "Aurora noticed something",
-              detail: p.message,
-              channel: p.channel || "proactive",
-              status: p.status || "completed",
-              created_at: p.created_at,
-              cost_usd: null,
-            });
+      (tasks || []).forEach((t) => {
+        // User message
+        if (t.email_subject) {
+          chatMessages.push({
+            id: `${t.id}-user`,
+            role: "user",
+            text: t.email_subject,
+            status: t.status,
+            created_at: t.created_at,
           });
         }
-      } catch {
-        // proactive_queue table may not exist yet — that's fine
-      }
 
-      // Sort everything by date, newest first
-      feedItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      setItems(feedItems);
+        // Aurora response
+        if (t.response_text) {
+          chatMessages.push({
+            id: `${t.id}-aurora`,
+            role: "aurora",
+            text: t.response_text,
+            status: t.status,
+            created_at: t.created_at,
+          });
+        } else if (t.status === "processing") {
+          chatMessages.push({
+            id: `${t.id}-aurora`,
+            role: "aurora",
+            text: "",
+            status: "processing",
+            created_at: t.created_at,
+          });
+        }
+      });
+
+      setMessages(chatMessages);
       setLoading(false);
+      setTimeout(scrollToBottom, 100);
     } catch (err) {
       console.error("Feed load error:", err);
-      setError("Something broke. Aurora is still working in the background.");
+      setError("Something went wrong loading your messages.");
       setLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, scrollToBottom]);
 
   useEffect(() => {
-    loadFeed();
-  }, [loadFeed]);
+    loadMessages();
+  }, [loadMessages]);
 
   /* ─── Realtime subscriptions ─── */
   useEffect(() => {
@@ -172,26 +134,71 @@ export default function AuroraFeed() {
           const t = payload.new as Record<string, unknown>;
           if (!t || !t.id) return;
 
-          const newItem: FeedItem = {
-            id: t.id as string,
-            type: "task",
-            title: (t.email_subject as string) || "Task",
-            detail: (t.response_text as string) || null,
-            channel: (t.input_channel as string) || null,
-            status: (t.status as string) || "pending",
-            created_at: (t.created_at as string) || new Date().toISOString(),
-            cost_usd: t.cost_usd ? parseFloat(t.cost_usd as string) : null,
-          };
+          const taskId = t.id as string;
+          const subject = (t.email_subject as string) || null;
+          const response = (t.response_text as string) || null;
+          const status = (t.status as string) || "pending";
+          const createdAt =
+            (t.created_at as string) || new Date().toISOString();
 
-          setItems((prev) => {
-            const idx = prev.findIndex((i) => i.id === newItem.id);
-            if (idx >= 0) {
-              const updated = [...prev];
-              updated[idx] = newItem;
-              return updated;
+          setMessages((prev) => {
+            const updated = [...prev];
+
+            // Update or add user message
+            if (subject) {
+              const userIdx = updated.findIndex(
+                (m) => m.id === `${taskId}-user`
+              );
+              if (userIdx >= 0) {
+                updated[userIdx] = {
+                  ...updated[userIdx],
+                  text: subject,
+                  status,
+                };
+              }
             }
-            return [newItem, ...prev];
+
+            // Update or add aurora response
+            const auroraIdx = updated.findIndex(
+              (m) => m.id === `${taskId}-aurora`
+            );
+            if (auroraIdx >= 0) {
+              updated[auroraIdx] = {
+                ...updated[auroraIdx],
+                text: response || "",
+                status,
+              };
+            } else if (response) {
+              // Find pending message and replace, or add new
+              const pendingIdx = updated.findIndex(
+                (m) =>
+                  m.id.startsWith("pending-") &&
+                  m.role === "aurora" &&
+                  m.status === "processing"
+              );
+              if (pendingIdx >= 0) {
+                updated[pendingIdx] = {
+                  id: `${taskId}-aurora`,
+                  role: "aurora",
+                  text: response,
+                  status,
+                  created_at: createdAt,
+                };
+              } else {
+                updated.push({
+                  id: `${taskId}-aurora`,
+                  role: "aurora",
+                  text: response,
+                  status,
+                  created_at: createdAt,
+                });
+              }
+            }
+
+            return updated;
           });
+
+          setTimeout(scrollToBottom, 100);
         }
       )
       .subscribe();
@@ -199,61 +206,92 @@ export default function AuroraFeed() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId, supabase]);
+  }, [userId, supabase, scrollToBottom]);
 
-  /* ─── Send message ─── */
+  /* ─── Send message via proxy ─── */
   const handleSend = async () => {
-    if (!message.trim() || sending) return;
-    const text = message.trim();
-    setMessage("");
+    if (!input.trim() || sending) return;
+    const text = input.trim();
+    setInput("");
     setSending(true);
 
-    try {
-      const agentUrl = process.env.NEXT_PUBLIC_AGENT_URL || "https://agent-production-1339.up.railway.app";
-      const { data: { session } } = await supabase.auth.getSession();
+    const now = new Date().toISOString();
+    const pendingId = `pending-${Date.now()}`;
 
-      const res = await fetch(`${agentUrl}/task/v2`, {
+    // Optimistic: add user message + processing indicator
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `${pendingId}-user`,
+        role: "user",
+        text,
+        status: "processing",
+        created_at: now,
+      },
+      {
+        id: `${pendingId}-aurora`,
+        role: "aurora",
+        text: "",
+        status: "processing",
+        created_at: now,
+      },
+    ]);
+    setTimeout(scrollToBottom, 100);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      const res = await fetch("/api/aurora/send", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token && { Authorization: `Bearer ${session.access_token}` }),
+          Authorization: `Bearer ${session?.access_token}`,
         },
-        body: JSON.stringify({
-          task: text,
-          channel: "web",
-        }),
+        body: JSON.stringify({ message: text }),
       });
 
       if (!res.ok) {
         throw new Error(`Failed to send: ${res.status}`);
       }
 
-      // Optimistic add
-      setItems((prev) => [
-        {
-          id: `pending-${Date.now()}`,
-          type: "task",
-          title: text,
-          detail: null,
-          channel: "web",
-          status: "processing",
-          created_at: new Date().toISOString(),
-          cost_usd: null,
-        },
-        ...prev,
-      ]);
+      const data = await res.json();
+
+      // If we got an immediate response, update the pending aurora message
+      if (data.response) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === `${pendingId}-aurora`
+              ? { ...m, text: data.response, status: "completed" }
+              : m
+          )
+        );
+      }
     } catch (err) {
       console.error("Send error:", err);
-      setError("Couldn't reach Aurora. She's probably busy. Try again in a sec.");
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === `${pendingId}-aurora`
+            ? {
+                ...m,
+                text: "Couldn't reach Aurora. Try again in a moment.",
+                status: "failed",
+              }
+            : m
+        )
+      );
+      setError("Couldn't reach Aurora. Try again.");
       setTimeout(() => setError(null), 4000);
     }
 
     setSending(false);
     inputRef.current?.focus();
+    setTimeout(scrollToBottom, 100);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter") {
       e.preventDefault();
       handleSend();
     }
@@ -261,124 +299,108 @@ export default function AuroraFeed() {
 
   /* ─── Render ─── */
   return (
-    <div className="flex flex-col min-h-[calc(100vh-7rem)]">
-      {/* Feed Header */}
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold tracking-tight">Activity</h1>
-        <p className="text-sm text-white/30 mt-1">
-          Everything Aurora has done, is doing, and is thinking about.
-        </p>
-      </div>
-
+    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
       {/* Error Banner */}
       {error && (
-        <div className="mb-4 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center gap-3">
+        <div className="mx-4 mt-2 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center gap-3">
           <AlertTriangle className="h-4 w-4 text-red-400 shrink-0" />
-          <p className="text-sm text-red-400">{error}</p>
+          <p className="text-sm text-red-300">{error}</p>
         </div>
       )}
 
-      {/* Feed Content */}
-      <div className="flex-1 space-y-2">
+      {/* Messages Area */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-4">
-            <div className="relative">
-              <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-white/40 animate-spin" />
-            </div>
-            <p className="text-sm text-white/20">Aurora is thinking. That&apos;s a good sign.</p>
+          <div className="flex flex-col items-center justify-center h-full gap-4">
+            <div className="w-8 h-8 rounded-full border-2 border-white/10 border-t-white/40 animate-spin" />
+            <p className="text-sm text-white/20">Loading...</p>
           </div>
-        ) : items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
-              <Bot className="h-7 w-7 text-white/15" />
+        ) : messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+            <div className="w-12 h-12 rounded-full bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
+              <span className="text-lg text-white/10">A</span>
             </div>
-            <div className="text-center max-w-sm">
-              <p className="text-sm text-white/40">
-                Aurora is learning about you. Give it a moment — or give it something to work with.
-              </p>
-              <p className="text-xs text-white/15 mt-2">
-                Try typing something below. Literally anything.
-              </p>
-            </div>
+            <p className="text-sm text-white/30 text-center max-w-xs">
+              This is the start of your conversation with Aurora.
+            </p>
+            <p className="text-xs text-white/15">
+              Type something below to begin.
+            </p>
           </div>
         ) : (
-          items.map((item) => (
-            <div
-              key={item.id}
-              className="group px-4 py-3.5 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:bg-white/[0.04] hover:border-white/[0.08] transition-all"
-            >
-              <div className="flex items-start gap-3">
-                {/* Status indicator */}
-                <div className="mt-0.5">
-                  {statusIndicator(item.status)}
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-white/90 truncate">
-                      {item.title}
-                    </span>
-                    {channelBadge(item.channel)}
-                    {item.type === "proactive" && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/10 text-amber-400">
-                        <Zap className="h-3 w-3" />
-                        Proactive
-                      </span>
+          <div className="space-y-4 max-w-3xl mx-auto">
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div className="flex flex-col gap-1 max-w-[85%] sm:max-w-[75%]">
+                  <div
+                    className={`px-4 py-2.5 text-sm leading-relaxed ${
+                      msg.role === "user"
+                        ? "bg-white text-[#0a0a0a] rounded-2xl rounded-br-md"
+                        : "bg-white/[0.06] text-white/80 rounded-2xl rounded-bl-md"
+                    }`}
+                  >
+                    {msg.status === "processing" && !msg.text ? (
+                      <div className="flex gap-1.5 py-0.5">
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"
+                          style={{ animationDelay: "0ms" }}
+                        />
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"
+                          style={{ animationDelay: "150ms" }}
+                        />
+                        <span
+                          className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"
+                          style={{ animationDelay: "300ms" }}
+                        />
+                      </div>
+                    ) : (
+                      <span className="whitespace-pre-wrap">{msg.text}</span>
                     )}
                   </div>
-
-                  {item.detail && (
-                    <p className="text-sm text-white/40 mt-1.5 line-clamp-3 leading-relaxed">
-                      {item.detail}
-                    </p>
-                  )}
-
-                  <div className="flex items-center gap-3 mt-2">
-                    <span className="text-[11px] text-white/20">
-                      {formatTime(item.created_at)}
-                    </span>
-                    {item.cost_usd !== null && item.cost_usd > 0 && (
-                      <span className="text-[11px] text-white/15">
-                        ${item.cost_usd.toFixed(3)}
-                      </span>
-                    )}
-                  </div>
+                  <span
+                    className={`text-[10px] text-white/15 px-1 ${msg.role === "user" ? "text-right" : "text-left"}`}
+                  >
+                    {formatTime(msg.created_at)}
+                  </span>
                 </div>
               </div>
-            </div>
-          ))
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
         )}
-        <div ref={feedEndRef} />
       </div>
 
-      {/* Message Input — Sticky Bottom */}
-      <div className="sticky bottom-0 pt-4 pb-2 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a] to-transparent">
-        <div className="relative">
-          <textarea
-            ref={inputRef}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Talk to Aurora..."
-            rows={1}
-            className="w-full px-4 py-3 pr-12 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder:text-white/20 outline-none focus:border-white/20 focus:bg-white/[0.06] transition-all resize-none"
-          />
-          <button
-            onClick={handleSend}
-            disabled={!message.trim() || sending}
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-lg text-white/30 hover:text-white/60 hover:bg-white/[0.06] disabled:opacity-20 disabled:hover:bg-transparent transition-all"
-          >
-            {sending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <SendIcon className="h-4 w-4" />
-            )}
-          </button>
+      {/* Input Area */}
+      <div className="border-t border-white/[0.06] bg-[#0a0a0a] px-4 sm:px-6 py-4">
+        <div className="max-w-3xl mx-auto">
+          <div className="relative flex items-center">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message Aurora..."
+              className="w-full h-11 px-4 pr-12 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder:text-white/20 outline-none focus:border-white/15 focus:bg-white/[0.06] focus:ring-1 focus:ring-white/[0.06] transition-all"
+              autoComplete="off"
+            />
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || sending}
+              className="absolute right-1.5 p-2 rounded-lg text-white/30 hover:text-white/60 hover:bg-white/[0.06] disabled:opacity-20 disabled:hover:bg-transparent transition-all"
+            >
+              {sending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <SendIcon className="h-4 w-4" />
+              )}
+            </button>
+          </div>
         </div>
-        <p className="text-[11px] text-white/10 text-center mt-2">
-          Press Enter to send. Shift+Enter for a new line.
-        </p>
       </div>
     </div>
   );
