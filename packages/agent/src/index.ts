@@ -95,6 +95,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { processIncomingTask, handleConfirmationReply, handleVerificationCodeReply } from "./services/task-router.js";
 import { processTaskV3 } from "./v3/processor-v3.js";
+import { extractContext } from "./services/context-engine.js";
 import { startScheduler } from "./services/scheduler.js";
 import { startInboxPoller } from "./services/inbox-poller.js";
 import { startInboxManager } from "./services/inbox-manager.js";
@@ -1048,6 +1049,14 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
   try {
     const result = await processTaskV3(taskReq);
 
+    // Aurora Intelligence: extract context in background (non-blocking)
+    const messageContent = (taskReq.body || taskReq.subject || '').trim();
+    if (messageContent) {
+      extractContext(messageContent, userId, inputChannel || 'web').catch(err =>
+        logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
+      );
+    }
+
     res.json({
       status: "completed",
       success: result.success,
@@ -1216,6 +1225,14 @@ app.post("/task", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
+  // Aurora Intelligence: extract context in background (non-blocking)
+  const taskMessageContent = ((task.body || '') + ' ' + (task.subject || '')).trim();
+  if (taskMessageContent) {
+    extractContext(taskMessageContent, task.userId, (task.inputChannel as string) || 'email').catch(err =>
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
+    );
+  }
+
   activeTasks++;
   registerActiveTask(task.userId, task.taskId || '', task.subject || '');
 
@@ -1291,6 +1308,14 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
   }
 
   res.json({ status: "queued", message: "Task received and processing" });
+
+  // Aurora Intelligence: extract context in background (non-blocking)
+  const incomingMsgContent = ((sanitizedIncoming.body || '') + ' ' + (sanitizedIncoming.subject || '')).trim();
+  if (incomingMsgContent) {
+    extractContext(incomingMsgContent, task.userId, (task.inputChannel as string) || 'email').catch(err =>
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
+    );
+  }
 
   // Route to V3 when enabled, V1 fallback
   activeTasks++;

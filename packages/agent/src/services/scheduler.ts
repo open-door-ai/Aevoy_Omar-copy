@@ -208,6 +208,28 @@ async function runProactiveChecks(): Promise<void> {
     logger.error('[SCHEDULER] Pattern detection error:', error);
   }
 
+  // AURORA INTELLIGENCE: Run behavioral pattern analysis (every proactive cycle)
+  try {
+    const { analyzeAllUserPatterns } = await import("./pattern-engine.js");
+    const patternCount = await analyzeAllUserPatterns();
+    if (patternCount > 0) {
+      logger.info(`[SCHEDULER] Aurora pattern engine: ${patternCount} patterns detected`);
+    }
+  } catch (error) {
+    logger.error('[SCHEDULER] Aurora pattern engine error:', error);
+  }
+
+  // AURORA INTELLIGENCE: Run proactive queue generation + processing
+  try {
+    const { runProactiveQueue } = await import("./proactive-queue.js");
+    const { generated, processed } = await runProactiveQueue();
+    if (generated > 0 || processed > 0) {
+      logger.info(`[SCHEDULER] Aurora proactive queue: ${generated} generated, ${processed} processed`);
+    }
+  } catch (error) {
+    logger.error('[SCHEDULER] Aurora proactive queue error:', error);
+  }
+
   // AUTONOMOUS INTELLIGENCE: Run skill recommendations (daily at 4 AM UTC, after pattern detection)
   try {
     const now = new Date();

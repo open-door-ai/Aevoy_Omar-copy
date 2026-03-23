@@ -238,6 +238,8 @@ export class ProactiveEngine {
       this.checkUpcomingMeetings(userId),
       this.checkRecurringBills(userId),
       this.checkHealthAnomalies(userId),
+      this.checkCommitmentsDue(userId),
+      this.checkPatternTriggers(userId),
     ];
 
     const results = await Promise.allSettled(checks);
@@ -523,6 +525,197 @@ export class ProactiveEngine {
       .from("health_insights")
       .update({ notified: true })
       .eq("id", insight.id);
+
+    return findings;
+  }
+
+  /**
+   * Check for commitments that are due soon or overdue.
+   * Scans the commitments table (Aurora intelligence engine).
+   */
+  private async checkCommitmentsDue(userId: string): Promise<ProactiveFinding[]> {
+    const findings: ProactiveFinding[] = [];
+
+    try {
+      const now = new Date();
+      const twoHoursFromNow = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
+      // Find commitments due within 2 hours that haven't been reminded
+      const { data: upcoming } = await getSupabaseClient()
+        .from("commitments")
+        .select("id, description, who_committed, committed_to, due_date, reminder_sent")
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .eq("reminder_sent", false)
+        .not("due_date", "is", null)
+        .lte("due_date", twoHoursFromNow.toISOString())
+        .gte("due_date", now.toISOString());
+
+      if (upcoming) {
+        for (const commitment of upcoming) {
+          const dueDate = new Date(commitment.due_date);
+          const minutesUntilDue = Math.round(
+            (dueDate.getTime() - now.getTime()) / (60 * 1000)
+          );
+
+          findings.push({
+            trigger: "commitment_due",
+            action: `Reminder: You committed to "${commitment.description}"${
+              commitment.committed_to ? ` (to ${commitment.committed_to})` : ""
+            }. It's due in about ${minutesUntilDue} minutes.`,
+            channel: minutesUntilDue <= 30 ? "sms" : "email",
+            priority: minutesUntilDue <= 30 ? "high" : "medium",
+            userId,
+            data: { commitmentId: commitment.id, dueDate: commitment.due_date },
+          });
+
+          // Mark reminder as sent
+          await getSupabaseClient()
+            .from("commitments")
+            .update({ reminder_sent: true, updated_at: now.toISOString() })
+            .eq("id", commitment.id);
+        }
+      }
+
+      // Find overdue commitments that haven't been followed up
+      const { data: overdue } = await getSupabaseClient()
+        .from("commitments")
+        .select("id, description, due_date, follow_up_sent")
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .eq("follow_up_sent", false)
+        .not("due_date", "is", null)
+        .lt("due_date", now.toISOString());
+
+      if (overdue) {
+        for (const commitment of overdue) {
+          const dueDate = new Date(commitment.due_date);
+          const hoursOverdue = Math.round(
+            (now.getTime() - dueDate.getTime()) / (60 * 60 * 1000)
+          );
+
+          // Only follow up if overdue by 1+ hours
+          if (hoursOverdue < 1) continue;
+
+          findings.push({
+            trigger: "commitment_overdue",
+            action: `Your commitment "${commitment.description}" was due ${
+              hoursOverdue < 24
+                ? `${hoursOverdue} hour${hoursOverdue > 1 ? "s" : ""} ago`
+                : `${Math.round(hoursOverdue / 24)} day${Math.round(hoursOverdue / 24) > 1 ? "s" : ""} ago`
+            }. Did you complete it, or should I reschedule?`,
+            channel: "sms",
+            priority: "medium",
+            userId,
+            data: { commitmentId: commitment.id, hoursOverdue },
+          });
+
+          // Mark overdue + follow_up_sent
+          await getSupabaseClient()
+            .from("commitments")
+            .update({
+              status: "overdue",
+              follow_up_sent: true,
+              updated_at: now.toISOString(),
+            })
+            .eq("id", commitment.id);
+        }
+      }
+    } catch (error) {
+      logger.error("[PROACTIVE] Commitment check error:", error);
+    }
+
+    return findings;
+  }
+
+  /**
+   * Check detected patterns for trigger conditions matching the current time/context.
+   * Scans the detected_patterns table (Aurora intelligence engine).
+   */
+  private async checkPatternTriggers(userId: string): Promise<ProactiveFinding[]> {
+    const findings: ProactiveFinding[] = [];
+
+    try {
+      const { data: patterns } = await getSupabaseClient()
+        .from("detected_patterns")
+        .select("id, pattern_type, description, trigger_conditions, confidence")
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .gte("confidence", 0.85);
+
+      if (!patterns || patterns.length === 0) return findings;
+
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentDay = now.getDay();
+
+      for (const pattern of patterns) {
+        const conditions = pattern.trigger_conditions as Record<string, unknown> | null;
+        if (!conditions) continue;
+
+        let shouldTrigger = false;
+        let actionMessage = "";
+
+        // Daily routine: trigger 1 hour before their active window
+        if (pattern.pattern_type === "daily_routine") {
+          const windowStart = conditions.time_window_start as number | undefined;
+          if (windowStart !== undefined) {
+            const triggerHour = (windowStart - 1 + 24) % 24;
+            if (currentHour === triggerHour) {
+              shouldTrigger = true;
+              actionMessage = `Good ${currentHour < 12 ? "morning" : currentHour < 17 ? "afternoon" : "evening"}! It's almost your typical active time. Anything I can help with?`;
+            }
+          }
+        }
+
+        // Weekly cycle: trigger at 9 AM on their active day
+        if (pattern.pattern_type === "weekly_cycle") {
+          const dayOfWeek = conditions.day_of_week as number | undefined;
+          if (dayOfWeek !== undefined && currentDay === dayOfWeek && currentHour === 9) {
+            const dayName = conditions.day_name as string || "today";
+            shouldTrigger = true;
+            actionMessage = `Happy ${dayName}! This tends to be one of your busiest days. Ready to get started?`;
+          }
+        }
+
+        if (shouldTrigger && actionMessage) {
+          // Deduplicate: check if already triggered today
+          const todayStart = new Date(now);
+          todayStart.setHours(0, 0, 0, 0);
+          const { data: recentTrigger } = await getSupabaseClient()
+            .from("tasks")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("type", "proactive")
+            .eq("email_subject", `[Proactive] pattern_${pattern.pattern_type}`)
+            .gte("created_at", todayStart.toISOString())
+            .limit(1);
+
+          if (recentTrigger && recentTrigger.length > 0) continue;
+
+          findings.push({
+            trigger: `pattern_${pattern.pattern_type}`,
+            action: actionMessage,
+            channel: "sms",
+            priority: "low",
+            userId,
+            data: { patternId: pattern.id, patternType: pattern.pattern_type },
+          });
+
+          // Update pattern's last_matched_at
+          await getSupabaseClient()
+            .from("detected_patterns")
+            .update({
+              times_matched: (pattern.confidence > 0 ? 1 : 0) + 1,
+              last_matched_at: now.toISOString(),
+              updated_at: now.toISOString(),
+            })
+            .eq("id", pattern.id);
+        }
+      }
+    } catch (error) {
+      logger.error("[PROACTIVE] Pattern trigger check error:", error);
+    }
 
     return findings;
   }
