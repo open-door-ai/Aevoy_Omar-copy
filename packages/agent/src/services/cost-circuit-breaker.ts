@@ -3,7 +3,8 @@
  *
  * Layer 1: Per-user daily spend cap (default $3.00)
  * Layer 2: Per-channel daily caps (SMS $0.50, Voice $2.00, WhatsApp $0.50)
- * Layer 3: Global hourly cap (env CIRCUIT_BREAKER_HOURLY_CENTS, default $10)
+ * Layer 3: Monthly Twilio cap (SMS+Voice+WhatsApp, env TWILIO_MONTHLY_CAP_CENTS, default $50)
+ * Layer 4: Global hourly cap (env CIRCUIT_BREAKER_HOURLY_CENTS, default $10)
  *
  * Uses daily_spend_tracking table for persistent cost tracking.
  */
@@ -47,6 +48,11 @@ const DEFAULT_USER_DAILY_CAP_CENTS = 300; // $3.00
 /** Global hourly cap from env, default $10 */
 function getGlobalHourlyCap(): number {
   return parseInt(process.env.CIRCUIT_BREAKER_HOURLY_CENTS || '1000', 10);
+}
+
+/** Monthly Twilio spend cap from env, default $50 */
+function getMonthlyTwilioCap(): number {
+  return parseInt(process.env.TWILIO_MONTHLY_CAP_CENTS || '5000', 10);
 }
 
 // ---- In-memory cache for fast path ----
@@ -114,7 +120,19 @@ export async function checkBudget(
       }
     }
 
-    // Layer 3: Global hourly circuit breaker
+    // Layer 3: Monthly Twilio cap (sms + voice + whatsapp)
+    if (channel === 'sms' || channel === 'voice' || channel === 'whatsapp') {
+      const monthlySpend = await getMonthlyTwilioSpend();
+      const monthlyCap = getMonthlyTwilioCap();
+      if (monthlySpend + cost > monthlyCap) {
+        return {
+          allowed: false,
+          reason: `Monthly Twilio cap reached ($${(monthlyCap / 100).toFixed(2)}). Spent: $${(monthlySpend / 100).toFixed(2)}`,
+        };
+      }
+    }
+
+    // Layer 4: Global hourly circuit breaker
     const globalHourlySpend = await getGlobalHourlySpend();
     const hourlyCap = getGlobalHourlyCap();
     if (globalHourlySpend + cost > hourlyCap) {
@@ -260,6 +278,31 @@ export async function getGlobalHourlySpend(): Promise<number> {
   } catch (err) {
     console.error('[COST-BREAKER] getGlobalHourlySpend error:', err);
     return 0; // On error, don't block
+  }
+}
+
+/**
+ * Get total Twilio spend (SMS + voice + WhatsApp) for the current calendar month.
+ * Code-side enforcement matching the Twilio console monthly limit.
+ */
+export async function getMonthlyTwilioSpend(): Promise<number> {
+  try {
+    const supabase = getSupabaseClient();
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+
+    const { data } = await supabase
+      .from('daily_spend_tracking')
+      .select('sms_spend_cents, voice_spend_cents, whatsapp_spend_cents')
+      .gte('date', firstOfMonth);
+
+    if (!data || data.length === 0) return 0;
+
+    return data.reduce((sum: number, row: { sms_spend_cents: number; voice_spend_cents: number; whatsapp_spend_cents: number }) =>
+      sum + (row.sms_spend_cents || 0) + (row.voice_spend_cents || 0) + (row.whatsapp_spend_cents || 0), 0);
+  } catch (err) {
+    console.error('[COST-BREAKER] getMonthlyTwilioSpend error:', err);
+    return 0;
   }
 }
 
