@@ -19,6 +19,7 @@ import { sendSms, callUser } from "./twilio.js";
 import { sendResponse } from "./email.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
+import { logger } from "../utils/logger.js";
 
 // ---- Proactive SMS Rate Limit (1 SMS per user per hour max) ----
 // Fast in-memory cache + DB source of truth (survives restarts)
@@ -150,7 +151,7 @@ export class ProactiveEngine {
    */
   async runForAllUsers(): Promise<number> {
     if (this.isRunning) {
-      console.log("[PROACTIVE] Already running, skipping");
+      logger.info("[PROACTIVE] Already running, skipping");
       return 0;
     }
 
@@ -179,7 +180,7 @@ export class ProactiveEngine {
         return 0;
       }
 
-      console.log(`[PROACTIVE] Checking ${users.length} users`);
+      logger.info(`[PROACTIVE] Checking ${users.length} users`);
 
       for (const user of users) {
         try {
@@ -187,7 +188,7 @@ export class ProactiveEngine {
 
           // Skip users in quiet hours
           if (this.isQuietHours(tz)) {
-            console.log(`[PROACTIVE] Skipping ${user.username} (quiet hours in ${tz})`);
+            logger.info(`[PROACTIVE] Skipping ${user.username} (quiet hours in ${tz})`);
             continue;
           }
 
@@ -196,7 +197,7 @@ export class ProactiveEngine {
           for (const finding of findings) {
             // Check daily rate limit (database-backed)
             if (await this.isDailyLimitReached(user.id, finding.priority)) {
-              console.log(`[PROACTIVE] Skipping ${finding.trigger} for ${user.username} (daily limit reached)`);
+              logger.info(`[PROACTIVE] Skipping ${finding.trigger} for ${user.username} (daily limit reached)`);
               continue;
             }
 
@@ -212,11 +213,11 @@ export class ProactiveEngine {
             findingsCount++;
           }
         } catch (error) {
-          console.error(`[PROACTIVE] Error checking user ${user.id}:`, error);
+          logger.error(`[PROACTIVE] Error checking user ${user.id}:`, error);
         }
       }
 
-      console.log(`[PROACTIVE] Completed. ${findingsCount} findings routed.`);
+      logger.info(`[PROACTIVE] Completed. ${findingsCount} findings routed.`);
     } finally {
       this.isRunning = false;
     }
@@ -548,7 +549,7 @@ export class ProactiveEngine {
         .limit(1);
 
       if (recentSame && recentSame.length > 0) {
-        console.log(`[PROACTIVE] Skipping duplicate ${finding.trigger} for ${user.username} (sent within 24h)`);
+        logger.info(`[PROACTIVE] Skipping duplicate ${finding.trigger} for ${user.username} (sent within 24h)`);
         return;
       }
 
@@ -578,7 +579,7 @@ export class ProactiveEngine {
         if ((preferredChannel === "sms" || preferredChannel === "voice") && user.phone) {
           // RATE LIMIT: max 1 proactive SMS per user per hour (prevents runaway loops)
           if (!(await canSendProactiveSms(user.userId))) {
-            console.log(`[PROACTIVE] Skipping SMS for ${user.username} — rate limited (1/hour). Finding: ${finding.trigger}`);
+            logger.info(`[PROACTIVE] Skipping SMS for ${user.username} — rate limited (1/hour). Finding: ${finding.trigger}`);
             // Silently degrade to email for low-priority, skip for sms channel
             await sendResponse({
               to: user.email,
@@ -614,7 +615,7 @@ export class ProactiveEngine {
               .gte('created_at', new Date(new Date().setHours(0,0,0,0)).toISOString())
               .limit(4);
             if (todayCalls && todayCalls.length >= 3) {
-              console.log(`[PROACTIVE] Call cap reached for ${user.userId.slice(0,8)} (${todayCalls.length} today) — skipping call`);
+              logger.info(`[PROACTIVE] Call cap reached for ${user.userId.slice(0,8)} (${todayCalls.length} today) — skipping call`);
             } else {
               await callUser({ userId: user.userId, to: user.phone, message: action });
             }
@@ -659,9 +660,9 @@ export class ProactiveEngine {
         completed_at: new Date().toISOString(),
       });
 
-      console.log(`[PROACTIVE] Routed ${priority} finding for ${user.username}: ${finding.trigger}`);
+      logger.info(`[PROACTIVE] Routed ${priority} finding for ${user.username}: ${finding.trigger}`);
     } catch (error) {
-      console.error(`[PROACTIVE] Failed to route finding:`, error);
+      logger.error(`[PROACTIVE] Failed to route finding:`, error);
     }
   }
 }
