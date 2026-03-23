@@ -118,6 +118,7 @@ import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { handleVoiceWebSocket, getActiveSessionCount } from "./services/voice-conversation.js";
 import { logger } from "./utils/logger.js";
+import { setupListenWebSocket } from "./routes/aurora-listen.js";
 
 // ---- Global Error Handlers ----
 // Prevents uncaught errors from crashing the process silently.
@@ -4227,6 +4228,56 @@ app.get('/aurora/feed/:userId', async (req, res) => {
   }
 });
 
+// POST /aurora/onboard — Trigger onboarding call to new user
+app.post('/aurora/onboard', async (req, res) => {
+  const secret = req.headers['x-webhook-secret'];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+
+  try {
+    // Get user profile
+    const { data: profile } = await getSupabaseClient()
+      .from('profiles')
+      .select('phone_number, display_name, username')
+      .eq('id', userId)
+      .single();
+
+    if (!profile?.phone_number) {
+      return res.status(400).json({ error: 'User has no phone number' });
+    }
+
+    // Initiate outbound call via Twilio (callUser expects VoiceCallRequest)
+    const { callUser, sendSms } = await import('./services/twilio.js');
+
+    const displayName = profile.display_name || profile.username || 'there';
+    const callResult = await callUser({
+      userId,
+      to: profile.phone_number,
+      message: `Hey ${displayName}, this is Aurora. I'm about to become the most useful thing in your life, but right now I know absolutely nothing about you. What's stressing you out this week?`,
+    });
+
+    // If call fails, send SMS fallback
+    if (!callResult.success) {
+      await sendSms({
+        userId,
+        to: profile.phone_number,
+        body: "I tried to call — no worries. Text me what's on your plate this week and I'll get to work.",
+      });
+    }
+
+    res.json({ status: 'initiated', channel: callResult.success ? 'voice' : 'sms_fallback' });
+  } catch (err) {
+    logger.error({ err, userId }, 'Onboarding call failed');
+    res.status(500).json({ error: 'Failed to initiate onboarding' });
+  }
+});
+
 // ---- Start Server ----
 
 const server = createServer(app);
@@ -4259,6 +4310,9 @@ server.on("upgrade", (request, socket, head) => {
         ws.close(4500, "Internal error");
       }
     });
+  } else if (url.pathname === '/aurora/listen/ws') {
+    // Handled by setupListenWebSocket — don't destroy
+    return;
   } else {
     socket.destroy();
   }
@@ -4267,6 +4321,9 @@ server.on("upgrade", (request, socket, head) => {
 wss.on("connection", (ws, request) => {
   handleVoiceWebSocket(ws, request);
 });
+
+// Deepgram listening proxy — browser mic → transcription → context extraction
+setupListenWebSocket(server);
 
 server.listen(PORT, async () => {
   logger.info(`Agent server v2.0 running on port ${PORT}`);
