@@ -370,7 +370,8 @@ async function getUserDailyCap(userId: string): Promise<number> {
       .single();
 
     return data?.daily_spend_cap_cents || DEFAULT_USER_DAILY_CAP_CENTS;
-  } catch {
+  } catch (err) {
+    console.warn('[COST-BREAKER] Failed to fetch user daily cap:', err);
     return DEFAULT_USER_DAILY_CAP_CENTS;
   }
 }

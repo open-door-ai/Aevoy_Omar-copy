@@ -174,8 +174,8 @@ registerTool({
             `${e.context_type}: ${e.key} = ${JSON.stringify(e.value)} (confidence: ${e.confidence})`
           ).join('\n');
         }
-      } catch {
-        // Non-critical — context engine may not have data yet
+      } catch (err) {
+        console.warn('[V3-TOOL-DATA] Context engine lookup failed (non-critical):', err);
       }
 
       const combined = [facts, contextSummary].filter(Boolean).join('\n\n--- Aurora Context ---\n');

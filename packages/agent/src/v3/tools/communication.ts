@@ -44,7 +44,7 @@ registerTool({
           new Promise<false>(r => setTimeout(() => r(false), 3000)),
         ]) as boolean;
       }
-    } catch { /* IMAP unavailable */ }
+    } catch (err) { console.warn('[V3-TOOL-COMM] User email send via IMAP failed:', err); }
 
     if (!sent) {
       sent = await sendResponse({

@@ -62,7 +62,7 @@ registerTool({
               }
             }
           } catch {
-            // Plain text: split by newlines and tabs/commas
+            // JSON parse failed — treating as plain text: split by newlines and tabs/commas
             const lines = content.split('\n').filter(l => l.trim());
             if (lines.length > 0) {
               headers = lines[0].split(/\t|,/).map(c => c.trim());
@@ -175,7 +175,7 @@ registerTool({
               }
             }
           }
-        } catch { /* fall through to Pollinations */ }
+        } catch (err) { console.warn('[V3-TOOL-FILES] Gemini image gen failed, falling through to Pollinations:', err); }
       }
 
       // Fallback: Pollinations.ai (free)

@@ -286,7 +286,8 @@ export async function isQuietHours(userId: string): Promise<boolean> {
     });
     const hour = parseInt(formatter.format(new Date()));
     return hour >= 22 || hour < 7;
-  } catch {
+  } catch (err) {
+    console.warn('[AURORA-MSG] Quiet hours check failed:', err);
     return false; // On error, assume not quiet
   }
 }
@@ -519,7 +520,8 @@ function getNext7AM(timezone: string): Date {
     // If it's before 7AM, trigger at 7AM today; otherwise 7AM tomorrow
     const hoursUntil7AM = currentHour < 7 ? (7 - currentHour) : (24 - currentHour + 7);
     return new Date(now.getTime() + hoursUntil7AM * 60 * 60 * 1000);
-  } catch {
+  } catch (err) {
+    console.warn('[AURORA-MSG] Next morning calculation failed:', err);
     // Fallback: 8 hours from now
     return new Date(Date.now() + 8 * 60 * 60 * 1000);
   }
@@ -649,8 +651,8 @@ export async function handleProactiveFeedback(
     try {
       const { recordChannelResponse } = await import('./channel-learner.js');
       await recordChannelResponse(userId, 'in_app', 'proactive', 0, false);
-    } catch {
-      // channel-learner recordChannelResponse may have different signature — non-critical
+    } catch (err) {
+      console.warn('[AURORA-MSG] channel-learner recordChannelResponse failed (non-critical):', err);
     }
   } catch (err) {
     console.error('[AURORA-MSG] handleProactiveFeedback error:', err);

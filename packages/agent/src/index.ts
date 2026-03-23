@@ -858,6 +858,9 @@ app.get("/health/memory", async (req, res) => {
 
 // ---- Live API Key Validation — actually calls each API ----
 app.get("/debug/test-apis", async (_req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
   const secret = _req.query.secret;
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized" });
@@ -933,6 +936,9 @@ app.get("/debug/test-apis", async (_req, res) => {
 
 // ---- Image generation test endpoint ----
 app.get("/debug/test-image-gen", async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
   const secret = req.query.secret;
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized" });
@@ -4082,7 +4088,7 @@ process.on("SIGINT", () => {
 // ---- Aurora Communication Endpoints ----
 
 // POST /aurora/settings — update user communication settings
-app.post('/aurora/settings', async (req, res) => {
+app.post('/aurora/settings', taskLimiter, async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized" });
@@ -4148,6 +4154,10 @@ app.post('/aurora/settings', async (req, res) => {
 // GET /aurora/feed/:userId — get user's activity feed (conversation_context + proactive_queue)
 // Supports pagination: ?limit=50&offset=0
 // Returns: { feed: [...], total: number, hasMore: boolean }
+function stripHtml(text: string): string {
+  return text ? text.replace(/<[^>]*>/g, '').replace(/&[a-z]+;/gi, '') : '';
+}
+
 app.get('/aurora/feed/:userId', async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
   if (!verifyWebhookSecret(secret as string)) {
@@ -4216,7 +4226,7 @@ app.get('/aurora/feed/:userId', async (req, res) => {
       feed.push({
         id: item.id,
         type: 'context',
-        content: item.content,
+        content: stripHtml(item.content),
         source: item.source || item.role,
         timestamp: item.created_at,
       });
@@ -4226,7 +4236,7 @@ app.get('/aurora/feed/:userId', async (req, res) => {
       feed.push({
         id: item.id,
         type: 'proactive',
-        content: item.content,
+        content: stripHtml(item.content),
         source: item.type,
         status: item.status,
         priority: item.priority,
@@ -4250,7 +4260,7 @@ app.get('/aurora/feed/:userId', async (req, res) => {
 
 // POST /aurora/onboard — Trigger onboarding call to new user
 // Enhanced: AMD voicemail detection, retry scheduling, SMS fallback after 2 failures
-app.post('/aurora/onboard', async (req, res) => {
+app.post('/aurora/onboard', taskLimiter, async (req, res) => {
   const secret = req.headers['x-webhook-secret'];
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: 'unauthorized' });
@@ -4381,7 +4391,7 @@ app.post('/aurora/onboard', async (req, res) => {
 // POST /aurora/onboard/amd — Called by AMD webhook when onboarding call hits voicemail
 // The existing /webhook/voice/amd-status handles generic AMD. This supplements it
 // specifically for onboarding calls: hang up + schedule retry.
-app.post('/aurora/onboard/amd', async (req, res) => {
+app.post('/aurora/onboard/amd', taskLimiter, async (req, res) => {
   const { callSid, answeredBy, userId } = req.body;
   res.sendStatus(204);
 
@@ -4451,7 +4461,7 @@ app.post('/aurora/onboard/amd', async (req, res) => {
 });
 
 // POST /aurora/error — Frontend error reporting endpoint
-app.post('/aurora/error', async (req, res) => {
+app.post('/aurora/error', taskLimiter, async (req, res) => {
   const { error, context, userId } = req.body;
   logger.error({ userId: userId?.slice?.(0, 8), error, context }, 'Frontend error reported');
   res.json({ received: true });

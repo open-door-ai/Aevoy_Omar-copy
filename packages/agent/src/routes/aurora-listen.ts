@@ -398,7 +398,14 @@ export function setupListenWebSocket(server: Server): void {
     }
 
     // ---- Message handler (auth + audio) ----
+    const MAX_WS_MESSAGE_SIZE = 65536; // 64KB max per message
+
     clientWs.on('message', async (raw: Buffer) => {
+      if (raw.length > MAX_WS_MESSAGE_SIZE) {
+        logger.warn({ userId }, 'WebSocket message too large, dropping');
+        return; // Don't process oversized messages
+      }
+
       // Before auth: only accept JSON auth messages
       if (!authenticated) {
         try {

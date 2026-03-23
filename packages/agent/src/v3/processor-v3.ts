@@ -292,7 +292,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     }
 
     // ── Update usage counter ──
-    try { await getSupabaseClient().rpc('increment_messages_used', { p_user_id: task.userId }); } catch { /* non-critical */ }
+    try { await getSupabaseClient().rpc('increment_messages_used', { p_user_id: task.userId }); } catch (err) { logger.warn({ err, userId: task.userId }, '[V3] increment_messages_used failed (non-critical)'); }
 
     // ── Append to daily log ──
     appendDailyLog(task.userId, `Task: ${task.subject} → ${response.substring(0, 200)}`).catch(() => {});
@@ -320,7 +320,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
           completed_at: new Date().toISOString(),
           execution_time_ms: Date.now() - startTime,
         }).eq('id', taskId);
-      } catch { /* ignore DB failure during error handling */ }
+      } catch (err) { logger.warn({ err }, '[V3] DB update failed during error handling'); }
     }
 
     // Notify user of error
@@ -333,7 +333,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
         `Re: ${task.subject}`,
         'I ran into an issue processing your request. Please try again, or rephrase your task.'
       );
-    } catch { /* ignore delivery failure */ }
+    } catch (err) { logger.warn({ err }, '[V3] Error notification delivery failed'); }
 
     return {
       taskId,
@@ -522,7 +522,8 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
       logger.warn(`[V3] Could not extract params for ${toolName}, falling back to multi_step`);
       return handleMultiStep(task, ctx);
     }
-  } catch {
+  } catch (err) {
+    logger.warn({ err, taskId: ctx.taskId }, '[V3] single_tool param extraction failed, falling back to multi_step');
     return handleMultiStep(task, ctx);
   }
 
@@ -759,7 +760,7 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
         await getSupabaseClient().from('tasks').update({
           progress_message: `Model error #${consecutiveModelFailures} at step ${iterations}: ${errMsg.substring(0, 200)}`,
         }).eq('id', ctx.taskId);
-      } catch { /* non-critical */ }
+      } catch (err) { logger.warn({ err, taskId: ctx.taskId }, '[V3] Progress update for model error failed (non-critical)'); }
       // Retry up to 5 times with backoff matching model-router's backoff windows:
       // Gemini: 15s backoff, Haiku: 30s backoff. Retries must OUTLAST these.
       if (consecutiveModelFailures >= 5) {
@@ -911,12 +912,12 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
 
       // Track domains visited
       if (tc.name === 'browser_go' && tc.arguments?.url) {
-        try { triedDomains.add(new URL(String(tc.arguments.url)).hostname); } catch {}
+        try { triedDomains.add(new URL(String(tc.arguments.url)).hostname); } catch { /* invalid URL format — safe to skip */ }
       }
 
       // Track tool cost
       if (result.cost > 0) {
-        try { await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`); } catch { /* non-critical */ }
+        try { await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`); } catch (err) { logger.warn({ err, tool: tc.name }, '[V3] Cost tracking failed (non-critical)'); }
       }
 
       // Add tool result to conversation — wrapped in <untrusted-data> to prevent
@@ -1105,7 +1106,7 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
         action_success_count: actionSuccessCount,
         cost_usd: budget.totalSpent,
       }).eq('id', ctx.taskId);
-    } catch { /* non-critical progress update */ }
+    } catch (err) { logger.warn({ err, taskId: ctx.taskId }, '[V3] Non-critical progress update failed'); }
   }
 
   // Max iterations reached
