@@ -148,24 +148,31 @@ export async function trackSpend(
   const supabase = getSupabaseClient();
 
   try {
-    // Build the channel column name for the upsert
-    const channelColumn = `${channel}_cents`;
+    // Map channel to DB column name (only paid channels have columns)
+    const CHANNEL_COLUMN_MAP: Partial<Record<DeliveryChannel, string>> = {
+      sms: 'sms_spend_cents',
+      voice: 'voice_spend_cents',
+      whatsapp: 'whatsapp_spend_cents',
+    };
+    const channelColumn = CHANNEL_COLUMN_MAP[channel];
 
     // Try to get existing record
     const { data: existing } = await supabase
       .from('daily_spend_tracking')
-      .select('id, total_cents, sms_cents, voice_cents, whatsapp_cents, email_cents, telegram_cents')
+      .select('id, total_spend_cents, sms_spend_cents, voice_spend_cents, whatsapp_spend_cents')
       .eq('user_id', userId)
       .eq('date', today)
       .single();
 
     if (existing) {
       // Update existing record
-      const currentChannelCents = (existing as Record<string, number>)[channelColumn] || 0;
       const updateData: Record<string, number> = {
-        total_cents: (existing.total_cents || 0) + costCents,
-        [channelColumn]: currentChannelCents + costCents,
+        total_spend_cents: (existing.total_spend_cents || 0) + costCents,
       };
+      if (channelColumn) {
+        const currentChannelCents = (existing as Record<string, number>)[channelColumn] || 0;
+        updateData[channelColumn] = currentChannelCents + costCents;
+      }
 
       await supabase
         .from('daily_spend_tracking')
@@ -176,14 +183,16 @@ export async function trackSpend(
       const insertData: Record<string, string | number> = {
         user_id: userId,
         date: today,
-        total_cents: costCents,
-        sms_cents: 0,
-        voice_cents: 0,
-        whatsapp_cents: 0,
-        email_cents: 0,
-        telegram_cents: 0,
-        [channelColumn]: costCents,
+        total_spend_cents: costCents,
+        sms_spend_cents: 0,
+        voice_spend_cents: 0,
+        whatsapp_spend_cents: 0,
+        ai_spend_cents: 0,
+        browser_spend_cents: 0,
       };
+      if (channelColumn) {
+        insertData[channelColumn] = costCents;
+      }
 
       await supabase
         .from('daily_spend_tracking')
@@ -241,19 +250,19 @@ async function getUserDailySpend(
   const supabase = getSupabaseClient();
   const { data } = await supabase
     .from('daily_spend_tracking')
-    .select('total_cents, sms_cents, voice_cents, whatsapp_cents, email_cents, telegram_cents')
+    .select('total_spend_cents, sms_spend_cents, voice_spend_cents, whatsapp_spend_cents')
     .eq('user_id', userId)
     .eq('date', today)
     .single();
 
   const result = {
-    totalCents: data?.total_cents || 0,
+    totalCents: data?.total_spend_cents || 0,
     channelCents: {
-      sms: data?.sms_cents || 0,
-      voice: data?.voice_cents || 0,
-      whatsapp: data?.whatsapp_cents || 0,
-      email: data?.email_cents || 0,
-      telegram: data?.telegram_cents || 0,
+      sms: data?.sms_spend_cents || 0,
+      voice: data?.voice_spend_cents || 0,
+      whatsapp: data?.whatsapp_spend_cents || 0,
+      email: 0, // free channel, no DB tracking
+      telegram: 0, // free channel, no DB tracking
     } as Record<string, number>,
   };
 

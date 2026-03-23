@@ -266,20 +266,26 @@ async function queueForLater(message: AuroraMessage): Promise<void> {
     // Calculate next 7AM in user's timezone
     const triggerAt = getNext7AM(timezone);
 
+    // Map string priority to integer (1-10 scale)
+    const priorityMap: Record<string, number> = { low: 3, medium: 5, high: 7, critical: 9 };
+
     await getSupabaseClient()
       .from('proactive_queue')
       .insert({
         user_id: message.userId,
-        type: message.source,
-        priority: message.priority,
-        content: message.content,
+        action_type: 'remind',
+        title: `Queued ${message.source} message`,
+        description: message.content,
+        priority: priorityMap[message.priority] || 5,
+        confidence: 0.95,
         trigger_at: triggerAt.toISOString(),
         status: 'pending',
-        metadata: JSON.stringify({
+        preferred_channel: message.preferredChannel || null,
+        trigger_condition: {
           originalChannel: message.preferredChannel,
           queuedReason: 'quiet_hours',
           emailSubject: message.emailSubject,
-        }),
+        },
       });
 
     console.log(`[AURORA-MSG] Queued message for ${message.userId.slice(0, 8)} — delivery at ${triggerAt.toISOString()}`);
@@ -303,21 +309,27 @@ async function scheduleEscalation(message: AuroraMessage, originalChannel: Deliv
     // Escalation channel: voice for critical, SMS for high
     const escalationChannel = message.priority === 'critical' ? 'voice' : 'sms';
 
+    // Map string priority to integer (1-10 scale)
+    const priorityMap: Record<string, number> = { low: 3, medium: 5, high: 7, critical: 9 };
+
     await getSupabaseClient()
       .from('proactive_queue')
       .insert({
         user_id: message.userId,
-        type: 'escalation',
-        priority: message.priority,
-        content: `[FOLLOW-UP] ${message.content}`,
+        action_type: 'follow_up',
+        title: `Escalation: ${message.source} via ${escalationChannel}`,
+        description: `[FOLLOW-UP] ${message.content}`,
+        priority: priorityMap[message.priority] || 7,
+        confidence: 0.95,
         trigger_at: triggerAt.toISOString(),
         status: 'pending',
-        metadata: JSON.stringify({
+        preferred_channel: escalationChannel,
+        trigger_condition: {
           originalChannel,
           escalationChannel,
           originalSource: message.source,
           emailSubject: message.emailSubject,
-        }),
+        },
       });
   } catch (err) {
     console.error('[AURORA-MSG] scheduleEscalation error:', err);

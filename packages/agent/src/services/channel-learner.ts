@@ -21,14 +21,14 @@ export interface ChannelPreference {
 interface ChannelPreferenceRow {
   id: string;
   user_id: string;
-  channel: string;
+  preferred_channel: string;
   info_type: string;
   response_count: number;
   avg_response_time_seconds: number;
   positive_count: number;
   negative_count: number;
   confidence: number;
-  last_updated: string;
+  updated_at: string;
 }
 
 // ---- In-memory cache ----
@@ -69,7 +69,7 @@ export async function recordChannelResponse(
       .from('channel_preferences')
       .select('id, response_count, avg_response_time_seconds, positive_count, negative_count, confidence')
       .eq('user_id', userId)
-      .eq('channel', channel)
+      .eq('preferred_channel', channel)
       .eq('info_type', infoType)
       .single();
 
@@ -96,7 +96,7 @@ export async function recordChannelResponse(
           positive_count: newPositive,
           negative_count: newNegative,
           confidence: Math.round(newConfidence * 100) / 100, // 2 decimal places
-          last_updated: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         })
         .eq('id', existing.id);
     } else {
@@ -107,14 +107,14 @@ export async function recordChannelResponse(
         .from('channel_preferences')
         .insert({
           user_id: userId,
-          channel,
+          preferred_channel: channel,
           info_type: infoType,
           response_count: 1,
           avg_response_time_seconds: responseTimeSeconds > 0 ? Math.round(responseTimeSeconds) : 0,
           positive_count: wasPositive ? 1 : 0,
           negative_count: wasPositive ? 0 : 1,
           confidence: initialConfidence,
-          last_updated: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
     }
 
@@ -152,7 +152,7 @@ export async function getPreferredChannel(
     // Query channel_preferences for this user + info_type, ordered by confidence
     const { data: preferences } = await supabase
       .from('channel_preferences')
-      .select('channel, confidence, avg_response_time_seconds, response_count')
+      .select('preferred_channel, confidence, avg_response_time_seconds, response_count')
       .eq('user_id', userId)
       .eq('info_type', infoType)
       .order('confidence', { ascending: false })
@@ -160,7 +160,7 @@ export async function getPreferredChannel(
 
     if (preferences && preferences.length > 0 && preferences[0].confidence > 0.2) {
       const result: ChannelPreference = {
-        channel: preferences[0].channel as LearnableChannel,
+        channel: preferences[0].preferred_channel as LearnableChannel,
         confidence: preferences[0].confidence,
       };
 
@@ -171,14 +171,14 @@ export async function getPreferredChannel(
     // No learned preference — try wildcard (any info_type for this channel)
     const { data: anyPrefs } = await supabase
       .from('channel_preferences')
-      .select('channel, confidence')
+      .select('preferred_channel, confidence')
       .eq('user_id', userId)
       .order('confidence', { ascending: false })
       .limit(1);
 
     if (anyPrefs && anyPrefs.length > 0 && anyPrefs[0].confidence > 0.3) {
       const result: ChannelPreference = {
-        channel: anyPrefs[0].channel as LearnableChannel,
+        channel: anyPrefs[0].preferred_channel as LearnableChannel,
         confidence: anyPrefs[0].confidence * 0.7, // Discount because it's not info-type-specific
       };
 

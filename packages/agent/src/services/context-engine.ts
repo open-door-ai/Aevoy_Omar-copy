@@ -424,30 +424,22 @@ async function trackChannelUsage(
   for (const topic of topics.slice(0, 3)) { // Max 3 topics per message
     const infoType = topic.toLowerCase().substring(0, 50);
     try {
+      // Check if we already have a record for this user+info_type+channel
       const { data: existing } = await supabase
         .from("channel_preferences")
         .select("id, times_observed, confidence")
         .eq("user_id", userId)
         .eq("info_type", infoType)
+        .eq("preferred_channel", channel)
         .single();
 
       if (existing) {
-        // If same channel as preferred, boost confidence; otherwise decay
-        const { data: currentPref } = await supabase
-          .from("channel_preferences")
-          .select("preferred_channel")
-          .eq("id", existing.id)
-          .single();
-
-        const sameChannel = currentPref?.preferred_channel === channel;
-        const newConfidence = sameChannel
-          ? Math.min(1.0, existing.confidence * 0.8 + 0.2)
-          : Math.max(0.1, existing.confidence * 0.9);
+        // Same channel used again — boost confidence
+        const newConfidence = Math.min(1.0, existing.confidence * 0.8 + 0.2);
 
         await supabase
           .from("channel_preferences")
           .update({
-            preferred_channel: sameChannel ? channel : (existing.times_observed > 5 ? currentPref?.preferred_channel : channel),
             confidence: parseFloat(newConfidence.toFixed(2)),
             times_observed: (existing.times_observed || 1) + 1,
             updated_at: new Date().toISOString(),

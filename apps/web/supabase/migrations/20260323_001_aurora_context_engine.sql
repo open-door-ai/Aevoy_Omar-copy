@@ -139,9 +139,11 @@ CREATE TABLE IF NOT EXISTS conversation_context (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     conversation_id UUID,
-    channel TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'in_app',
     role TEXT NOT NULL CHECK (role IN ('user', 'aurora', 'system')),
     content TEXT NOT NULL,
+    source TEXT,
+    proactive_queue_id UUID,
     extracted_intents JSONB DEFAULT '[]'::jsonb,
     extracted_entities JSONB DEFAULT '{}'::jsonb,
     extracted_commitments JSONB DEFAULT '[]'::jsonb,
@@ -168,12 +170,15 @@ CREATE TABLE IF NOT EXISTS channel_preferences (
     info_type TEXT NOT NULL,
     preferred_channel TEXT NOT NULL,
     confidence DECIMAL(3,2) NOT NULL DEFAULT 0.50,
-    avg_response_time_seconds INTEGER,
+    avg_response_time_seconds INTEGER DEFAULT 0,
     preferred_time TEXT,
     times_observed INTEGER NOT NULL DEFAULT 1,
+    response_count INTEGER NOT NULL DEFAULT 0,
+    positive_count INTEGER NOT NULL DEFAULT 0,
+    negative_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(user_id, info_type)
+    UNIQUE(user_id, info_type, preferred_channel)
 );
 ALTER TABLE channel_preferences ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN

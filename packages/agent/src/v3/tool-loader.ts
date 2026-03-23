@@ -13,7 +13,6 @@
  */
 
 import type { ToolDefinition } from './types.js';
-import { getAllTools } from './tool-registry.js';
 
 // ── Tool categories — group tools by function (not by ToolDefinition.category) ──
 
@@ -105,7 +104,6 @@ export function expandTools(
 ): ToolDefinition[] {
   const currentSet = new Set(currentToolNames);
   const wasLoaded = currentSet.has(requestedToolName);
-  const allNames = allToolDefinitions.map(t => t.name);
 
   console.log(
     `[TOOL-LOADER] Expanding tools: "${requestedToolName}" was ${wasLoaded ? 'loaded but failed' : 'NOT loaded'}. ` +

@@ -11,7 +11,7 @@ import { compressOldMemories, decayMemories } from './memory.js';
 import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
 import { detectPatterns } from './pattern-detector.js';
 import { CronExpressionParser } from 'cron-parser';
-import { startMonitoringService } from './monitoring.js';
+// monitoring service import removed — DISABLED for cost control
 import { schedulerHeartbeat } from '../utils/scheduler-heartbeat.js';
 import { logger } from '../utils/logger.js';
 
@@ -589,14 +589,10 @@ function isTimeMatch(currentHourUTC: number, currentMinuteUTC: number, targetTim
 
 /**
  * Mark learnings with stale layout verification (>14 days old).
+ * NOTE: 'learnings' table deprecated in migration 002 — this is now a no-op.
  */
 async function checkStaleLearnings(): Promise<void> {
-  const staleDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-  await getSupabaseClient()
-    .from("learnings")
-    .update({ page_hash: null })
-    .not("page_hash", "is", null)
-    .lt("layout_verified_at", staleDate);
+  // Table renamed to _deprecated_learnings — no longer active
 }
 
 /**
