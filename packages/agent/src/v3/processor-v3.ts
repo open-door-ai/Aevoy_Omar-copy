@@ -363,6 +363,11 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     return { tier: 'instant', reasoning: 'commitment acknowledgment' };
   }
 
+  // Self-knowledge / memory recall queries — needs the recall tool to fetch user_context
+  if (/\b(what do you know|what have you learned|tell me about (me|myself)|what('?s| is) my|do you remember|recall|my (preference|routine|habit|schedule))\b/i.test(lower)) {
+    return { tier: 'single_tool', tool: 'recall', reasoning: 'self-knowledge query — needs recall tool' };
+  }
+
   // Weather
   if (/\b(weather|temperature|forecast|rain|snow|sunny|cloudy)\b/i.test(lower) && lower.length < 100) {
     return { tier: 'single_tool', tool: 'weather', reasoning: 'weather query' };
