@@ -370,7 +370,7 @@ async function main() {
     };
 
     await fs.writeFile(
-      '/workspaces/Aevoy_Omar-copy/CAPTCHA_TEST_REPORT.md',
+      '/workspaces/Aurora_Omar-copy/CAPTCHA_TEST_REPORT.md',
       `# CAPTCHA Test Report
 
 **Generated:** ${new Date().toISOString()}

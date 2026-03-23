@@ -22,7 +22,7 @@ import {
   processIncomingTask,
   handleConfirmationReply,
   handleVerificationCodeReply,
-} from "./processor.js";
+} from "./task-router.js";
 import { maskEmail } from "../utils/logging.js";
 
 // ---------------------------------------------------------------------------
@@ -677,7 +677,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   // getting picked up by the IMAP poller. Processing them creates infinite loops and
   // triggers false PIN challenges.
   if (senderEmail.endsWith('@aevoy.com')) {
-    console.log(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Aevoy system email)`);
+    console.log(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Aurora system email)`);
     return;
   }
 
@@ -739,7 +739,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     if (!hasPinSet) {
       // No PIN set — tell sender to contact the user
       await sendPinReply(email.from, username, email.subject,
-        `This email address only accepts emails from ${username}'s registered email. To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aevoy settings.`);
+        `This email address only accepts emails from ${username}'s registered email. To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aurora settings.`);
       console.log(`[INBOX-POLLER] Unknown sender ${maskEmail(senderEmail)} for ${username}, no PIN set — sent setup instructions`);
       return;
     }
@@ -750,7 +750,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     if (!pinMatch) {
       // No PIN found — reply asking for PIN
       await sendPinReply(email.from, username, email.subject,
-        `Hi! This is ${username}'s AI assistant at Aevoy.\n\nI received your email, but I don't recognize your email address. To verify your identity, please reply with your 4-6 digit security PIN in the subject line or body of your email.\n\nIf you don't have a PIN, please ask ${username} to share it with you.`);
+        `Hi! This is ${username}'s AI assistant at Aurora.\n\nI received your email, but I don't recognize your email address. To verify your identity, please reply with your 4-6 digit security PIN in the subject line or body of your email.\n\nIf you don't have a PIN, please ask ${username} to share it with you.`);
       console.log(`[INBOX-POLLER] Sent PIN request to ${maskEmail(senderEmail)} for ${username}`);
       return;
     }
@@ -875,7 +875,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
             await sendSms({
               userId: user.id,
               to: userProfile.phone_number,
-              body: `[Aevoy] ${urgentLabel} email from ${email.from}: "${email.subject.substring(0, 80)}" — replied on your behalf. Check your inbox.`,
+              body: `[Aurora] ${urgentLabel} email from ${email.from}: "${email.subject.substring(0, 80)}" — replied on your behalf. Check your inbox.`,
             });
             console.log(`[FULL-SEND] SMS alert sent for ${priority} email`);
           }
@@ -1025,8 +1025,8 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
               auto_proceed_context: null,
             }).eq('id', awaitingTask.id);
 
-            const { processTask } = await import('./processor.js');
-            await processTask({
+            const { processTaskV3 } = await import('../v3/processor-v3.js');
+            await processTaskV3({
               userId: user.id,
               username: user.username,
               from: user.email,

@@ -423,7 +423,7 @@ function getSupabaseClient(url: string, key: string) {
 
 export default {
   async fetch(_request: Request, _env: Env): Promise<Response> {
-    return new Response("Aevoy Email Router", { status: 200 });
+    return new Response("Aurora Email Router", { status: 200 });
   },
   async email(message: EmailMessage, env: Env): Promise<void> {
     try {
@@ -469,7 +469,7 @@ export default {
         user = await getUserByEmail(message.from, env.SUPABASE_URL, env.SUPABASE_SERVICE_KEY);
         if (!user) {
           console.log(`[EMAIL] No account found for sender: ${maskEmail(message.from)}`);
-          message.setReject("No Aevoy account found for this email address. Sign up at aevoy.com");
+          message.setReject("No Aurora account found for this email address. Sign up at aevoy.com");
           return;
         }
       } else {
@@ -533,7 +533,7 @@ export default {
             to: senderEmail,
             from: `${username}@aevoy.com`,
             subject: `Re: ${parsed.subject}`,
-            html: `<p>This email address only accepts emails from ${username}'s registered email address.</p><p>To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aevoy settings.</p>`,
+            html: `<p>This email address only accepts emails from ${username}'s registered email address.</p><p>To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aurora settings.</p>`,
             agentUrl: env.AGENT_URL,
             webhookSecret: env.AGENT_WEBHOOK_SECRET,
           });
@@ -567,7 +567,7 @@ export default {
             to: senderEmail,
             from: `${username}@aevoy.com`,
             subject: `Re: ${parsed.subject}`,
-            html: `<p>Hi! This is ${username}'s AI assistant at Aevoy.</p><p>I received your email, but I don't recognize your email address. To verify your identity, please reply with your <strong>4-6 digit security PIN</strong> in the subject line or body of your email.</p><p>If you don't have a PIN, please ask ${username} to share it with you.</p>`,
+            html: `<p>Hi! This is ${username}'s AI assistant at Aurora.</p><p>I received your email, but I don't recognize your email address. To verify your identity, please reply with your <strong>4-6 digit security PIN</strong> in the subject line or body of your email.</p><p>If you don't have a PIN, please ask ${username} to share it with you.</p>`,
             agentUrl: env.AGENT_URL,
             webhookSecret: env.AGENT_WEBHOOK_SECRET,
           });

@@ -60,7 +60,7 @@ export async function POST(request: Request) {
   const DEMO_DISABLED = true;
   if (DEMO_DISABLED) {
     return NextResponse.json(
-      { error: 'Demo calls are temporarily paused. Sign up for a free account to try Aevoy!' },
+      { error: 'Demo calls are temporarily paused. Sign up for a free account to try Aurora!' },
       { status: 503 }
     );
   }

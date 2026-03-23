@@ -3,7 +3,7 @@ const RESEND_KEY = 're_ckf3djVk'; // partial - let's use the Resend API listing 
 
 // Use the Resend API with the omarkebrahim account key for probatedesk
 // We need to use the pro desk production key from the .env
-const API_KEY = 're_VtsbyLPy_DQCd8jCBuoLaCMNmRVF3Mt3s'; // Aevoy key
+const API_KEY = 're_VtsbyLPy_DQCd8jCBuoLaCMNmRVF3Mt3s'; // Aurora key
 
 // Check probatedesk DKIM from public DNS
 const dkimRes = await fetch(

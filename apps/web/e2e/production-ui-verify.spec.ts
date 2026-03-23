@@ -37,12 +37,12 @@ test.describe('Production UI Verification', () => {
     await page.goto('https://www.aevoy.com');
 
     // Check page title
-    await expect(page).toHaveTitle(/Aevoy/);
+    await expect(page).toHaveTitle(/Aurora/);
     console.log('[VERIFY] ✅ Landing page title correct');
 
-    // Check for Aevoy branding
-    const hasAevoy = await page.locator('text=/Aevoy/i').isVisible({ timeout: 5000 });
-    expect(hasAevoy).toBeTruthy();
+    // Check for Aurora branding
+    const hasAurora = await page.locator('text=/Aurora/i').isVisible({ timeout: 5000 });
+    expect(hasAurora).toBeTruthy();
     console.log('[VERIFY] ✅ Landing page loaded with branding');
   });
 

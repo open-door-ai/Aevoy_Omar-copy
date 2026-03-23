@@ -95,7 +95,7 @@ export default function ConnectPage() {
           Connect {payload.serviceName}
         </h1>
         <p className="text-gray-600 mb-8">
-          Aevoy needs access to your {payload.serviceName} account to complete tasks on your behalf.
+          Aurora needs access to your {payload.serviceName} account to complete tasks on your behalf.
         </p>
 
         <button
@@ -107,7 +107,7 @@ export default function ConnectPage() {
         </button>
 
         <p className="text-xs text-gray-400 mt-6">
-          Your data is encrypted. Aevoy only accesses what&apos;s needed for your tasks.
+          Your data is encrypted. Aurora only accesses what&apos;s needed for your tasks.
         </p>
       </div>
     </div>

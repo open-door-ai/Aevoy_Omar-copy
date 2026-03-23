@@ -83,7 +83,7 @@ export async function loadPersonality(
     return await getCompiledPrompt(userId, username, memory, senderName, undefined, userEmail);
   } catch (err) {
     console.warn('[V3-CONTEXT] Personality load failed:', err);
-    return `You are Aevoy, a helpful AI assistant for ${username}.`;
+    return `You are Aurora, a helpful AI assistant for ${username}.`;
   }
 }
 

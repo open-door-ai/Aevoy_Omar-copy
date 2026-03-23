@@ -1,4 +1,4 @@
-# Aevoy Agent Server — Railway Deployment
+# Aurora Agent Server — Railway Deployment
 FROM node:20-slim
 
 # System deps for Playwright chromium + Windows font fingerprint bypass

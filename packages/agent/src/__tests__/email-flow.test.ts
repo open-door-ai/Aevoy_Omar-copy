@@ -180,7 +180,7 @@ vi.mock("../execution/engine.js", () => ({
 }));
 
 // ---- Import after mocks ----
-import { processIncomingTask, handleConfirmationReply } from "../services/processor.js";
+import { processIncomingTask, handleConfirmationReply } from "../services/task-router.js";
 import { sendResponse, sendConfirmationEmail, sendOverQuotaEmail, sendErrorEmail, sendTaskCancelled } from "../services/email.js";
 import { sendSms } from "../services/twilio.js";
 import { clarifyTask, parseConfirmationReply } from "../services/clarifier.js";

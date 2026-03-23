@@ -52,7 +52,7 @@ export async function POST() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "Aevoy AI <hello@aevoy.com>",
+        from: "Aurora AI <hello@aevoy.com>",
         to: [userEmail],
         subject: "Help your AI get to know you",
         html: `
@@ -60,7 +60,7 @@ export async function POST() {
             <h1 style="font-size: 24px; color: #1a1a1a;">Hey ${name}!</h1>
 
             <p style="color: #444; line-height: 1.6;">
-              To help your Aevoy AI assistant work better for you, we'd love to learn a bit about you.
+              To help your Aurora AI assistant work better for you, we'd love to learn a bit about you.
               Just reply to this email with answers to the questions below.
             </p>
 
@@ -73,7 +73,7 @@ export async function POST() {
                 <li><strong>What do you do for work?</strong></li>
                 <li><strong>What are the top 3 things you'd like AI help with?</strong>
                   <br><em style="color: #888;">(e.g., booking restaurants, research, managing emails, scheduling)</em></li>
-                <li><strong>Any accounts you'd like Aevoy to help manage?</strong>
+                <li><strong>Any accounts you'd like Aurora to help manage?</strong>
                   <br><em style="color: #888;">(e.g., OpenTable, Uber, Amazon — you'll send login details separately)</em></li>
                 <li><strong>Any preferences or habits we should know about?</strong>
                   <br><em style="color: #888;">(e.g., "I prefer window seats", "I'm vegetarian", "I like early flights")</em></li>
@@ -87,7 +87,7 @@ export async function POST() {
             </p>
 
             <p style="color: #888; font-size: 14px; margin-top: 32px;">
-              — The Aevoy Team
+              — The Aurora Team
             </p>
           </div>
         `,

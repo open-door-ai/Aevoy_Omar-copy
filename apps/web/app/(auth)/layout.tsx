@@ -37,7 +37,7 @@ export default function AuthLayout({
         <div className="relative z-10 text-center px-12">
           <Link href="/" className="inline-block">
             <h1 className="text-5xl font-bold text-white tracking-tight">
-              Aevoy
+              Aurora
             </h1>
           </Link>
           <p className="mt-4 text-lg text-stone-400 max-w-sm mx-auto">
@@ -69,7 +69,7 @@ export default function AuthLayout({
         <header className="lg:hidden border-b border-border bg-background/80 backdrop-blur-sm relative z-10">
           <div className="px-6 py-4">
             <Link href="/" className="text-2xl font-bold text-foreground">
-              Aevoy
+              Aurora
             </Link>
           </div>
         </header>

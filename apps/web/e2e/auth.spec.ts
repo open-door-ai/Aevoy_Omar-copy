@@ -11,7 +11,7 @@ test.describe('Authentication Flow', () => {
 
     // Navigate to signup page
     await page.goto('/signup');
-    await expect(page).toHaveTitle(/Aevoy/);
+    await expect(page).toHaveTitle(/Aurora/);
 
     // Fill signup form
     await page.fill('input[type="email"]', testEmail);
@@ -36,7 +36,7 @@ test.describe('Authentication Flow', () => {
     await page.waitForURL(/\/dashboard/, { timeout: 10000 });
 
     // Check if onboarding appears
-    const onboardingVisible = await page.locator('text=Welcome to Aevoy').isVisible().catch(() => false);
+    const onboardingVisible = await page.locator('text=Welcome to Aurora').isVisible().catch(() => false);
 
     if (onboardingVisible) {
       console.log('[E2E] Onboarding flow detected, completing...');

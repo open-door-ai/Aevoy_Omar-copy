@@ -10,7 +10,7 @@
 
 import { fakeEmailServer, enableTestMode } from './fake-email-server.js';
 import { IntegrationRunner, runLoadTest } from './integration-runner.js';
-import { processTask } from '../services/processor.js';
+import { processTaskV3 as processTask } from '../v3/processor-v3.js';
 
 const TEST_USER = {
   id: 'test-user-integration',
@@ -192,7 +192,7 @@ async function runLoadTests() {
 // Main test runner
 async function main() {
   console.log('\n========================================');
-  console.log('  Aevoy Integration Tests');
+  console.log('  Aurora Integration Tests');
   console.log('========================================\n');
 
   enableTestMode();

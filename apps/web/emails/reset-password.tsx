@@ -11,14 +11,14 @@ interface ResetPasswordProps {
 
 export function ResetPassword({ resetUrl, userEmail }: ResetPasswordProps) {
   return (
-    <EmailLayout previewText="Reset your Aevoy password">
+    <EmailLayout previewText="Reset your Aurora password">
       <EmailHeader />
 
       <Section style={contentStyle}>
         <Text style={headingStyle}>Reset Your Password</Text>
 
         <Text style={bodyStyle}>
-          We received a request to reset the password for your Aevoy account ({userEmail}).
+          We received a request to reset the password for your Aurora account ({userEmail}).
         </Text>
 
         <Text style={bodyStyle}>

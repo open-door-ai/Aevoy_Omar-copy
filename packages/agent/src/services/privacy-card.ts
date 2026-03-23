@@ -71,7 +71,7 @@ export async function createAgentCard(userId: string): Promise<{
         type: 'UNLOCKED', // Can be used anywhere
         spend_limit: settings.agentCardLimitTransaction, // Per-transaction limit
         spend_limit_duration: 'TRANSACTION',
-        memo: `Aevoy Agent - ${userId.slice(0, 8)}`
+        memo: `Aurora Agent - ${userId.slice(0, 8)}`
       })
     });
     
@@ -206,7 +206,7 @@ export async function fundAgentCard(
     //   amount: amountCents,
     //   currency: 'usd',
     //   customer: user.stripe_customer_id,
-    //   description: 'Fund Aevoy Agent Card'
+    //   description: 'Fund Aurora Agent Card'
     // });
     
     // Atomic balance update to prevent race conditions

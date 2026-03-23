@@ -67,7 +67,7 @@ test.describe('System Health & Integration', () => {
     console.log('[E2E] Verifying web app at:', WEB_URL);
 
     await page.goto(WEB_URL);
-    await expect(page).toHaveTitle(/Aevoy/);
+    await expect(page).toHaveTitle(/Aurora/);
 
     const hasLanding = await page.locator('text=AI Employee, text=Never Fails').isVisible().catch(() => false);
     expect(hasLanding).toBeTruthy();

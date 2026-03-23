@@ -378,7 +378,7 @@ async function notifyUser(
 ): Promise<void> {
   const preferredChannel = settings?.proactive_channel || 'email';
   const notificationMessage = `[Monitoring] ${job.description.substring(0, 50)}...\n\n${message}`;
-  const emailSubject = `[Aevoy Monitor] ${job.description.substring(0, 60)}`;
+  const emailSubject = `[Aurora Monitor] ${job.description.substring(0, 60)}`;
 
   try {
     if (preferredChannel === 'telegram' && profile.telegram_chat_id) {

@@ -14,7 +14,7 @@ test.describe('Phase 2 Post-Deploy: Production Smoke Tests', () => {
     });
 
     await page.goto(BASE_URL, { waitUntil: 'networkidle' });
-    await expect(page).toHaveTitle(/Aevoy/i);
+    await expect(page).toHaveTitle(/Aurora/i);
 
     // Check hero content renders
     const heroText = page.locator('text=AI Employee').or(page.locator('text=Life Simplified')).or(page.locator('text=Your AI'));

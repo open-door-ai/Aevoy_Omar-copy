@@ -57,7 +57,7 @@ export function BetaPaymentModal({ onComplete, userEmail }: BetaPaymentModalProp
             Beta Payment Wall
           </CardTitle>
           <CardDescription className="text-base mt-2">
-            Welcome to the Aevoy beta! Credit card is <span className="font-semibold text-green-600">not required</span> during beta.
+            Welcome to the Aurora beta! Credit card is <span className="font-semibold text-green-600">not required</span> during beta.
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>

@@ -5,14 +5,13 @@
  * Checks every minute for tasks that need to be executed.
  */
 
-import { processTask } from './processor.js';
+import { processTaskV3 } from '../v3/processor-v3.js';
 import { getProactiveEngine } from './proactive.js';
 import { compressOldMemories, decayMemories } from './memory.js';
 import { getSupabaseClient, acquireDistributedLock, releaseDistributedLock } from '../utils/supabase.js';
 import { detectPatterns } from './pattern-detector.js';
 import { CronExpressionParser } from 'cron-parser';
 import { startMonitoringService } from './monitoring.js';
-import { startAutoProceedPoller, stopAutoProceedPoller } from './auto-proceed.js';
 import { schedulerHeartbeat } from '../utils/scheduler-heartbeat.js';
 
 let schedulerInterval: NodeJS.Timeout | null = null;
@@ -92,9 +91,7 @@ export function startScheduler(): void {
   // startMonitoringService();
   console.log('[SCHEDULER] Monitoring service DISABLED (cost control)');
 
-  // Start auto-proceed poller (every 5 minutes) — re-triggers tasks where user didn't respond
-  startAutoProceedPoller();
-  console.log('[SCHEDULER] Auto-proceed poller started');
+  // Auto-proceed poller removed (V1 legacy)
 
   // Daily Twilio cost reconciliation — runs 60s after startup, then every 24h
   setTimeout(async () => {
@@ -129,7 +126,6 @@ export function stopScheduler(): void {
     clearInterval(checkinInterval);
     checkinInterval = null;
   }
-  stopAutoProceedPoller();
   console.log('[SCHEDULER] Stopped');
 }
 
@@ -244,7 +240,7 @@ async function runProactiveChecks(): Promise<void> {
                 await sendResponse({
                   to: profile.email,
                   from: `${profile.username}@aevoy.com`,
-                  subject: "[Aevoy] Skill Recommendations",
+                  subject: "[Aurora] Skill Recommendations",
                   body: `I analyzed your recent task patterns and found ${recommendations.length} skills that could help:\n\n${formattedRecommendations}\n\nInstall skills at: https://www.aevoy.com/dashboard/skills`,
                 });
                 console.log(`[SCHEDULER] Sent ${recommendations.length} skill recommendations to user ${userId.slice(0, 8)}`);
@@ -367,7 +363,7 @@ async function runProactiveChecks(): Promise<void> {
                   await sendResponse({
                     to: profile.email,
                     from: `${profile.username}@aevoy.com`,
-                    subject: "[Aevoy] Action Required",
+                    subject: "[Aurora] Action Required",
                     body: formatProblemsForNotification(criticalProblems),
                   });
 
@@ -404,14 +400,7 @@ async function runProactiveChecks(): Promise<void> {
     // Non-critical
   }
 
-  // Process overnight task queue
-  try {
-    const { processOvernightQueue, sendMorningSummaries } = await import("./overnight.js");
-    await processOvernightQueue();
-    await sendMorningSummaries();
-  } catch {
-    // Non-critical
-  }
+  // Overnight task queue removed (V1 legacy)
 
   // Check stale learnings (>14 days since layout verified)
   try {
@@ -915,7 +904,7 @@ async function runDueScheduledTasksInner(): Promise<void> {
 
       if (!directActionHandled) {
         // Fall back to full AI processing for complex/natural-language tasks
-        await processTask({
+        await processTaskV3({
           userId: scheduled.user_id,
           username: profile.username,
           from: profile.email,

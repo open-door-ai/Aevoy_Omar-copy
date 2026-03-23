@@ -59,7 +59,7 @@ export function StepLegal({ onNext, onBack }: StepLegalProps) {
         <div className="flex items-start gap-3">
           <AlertTriangle className="w-6 h-6 text-yellow-600 flex-shrink-0 mt-0.5" />
           <div className="space-y-2">
-            <h3 className="font-semibold text-lg text-gray-900">Aevoy is 99.9999% accurate... but not perfect</h3>
+            <h3 className="font-semibold text-lg text-gray-900">Aurora is 99.9999% accurate... but not perfect</h3>
             <p className="text-sm text-gray-600">
               It might book the wrong flight, send the wrong email, or buy 500 rubber ducks
             </p>

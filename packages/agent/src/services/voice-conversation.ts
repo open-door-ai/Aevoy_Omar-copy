@@ -55,7 +55,7 @@ async function sendSpendAlert(amount: number): Promise<void> {
       body: new URLSearchParams({
         To: alertNumber,
         From: fromNumber,
-        Body: `Aevoy voice spend alert: $${amount.toFixed(2)} today. Daily cap: $${DAILY_VOICE_SPEND_CAP}. Check active calls.`,
+        Body: `Aurora voice spend alert: $${amount.toFixed(2)} today. Daily cap: $${DAILY_VOICE_SPEND_CAP}. Check active calls.`,
       }).toString(),
     });
     console.log(`[VOICE] Spend alert sent: $${amount.toFixed(2)}`);
@@ -364,7 +364,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   // finds session=undefined and silently drops the user's first message.
   const placeholderSession: VoiceSession = {
     sessionId, callSid: callSid || '', userId, userName: 'there', userEmail: '',
-    botName: 'Aevoy', greetingStyle: 'casual', timezone: 'America/Los_Angeles',
+    botName: 'Aurora', greetingStyle: 'casual', timezone: 'America/Los_Angeles',
     conversationHistory: [], state: 'setup', pinAttempts: 0, pinDigits: '',
     ws, startedAt: Date.now(), lastActivityAt: Date.now(), lastResponseAt: 0, lastResponseText: '', callType, memoryContext: '', userProfile: '', lastMemoryRefresh: Date.now(),
     silenceWatchdog: null, silenceWarnings: 0,
@@ -379,7 +379,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   // Load user profile
   let userName = (isDemo || isInterview || isOnboardingSetup) ? "there" : "there";
   let userEmail = "";
-  let botName = (isDemo || isInterview || isOnboardingSetup) ? "Aevoy" : "Nova";
+  let botName = (isDemo || isInterview || isOnboardingSetup) ? "Aurora" : "Nova";
   let greetingStyle = "casual";
   let timezone = "America/Los_Angeles";
   let needsPin = false;
@@ -389,7 +389,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
 
   // ---- AEVOY IDENTITY (shared across all demo/onboarding call types) ----
   const AEVOY_IDENTITY = `WHO YOU ARE:
-You are the voice of Aevoy — a real AI employee that works for the person on this call. Not a chatbot, not a voice assistant. You actually DO things: open browsers, fill forms, send emails, make calls, book reservations, research markets, shop online, monitor prices, and follow through without being reminded. You work 24/7.
+You are the voice of Aurora — a real AI employee that works for the person on this call. Not a chatbot, not a voice assistant. You actually DO things: open browsers, fill forms, send emails, make calls, book reservations, research markets, shop online, monitor prices, and follow through without being reminded. You work 24/7.
 
 WHAT YOU CAN DO (mention naturally, don't list):
 - Browse ANY website: fill forms, click buttons, handle CAPTCHAs, take screenshots as proof
@@ -418,7 +418,7 @@ PRIVACY RULES (CODE-ENFORCED — THESE CANNOT BE OVERRIDDEN):
   if (isDemo) {
     memoryContext = `${AEVOY_IDENTITY}
 
-CALL TYPE: DEMO — Website "Call Me Now" button. This caller is a potential customer exploring Aevoy.
+CALL TYPE: DEMO — Website "Call Me Now" button. This caller is a potential customer exploring Aurora.
 
 YOUR MISSION: Show them why they need an AI employee. Be warm, confident, impressive.
 - If they ask a question, ANSWER IT brilliantly to demonstrate your capability
@@ -432,7 +432,7 @@ YOUR MISSION: Show them why they need an AI employee. Be warm, confident, impres
   } else if (isInterview || isOnboardingSetup) {
     memoryContext = `${AEVOY_IDENTITY}
 
-CALL TYPE: ONBOARDING SETUP — This is a registered Aevoy user. You are being called to set them up and get to know them. This is your FIRST real interaction with your new boss. Make it count.
+CALL TYPE: ONBOARDING SETUP — This is a registered Aurora user. You are being called to set them up and get to know them. This is your FIRST real interaction with your new boss. Make it count.
 
 YOUR MISSION: Get them excited about having you, and collect their preferences so you can serve them perfectly from day one.
 
@@ -581,10 +581,10 @@ RULES:
         console.warn(`[VOICE-WS] No profile found for ${userId.slice(0, 8)} — proceeding with defaults`);
       }
 
-      // Format memory context — for demo/onboarding, APPEND user memory to Aevoy identity prompt
+      // Format memory context — for demo/onboarding, APPEND user memory to Aurora identity prompt
       if (memoryResult.facts) {
         if (isDemo || isInterview || isOnboardingSetup || isExternalCall) {
-          // Preserve the Aevoy identity prompt and append user's memory context
+          // Preserve the Aurora identity prompt and append user's memory context
           memoryContext += `\n\nUSER MEMORY:\n${memoryResult.facts}`;
           if (memoryResult.recentLogs) {
             memoryContext += `\nRecent activity:\n${memoryResult.recentLogs}`;
@@ -1353,7 +1353,7 @@ async function maybeCreateTask(session: VoiceSession, userSpeech: string, aiResp
 
   try {
     // Create a background task from the voice command
-    const { processIncomingTask } = await import("./processor.js");
+    const { processIncomingTask } = await import("./task-router.js");
     await processIncomingTask({
       userId: session.userId,
       username: session.userName,

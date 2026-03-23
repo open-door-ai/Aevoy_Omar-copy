@@ -93,7 +93,7 @@ const capabilities = [
 const faqs = [
   {
     q: "Is this a chatbot?",
-    a: "No. Chatbots answer questions. Aevoy does things. It opens a real browser, navigates real websites, fills real forms, and makes real phone calls. You get results, not responses.",
+    a: "No. Chatbots answer questions. Aurora does things. It opens a real browser, navigates real websites, fills real forms, and makes real phone calls. You get results, not responses.",
   },
   {
     q: "How does it access my accounts?",
@@ -132,7 +132,7 @@ export default function HowItWorksPage() {
             <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center">
               <span className="text-white font-semibold text-sm">H</span>
             </div>
-            <span className="font-semibold text-lg tracking-tight">Aevoy</span>
+            <span className="font-semibold text-lg tracking-tight">Aurora</span>
           </Link>
           <div className="flex items-center gap-4">
             <Link
@@ -155,7 +155,7 @@ export default function HowItWorksPage() {
       <section className="py-24 md:py-32">
         <div className="max-w-4xl mx-auto px-6 text-center">
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
-            How Aevoy Works
+            How Aurora Works
           </h1>
           <p className="text-xl md:text-2xl text-stone-500 max-w-2xl mx-auto">
             Your AI employee that opens a browser, navigates the web, and
@@ -474,7 +474,7 @@ export default function HowItWorksPage() {
       <footer className="py-12 bg-stone-950 text-stone-500">
         <div className="max-w-6xl mx-auto px-6">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4 text-sm">
-            <p>&copy; 2026 Aevoy. All rights reserved.</p>
+            <p>&copy; 2026 Aurora. All rights reserved.</p>
             <div className="flex gap-6">
               <Link href="/" className="hover:text-white transition-colors">
                 Home

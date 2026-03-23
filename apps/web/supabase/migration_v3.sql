@@ -1,4 +1,4 @@
--- Aevoy Database Migration V3
+-- Aurora Database Migration V3
 -- Run this in Supabase SQL Editor AFTER migration_v2.sql
 -- Adds: action_history, transactions, prepaid_cards, profile columns, memory embedding, indexes
 

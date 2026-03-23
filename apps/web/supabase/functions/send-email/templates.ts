@@ -41,7 +41,7 @@ function emailHeader(): string {
 <tr>
   <td style="background: linear-gradient(135deg, #8e5ef2 0%, #8f63f5 50%, #7f5ef0 100%); padding: 32px 40px; text-align: center;">
     <h1 style="color: #ffffff; font-size: 32px; font-weight: 700; margin: 0 0 4px 0; letter-spacing: -0.02em; text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);">
-      Aevoy
+      Aurora
     </h1>
     <div style="color: rgba(255, 255, 255, 0.9); font-size: 14px; font-weight: 400; margin: 0;">
       Your AI Employee
@@ -59,7 +59,7 @@ function emailFooter(): string {
       <tr>
         <td style="background-color: #fafaf9; padding: 32px 40px; text-align: center;">
           <p style="font-size: 14px; color: #57534e; margin: 0 0 8px 0;">
-            Sent by your AI assistant at <a href="https://aevoy.com" style="color: #8e5ef2; text-decoration: none;">Aevoy</a>
+            Sent by your AI assistant at <a href="https://aevoy.com" style="color: #8e5ef2; text-decoration: none;">Aurora</a>
           </p>
           <p style="font-size: 14px; color: #78716c; margin: 0 0 16px 0;">
             <a href="https://aevoy.com/dashboard" style="color: #8e5ef2; text-decoration: none;">Dashboard</a>
@@ -69,7 +69,7 @@ function emailFooter(): string {
             <a href="https://aevoy.com/help" style="color: #8e5ef2; text-decoration: none;">Help</a>
           </p>
           <p style="font-size: 12px; color: #a8a29e; margin: 0;">
-            © 2026 Aevoy. All rights reserved.
+            © 2026 Aurora. All rights reserved.
           </p>
         </td>
       </tr>
@@ -85,11 +85,11 @@ ${emailHeader()}
 <tr>
   <td style="padding: 40px;">
     <h2 style="font-size: 24px; font-weight: 700; color: #1c1917; margin: 0 0 16px 0; line-height: 1.3;">
-      Welcome to Aevoy!
+      Welcome to Aurora!
     </h2>
 
     <p style="font-size: 16px; color: #44403c; margin: 0 0 16px 0; line-height: 1.6;">
-      Thanks for signing up for Aevoy, your AI employee that never fails. We're excited to have you on board.
+      Thanks for signing up for Aurora, your AI employee that never fails. We're excited to have you on board.
     </p>
 
     <p style="font-size: 16px; color: #44403c; margin: 0 0 16px 0; line-height: 1.6;">
@@ -111,7 +111,7 @@ ${emailHeader()}
     </p>
 
     <p style="font-size: 14px; color: #78716c; margin: 16px 0 0 0; line-height: 1.5;">
-      If you didn't create an account with Aevoy, you can safely ignore this email.
+      If you didn't create an account with Aurora, you can safely ignore this email.
     </p>
 
     <p style="font-size: 14px; color: #78716c; margin: 16px 0 0 0; line-height: 1.5;">
@@ -123,7 +123,7 @@ ${emailHeader()}
 ${emailFooter()}
   `;
 
-  return emailLayout(content, 'Confirm your Aevoy account');
+  return emailLayout(content, 'Confirm your Aurora account');
 }
 
 function resetPasswordTemplate(data: TemplateData): string {
@@ -136,7 +136,7 @@ ${emailHeader()}
     </h2>
 
     <p style="font-size: 16px; color: #44403c; margin: 0 0 16px 0; line-height: 1.6;">
-      We received a request to reset the password for your Aevoy account (${data.userEmail}).
+      We received a request to reset the password for your Aurora account (${data.userEmail}).
     </p>
 
     <p style="font-size: 16px; color: #44403c; margin: 0 0 16px 0; line-height: 1.6;">
@@ -166,7 +166,7 @@ ${emailHeader()}
 ${emailFooter()}
   `;
 
-  return emailLayout(content, 'Reset your Aevoy password');
+  return emailLayout(content, 'Reset your Aurora password');
 }
 
 function magicLinkTemplate(data: TemplateData): string {
@@ -175,11 +175,11 @@ ${emailHeader()}
 <tr>
   <td style="padding: 40px;">
     <h2 style="font-size: 24px; font-weight: 700; color: #1c1917; margin: 0 0 16px 0; line-height: 1.3;">
-      Sign In to Aevoy
+      Sign In to Aurora
     </h2>
 
     <p style="font-size: 16px; color: #44403c; margin: 0 0 16px 0; line-height: 1.6;">
-      Click the button below to securely sign in to your Aevoy account:
+      Click the button below to securely sign in to your Aurora account:
     </p>
 
     <table cellpadding="0" cellspacing="0" border="0" width="100%">
@@ -209,7 +209,7 @@ ${emailHeader()}
 ${emailFooter()}
   `;
 
-  return emailLayout(content, 'Your Aevoy sign-in link');
+  return emailLayout(content, 'Your Aurora sign-in link');
 }
 
 export function renderTemplate(
@@ -221,17 +221,17 @@ export function renderTemplate(
 
   switch (type) {
     case 'signup':
-      subject = 'Confirm your Aevoy account';
+      subject = 'Confirm your Aurora account';
       html = confirmEmailTemplate(data);
       break;
 
     case 'recovery':
-      subject = 'Reset your Aevoy password';
+      subject = 'Reset your Aurora password';
       html = resetPasswordTemplate(data);
       break;
 
     case 'magic_link':
-      subject = 'Your Aevoy sign-in link';
+      subject = 'Your Aurora sign-in link';
       html = magicLinkTemplate(data);
       break;
 

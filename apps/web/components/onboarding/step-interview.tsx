@@ -358,7 +358,7 @@ export default function StepInterview({ onNext, onBack }: StepInterviewProps) {
       {/* Use case pills */}
       <FadeIn delay={0.15} className="w-full">
         <div className="w-full space-y-4 mb-8">
-          <Label className="text-gray-600">What will you use Aevoy for?</Label>
+          <Label className="text-gray-600">What will you use Aurora for?</Label>
           <div className="flex flex-wrap gap-3">
             {USE_CASES.map((useCase) => (
               <motion.button

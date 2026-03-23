@@ -58,7 +58,7 @@ export default function DeveloperPortal() {
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
             <div className="text-center">
               <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-4"><Code2 className="h-8 w-8 text-primary" /></div>
-              <h1 className="text-3xl font-bold mb-2">Become an Aevoy Developer</h1>
+              <h1 className="text-3xl font-bold mb-2">Become an Aurora Developer</h1>
               <p className="text-muted-foreground">Build widgets and integrations. Earn 70% of every sale.</p>
             </div>
 
@@ -68,7 +68,7 @@ export default function DeveloperPortal() {
                 { icon: DollarSign, title: "70% Revenue Share", desc: "Keep the majority of your earnings" },
                 { icon: Shield, title: "AI Security Review", desc: "Your code is reviewed by Opus 4.6" },
                 { icon: Zap, title: "SDK & Docs", desc: "Build with our widget SDK" },
-                { icon: Globe, title: "Global Distribution", desc: "Reach all Aevoy users instantly" },
+                { icon: Globe, title: "Global Distribution", desc: "Reach all Aurora users instantly" },
               ].map(b => (
                 <div key={b.title} className="border border-border rounded-xl p-4 bg-card">
                   <b.icon className="h-5 w-5 text-primary mb-2" />
