@@ -131,9 +131,9 @@ export default function AuroraOnboarding() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[70vh] gap-6">
         <div className="relative">
-          <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-white/40 animate-spin" />
+          <div className="w-10 h-10 rounded-full border-2 border-border border-t-muted-foreground animate-spin" />
         </div>
-        <p className="text-sm text-white/30 animate-pulse">Setting up Aurora...</p>
+        <p className="text-sm text-muted-foreground animate-pulse">Setting up Aurora...</p>
       </div>
     );
   }
@@ -145,7 +145,7 @@ export default function AuroraOnboarding() {
         <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center">
           <span className="text-emerald-400 text-lg">&#10003;</span>
         </div>
-        <p className="text-sm text-white/40">All set. Redirecting...</p>
+        <p className="text-sm text-muted-foreground">All set. Redirecting...</p>
       </div>
     );
   }
@@ -157,10 +157,10 @@ export default function AuroraOnboarding() {
       <div className="flex-1 space-y-4 mb-8">
         {phase === "ready" && messages.length === 0 && (
           <div className="flex flex-col items-center justify-center pt-20 gap-4">
-            <div className="w-12 h-12 rounded-full bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
-              <span className="text-lg text-white/10">A</span>
+            <div className="w-12 h-12 rounded-full bg-muted border border-border flex items-center justify-center">
+              <span className="text-lg text-muted-foreground/40">A</span>
             </div>
-            <p className="text-sm text-white/40 text-center max-w-xs">
+            <p className="text-sm text-muted-foreground text-center max-w-xs">
               Tell Aurora about yourself. Name, what you do, how you like to be reached.
             </p>
           </div>
@@ -174,8 +174,8 @@ export default function AuroraOnboarding() {
             <div
               className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                 msg.role === "user"
-                  ? "bg-white text-[#0a0a0a] rounded-br-md"
-                  : "bg-white/[0.06] text-white/80 rounded-bl-md"
+                  ? "bg-primary text-primary-foreground rounded-br-md"
+                  : "bg-card text-card-foreground rounded-bl-md"
               }`}
             >
               {msg.text}
@@ -185,11 +185,11 @@ export default function AuroraOnboarding() {
 
         {sending && (
           <div className="flex justify-start">
-            <div className="px-4 py-2.5 rounded-2xl rounded-bl-md bg-white/[0.06]">
+            <div className="px-4 py-2.5 rounded-2xl rounded-bl-md bg-card">
               <div className="flex gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce" style={{ animationDelay: "0ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce" style={{ animationDelay: "150ms" }} />
-                <span className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce" style={{ animationDelay: "300ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: "0ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: "150ms" }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: "300ms" }} />
               </div>
             </div>
           </div>
@@ -199,7 +199,7 @@ export default function AuroraOnboarding() {
       </div>
 
       {/* Input */}
-      <div className="sticky bottom-0 pt-4 bg-gradient-to-t from-[#0a0a0a] via-[#0a0a0a] to-transparent">
+      <div className="sticky bottom-0 pt-4 bg-gradient-to-t from-background via-background to-transparent">
         <div className="relative flex items-center">
           <input
             ref={inputRef}
@@ -208,13 +208,13 @@ export default function AuroraOnboarding() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Tell Aurora about yourself..."
-            className="w-full h-11 px-4 pr-12 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder:text-white/20 outline-none focus:border-white/15 focus:bg-white/[0.06] focus:ring-1 focus:ring-white/[0.06] transition-all"
+            className="w-full h-11 px-4 pr-12 rounded-xl bg-card border border-border text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all"
             autoComplete="off"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending}
-            className="absolute right-1.5 p-2 rounded-lg text-white/30 hover:text-white/60 disabled:opacity-20 transition-all"
+            className="absolute right-1.5 p-2 rounded-lg text-muted-foreground hover:text-foreground/60 disabled:opacity-20 transition-all"
           >
             {sending ? (
               <Loader2 className="h-4 w-4 animate-spin" />

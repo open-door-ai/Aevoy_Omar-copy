@@ -123,8 +123,8 @@ export default function AuroraSettingsPage() {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-6 w-6 text-white/30 animate-spin" />
-          <p className="text-sm text-white/20">Loading preferences...</p>
+          <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading preferences...</p>
         </div>
       </div>
     );
@@ -135,7 +135,7 @@ export default function AuroraSettingsPage() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-white/30 mt-2">
+        <p className="text-sm text-muted-foreground mt-2">
           Control how Aurora communicates with you.
         </p>
       </div>
@@ -152,7 +152,7 @@ export default function AuroraSettingsPage() {
             type="time"
             value={settings.morning_checkin_time}
             onChange={(e) => updateSetting("morning_checkin_time", e.target.value)}
-            className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-sm text-white outline-none focus:border-white/20 transition-all [color-scheme:dark]"
+            className="px-3 py-2 rounded-lg bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all [color-scheme:dark]"
           />
         </SettingCard>
 
@@ -179,14 +179,14 @@ export default function AuroraSettingsPage() {
               type="time"
               value={settings.quiet_hours_start}
               onChange={(e) => updateSetting("quiet_hours_start", e.target.value)}
-              className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-sm text-white outline-none focus:border-white/20 transition-all w-[120px] [color-scheme:dark]"
+              className="px-3 py-2 rounded-lg bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all w-[120px] [color-scheme:dark]"
             />
-            <span className="text-white/20 text-sm">to</span>
+            <span className="text-muted-foreground text-sm">to</span>
             <input
               type="time"
               value={settings.quiet_hours_end}
               onChange={(e) => updateSetting("quiet_hours_end", e.target.value)}
-              className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-sm text-white outline-none focus:border-white/20 transition-all w-[120px] [color-scheme:dark]"
+              className="px-3 py-2 rounded-lg bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all w-[120px] [color-scheme:dark]"
             />
           </div>
         </SettingCard>
@@ -206,8 +206,8 @@ export default function AuroraSettingsPage() {
                   onClick={() => updateSetting("preferred_channel", ch.value)}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     isActive
-                      ? "bg-white/10 text-white border border-white/20"
-                      : "bg-white/[0.03] text-white/40 border border-white/[0.06] hover:bg-white/[0.06] hover:text-white/60"
+                      ? "bg-primary text-primary-foreground border border-primary"
+                      : "bg-muted text-muted-foreground border border-border hover:bg-muted/80 hover:text-foreground/60"
                   }`}
                 >
                   <ch.icon className="h-3 w-3" />
@@ -237,7 +237,7 @@ export default function AuroraSettingsPage() {
           description="Maximum amount Aurora can spend on your behalf per day."
         >
           <div className="flex items-center gap-2">
-            <span className="text-sm text-white/30">$</span>
+            <span className="text-sm text-muted-foreground">$</span>
             <input
               type="number"
               min="0.50"
@@ -245,21 +245,21 @@ export default function AuroraSettingsPage() {
               step="0.50"
               value={settings.daily_spend_cap}
               onChange={(e) => updateSetting("daily_spend_cap", parseFloat(e.target.value) || 0)}
-              className="w-24 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-sm text-white outline-none focus:border-white/20 transition-all"
+              className="w-24 px-3 py-2 rounded-lg bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all"
             />
-            <span className="text-xs text-white/20">/ day</span>
+            <span className="text-xs text-muted-foreground">/ day</span>
           </div>
         </SettingCard>
       </div>
 
       {/* Footer hint */}
-      <p className="text-xs text-white/15 text-center">
+      <p className="text-xs text-muted-foreground/70 text-center">
         You can also change these by messaging Aurora directly.
       </p>
 
       {/* Save Bar */}
       <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-full max-w-xl px-4">
-        <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-[#141414] border border-white/[0.08] backdrop-blur-xl shadow-2xl">
+        <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-card border border-border backdrop-blur-xl shadow-2xl">
           <div className="flex items-center gap-2">
             {saved && (
               <>
@@ -274,7 +274,7 @@ export default function AuroraSettingsPage() {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-white text-black text-sm font-medium hover:bg-white/90 disabled:opacity-40 transition-all"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-40 transition-all"
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -302,15 +302,15 @@ function SettingCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="px-5 py-5 rounded-xl bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.08] transition-all">
+    <div className="px-5 py-5 rounded-xl bg-card border border-border hover:border-border/80 transition-all">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 w-9 h-9 rounded-lg bg-white/[0.04] flex items-center justify-center shrink-0">
-            <Icon className="h-4 w-4 text-white/30" />
+          <div className="mt-0.5 w-9 h-9 rounded-lg bg-muted flex items-center justify-center shrink-0">
+            <Icon className="h-4 w-4 text-muted-foreground" />
           </div>
           <div>
-            <h3 className="text-[15px] font-medium text-white/90">{title}</h3>
-            <p className="text-[13px] text-white/30 mt-1 leading-relaxed max-w-md">
+            <h3 className="text-[15px] font-medium text-foreground">{title}</h3>
+            <p className="text-[13px] text-muted-foreground mt-1 leading-relaxed max-w-md">
               {description}
             </p>
           </div>

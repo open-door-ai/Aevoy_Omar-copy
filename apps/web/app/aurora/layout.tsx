@@ -52,9 +52,9 @@ export default function AuroraLayout({ children }: { children: React.ReactNode }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-6 w-6 text-white/30 animate-spin" />
+          <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
         </div>
       </div>
     );
@@ -68,9 +68,9 @@ export default function AuroraLayout({ children }: { children: React.ReactNode }
   const isOnboarding = pathname === "/aurora/onboarding";
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white">
+    <div className="min-h-screen bg-background text-foreground">
       {/* Top Navigation */}
-      <header className="sticky top-0 z-40 border-b border-white/[0.06] bg-[#0a0a0a]/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-xl">
         <div className="max-w-3xl mx-auto px-4 sm:px-6">
           <div className="flex items-center justify-between h-14">
             {/* Left: Brand + Nav */}
@@ -88,8 +88,8 @@ export default function AuroraLayout({ children }: { children: React.ReactNode }
                         href={item.href}
                         className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
                           isActive
-                            ? "bg-white/10 text-white"
-                            : "text-white/40 hover:text-white/70 hover:bg-white/[0.04]"
+                            ? "bg-muted text-foreground"
+                            : "text-muted-foreground hover:text-foreground/70 hover:bg-muted/50"
                         }`}
                       >
                         {item.label}
@@ -103,13 +103,13 @@ export default function AuroraLayout({ children }: { children: React.ReactNode }
             {/* Right: User controls */}
             <div className="flex items-center gap-3">
               {username && (
-                <span className="text-xs text-white/30 hidden sm:inline">
+                <span className="text-xs text-muted-foreground hidden sm:inline">
                   {username}
                 </span>
               )}
               <button
                 onClick={handleLogout}
-                className="p-2 rounded-lg text-white/30 hover:text-white/60 hover:bg-white/[0.04] transition-all"
+                className="p-2 rounded-lg text-muted-foreground hover:text-foreground/60 hover:bg-muted/50 transition-all"
                 aria-label="Sign out"
               >
                 <LogOut className="h-4 w-4" />

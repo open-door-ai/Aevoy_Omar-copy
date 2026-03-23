@@ -312,18 +312,18 @@ export default function AuroraFeed() {
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full gap-4">
-            <div className="w-8 h-8 rounded-full border-2 border-white/10 border-t-white/40 animate-spin" />
-            <p className="text-sm text-white/20">Loading...</p>
+            <div className="w-8 h-8 rounded-full border-2 border-border border-t-muted-foreground animate-spin" />
+            <p className="text-sm text-muted-foreground">Loading...</p>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3">
-            <div className="w-12 h-12 rounded-full bg-white/[0.03] border border-white/[0.06] flex items-center justify-center">
-              <span className="text-lg text-white/10">A</span>
+            <div className="w-12 h-12 rounded-full bg-muted border border-border flex items-center justify-center">
+              <span className="text-lg text-muted-foreground/40">A</span>
             </div>
-            <p className="text-sm text-white/30 text-center max-w-xs">
+            <p className="text-sm text-muted-foreground text-center max-w-xs">
               This is the start of your conversation with Aurora.
             </p>
-            <p className="text-xs text-white/15">
+            <p className="text-xs text-muted-foreground/70">
               Type something below to begin.
             </p>
           </div>
@@ -338,22 +338,22 @@ export default function AuroraFeed() {
                   <div
                     className={`px-4 py-2.5 text-sm leading-relaxed ${
                       msg.role === "user"
-                        ? "bg-white text-[#0a0a0a] rounded-2xl rounded-br-md"
-                        : "bg-white/[0.06] text-white/80 rounded-2xl rounded-bl-md"
+                        ? "bg-primary text-primary-foreground rounded-2xl rounded-br-md"
+                        : "bg-card text-card-foreground rounded-2xl rounded-bl-md"
                     }`}
                   >
                     {msg.status === "processing" && !msg.text ? (
                       <div className="flex gap-1.5 py-0.5">
                         <span
-                          className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"
+                          className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
                           style={{ animationDelay: "0ms" }}
                         />
                         <span
-                          className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"
+                          className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
                           style={{ animationDelay: "150ms" }}
                         />
                         <span
-                          className="w-1.5 h-1.5 rounded-full bg-white/30 animate-bounce"
+                          className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce"
                           style={{ animationDelay: "300ms" }}
                         />
                       </div>
@@ -362,7 +362,7 @@ export default function AuroraFeed() {
                     )}
                   </div>
                   <span
-                    className={`text-[10px] text-white/15 px-1 ${msg.role === "user" ? "text-right" : "text-left"}`}
+                    className={`text-[10px] text-muted-foreground/70 px-1 ${msg.role === "user" ? "text-right" : "text-left"}`}
                   >
                     {formatTime(msg.created_at)}
                   </span>
@@ -375,7 +375,7 @@ export default function AuroraFeed() {
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-white/[0.06] bg-[#0a0a0a] px-4 sm:px-6 py-4">
+      <div className="border-t border-border bg-background px-4 sm:px-6 py-4">
         <div className="max-w-3xl mx-auto">
           <div className="relative flex items-center">
             <input
@@ -385,13 +385,13 @@ export default function AuroraFeed() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Message Aurora..."
-              className="w-full h-11 px-4 pr-12 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder:text-white/20 outline-none focus:border-white/15 focus:bg-white/[0.06] focus:ring-1 focus:ring-white/[0.06] transition-all"
+              className="w-full h-11 px-4 pr-12 rounded-xl bg-card border border-border text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/50 transition-all"
               autoComplete="off"
             />
             <button
               onClick={handleSend}
               disabled={!input.trim() || sending}
-              className="absolute right-1.5 p-2 rounded-lg text-white/30 hover:text-white/60 hover:bg-white/[0.06] disabled:opacity-20 disabled:hover:bg-transparent transition-all"
+              className="absolute right-1.5 p-2 rounded-lg text-muted-foreground hover:text-foreground/60 hover:bg-muted disabled:opacity-20 disabled:hover:bg-transparent transition-all"
             >
               {sending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
