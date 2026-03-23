@@ -140,6 +140,13 @@ function cleanResponse(text: string): string {
   cleaned = cleaned.replace(/\*\*Also did for you:\*\*[^\n]*/g, "");
   cleaned = cleaned.replace(/null|undefined|NaN|\[object Object\]/gi, "");
 
+  // Strip markdown formatting
+  cleaned = cleaned.replace(/\*\*(.+?)\*\*/g, '$1'); // bold
+  cleaned = cleaned.replace(/__(.+?)__/g, '$1'); // bold alt
+  cleaned = cleaned.replace(/\*(.+?)\*/g, '$1'); // italic
+  cleaned = cleaned.replace(/#+ /g, ''); // headers
+  cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // links — keep text, strip URL
+
   // Strip URLs unless they're user-facing
   cleaned = cleaned.replace(/https?:\/\/[^\s]+/gi, (match) => {
     if (isUserFacingUrl(match)) return match;
@@ -156,6 +163,20 @@ function cleanResponse(text: string): string {
   // If remaining text is under 10 chars, use fallback
   if (cleaned.length < 10) {
     return "Aurora completed a task.";
+  }
+
+  // Detect and transform failure/error responses
+  const failurePatterns = [
+    /couldn't complete/i,
+    /couldn't solve/i,
+    /hit a verification wall/i,
+    /took too long/i,
+    /timed out/i,
+    /rate.?limit/i,
+  ];
+  const isFailure = failurePatterns.some((p) => p.test(cleaned));
+  if (isFailure) {
+    return `[!] ${cleaned}`;
   }
 
   return cleaned;

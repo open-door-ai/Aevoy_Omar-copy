@@ -164,6 +164,18 @@ interface OrSettings {
 }
 const orSettingsCache = new Map<string, OrSettings>();
 
+// Clean up expired orSettingsCache entries every 5 minutes to prevent unbounded growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of orSettingsCache.entries()) {
+    if (val.expiresAt < now) orSettingsCache.delete(key);
+  }
+  // Also prune expired rateLimitBackoff entries
+  for (const [key, until] of rateLimitBackoff.entries()) {
+    if (until < now) rateLimitBackoff.delete(key);
+  }
+}, 5 * 60_000);
+
 function decryptApiKey(ciphertext: string): string {
   const keyHex = process.env.ENCRYPTION_KEY || "";
   const key = Buffer.from(keyHex.slice(0, 64), "hex");

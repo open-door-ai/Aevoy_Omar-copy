@@ -77,6 +77,7 @@ export default function AuroraSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const supabase = createClient();
 
@@ -130,8 +131,34 @@ export default function AuroraSettingsPage() {
     loadSettings();
   }, [loadSettings]);
 
+  /* ─── Validate settings ─── */
+  const validate = (): boolean => {
+    const errors: Record<string, string> = {};
+    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+    if (!timeRegex.test(settings.morning_checkin_time)) {
+      errors.morning_checkin_time = "Enter a valid time (HH:MM).";
+    }
+    if (!timeRegex.test(settings.quiet_hours_start)) {
+      errors.quiet_hours_start = "Enter a valid time (HH:MM).";
+    }
+    if (!timeRegex.test(settings.quiet_hours_end)) {
+      errors.quiet_hours_end = "Enter a valid time (HH:MM).";
+    }
+
+    const cap = settings.daily_spend_cap;
+    if (isNaN(cap) || cap < 0.5 || cap > 50) {
+      errors.daily_spend_cap = "Must be between $0.50 and $50.";
+    }
+
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   /* ─── Save settings ─── */
   const handleSave = async () => {
+    if (!validate()) return;
+
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -171,6 +198,14 @@ export default function AuroraSettingsPage() {
   ) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
     setSaved(false);
+    // Clear field error when user corrects the value
+    if (fieldErrors[key]) {
+      setFieldErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
   };
 
   const currentHumor = HUMOR_OPTIONS.find(
@@ -210,14 +245,19 @@ export default function AuroraSettingsPage() {
           title="Morning check-in"
           description="When should Aurora call to plan your day?"
         >
-          <input
-            type="time"
-            value={settings.morning_checkin_time}
-            onChange={(e) =>
-              updateSetting("morning_checkin_time", e.target.value)
-            }
-            className="px-3 py-2 rounded-lg bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all"
-          />
+          <div className="flex flex-col items-end gap-1">
+            <input
+              type="time"
+              value={settings.morning_checkin_time}
+              onChange={(e) =>
+                updateSetting("morning_checkin_time", e.target.value)
+              }
+              className={`px-3 py-2 rounded-lg bg-[--aurora-card] border text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all ${fieldErrors.morning_checkin_time ? "border-red-400" : "border-[--aurora-card-border]"}`}
+            />
+            {fieldErrors.morning_checkin_time && (
+              <span className="text-[11px] text-red-400">{fieldErrors.morning_checkin_time}</span>
+            )}
+          </div>
         </SettingCard>
 
         {/* 2. Autonomous Mode */}
@@ -247,26 +287,33 @@ export default function AuroraSettingsPage() {
           title="Quiet hours"
           description="Aurora won't send proactive messages during these hours."
         >
-          <div className="flex items-center gap-2">
-            <input
-              type="time"
-              value={settings.quiet_hours_start}
-              onChange={(e) =>
-                updateSetting("quiet_hours_start", e.target.value)
-              }
-              className="px-3 py-2 rounded-lg bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all w-[120px]"
-            />
-            <span className="text-[--aurora-text-secondary] text-sm">
-              to
-            </span>
-            <input
-              type="time"
-              value={settings.quiet_hours_end}
-              onChange={(e) =>
-                updateSetting("quiet_hours_end", e.target.value)
-              }
-              className="px-3 py-2 rounded-lg bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all w-[120px]"
-            />
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              <input
+                type="time"
+                value={settings.quiet_hours_start}
+                onChange={(e) =>
+                  updateSetting("quiet_hours_start", e.target.value)
+                }
+                className={`px-3 py-2 rounded-lg bg-[--aurora-card] border text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all w-[120px] ${fieldErrors.quiet_hours_start ? "border-red-400" : "border-[--aurora-card-border]"}`}
+              />
+              <span className="text-[--aurora-text-secondary] text-sm">
+                to
+              </span>
+              <input
+                type="time"
+                value={settings.quiet_hours_end}
+                onChange={(e) =>
+                  updateSetting("quiet_hours_end", e.target.value)
+                }
+                className={`px-3 py-2 rounded-lg bg-[--aurora-card] border text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all w-[120px] ${fieldErrors.quiet_hours_end ? "border-red-400" : "border-[--aurora-card-border]"}`}
+              />
+            </div>
+            {(fieldErrors.quiet_hours_start || fieldErrors.quiet_hours_end) && (
+              <span className="text-[11px] text-red-400">
+                {fieldErrors.quiet_hours_start || fieldErrors.quiet_hours_end}
+              </span>
+            )}
           </div>
         </SettingCard>
 
@@ -325,26 +372,41 @@ export default function AuroraSettingsPage() {
           title="Daily spend cap"
           description="Maximum amount Aurora can spend on your behalf per day."
         >
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[--aurora-text-secondary] font-medium">
-              $
-            </span>
-            <input
-              type="number"
-              min="0.50"
-              max="50"
-              step="0.50"
-              value={settings.daily_spend_cap}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value) || 0;
-                const clamped = Math.min(50, Math.max(0.5, val));
-                updateSetting("daily_spend_cap", clamped);
-              }}
-              className="w-24 px-3 py-2 rounded-lg bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all"
-            />
-            <span className="text-xs text-[--aurora-text-secondary]">
-              / day
-            </span>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-[--aurora-text-secondary] font-medium">
+                $
+              </span>
+              <input
+                type="number"
+                min="0.50"
+                max="50"
+                step="0.50"
+                value={settings.daily_spend_cap}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  if (isNaN(val)) {
+                    updateSetting("daily_spend_cap", 0 as number);
+                  } else {
+                    updateSetting("daily_spend_cap", val);
+                  }
+                }}
+                onBlur={() => {
+                  const val = settings.daily_spend_cap;
+                  if (!isNaN(val) && val >= 0.5 && val <= 50) {
+                    const clamped = Math.min(50, Math.max(0.5, val));
+                    updateSetting("daily_spend_cap", clamped);
+                  }
+                }}
+                className={`w-24 px-3 py-2 rounded-lg bg-[--aurora-card] border text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all ${fieldErrors.daily_spend_cap ? "border-red-400" : "border-[--aurora-card-border]"}`}
+              />
+              <span className="text-xs text-[--aurora-text-secondary]">
+                / day
+              </span>
+            </div>
+            {fieldErrors.daily_spend_cap && (
+              <span className="text-[11px] text-red-400">{fieldErrors.daily_spend_cap}</span>
+            )}
           </div>
         </SettingCard>
 
