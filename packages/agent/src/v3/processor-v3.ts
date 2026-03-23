@@ -903,10 +903,13 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         try { await budget.trackCost('v3', tc.name, result.cost, `v3:tool:${tc.name}`); } catch { /* non-critical */ }
       }
 
-      // Add tool result to conversation
-      const resultContent = result.success
+      // Add tool result to conversation — wrapped in <untrusted-data> to prevent
+      // prompt injection via tool outputs (S027/S028). The LLM treats content inside
+      // these tags as data, not instructions.
+      const rawResultContent = result.success
         ? String(result.data || 'Success')
         : `Error: ${result.error || 'Unknown error'}`;
+      const resultContent = `<untrusted-data>${rawResultContent}</untrusted-data>`;
       messages.push({
         role: 'tool',
         content: resultContent,
@@ -1160,16 +1163,34 @@ function compressMessagesV2(
 /**
  * Strip any leaked credential references from response text.
  * Prevents [CRED_EMAIL], [CRED_PASS], etc. from reaching the user.
- * Also strips common patterns of exposed secrets.
+ * Also strips common patterns of exposed secrets, prompt leaks, and system internals.
  */
 function stripCredentialLeaks(text: string): string {
   let clean = text;
+
   // Strip credential reference tokens
   clean = clean.replace(/\[CRED_\w+\]/gi, '[redacted]');
+
   // Strip anything that looks like an exposed API key or secret
   clean = clean.replace(/\b(sk-[a-zA-Z0-9]{20,})\b/g, '[redacted-key]');
+  clean = clean.replace(/\b(gsk_[a-zA-Z0-9]{20,})\b/g, '[redacted-key]');
+  clean = clean.replace(/\b(AIza[a-zA-Z0-9_-]{20,})\b/g, '[redacted-key]');
+  clean = clean.replace(/\b(whsec_[a-zA-Z0-9]{20,})\b/g, '[redacted-key]');
+  clean = clean.replace(/\b(re_[a-zA-Z0-9]{20,})\b/g, '[redacted-key]');
   clean = clean.replace(/\b(Bearer\s+[a-zA-Z0-9._-]{20,})\b/g, 'Bearer [redacted]');
+
+  // Strip system prompt leaks — content between <system> tags
+  clean = clean.replace(/<system>[\s\S]*?<\/system>/gi, '');
+  // Also strip partial system tag leaks
+  clean = clean.replace(/<system>[\s\S]*/gi, '');
+
+  // Strip agent inbox email if it leaks into response
+  const agentInbox = process.env.AGENT_INBOX_EMAIL;
+  if (agentInbox) {
+    clean = clean.replace(new RegExp(agentInbox.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[aurora-email]');
+  }
+
   // Note: Don't strip password patterns from responses — user may have asked for credentials
-  // Only strip internal credential tokens and API keys above
+  // Only strip internal credential tokens, API keys, and system internals above
   return clean;
 }

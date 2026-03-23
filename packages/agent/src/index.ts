@@ -657,7 +657,7 @@ app.get("/health/detailed", async (req, res) => {
   });
 });
 
-// ---- Comprehensive Admin Health Check ----
+// ---- Comprehensive Admin Health Check (T009) ----
 app.get("/admin/health", async (req, res) => {
   // Require Bearer token auth using webhook secret
   const authHeader = req.headers.authorization;
@@ -665,38 +665,97 @@ app.get("/admin/health", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  const health: Record<string, unknown> = {
-    status: "ok",
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
-    version: "aurora-v0",
-    services: {
-      supabase: "unknown" as string,
-      twilio: "unknown" as string,
-      ai_models: "unknown" as string,
-    },
-    memory: process.memoryUsage(),
-    proactive_engine: process.env.PROACTIVE_ENGINE === "true" ? "enabled" : "disabled",
-    processor_version: process.env.PROCESSOR_VERSION || "v3",
+  const services: Record<string, unknown> = {
+    supabase: "unknown",
+    twilio: "unknown",
+    ai_models: "unknown",
+    ai_backoff: {} as Record<string, unknown>,
   };
 
-  // Check Supabase connectivity
+  // Check Supabase connectivity with a lightweight query (SELECT 1)
+  let supabaseLatencyMs = 0;
   try {
-    const { data, error } = await getSupabaseClient().from("profiles").select("id").limit(1);
-    (health.services as Record<string, string>).supabase = error ? "error: " + error.message : "connected";
+    const sbStart = Date.now();
+    const { error } = await getSupabaseClient().rpc('ping').maybeSingle();
+    supabaseLatencyMs = Date.now() - sbStart;
+    if (error) {
+      // Fallback: try a simple table query if RPC 'ping' doesn't exist
+      const sbStart2 = Date.now();
+      const { error: err2 } = await getSupabaseClient().from("profiles").select("id").limit(1);
+      supabaseLatencyMs = Date.now() - sbStart2;
+      services.supabase = err2 ? `error: ${err2.message}` : "connected";
+    } else {
+      services.supabase = "connected";
+    }
   } catch (e) {
-    (health.services as Record<string, string>).supabase = "unreachable";
+    services.supabase = "unreachable";
   }
 
   // Check Twilio config
-  (health.services as Record<string, string>).twilio = process.env.TWILIO_ACCOUNT_SID ? "configured" : "not_configured";
+  services.twilio = process.env.TWILIO_ACCOUNT_SID ? "configured" : "not_configured";
 
-  // Check AI model availability
+  // Check AI model availability + backoff status
   const aiProviders = ["GROQ_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY"];
   const configuredProviders = aiProviders.filter(k => !!process.env[k]).length;
-  (health.services as Record<string, string>).ai_models = configuredProviders > 0
+  services.ai_models = configuredProviders > 0
     ? `${configuredProviders} provider(s) configured`
     : "none_configured";
+
+  // Model-level backoff and performance stats
+  try {
+    const { getBackoffStatus, getSessionModelStats } = await import("./v3/model-router.js");
+    services.ai_backoff = getBackoffStatus();
+    services.ai_performance = getSessionModelStats();
+  } catch {
+    services.ai_backoff = "unavailable";
+  }
+
+  // Scheduler status: check last heartbeat timestamps
+  const schedulerStatus: Record<string, unknown> = {};
+  const now = Date.now();
+  for (const [name, ts] of Object.entries(lastSchedulerRuns)) {
+    const lastRun = ts as number;
+    schedulerStatus[name] = {
+      last_run: lastRun > 0 ? new Date(lastRun).toISOString() : "never",
+      age_seconds: lastRun > 0 ? Math.round((now - lastRun) / 1000) : null,
+      healthy: lastRun > 0 && (now - lastRun) < 5 * 60 * 1000, // stale if >5min
+    };
+  }
+
+  // Proactive engine status
+  const proactiveEnabled = process.env.PROACTIVE_ENGINE !== 'false';
+  const proactiveStatus: Record<string, unknown> = {
+    enabled: proactiveEnabled,
+    last_run: lastSchedulerRuns['proactive']
+      ? new Date(lastSchedulerRuns['proactive'] as number).toISOString()
+      : "never",
+  };
+
+  // Check for any backed-off providers (degraded service)
+  const backedOffProviders = Object.entries(services.ai_backoff as Record<string, { backedOff: boolean }> || {})
+    .filter(([_, v]) => v?.backedOff)
+    .map(([k]) => k);
+
+  // Determine overall status
+  let overallStatus = "ok";
+  if (services.supabase !== "connected") overallStatus = "degraded";
+  if (configuredProviders === 0) overallStatus = "degraded";
+  if (backedOffProviders.length >= configuredProviders && configuredProviders > 0) overallStatus = "degraded";
+
+  const health: Record<string, unknown> = {
+    status: overallStatus,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    version: "aurora-v0",
+    services,
+    supabase_latency_ms: supabaseLatencyMs,
+    scheduler: schedulerStatus,
+    proactive_engine: proactiveStatus,
+    active_tasks: activeTasks,
+    sms_idempotency_cache_size: processedSmsSids.size,
+    memory: process.memoryUsage(),
+    processor_version: process.env.PROCESSOR_VERSION || "v3",
+  };
 
   logger.info({ endpoint: "/admin/health" }, "Admin health check requested");
   res.json(health);
@@ -2323,12 +2382,45 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
   }
 });
 
+// ---- SMS Idempotency: prevent duplicate processing of the same Twilio message ----
+const processedSmsSids = new Map<string, number>(); // MessageSid -> timestamp
+const SMS_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Cleanup stale entries every 2 minutes
+setInterval(() => {
+  const cutoff = Date.now() - SMS_IDEMPOTENCY_TTL_MS;
+  for (const [sid, ts] of processedSmsSids) {
+    if (ts < cutoff) processedSmsSids.delete(sid);
+  }
+}, 2 * 60 * 1000);
+
+function isSmsDuplicate(messageSid: string): boolean {
+  if (!messageSid) return false;
+  if (processedSmsSids.has(messageSid)) {
+    logger.info(`[SMS] Duplicate MessageSid ${messageSid.slice(0, 12)} — skipping`);
+    return true;
+  }
+  processedSmsSids.set(messageSid, Date.now());
+  return false;
+}
+
+// ---- SMS STOP/Unsubscribe keyword handling (U004) ----
+const SMS_STOP_KEYWORDS = new Set(['stop', 'unsubscribe', 'cancel', 'opt out']);
+const SMS_START_KEYWORDS = new Set(['start', 'subscribe', 'opt in', 'resume']);
+
 // ---- Twilio SMS Webhook ----
 
 app.post("/webhook/sms/:userId", twilioLimiter, validateTwilioSignature, async (req, res) => {
   const from = req.body.From || "";
   const to = req.body.To || "";
   const body = req.body.Body || "";
+  const messageSid = req.body.MessageSid || "";
+
+  // Idempotency: skip duplicate message SIDs (T031)
+  if (isSmsDuplicate(messageSid)) {
+    res.type("text/xml");
+    return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  }
 
   logger.info(`[TWILIO] Incoming SMS received`);
 
@@ -2425,6 +2517,12 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
   const message = req.body.Body || "";
   const twilioNumber = req.body.To || "";
   const messageSid = req.body.MessageSid || "";
+
+  // Idempotency: skip duplicate message SIDs (T031)
+  if (isSmsDuplicate(messageSid)) {
+    res.type("text/xml");
+    return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  }
 
   logger.info(`[SMS] Incoming from ${maskPhone(senderNumber)}: "${message.slice(0, 50)}..."`);
 
@@ -2571,6 +2669,76 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
 
     // Track inbound SMS cost (Twilio charges us per inbound SMS)
     trackInboundSmsCost(userId);
+
+    // ── STOP/Unsubscribe handling (U004) ──
+    // Check for opt-out keywords BEFORE any task processing
+    const smsNormalized = message.trim().toLowerCase();
+    if (SMS_STOP_KEYWORDS.has(smsNormalized)) {
+      logger.info(`[SMS] User ${userId.slice(0, 8)} sent STOP keyword — disabling proactive`);
+      try {
+        await supabase.from('user_settings').upsert({
+          user_id: userId,
+          proactive_enabled: false,
+        }, { onConflict: 'user_id' });
+      } catch (err) {
+        logger.error('[SMS] Failed to update proactive setting:', err);
+      }
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Got it. Aurora will stop reaching out. Text START anytime to resume.</Message>
+</Response>`);
+    }
+
+    if (SMS_START_KEYWORDS.has(smsNormalized)) {
+      logger.info(`[SMS] User ${userId.slice(0, 8)} sent START keyword — enabling proactive`);
+      try {
+        await supabase.from('user_settings').upsert({
+          user_id: userId,
+          proactive_enabled: true,
+        }, { onConflict: 'user_id' });
+      } catch (err) {
+        logger.error('[SMS] Failed to update proactive setting:', err);
+      }
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Welcome back! Aurora will now proactively reach out when there's something useful to share.</Message>
+</Response>`);
+    }
+
+    // ── Commitment completion via SMS (U040) ──
+    // If message starts with "done" or "completed", mark the most recent pending commitment
+    const commitmentMatch = smsNormalized.match(/^(done|completed)\b/);
+    if (commitmentMatch) {
+      try {
+        const { data: pendingCommitment } = await supabase
+          .from('commitments')
+          .select('id, description')
+          .eq('user_id', userId)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (pendingCommitment) {
+          await supabase.from('commitments').update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+          }).eq('id', pendingCommitment.id);
+
+          logger.info(`[SMS] User ${userId.slice(0, 8)} completed commitment: ${pendingCommitment.description.slice(0, 50)}`);
+          res.type("text/xml");
+          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Marked as done: ${pendingCommitment.description.substring(0, 140)}</Message>
+</Response>`);
+        }
+        // No pending commitment found — fall through to normal processing
+      } catch {
+        // Non-critical — fall through to normal processing
+      }
+    }
 
     // Check if sender is the registered phone number or needs PIN
     const { isRegisteredPhone, hasPin: userHasPin, verifyUnifiedPin } = await import("./utils/pin-auth.js");
@@ -2985,6 +3153,12 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
   let smsBody = req.body.Body || "";
   const messageSid = req.body.MessageSid || "";
 
+  // Idempotency: skip duplicate message SIDs (T031)
+  if (isSmsDuplicate(messageSid)) {
+    res.type("text/xml");
+    return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  }
+
   logger.info(`[SMS-PREMIUM] Message to user ${userId.slice(0, 8)} from ${maskPhone(from)}: "${smsBody.slice(0, 50)}..."`);
 
   // Track inbound SMS cost for premium number (Twilio charges us per inbound SMS)
@@ -3097,6 +3271,72 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
         // Strip PIN from message
         smsBody = smsBody.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || smsBody;
         logger.info(`[SMS-PREMIUM] PIN verified for ${maskPhone(from)} -> user ${userId.slice(0, 8)}`);
+      }
+    }
+
+    // ── STOP/Unsubscribe handling for premium SMS (U004) ──
+    const premiumNormalized = smsBody.trim().toLowerCase();
+    if (SMS_STOP_KEYWORDS.has(premiumNormalized)) {
+      logger.info(`[SMS-PREMIUM] User ${userId.slice(0, 8)} sent STOP keyword — disabling proactive`);
+      try {
+        await supabase.from('user_settings').upsert({
+          user_id: userId,
+          proactive_enabled: false,
+        }, { onConflict: 'user_id' });
+      } catch (err) {
+        logger.error('[SMS-PREMIUM] Failed to update proactive setting:', err);
+      }
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Got it. Aurora will stop reaching out. Text START anytime to resume.</Message>
+</Response>`);
+    }
+
+    if (SMS_START_KEYWORDS.has(premiumNormalized)) {
+      logger.info(`[SMS-PREMIUM] User ${userId.slice(0, 8)} sent START keyword — enabling proactive`);
+      try {
+        await supabase.from('user_settings').upsert({
+          user_id: userId,
+          proactive_enabled: true,
+        }, { onConflict: 'user_id' });
+      } catch (err) {
+        logger.error('[SMS-PREMIUM] Failed to update proactive setting:', err);
+      }
+      res.type("text/xml");
+      return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Welcome back! Aurora will now proactively reach out when there's something useful to share.</Message>
+</Response>`);
+    }
+
+    // ── Commitment completion via SMS (U040) ──
+    if (/^(done|completed)\b/i.test(premiumNormalized)) {
+      try {
+        const { data: pendingCommitment } = await supabase
+          .from('commitments')
+          .select('id, description')
+          .eq('user_id', userId)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (pendingCommitment) {
+          await supabase.from('commitments').update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+          }).eq('id', pendingCommitment.id);
+
+          logger.info(`[SMS-PREMIUM] User ${userId.slice(0, 8)} completed commitment: ${pendingCommitment.description.slice(0, 50)}`);
+          res.type("text/xml");
+          return res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Message>Marked as done: ${pendingCommitment.description.substring(0, 140)}</Message>
+</Response>`);
+        }
+      } catch {
+        // No pending commitment found — fall through to normal processing
       }
     }
 

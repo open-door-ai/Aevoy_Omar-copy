@@ -91,6 +91,19 @@ export function getSessionModelStats(): Record<string, ModelPerformance> {
   return Object.fromEntries(sessionModelPerf);
 }
 
+/** Get current backoff status for all providers (for health checks) */
+export function getBackoffStatus(): Record<string, { backedOff: boolean; remainingMs: number }> {
+  const now = Date.now();
+  const status: Record<string, { backedOff: boolean; remainingMs: number }> = {};
+  for (const [key, until] of backoffUntil.entries()) {
+    status[key] = {
+      backedOff: now < until,
+      remainingMs: Math.max(0, until - now),
+    };
+  }
+  return status;
+}
+
 // ── Rate limit tracking ──
 
 const backoffUntil = new Map<string, number>();
