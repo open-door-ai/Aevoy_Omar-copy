@@ -18,6 +18,7 @@
 import { sendSms, callUser } from "./twilio.js";
 import { sendResponse } from "./email.js";
 import { getSupabaseClient } from "../utils/supabase.js";
+import { sendAuroraMessage } from "./aurora-messenger.js";
 import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
 
 // ---- Proactive SMS Rate Limit (1 SMS per user per hour max) ----
@@ -552,101 +553,17 @@ export class ProactiveEngine {
         return;
       }
 
-      // Look up user's preferred proactive channel
-      const { data: settings } = await getSupabaseClient()
-        .from("user_settings")
-        .select("proactive_channel")
-        .eq("user_id", user.userId)
-        .single();
+      // Route through Aurora Messenger (central delivery with cost controls + quiet hours)
+      const auroraPriority = priority === 'high' ? 'high' : priority === 'medium' ? 'medium' : 'low';
+      const emailSubject = "[Aurora] " + finding.trigger.replace(/_/g, " ");
 
-      const preferredChannel = settings?.proactive_channel || "sms";
-      const message = `[Aevoy] ${action}`;
-      const emailSubject = "[Aevoy] " + finding.trigger.replace(/_/g, " ");
-
-      // Helper: send via preferred channel with email fallback
-      const sendViaPreferred = async (fallbackToCall = false) => {
-        if (preferredChannel === "telegram" && user.telegramChatId) {
-          const { sendTelegramMessage } = await import("./telegram.js");
-          await sendTelegramMessage(user.telegramChatId, message);
-          return;
-        }
-        if (preferredChannel === "whatsapp" && user.whatsappPhone) {
-          const { sendWhatsAppMessage } = await import("./whatsapp.js");
-          await sendWhatsAppMessage(user.whatsappPhone, message);
-          return;
-        }
-        if ((preferredChannel === "sms" || preferredChannel === "voice") && user.phone) {
-          // RATE LIMIT: max 1 proactive SMS per user per hour (prevents runaway loops)
-          if (!(await canSendProactiveSms(user.userId))) {
-            console.log(`[PROACTIVE] Skipping SMS for ${user.username} — rate limited (1/hour). Finding: ${finding.trigger}`);
-            // Silently degrade to email for low-priority, skip for sms channel
-            await sendResponse({
-              to: user.email,
-              from: `${user.username}@aevoy.com`,
-              subject: emailSubject,
-              body: action,
-            });
-            return;
-          }
-          if (fallbackToCall && preferredChannel === "voice") {
-            await callUser({ userId: user.userId, to: user.phone, message: action });
-          }
-          await sendSms({ userId: user.userId, to: user.phone, body: message });
-          return;
-        }
-        // Default: email
-        await sendResponse({
-          to: user.email,
-          from: `${user.username}@aevoy.com`,
-          subject: emailSubject,
-          body: action,
-        });
-      };
-
-      switch (priority) {
-        case "high": {
-          // High priority: call (if under daily cap) + send via preferred channel
-          if (user.phone) {
-            const { data: todayCalls } = await getSupabaseClient()
-              .from('call_history')
-              .select('id')
-              .eq('user_id', user.userId)
-              .gte('created_at', new Date(new Date().setHours(0,0,0,0)).toISOString())
-              .limit(4);
-            if (todayCalls && todayCalls.length >= 3) {
-              console.log(`[PROACTIVE] Call cap reached for ${user.userId.slice(0,8)} (${todayCalls.length} today) — skipping call`);
-            } else {
-              await callUser({ userId: user.userId, to: user.phone, message: action });
-            }
-          }
-          await sendViaPreferred(false);
-          break;
-        }
-
-        case "medium": {
-          await sendViaPreferred(false);
-          break;
-        }
-
-        case "low": {
-          // Low: email only (never interrupt with calls/SMS for low-priority)
-          if (preferredChannel === "telegram" && user.telegramChatId) {
-            const { sendTelegramMessage } = await import("./telegram.js");
-            await sendTelegramMessage(user.telegramChatId, message);
-          } else if (preferredChannel === "whatsapp" && user.whatsappPhone) {
-            const { sendWhatsAppMessage } = await import("./whatsapp.js");
-            await sendWhatsAppMessage(user.whatsappPhone, message);
-          } else {
-            await sendResponse({
-              to: user.email,
-              from: `${user.username}@aevoy.com`,
-              subject: "[Aevoy Suggestion] " + finding.trigger.replace(/_/g, " "),
-              body: action,
-            });
-          }
-          break;
-        }
-      }
+      await sendAuroraMessage({
+        userId: user.userId,
+        content: action,
+        priority: auroraPriority,
+        source: 'proactive',
+        emailSubject,
+      });
 
       // Record the proactive action as a task
       await getSupabaseClient().from("tasks").insert({
