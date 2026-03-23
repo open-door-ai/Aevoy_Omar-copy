@@ -53,6 +53,9 @@ export function startScheduler(): void {
   const PROACTIVE_ENABLED = process.env.PROACTIVE_ENGINE !== 'false'; // Can be disabled via env var
   const PROACTIVE_INTERVAL_MS = parseInt(process.env.PROACTIVE_INTERVAL_MS || '900000', 10); // Default 15 min (was 2 hours)
   if (PROACTIVE_ENABLED) {
+    // Run immediately on start (like the scheduler does)
+    runProactiveChecks().catch((err: unknown) => logger.error({ err }, 'Proactive initial run failed'));
+
     proactiveInterval = setInterval(async () => {
       try {
         await runProactiveChecks();
@@ -469,6 +472,7 @@ async function runProactiveChecks(): Promise<void> {
     // Non-critical
   }
 
+  schedulerHeartbeat.record('proactive');
   await releaseDistributedLock("scheduler_proactive");
 }
 

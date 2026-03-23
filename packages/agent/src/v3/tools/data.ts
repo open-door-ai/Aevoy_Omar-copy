@@ -7,6 +7,7 @@
 
 import { registerTool } from '../tool-registry.js';
 import { updateMemoryWithFact, loadMemory } from '../../services/memory.js';
+import { getUserContext } from '../../services/context-engine.js';
 import type { ToolCallResult, TaskContext } from '../types.js';
 
 /** Weather lookup tool */
@@ -162,8 +163,23 @@ registerTool({
     const query = String(params.query);
     try {
       const memory = await loadMemory(ctx.userId, query, 'default');
-      const facts = memory.facts || 'No memories found.';
-      return { success: true, data: facts, cost: 0 };
+      const facts = memory.facts || '';
+
+      // Also query Aurora's context engine for richer user knowledge
+      let contextSummary = '';
+      try {
+        const contextEntries = await getUserContext(ctx.userId);
+        if (contextEntries && contextEntries.length > 0) {
+          contextSummary = contextEntries.map(e =>
+            `${e.context_type}: ${e.key} = ${JSON.stringify(e.value)} (confidence: ${e.confidence})`
+          ).join('\n');
+        }
+      } catch {
+        // Non-critical — context engine may not have data yet
+      }
+
+      const combined = [facts, contextSummary].filter(Boolean).join('\n\n--- Aurora Context ---\n');
+      return { success: true, data: combined || 'No memories or context found.', cost: 0 };
     } catch (err) {
       return { success: false, error: 'Failed to recall memory', cost: 0 };
     }

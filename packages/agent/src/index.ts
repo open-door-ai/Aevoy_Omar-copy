@@ -409,6 +409,7 @@ setInterval(() => {
 // ---- Scheduler health tracking: when each background job last ran successfully ----
 export const lastSchedulerRuns: Record<string, number> = {
   scheduler: 0,
+  proactive: 0,
   inbox_manager: 0,
   reconciliation: 0,
   watchdog: 0,

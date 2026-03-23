@@ -128,11 +128,17 @@ export function buildSystemPrompt(
   memoryContext: string,
   budgetContext: string,
   toolDescriptions: string,
-  timezone: string
+  timezone: string,
+  username?: string
 ): string {
   const parts: string[] = [];
 
   parts.push(personality);
+
+  // Clear identity statement to prevent Aurora confusing itself with the user
+  if (username) {
+    parts.push(`IDENTITY CLARIFICATION: You are Aurora, an AI assistant. The human you are talking to is ${username}. You serve ${username}. When they ask "what do you know about me" or "tell me about myself," they are asking what YOU (Aurora) know about THEM (${username}) — not asking you to describe yourself. Never confuse your identity with the user's identity.`);
+  }
 
   parts.push(`
 CURRENT TIME: ${new Date().toLocaleString('en-US', { timeZone: timezone })} (${timezone})

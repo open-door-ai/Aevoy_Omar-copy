@@ -357,6 +357,12 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     return { tier: 'instant', reasoning: 'greeting' };
   }
 
+  // Commitments / acknowledgment-type messages — user is telling Aurora something to remember,
+  // NOT asking for a web search. The context engine extracts commitments in the background.
+  if (/\b(i promised|i need to|i have to|i've got to|i gotta|don'?t let me forget|i told .+ i would|i committed to|i agreed to)\b/i.test(lower) && lower.length < 200) {
+    return { tier: 'instant', reasoning: 'commitment acknowledgment' };
+  }
+
   // Weather
   if (/\b(weather|temperature|forecast|rain|snow|sunny|cloudy)\b/i.test(lower) && lower.length < 100) {
     return { tier: 'single_tool', tool: 'weather', reasoning: 'weather query' };
@@ -468,7 +474,7 @@ async function handleInstant(task: TaskRequest, ctx: TaskContext): Promise<strin
   // Use a fast, free model for conversational responses
   const result = await callModel({
     messages: [
-      { role: 'system', content: `You are Aurora, a friendly AI assistant for ${ctx.username}. Respond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.\n\nIMPORTANT: You are NOT connected to the internet. You CANNOT browse websites, check prices, make calls, send emails, or access any external services. Only answer from your training knowledge. If the question requires live data, say "I'd need to look that up online — let me search for you" and nothing more.` },
+      { role: 'system', content: `You are Aurora, a friendly AI assistant. The human you are talking to is ${ctx.username}. You serve ${ctx.username}. When they ask "what do you know about me" or anything about themselves, they are asking what YOU (Aurora) know about THEM (${ctx.username}) — not asking you to describe yourself. Never confuse your identity with the user's identity.\n\nRespond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.\n\nIMPORTANT: You are NOT connected to the internet. You CANNOT browse websites, check prices, make calls, send emails, or access any external services. Only answer from your training knowledge. If the question requires live data, say "I'd need to look that up online — let me search for you" and nothing more.` },
       { role: 'user', content: taskText },
     ],
     tier: 'instant',
@@ -595,7 +601,8 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     memoryContext,
     budget.formatForPrompt(),
     toolDescriptions,
-    ctx.profile.timezone
+    ctx.profile.timezone,
+    ctx.username
   );
 
   // ── Build conversation ──
@@ -834,7 +841,8 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         memoryContext,
         budget.formatForPrompt(),
         expandedToolDescriptions,
-        ctx.profile.timezone
+        ctx.profile.timezone,
+        ctx.username
       );
       // Update the system message in conversation
       messages[0] = { role: 'system', content: expandedSystemPrompt };
