@@ -18,6 +18,7 @@ export default function AuroraLayout({
   const [loading, setLoading] = useState(true);
   const [username, setUsername] = useState<string | null>(null);
   const [auroraTheme, setAuroraTheme] = useState<AuroraTheme>("dark");
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   // Load theme from localStorage on mount
   useEffect(() => {
@@ -110,13 +111,17 @@ export default function AuroraLayout({
                       <Link
                         key={item.href}
                         href={item.href}
-                        className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
+                        className={`px-3 py-1.5 text-sm transition-all relative ${
                           isActive
-                            ? "bg-[#6C5CE7]/10 text-[#6C5CE7]"
-                            : "text-[--aurora-text-secondary] hover:text-[--aurora-text]/70 hover:bg-[--aurora-card]"
+                            ? "text-[#6C5CE7]"
+                            : "text-[#8E8E93] hover:text-[--aurora-text]/70"
                         }`}
                       >
                         {item.label}
+                        {/* Active bottom border */}
+                        {isActive && (
+                          <span className="absolute bottom-0 left-1 right-1 h-[2px] bg-[#6C5CE7] rounded-full" />
+                        )}
                       </Link>
                     );
                   })}
@@ -126,7 +131,7 @@ export default function AuroraLayout({
 
             {/* Right: Theme toggle + User controls */}
             <div className="flex items-center gap-2">
-              {/* Light/Dark toggle */}
+              {/* Light/Dark toggle: sun when dark (switch TO light), moon when light */}
               <button
                 onClick={toggleTheme}
                 className="p-2 rounded-lg text-[--aurora-text-secondary] hover:text-[--aurora-text]/60 hover:bg-[--aurora-card] transition-all"
@@ -149,7 +154,7 @@ export default function AuroraLayout({
                 </span>
               )}
               <button
-                onClick={handleLogout}
+                onClick={() => setShowLogoutConfirm(true)}
                 className="p-2 rounded-lg text-[--aurora-text-secondary] hover:text-[--aurora-text]/60 hover:bg-[--aurora-card] transition-all"
                 aria-label="Sign out"
               >
@@ -159,6 +164,34 @@ export default function AuroraLayout({
           </div>
         </div>
       </header>
+
+      {/* Logout Confirmation Dialog */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-[--aurora-card] border border-[--aurora-card-border] rounded-2xl p-6 max-w-sm mx-4 shadow-2xl">
+            <h3 className="text-lg font-semibold text-[--aurora-text]">
+              Leave Aurora?
+            </h3>
+            <p className="text-sm text-[--aurora-text-secondary] mt-2">
+              You&apos;ll be signed out and returned to the login page.
+            </p>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                className="flex-1 px-4 py-2.5 rounded-lg border border-[--aurora-card-border] text-sm text-[--aurora-text] hover:bg-[--aurora-card-border]/20 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLogout}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400 hover:bg-red-500/20 transition-all"
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Page Content */}
       <main

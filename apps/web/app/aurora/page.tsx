@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Send as SendIcon, Loader2, AlertTriangle } from "lucide-react";
 import { MicButton } from "@/components/aurora/MicButton";
-import { FeedCard } from "@/components/aurora/FeedCard";
+import { FeedCard, SkeletonCard } from "@/components/aurora/FeedCard";
 import { formatTaskForFeed } from "@/lib/feed-formatter";
 import type { FeedItem } from "@/lib/feed-formatter";
 
@@ -17,13 +17,13 @@ export default function AuroraFeed() {
   const [sending, setSending] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
-  const feedEndRef = useRef<HTMLDivElement>(null);
+  const feedTopRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const supabase = createClient();
 
-  const scrollToBottom = useCallback(() => {
-    feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToTop = useCallback(() => {
+    feedTopRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   /* ─── Load initial feed ─── */
@@ -46,22 +46,20 @@ export default function AuroraFeed() {
 
       if (tasksError) throw tasksError;
 
+      // Newest first — keep the order from the query
       const items: FeedItem[] = [];
-      // Reverse to get chronological order for display (oldest first)
-      const ordered = [...(tasks || [])].reverse();
-      for (const task of ordered) {
+      for (const task of tasks || []) {
         items.push(...formatTaskForFeed(task));
       }
 
       setFeedItems(items);
       setLoading(false);
-      setTimeout(scrollToBottom, 100);
     } catch (err) {
       console.error("Feed load error:", err);
       setError("Something went wrong loading your feed.");
       setLoading(false);
     }
-  }, [supabase, scrollToBottom]);
+  }, [supabase]);
 
   useEffect(() => {
     loadFeed();
@@ -118,15 +116,14 @@ export default function AuroraFeed() {
                 ) {
                   updated[pendingIdx] = newItem;
                 } else {
-                  updated.push(newItem);
+                  // Insert at the top (newest first)
+                  updated.unshift(newItem);
                 }
               }
             }
 
             return updated;
           });
-
-          setTimeout(scrollToBottom, 100);
         }
       )
       .subscribe();
@@ -134,7 +131,7 @@ export default function AuroraFeed() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId, supabase, scrollToBottom]);
+  }, [userId, supabase]);
 
   /* ─── Send message via proxy ─── */
   const handleSend = async () => {
@@ -146,25 +143,27 @@ export default function AuroraFeed() {
     const now = new Date().toISOString();
     const pendingId = `pending-${Date.now()}`;
 
-    // Optimistic: add user message + processing indicator
+    // Optimistic: add user message + processing indicator at TOP (newest first)
     setFeedItems((prev) => [
-      ...prev,
-      {
-        id: `${pendingId}-user`,
-        summary: text,
-        channel: "web",
-        status: "processing",
-        timestamp: now,
-      },
       {
         id: `${pendingId}-aurora`,
         summary: "",
         channel: "web",
         status: "processing",
         timestamp: now,
+        isUser: false,
       },
+      {
+        id: `${pendingId}-user`,
+        summary: text,
+        channel: "web",
+        status: "processing",
+        timestamp: now,
+        isUser: true,
+      },
+      ...prev,
     ]);
-    setTimeout(scrollToBottom, 100);
+    setTimeout(scrollToTop, 100);
 
     try {
       const {
@@ -215,7 +214,6 @@ export default function AuroraFeed() {
 
     setSending(false);
     inputRef.current?.focus();
-    setTimeout(scrollToBottom, 100);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -239,27 +237,35 @@ export default function AuroraFeed() {
       {/* Scrollable content area */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 scrollbar-hide">
         {loading ? (
-          <div className="flex flex-col items-center justify-center h-full gap-4">
-            <div className="w-8 h-8 rounded-full border-2 border-[--aurora-card-border] border-t-[#6C5CE7] animate-spin" />
-            <p className="text-sm text-[--aurora-text-secondary]">
-              Loading...
-            </p>
+          /* ─── Skeleton Loading State ─── */
+          <div className="max-w-2xl mx-auto space-y-8">
+            <div className="flex justify-center pt-4 pb-2">
+              <div className="w-[120px] h-[120px] rounded-full bg-[--aurora-card-border] animate-shimmer" />
+            </div>
+            <div className="space-y-3">
+              <div className="h-3 w-24 rounded bg-[--aurora-card-border] animate-shimmer" />
+              <SkeletonCard />
+              <SkeletonCard />
+              <SkeletonCard />
+            </div>
           </div>
         ) : (
           <div className="max-w-2xl mx-auto space-y-8">
+            <div ref={feedTopRef} />
+
             {/* Mic Button — the centerpiece */}
             <div className="flex justify-center pt-4 pb-2">
               <MicButton onListeningChange={setListening} />
             </div>
 
-            {/* Feed heading */}
+            {/* Feed */}
             {feedItems.length > 0 && (
               <div className="space-y-3">
                 <h2 className="text-xs font-medium uppercase tracking-wider text-[--aurora-text-secondary] px-1">
                   Recent Activity
                 </h2>
 
-                {/* Feed cards */}
+                {/* Feed cards — newest first */}
                 <div className="space-y-2.5">
                   {feedItems.map((item) => (
                     <FeedCard key={item.id} item={item} />
@@ -268,16 +274,18 @@ export default function AuroraFeed() {
               </div>
             )}
 
-            {/* Empty state */}
+            {/* Empty state per bible */}
             {feedItems.length === 0 && !listening && (
               <div className="flex flex-col items-center gap-3 pt-4">
+                <p className="text-sm italic text-[#8E8E93] text-center">
+                  Aurora is thinking. That&apos;s a good sign.
+                </p>
                 <p className="text-sm text-[--aurora-text-secondary] text-center max-w-xs">
-                  No activity yet. Tap the mic or type below to start.
+                  Start talking, or send a message below. Aurora will get to
+                  work.
                 </p>
               </div>
             )}
-
-            <div ref={feedEndRef} />
           </div>
         )}
       </div>

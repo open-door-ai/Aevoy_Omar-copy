@@ -12,6 +12,7 @@ export interface FeedItem {
     | "proactive";
   status: "completed" | "processing" | "failed" | "pending";
   timestamp: string;
+  isUser?: boolean; // true = user message, false/undefined = Aurora response
 }
 
 // Patterns that indicate raw/debug data that must NEVER be shown
@@ -26,7 +27,33 @@ const RAW_DATA_PATTERNS = [
   /\.ts:\d+/, // Stack traces
   /\{.*"role".*"content"/, // Raw JSON
   /https?:\/\/[^\s]+\.(js|css|json)/i, // Asset URLs
+  /https?:\/\/[^\s]+/i, // All URLs (stripped unless confirmation links)
+  /\d{3,}/, // Status codes and long number sequences
+  /null|undefined|NaN|\[object Object\]/i, // Garbage data
+  /\*\*Also did for you:\*\*/, // Markdown artifacts
+  /Saved to memory:/i, // Internal memory operations
+  /\[CRED_/i, // Credential placeholders
 ];
+
+// JSON-like multiline pattern
+const JSON_PATTERN = /\{[^}]*:[^}]*\}/;
+
+// URLs that ARE user-facing (keep these)
+const USER_FACING_URL_PATTERNS = [
+  /booking/i,
+  /confirmation/i,
+  /receipt/i,
+  /invoice/i,
+  /document/i,
+  /docs\.google/i,
+  /drive\.google/i,
+  /dropbox/i,
+  /calendar/i,
+];
+
+function isUserFacingUrl(url: string): boolean {
+  return USER_FACING_URL_PATTERNS.some((p) => p.test(url));
+}
 
 export function formatTaskForFeed(task: {
   id: string;
@@ -46,6 +73,7 @@ export function formatTaskForFeed(task: {
       channel: (task.input_channel as FeedItem["channel"]) || "web",
       status: task.status as FeedItem["status"],
       timestamp: task.created_at,
+      isUser: true,
     });
   }
 
@@ -59,6 +87,7 @@ export function formatTaskForFeed(task: {
         channel: (task.input_channel as FeedItem["channel"]) || "web",
         status: task.status as FeedItem["status"],
         timestamp: task.created_at,
+        isUser: false,
       });
     }
   } else if (task.status === "processing") {
@@ -68,6 +97,7 @@ export function formatTaskForFeed(task: {
       channel: "web",
       status: "processing",
       timestamp: task.created_at,
+      isUser: false,
     });
   }
 
@@ -75,7 +105,8 @@ export function formatTaskForFeed(task: {
 }
 
 function containsRawData(text: string): boolean {
-  return RAW_DATA_PATTERNS.some((pattern) => pattern.test(text));
+  return RAW_DATA_PATTERNS.some((pattern) => pattern.test(text)) ||
+    JSON_PATTERN.test(text);
 }
 
 function cleanResponse(text: string): string {
@@ -89,7 +120,12 @@ function cleanResponse(text: string): string {
       (s) => !containsRawData(s) && s.trim().length > 10
     );
     if (clean.length > 0) {
-      return clean.slice(-3).join(". ").trim() + ".";
+      const result = clean.slice(-3).join(". ").trim();
+      // Ensure it ends with punctuation
+      if (!/[.!?]$/.test(result)) {
+        return result + ".";
+      }
+      return result;
     }
     return "Aurora completed a task."; // Fallback
   }
@@ -99,9 +135,30 @@ function cleanResponse(text: string): string {
   cleaned = cleaned.replace(/\[ref[=_][^\]]*\]/g, "");
   cleaned = cleaned.replace(/ref=e\d+/g, "");
   cleaned = cleaned.replace(/<[^>]+>/g, "");
-  cleaned = cleaned.replace(/\s{2,}/g, " ");
+  cleaned = cleaned.replace(/\[CRED_[^\]]*\]/g, "");
+  cleaned = cleaned.replace(/Saved to memory:[^\n]*/gi, "");
+  cleaned = cleaned.replace(/\*\*Also did for you:\*\*[^\n]*/g, "");
+  cleaned = cleaned.replace(/null|undefined|NaN|\[object Object\]/gi, "");
 
-  return cleaned.trim();
+  // Strip URLs unless they're user-facing
+  cleaned = cleaned.replace(/https?:\/\/[^\s]+/gi, (match) => {
+    if (isUserFacingUrl(match)) return match;
+    return "";
+  });
+
+  // Clean up JSON fragments
+  cleaned = cleaned.replace(/\{[^}]*:[^}]*\}/g, "");
+
+  // Normalize whitespace
+  cleaned = cleaned.replace(/\s{2,}/g, " ");
+  cleaned = cleaned.trim();
+
+  // If remaining text is under 10 chars, use fallback
+  if (cleaned.length < 10) {
+    return "Aurora completed a task.";
+  }
+
+  return cleaned;
 }
 
 export function formatProactiveForFeed(item: {
@@ -119,5 +176,6 @@ export function formatProactiveForFeed(item: {
     channel: (item.preferred_channel as FeedItem["channel"]) || "proactive",
     status: item.status as FeedItem["status"],
     timestamp: item.created_at,
+    isUser: false,
   };
 }

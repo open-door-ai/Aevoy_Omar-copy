@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
 import {
   Loader2,
   Save,
@@ -42,15 +43,31 @@ const DEFAULT_SETTINGS: AuroraSettings = {
 const CHANNEL_OPTIONS = [
   { value: "sms", label: "SMS", icon: MessageSquare },
   { value: "email", label: "Email", icon: Mail },
-  { value: "voice", label: "Call", icon: Phone },
+  { value: "voice", label: "Phone call", icon: Phone },
   { value: "whatsapp", label: "WhatsApp", icon: MessageSquare },
   { value: "telegram", label: "Telegram", icon: Zap },
 ];
 
-const HUMOR_OPTIONS = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
+const HUMOR_OPTIONS: {
+  value: string;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "low",
+    label: "Low",
+    description: "Straight to the point. No jokes.",
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    description: "A little personality. Dry wit when it fits.",
+  },
+  {
+    value: "high",
+    label: "High",
+    description: "Full Aurora charm. Expect banter.",
+  },
 ];
 
 /* ─────────────────────────── Component ─────────────────────────── */
@@ -156,6 +173,10 @@ export default function AuroraSettingsPage() {
     setSaved(false);
   };
 
+  const currentHumor = HUMOR_OPTIONS.find(
+    (h) => h.value === settings.humor_level
+  );
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -187,7 +208,7 @@ export default function AuroraSettingsPage() {
         <SettingCard
           icon={Clock}
           title="Morning check-in"
-          description="When Aurora should send your daily briefing."
+          description="When should Aurora call to plan your day?"
         >
           <input
             type="time"
@@ -205,12 +226,19 @@ export default function AuroraSettingsPage() {
           title="Autonomous mode"
           description="Let Aurora take actions without asking for confirmation first."
         >
-          <Toggle
-            checked={settings.autonomous_mode}
-            onChange={(checked) =>
-              updateSetting("autonomous_mode", checked)
-            }
-          />
+          <div className="flex flex-col items-end gap-1">
+            <Toggle
+              checked={settings.autonomous_mode}
+              onChange={(checked) =>
+                updateSetting("autonomous_mode", checked)
+              }
+            />
+            {settings.autonomous_mode && (
+              <span className="text-[11px] text-[#6C5CE7]">
+                Aurora will act on your behalf
+              </span>
+            )}
+          </div>
         </SettingCard>
 
         {/* 3. Quiet Hours */}
@@ -242,13 +270,13 @@ export default function AuroraSettingsPage() {
           </div>
         </SettingCard>
 
-        {/* 4. Preferred Channel */}
+        {/* 4. Preferred Channel — segmented pill buttons */}
         <SettingCard
           icon={MessageSquare}
           title="Preferred channel"
           description="How Aurora reaches you for proactive messages and alerts."
         >
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5 rounded-xl border border-[--aurora-card-border] p-1">
             {CHANNEL_OPTIONS.map((ch) => {
               const isActive = settings.preferred_channel === ch.value;
               return (
@@ -259,11 +287,10 @@ export default function AuroraSettingsPage() {
                   }
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                     isActive
-                      ? "bg-[#6C5CE7] text-white border border-[#6C5CE7]"
-                      : "bg-[--aurora-card] text-[--aurora-text-secondary] border border-[--aurora-card-border] hover:border-[#6C5CE7]/30 hover:text-[--aurora-text]"
+                      ? "bg-[#6C5CE7] text-white shadow-sm"
+                      : "text-[--aurora-text-secondary] hover:text-[--aurora-text] hover:bg-[--aurora-card]"
                   }`}
                 >
-                  <ch.icon className="h-3 w-3" />
                   {ch.label}
                 </button>
               );
@@ -277,12 +304,19 @@ export default function AuroraSettingsPage() {
           title="Daily digest"
           description="Receive a daily summary of Aurora's activity and insights."
         >
-          <Toggle
-            checked={settings.daily_digest}
-            onChange={(checked) =>
-              updateSetting("daily_digest", checked)
-            }
-          />
+          <div className="flex flex-col items-end gap-1">
+            <Toggle
+              checked={settings.daily_digest}
+              onChange={(checked) =>
+                updateSetting("daily_digest", checked)
+              }
+            />
+            {settings.daily_digest && (
+              <span className="text-[11px] text-[--aurora-text-secondary]">
+                Sent at 6 PM your time
+              </span>
+            )}
+          </div>
         </SettingCard>
 
         {/* 6. Daily Spend Cap */}
@@ -292,21 +326,20 @@ export default function AuroraSettingsPage() {
           description="Maximum amount Aurora can spend on your behalf per day."
         >
           <div className="flex items-center gap-2">
-            <span className="text-sm text-[--aurora-text-secondary]">
+            <span className="text-sm text-[--aurora-text-secondary] font-medium">
               $
             </span>
             <input
               type="number"
               min="0.50"
-              max="100"
+              max="50"
               step="0.50"
               value={settings.daily_spend_cap}
-              onChange={(e) =>
-                updateSetting(
-                  "daily_spend_cap",
-                  parseFloat(e.target.value) || 0
-                )
-              }
+              onChange={(e) => {
+                const val = parseFloat(e.target.value) || 0;
+                const clamped = Math.min(50, Math.max(0.5, val));
+                updateSetting("daily_spend_cap", clamped);
+              }}
               className="w-24 px-3 py-2 rounded-lg bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] outline-none focus:border-[#6C5CE7]/50 focus:ring-2 focus:ring-[#6C5CE7]/20 transition-all"
             />
             <span className="text-xs text-[--aurora-text-secondary]">
@@ -315,38 +348,52 @@ export default function AuroraSettingsPage() {
           </div>
         </SettingCard>
 
-        {/* 7. Humor Level */}
+        {/* 7. Humor Level — segmented with dynamic description */}
         <SettingCard
           icon={Smile}
           title="Humor level"
           description="How much personality Aurora puts into responses."
         >
-          <div className="flex gap-1 rounded-lg border border-[--aurora-card-border] p-0.5">
-            {HUMOR_OPTIONS.map((opt) => {
-              const isActive = settings.humor_level === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  onClick={() =>
-                    updateSetting("humor_level", opt.value)
-                  }
-                  className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    isActive
-                      ? "bg-[#6C5CE7] text-white"
-                      : "text-[--aurora-text-secondary] hover:text-[--aurora-text]"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-1 rounded-lg border border-[--aurora-card-border] p-0.5">
+              {HUMOR_OPTIONS.map((opt) => {
+                const isActive = settings.humor_level === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    onClick={() =>
+                      updateSetting("humor_level", opt.value)
+                    }
+                    className={`px-4 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      isActive
+                        ? "bg-[#6C5CE7] text-white"
+                        : "text-[--aurora-text-secondary] hover:text-[--aurora-text]"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            {currentHumor && (
+              <p className="text-[11px] text-[--aurora-text-secondary] text-right">
+                {currentHumor.description}
+              </p>
+            )}
           </div>
         </SettingCard>
       </div>
 
-      {/* Footer hint */}
+      {/* Footer hint — link to feed */}
       <p className="text-xs text-[--aurora-text-secondary]/70 text-center">
-        You can also change these by messaging Aurora directly.
+        You can also change any of these by just{" "}
+        <Link
+          href="/aurora"
+          className="text-[#6C5CE7] hover:underline"
+        >
+          messaging Aurora
+        </Link>
+        .
       </p>
 
       {/* Save Bar */}
