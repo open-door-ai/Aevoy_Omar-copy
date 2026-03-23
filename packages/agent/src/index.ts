@@ -4145,6 +4145,8 @@ app.post('/aurora/settings', async (req, res) => {
 });
 
 // GET /aurora/feed/:userId — get user's activity feed (conversation_context + proactive_queue)
+// Supports pagination: ?limit=50&offset=0
+// Returns: { feed: [...], total: number, hasMore: boolean }
 app.get('/aurora/feed/:userId', async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
   if (!verifyWebhookSecret(secret as string)) {
@@ -4156,13 +4158,29 @@ app.get('/aurora/feed/:userId', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
     const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
+    // Get total counts first for proper pagination metadata
+    const [contextCountResult, queueCountResult] = await Promise.all([
+      getSupabaseClient()
+        .from('conversation_context')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId),
+      getSupabaseClient()
+        .from('proactive_queue')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId),
+    ]);
+
+    const totalCount = (contextCountResult.count || 0) + (queueCountResult.count || 0);
+
     // Fetch conversation context (in-app messages)
+    // Over-fetch by limit to ensure we have enough after merging
+    const fetchLimit = limit + 1; // +1 to detect hasMore
     const { data: contextItems, error: contextError } = await getSupabaseClient()
       .from('conversation_context')
       .select('id, role, content, source, created_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .range(offset, offset + fetchLimit - 1);
 
     if (contextError) {
       console.error('[AURORA-FEED] Context query error:', contextError);
@@ -4174,7 +4192,7 @@ app.get('/aurora/feed/:userId', async (req, res) => {
       .select('id, type, priority, content, status, trigger_at, delivered_at, created_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .range(offset, offset + fetchLimit - 1);
 
     if (queueError) {
       console.error('[AURORA-FEED] Queue query error:', queueError);
@@ -4218,10 +4236,11 @@ app.get('/aurora/feed/:userId', async (req, res) => {
     // Sort combined feed by timestamp descending
     feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-    // Apply limit to combined results
+    // Apply limit to combined results (take only `limit`, not fetchLimit)
     const paginatedFeed = feed.slice(0, limit);
+    const hasMore = feed.length > limit || (offset + limit) < totalCount;
 
-    res.json({ feed: paginatedFeed, total: feed.length });
+    res.json({ feed: paginatedFeed, total: totalCount, hasMore });
   } catch (err) {
     console.error('[AURORA-FEED] Error:', err);
     res.status(500).json({ error: "Internal error" });
@@ -4229,6 +4248,7 @@ app.get('/aurora/feed/:userId', async (req, res) => {
 });
 
 // POST /aurora/onboard — Trigger onboarding call to new user
+// Enhanced: AMD voicemail detection, retry scheduling, SMS fallback after 2 failures
 app.post('/aurora/onboard', async (req, res) => {
   const secret = req.headers['x-webhook-secret'];
   if (!verifyWebhookSecret(secret as string)) {
@@ -4252,7 +4272,43 @@ app.post('/aurora/onboard', async (req, res) => {
       return res.status(400).json({ error: 'User has no phone number' });
     }
 
-    // Initiate outbound call via Twilio (callUser expects VoiceCallRequest)
+    // Check onboarding attempt count from user_settings
+    const { data: settings } = await getSupabaseClient()
+      .from('user_settings')
+      .select('onboarding_call_attempts, onboarding_call_status')
+      .eq('user_id', userId)
+      .single();
+
+    const attempts = settings?.onboarding_call_attempts || 0;
+    const status = settings?.onboarding_call_status || 'pending';
+
+    // If already completed or already fell back to SMS, don't call again
+    if (status === 'completed' || status === 'sms_fallback') {
+      return res.json({ status, message: 'Onboarding already handled' });
+    }
+
+    // After 2 failed call attempts, fall back to text-based onboarding via SMS
+    if (attempts >= 2) {
+      const { sendSms } = await import('./services/twilio.js');
+      await sendSms({
+        userId,
+        to: profile.phone_number,
+        body: "Hey, I tried calling twice but couldn't reach you. No worries — text me what's on your plate this week and I'll get to work. I'm Aurora, your new AI assistant.",
+      });
+
+      // Update status to sms_fallback
+      await getSupabaseClient()
+        .from('user_settings')
+        .upsert({
+          user_id: userId,
+          onboarding_call_status: 'sms_fallback',
+          onboarding_call_attempts: attempts,
+        }, { onConflict: 'user_id' });
+
+      return res.json({ status: 'sms_fallback', attempts, message: 'Fell back to SMS after 2 failed calls' });
+    }
+
+    // Initiate outbound call via Twilio
     const { callUser, sendSms } = await import('./services/twilio.js');
 
     const displayName = profile.display_name || profile.username || 'there';
@@ -4262,20 +4318,142 @@ app.post('/aurora/onboard', async (req, res) => {
       message: `Hey ${displayName}, this is Aurora. I'm about to become the most useful thing in your life, but right now I know absolutely nothing about you. What's stressing you out this week?`,
     });
 
-    // If call fails, send SMS fallback
+    // Increment attempt counter
+    const newAttempts = attempts + 1;
+    await getSupabaseClient()
+      .from('user_settings')
+      .upsert({
+        user_id: userId,
+        onboarding_call_attempts: newAttempts,
+        onboarding_call_status: callResult.success ? 'calling' : 'failed',
+      }, { onConflict: 'user_id' });
+
+    // If call fails immediately (no Twilio number, international, etc.), send SMS fallback
     if (!callResult.success) {
-      await sendSms({
-        userId,
-        to: profile.phone_number,
-        body: "I tried to call — no worries. Text me what's on your plate this week and I'll get to work.",
-      });
+      // If this was attempt 2, fall back to SMS
+      if (newAttempts >= 2) {
+        await sendSms({
+          userId,
+          to: profile.phone_number,
+          body: "I tried calling but couldn't reach you. Text me what's on your plate this week and I'll get to work.",
+        });
+        await getSupabaseClient()
+          .from('user_settings')
+          .update({ onboarding_call_status: 'sms_fallback' })
+          .eq('user_id', userId);
+        return res.json({ status: 'sms_fallback', attempts: newAttempts });
+      }
+
+      // Schedule retry in 1 hour via scheduled_tasks
+      const retryAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await getSupabaseClient()
+        .from('scheduled_tasks')
+        .insert({
+          user_id: userId,
+          task_type: 'onboarding_call_retry',
+          cron_expression: null,
+          next_run_at: retryAt,
+          timezone: 'UTC',
+          payload: { userId, attempt: newAttempts },
+          status: 'active',
+        });
+
+      return res.json({ status: 'retry_scheduled', attempts: newAttempts, retryAt });
     }
 
-    res.json({ status: 'initiated', channel: callResult.success ? 'voice' : 'sms_fallback' });
+    // Call was placed successfully — AMD callback will handle voicemail detection
+    // Store the callSid so the AMD webhook can match it to this onboarding call
+    if (callResult.callSid) {
+      await getSupabaseClient()
+        .from('user_settings')
+        .update({ onboarding_call_sid: callResult.callSid })
+        .eq('user_id', userId);
+    }
+
+    res.json({ status: 'calling', callSid: callResult.callSid, attempts: newAttempts });
   } catch (err) {
     logger.error({ err, userId }, 'Onboarding call failed');
     res.status(500).json({ error: 'Failed to initiate onboarding' });
   }
+});
+
+// POST /aurora/onboard/amd — Called by AMD webhook when onboarding call hits voicemail
+// The existing /webhook/voice/amd-status handles generic AMD. This supplements it
+// specifically for onboarding calls: hang up + schedule retry.
+app.post('/aurora/onboard/amd', async (req, res) => {
+  const { callSid, answeredBy, userId } = req.body;
+  res.sendStatus(204);
+
+  if (!callSid || !answeredBy || !userId) return;
+
+  // Only act on machine/voicemail detections
+  if (!answeredBy.startsWith('machine')) return;
+
+  logger.info({ callSid, answeredBy, userId }, 'Onboarding call hit voicemail — scheduling retry');
+
+  try {
+    // Get current attempts
+    const { data: settings } = await getSupabaseClient()
+      .from('user_settings')
+      .select('onboarding_call_attempts')
+      .eq('user_id', userId)
+      .single();
+
+    const attempts = settings?.onboarding_call_attempts || 1;
+
+    if (attempts >= 2) {
+      // Fall back to SMS
+      const { data: profile } = await getSupabaseClient()
+        .from('profiles')
+        .select('phone_number')
+        .eq('id', userId)
+        .single();
+
+      if (profile?.phone_number) {
+        const { sendSms } = await import('./services/twilio.js');
+        await sendSms({
+          userId,
+          to: profile.phone_number,
+          body: "Hey, I tried calling twice but got your voicemail. Text me what's on your plate this week and I'll get to work. I'm Aurora.",
+        });
+      }
+
+      await getSupabaseClient()
+        .from('user_settings')
+        .update({ onboarding_call_status: 'sms_fallback' })
+        .eq('user_id', userId);
+    } else {
+      // Schedule retry in 1 hour
+      const retryAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await getSupabaseClient()
+        .from('scheduled_tasks')
+        .insert({
+          user_id: userId,
+          task_type: 'onboarding_call_retry',
+          cron_expression: null,
+          next_run_at: retryAt,
+          timezone: 'UTC',
+          payload: { userId, attempt: attempts },
+          status: 'active',
+        });
+
+      await getSupabaseClient()
+        .from('user_settings')
+        .update({ onboarding_call_status: 'voicemail_retry_scheduled' })
+        .eq('user_id', userId);
+
+      logger.info({ userId, retryAt }, 'Onboarding retry scheduled after voicemail');
+    }
+  } catch (err) {
+    logger.error({ err, userId }, 'Onboarding AMD handler failed');
+  }
+});
+
+// POST /aurora/error — Frontend error reporting endpoint
+app.post('/aurora/error', async (req, res) => {
+  const { error, context, userId } = req.body;
+  logger.error({ userId: userId?.slice?.(0, 8), error, context }, 'Frontend error reported');
+  res.json({ received: true });
 });
 
 // ---- Start Server ----
