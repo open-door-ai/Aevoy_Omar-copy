@@ -3837,6 +3837,156 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
+// ---- Aurora Communication Endpoints ----
+
+// POST /aurora/settings — update user communication settings
+app.post('/aurora/settings', async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  try {
+    const { userId, ...settingsUpdate } = req.body as {
+      userId: string;
+      daily_spend_cap_cents?: number;
+      proactive_channel?: string;
+      proactive_enabled?: boolean;
+      quiet_hours_start?: number;
+      quiet_hours_end?: number;
+    };
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    // Whitelist allowed fields to prevent injection
+    const allowedFields: Record<string, unknown> = {};
+    if (settingsUpdate.daily_spend_cap_cents !== undefined) {
+      allowedFields.daily_spend_cap_cents = Math.max(0, Math.min(10000, settingsUpdate.daily_spend_cap_cents));
+    }
+    if (settingsUpdate.proactive_channel !== undefined) {
+      const validChannels = ['sms', 'voice', 'whatsapp', 'email', 'telegram', 'in_app'];
+      if (validChannels.includes(settingsUpdate.proactive_channel)) {
+        allowedFields.proactive_channel = settingsUpdate.proactive_channel;
+      }
+    }
+    if (settingsUpdate.proactive_enabled !== undefined) {
+      allowedFields.proactive_enabled = !!settingsUpdate.proactive_enabled;
+    }
+    if (settingsUpdate.quiet_hours_start !== undefined) {
+      allowedFields.quiet_hours_start = Math.max(0, Math.min(23, settingsUpdate.quiet_hours_start));
+    }
+    if (settingsUpdate.quiet_hours_end !== undefined) {
+      allowedFields.quiet_hours_end = Math.max(0, Math.min(23, settingsUpdate.quiet_hours_end));
+    }
+
+    if (Object.keys(allowedFields).length === 0) {
+      return res.status(400).json({ error: "No valid settings provided" });
+    }
+
+    const { data, error } = await getSupabaseClient()
+      .from('user_settings')
+      .upsert({ user_id: userId, ...allowedFields }, { onConflict: 'user_id' })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[AURORA-SETTINGS] Update error:', error);
+      return res.status(500).json({ error: "Failed to update settings" });
+    }
+
+    res.json({ success: true, settings: data });
+  } catch (err) {
+    console.error('[AURORA-SETTINGS] Error:', err);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// GET /aurora/feed/:userId — get user's activity feed (conversation_context + proactive_queue)
+app.get('/aurora/feed/:userId', async (req, res) => {
+  const secret = req.headers["x-webhook-secret"];
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+
+  try {
+    const { userId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+
+    // Fetch conversation context (in-app messages)
+    const { data: contextItems, error: contextError } = await getSupabaseClient()
+      .from('conversation_context')
+      .select('id, role, content, source, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (contextError) {
+      console.error('[AURORA-FEED] Context query error:', contextError);
+    }
+
+    // Fetch proactive queue items (pending + completed)
+    const { data: queueItems, error: queueError } = await getSupabaseClient()
+      .from('proactive_queue')
+      .select('id, type, priority, content, status, trigger_at, delivered_at, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (queueError) {
+      console.error('[AURORA-FEED] Queue query error:', queueError);
+    }
+
+    // Combine and sort by timestamp
+    interface FeedItem {
+      id: string;
+      type: 'context' | 'proactive';
+      content: string;
+      source: string;
+      status?: string;
+      priority?: string;
+      timestamp: string;
+    }
+
+    const feed: FeedItem[] = [];
+
+    for (const item of (contextItems || [])) {
+      feed.push({
+        id: item.id,
+        type: 'context',
+        content: item.content,
+        source: item.source || item.role,
+        timestamp: item.created_at,
+      });
+    }
+
+    for (const item of (queueItems || [])) {
+      feed.push({
+        id: item.id,
+        type: 'proactive',
+        content: item.content,
+        source: item.type,
+        status: item.status,
+        priority: item.priority,
+        timestamp: item.created_at,
+      });
+    }
+
+    // Sort combined feed by timestamp descending
+    feed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    // Apply limit to combined results
+    const paginatedFeed = feed.slice(0, limit);
+
+    res.json({ feed: paginatedFeed, total: feed.length });
+  } catch (err) {
+    console.error('[AURORA-FEED] Error:', err);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
 // ---- Start Server ----
 
 const server = createServer(app);

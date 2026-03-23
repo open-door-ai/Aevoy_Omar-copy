@@ -12,8 +12,7 @@
  */
 
 import { getSupabaseClient } from "../utils/supabase.js";
-import { sendResponse } from "./email.js";
-import { sendSms } from "./twilio.js";
+import { sendAuroraMessage } from "./aurora-messenger.js";
 import { encryptWithServerKey, decryptWithServerKey } from "../security/encryption.js";
 import type { InputChannel } from "../types/index.js";
 
@@ -474,17 +473,20 @@ export class ProactiveEngagementEngine {
           const digest = await this.generateDailyDigest(user.id);
           if (!digest) continue;
 
-          // Format and send email
+          // Format and send via Aurora Messenger (central delivery)
           const emailBody = this.formatDailyDigestEmail(digest);
-          await sendResponse({
-            to: user.email,
-            from: `${user.username}@aevoy.com`,
-            subject: `Your Daily Aurora Digest - ${digest.date}`,
-            body: emailBody,
+          const result = await sendAuroraMessage({
+            userId: user.id,
+            content: emailBody,
+            priority: 'low',
+            source: 'digest',
+            emailSubject: `Your Daily Aurora Digest - ${digest.date}`,
           });
 
-          sentCount++;
-          console.log(`[PROACTIVE_ENGAGEMENT] Sent digest to ${user.username}`);
+          if (result.delivered || result.queued) {
+            sentCount++;
+            console.log(`[PROACTIVE_ENGAGEMENT] Sent digest to ${user.username} via ${result.channel}`);
+          }
         } catch (error) {
           console.error(`[PROACTIVE_ENGAGEMENT] Error sending digest to ${user.id}:`, error);
         }
@@ -536,17 +538,20 @@ export class ProactiveEngagementEngine {
           const report = await this.generateWeeklyReport(user.id);
           if (!report) continue;
 
-          // Format and send email
+          // Format and send via Aurora Messenger (central delivery)
           const emailBody = this.formatWeeklyReportEmail(report);
-          await sendResponse({
-            to: user.email,
-            from: `${user.username}@aevoy.com`,
-            subject: `Your Weekly Aurora Report - Productivity Score: ${report.productivity_score}/100`,
-            body: emailBody,
+          const reportResult = await sendAuroraMessage({
+            userId: user.id,
+            content: emailBody,
+            priority: 'low',
+            source: 'digest',
+            emailSubject: `Your Weekly Aurora Report - Productivity Score: ${report.productivity_score}/100`,
           });
 
-          sentCount++;
-          console.log(`[PROACTIVE_ENGAGEMENT] Sent report to ${user.username}`);
+          if (reportResult.delivered || reportResult.queued) {
+            sentCount++;
+            console.log(`[PROACTIVE_ENGAGEMENT] Sent report to ${user.username} via ${reportResult.channel}`);
+          }
         } catch (error) {
           console.error(`[PROACTIVE_ENGAGEMENT] Error sending report to ${user.id}:`, error);
         }
@@ -837,31 +842,24 @@ ${report.suggestions.length > 0 ? `
    * Send individual suggestion to user
    */
   private async sendSuggestion(userId: string, suggestion: ProactiveSuggestion): Promise<void> {
-    const { data: user } = await getSupabaseClient()
-      .from("profiles")
-      .select("username, email, twilio_number")
-      .eq("id", userId)
-      .single();
-
-    if (!user) return;
-
     try {
-      if (suggestion.channel === 'sms' && user.twilio_number) {
-        await sendSms({
-          userId,
-          to: user.twilio_number,
-          body: `[Aurora] ${suggestion.message}`,
-        });
-      } else {
-        await sendResponse({
-          to: user.email,
-          from: `${user.username}@aevoy.com`,
-          subject: `[Aurora ${suggestion.type}] ${suggestion.message.substring(0, 50)}...`,
-          body: suggestion.message,
-        });
-      }
+      const priorityMap: Record<string, 'low' | 'medium' | 'high'> = {
+        high: 'high',
+        medium: 'medium',
+        low: 'low',
+      };
 
-      console.log(`[PROACTIVE_ENGAGEMENT] Sent ${suggestion.type} to ${user.username}`);
+      const result = await sendAuroraMessage({
+        userId,
+        content: suggestion.message,
+        priority: priorityMap[suggestion.priority] || 'low',
+        source: 'proactive',
+        emailSubject: `[Aurora ${suggestion.type}] ${suggestion.message.substring(0, 50)}...`,
+      });
+
+      if (result.delivered || result.queued) {
+        console.log(`[PROACTIVE_ENGAGEMENT] Sent ${suggestion.type} via ${result.channel}`);
+      }
     } catch (error) {
       console.error("[PROACTIVE_ENGAGEMENT] Error sending suggestion:", error);
     }
