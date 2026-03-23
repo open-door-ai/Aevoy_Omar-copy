@@ -28,7 +28,7 @@ const RAW_DATA_PATTERNS = [
   /\{.*"role".*"content"/, // Raw JSON
   /https?:\/\/[^\s]+\.(js|css|json)/i, // Asset URLs
   /https?:\/\/[^\s]+/i, // All URLs (stripped unless confirmation links)
-  /\d{3,}/, // Status codes and long number sequences
+  /(?:status|error|code|HTTP)\s*\d{3}/i, // HTTP status codes (e.g. "Error 403", "status 200")
   /null|undefined|NaN|\[object Object\]/i, // Garbage data
   /\*\*Also did for you:\*\*/, // Markdown artifacts
   /Saved to memory:/i, // Internal memory operations

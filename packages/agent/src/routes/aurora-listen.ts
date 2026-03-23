@@ -436,7 +436,11 @@ export function setupListenWebSocket(server: Server): void {
       }
 
       if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-        deepgramWs.send(raw);
+        try {
+          deepgramWs.send(raw);
+        } catch {
+          // Deepgram socket may close mid-send — safe to ignore
+        }
       }
     });
 

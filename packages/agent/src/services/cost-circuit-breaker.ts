@@ -163,6 +163,12 @@ export async function trackSpend(
 ): Promise<number> {
   if (costCents <= 0) return 0;
 
+  // Validate userId is a UUID to prevent SQL injection in raw query below
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    console.error('[COST-BREAKER] Invalid userId format — rejecting trackSpend');
+    return 0;
+  }
+
   const today = getTodayDate();
   const supabase = getSupabaseClient();
 
