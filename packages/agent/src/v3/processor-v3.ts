@@ -132,6 +132,9 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // ── Security: strip any leaked credentials from response ──
     response = stripCredentialLeaks(response);
 
+    // ── Quality: clean raw tool output that leaked into response ──
+    response = cleanRawToolOutput(response);
+
     // ── Quality gate: cross-reference AI claims against actual actions ──
     const executionTime = Date.now() - startTime;
     // Quality gate applies to ALL tiers — even "instant" can hallucinate
@@ -1206,4 +1209,66 @@ function stripCredentialLeaks(text: string): string {
   // Note: Don't strip password patterns from responses — user may have asked for credentials
   // Only strip internal credential tokens, API keys, and system internals above
   return clean;
+}
+
+/**
+ * Clean raw tool output that leaked into the final response.
+ * When a model returns recall/memory data as-is instead of synthesizing it,
+ * this detects the pattern and produces a clean summary.
+ */
+function cleanRawToolOutput(text: string): string {
+  // Detect recall tool dump pattern: contains "--- Aurora Context ---" or raw JSON objects
+  const hasContextDump = text.includes('--- Aurora Context ---');
+  const hasRawJson = (text.match(/\{[^}]*"[^"]*"[^}]*:[^}]*\}/g) || []).length > 3;
+  const hasConfidenceScores = (text.match(/\(confidence:\s*[\d.]+\)/g) || []).length > 2;
+
+  if (!hasContextDump && !hasRawJson && !hasConfidenceScores) {
+    return text; // Not raw tool output, pass through
+  }
+
+  // Extract meaningful facts from the structured data
+  const facts: string[] = [];
+
+  // Extract relationships
+  const relationships = text.match(/relationship:\s*(\w+)\s*=\s*\{[^}]*"name":\s*"([^"]+)"[^}]*\}/g);
+  if (relationships) {
+    const people = new Set<string>();
+    for (const r of relationships) {
+      const nameMatch = r.match(/"name":\s*"([^"]+)"/);
+      if (nameMatch && !['you', 'family', 'friends', 'colleagues'].includes(nameMatch[1].toLowerCase())) {
+        people.add(nameMatch[1]);
+      }
+    }
+    if (people.size > 0) facts.push(`You've mentioned ${Array.from(people).join(', ')} in our conversations`);
+  }
+
+  // Extract locations
+  const locations = text.match(/location:\s*(\w+)\s*=\s*\{[^}]*"place":\s*"([^"]+)"/g);
+  if (locations) {
+    const places = new Set<string>();
+    for (const l of locations) {
+      const placeMatch = l.match(/"place":\s*"([^"]+)"/);
+      if (placeMatch) places.add(placeMatch[1]);
+    }
+    if (places.size > 0) facts.push(`You've asked about ${Array.from(places).join(', ')}`);
+  }
+
+  // Extract preferences
+  const prefs = text.match(/preference:\s*\w+:([^=]+)=\s*\{[^}]*"preference":\s*"([^"]+)"/g);
+  if (prefs) {
+    for (const p of prefs) {
+      const prefMatch = p.match(/"preference":\s*"([^"]+)"/);
+      if (prefMatch) facts.push(`You prefer ${prefMatch[1]}`);
+    }
+  }
+
+  // Extract commitments from the old memory system
+  const nameMatch = text.match(/"answer":\s*"Call me (\w+)\."/);
+  if (nameMatch) facts.push(`You asked to be called ${nameMatch[1]}`);
+
+  if (facts.length === 0) {
+    return "We're still getting to know each other. The more we talk, the more I'll learn about you.";
+  }
+
+  return `Here's what I know about you so far:\n\n${facts.map(f => `- ${f}`).join('\n')}\n\nThe more we talk, the more I'll pick up.`;
 }
