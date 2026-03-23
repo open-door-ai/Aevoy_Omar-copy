@@ -528,3 +528,136 @@ function getNext7AM(timezone: string): Date {
 function isDeliveryChannel(channel: string): channel is DeliveryChannel {
   return ['sms', 'voice', 'whatsapp', 'email', 'telegram', 'in_app'].includes(channel);
 }
+
+// ---- Frustration Detection & Proactive Feedback Handling ----
+
+/** Keywords/phrases that indicate user frustration with a proactive message */
+const FRUSTRATION_PATTERNS = [
+  'this is wrong',
+  'stop making things up',
+  'that\'s not right',
+  'that\'s wrong',
+  'not true',
+  'incorrect',
+  'don\'t send me this',
+  'stop sending',
+  'leave me alone',
+  'shut up',
+  'this is annoying',
+  'stop it',
+  'you\'re wrong',
+  'you are wrong',
+  'completely wrong',
+  'not helpful',
+  'useless',
+  'terrible',
+  'awful suggestion',
+  'bad advice',
+  'wtf',
+  'what the hell',
+  'seriously?',
+  'are you kidding',
+  'makes no sense',
+  'nonsense',
+  'hallucinating',
+  'made that up',
+];
+
+/**
+ * Detect whether a user response indicates frustration.
+ * Returns true if any frustration pattern is found in the text.
+ */
+export function detectFrustration(text: string): boolean {
+  const normalized = text.toLowerCase().trim();
+  return FRUSTRATION_PATTERNS.some(pattern => normalized.includes(pattern));
+}
+
+/**
+ * Handle proactive feedback when a user responds with frustration.
+ *
+ * 1. Marks the proactive item as 'dismissed' with negative feedback
+ * 2. Reduces confidence threshold for the source pattern by 0.10
+ * 3. Returns an apologetic response to send back
+ *
+ * @param userId - The user who responded
+ * @param responseText - The user's response text
+ * @param proactiveQueueId - The proactive_queue item they're responding to (if known)
+ * @returns Object with `isFrustrated` flag and optional `reply` text
+ */
+export async function handleProactiveFeedback(
+  userId: string,
+  responseText: string,
+  proactiveQueueId?: string
+): Promise<{ isFrustrated: boolean; reply?: string }> {
+  if (!detectFrustration(responseText)) {
+    return { isFrustrated: false };
+  }
+
+  console.log(`[AURORA-MSG] Frustration detected from user ${userId.slice(0, 8)}: "${responseText.slice(0, 80)}"`);
+
+  const supabase = getSupabaseClient();
+
+  try {
+    // Step 1: Mark the proactive item as dismissed with negative feedback
+    if (proactiveQueueId) {
+      await supabase
+        .from('proactive_queue')
+        .update({
+          status: 'dismissed',
+          feedback: 'negative',
+          feedback_text: responseText.slice(0, 500),
+          dismissed_at: new Date().toISOString(),
+        })
+        .eq('id', proactiveQueueId)
+        .eq('user_id', userId);
+
+      // Step 2: Find the pattern that generated this proactive item and reduce its confidence
+      const { data: queueItem } = await supabase
+        .from('proactive_queue')
+        .select('trigger_condition, action_type')
+        .eq('id', proactiveQueueId)
+        .single();
+
+      if (queueItem?.trigger_condition) {
+        const condition = queueItem.trigger_condition as Record<string, unknown>;
+        const patternType = (condition.pattern_type as string) || queueItem.action_type;
+
+        if (patternType) {
+          // Reduce confidence of matching patterns by 0.10
+          const { data: patterns } = await supabase
+            .from('detected_patterns')
+            .select('id, confidence')
+            .eq('user_id', userId)
+            .eq('pattern_type', patternType)
+            .gte('confidence', 0.1);
+
+          if (patterns && patterns.length > 0) {
+            for (const pattern of patterns) {
+              const newConfidence = Math.max(0, (pattern.confidence || 0.5) - 0.10);
+              await supabase
+                .from('detected_patterns')
+                .update({ confidence: newConfidence })
+                .eq('id', pattern.id);
+            }
+            console.log(`[AURORA-MSG] Reduced confidence by 0.10 for ${patterns.length} "${patternType}" patterns for user ${userId.slice(0, 8)}`);
+          }
+        }
+      }
+    }
+
+    // Record the negative channel interaction for channel-learner
+    try {
+      const { recordChannelResponse } = await import('./channel-learner.js');
+      await recordChannelResponse(userId, 'in_app', 'proactive', 0, false);
+    } catch {
+      // channel-learner recordChannelResponse may have different signature — non-critical
+    }
+  } catch (err) {
+    console.error('[AURORA-MSG] handleProactiveFeedback error:', err);
+  }
+
+  return {
+    isFrustrated: true,
+    reply: "My mistake. I'll learn from this. What did I get wrong?",
+  };
+}
