@@ -433,15 +433,84 @@ export async function processQueue(): Promise<number> {
 }
 
 /**
+ * Acquire a distributed lock to prevent concurrent execution across instances.
+ * Uses the same distributed_locks table pattern as scheduler.ts.
+ * Returns true if lock was acquired, false if another instance holds it.
+ */
+async function acquireProactiveLock(): Promise<boolean> {
+  const lockName = "proactive_queue_run";
+  const supabase = getSupabaseClient();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 5 * 60 * 1000); // 5 minute lock
+
+  try {
+    // Try to upsert a lock — only succeed if no unexpired lock exists
+    const { data: existing } = await supabase
+      .from("distributed_locks")
+      .select("locked_at")
+      .eq("lock_name", lockName)
+      .single();
+
+    if (existing?.locked_at) {
+      const lockedAt = new Date(existing.locked_at).getTime();
+      const lockAge = now.getTime() - lockedAt;
+      // If lock is less than 5 minutes old, another instance is running
+      if (lockAge < 5 * 60 * 1000) {
+        return false;
+      }
+    }
+
+    // Acquire or renew the lock
+    await supabase
+      .from("distributed_locks")
+      .upsert({
+        lock_name: lockName,
+        locked_at: now.toISOString(),
+        locked_by: `proactive-queue-${process.pid}`,
+        expires_at: expiresAt.toISOString(),
+      }, { onConflict: "lock_name" });
+
+    return true;
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[PROACTIVE-Q] Lock acquisition failed");
+    return false;
+  }
+}
+
+/**
+ * Release the distributed lock after processing completes.
+ */
+async function releaseProactiveLock(): Promise<void> {
+  try {
+    await getSupabaseClient()
+      .from("distributed_locks")
+      .delete()
+      .eq("lock_name", "proactive_queue_run");
+  } catch {
+    // Non-critical — lock will expire on its own
+  }
+}
+
+/**
  * Generate and process proactive actions for all active users.
  * Called by the scheduler periodically.
+ *
+ * Uses a distributed lock to prevent concurrent execution across
+ * multiple instances (E025). Checks global proactive_enabled setting (E028).
  */
 export async function runProactiveQueue(): Promise<{ generated: number; processed: number }> {
+  // Acquire distributed lock — prevents duplicate execution across instances
+  const lockAcquired = await acquireProactiveLock();
+  if (!lockAcquired) {
+    logger.debug("[PROACTIVE-Q] Skipping — another instance holds the lock");
+    return { generated: 0, processed: 0 };
+  }
+
   let totalGenerated = 0;
   let totalProcessed = 0;
 
   try {
-    // Get users with proactive enabled
+    // Get users with proactive enabled (per-user opt-out check)
     const { data: enabledSettings } = await getSupabaseClient()
       .from("user_settings")
       .select("user_id")
@@ -464,6 +533,9 @@ export async function runProactiveQueue(): Promise<{ generated: number; processe
     totalProcessed = await processQueue();
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : String(err) }, "[PROACTIVE-Q] Batch run failed");
+  } finally {
+    // Always release lock
+    await releaseProactiveLock();
   }
 
   return { generated: totalGenerated, processed: totalProcessed };

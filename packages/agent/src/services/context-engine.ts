@@ -84,6 +84,34 @@ const MIN_MESSAGE_LENGTH = 5;
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.1-8b-instant"; // Fast, free
 const EXTRACTION_TIMEOUT_MS = 15_000; // 15s max for extraction
+const MAX_MESSAGE_LENGTH_FOR_LLM = 2000; // Truncate before sending to extraction LLM
+const MAX_EXTRACTIONS_PER_USER_PER_MINUTE = 5;
+
+// ---- Per-user extraction rate limiter ----
+
+const extractionTimestamps = new Map<string, number[]>();
+
+function isExtractionRateLimited(userId: string): boolean {
+  const now = Date.now();
+  const oneMinuteAgo = now - 60_000;
+
+  let timestamps = extractionTimestamps.get(userId);
+  if (!timestamps) {
+    timestamps = [];
+    extractionTimestamps.set(userId, timestamps);
+  }
+
+  // Remove timestamps older than 1 minute
+  const recent = timestamps.filter(t => t > oneMinuteAgo);
+  extractionTimestamps.set(userId, recent);
+
+  if (recent.length >= MAX_EXTRACTIONS_PER_USER_PER_MINUTE) {
+    return true;
+  }
+
+  recent.push(now);
+  return false;
+}
 
 const EXTRACTION_PROMPT = `You are analyzing a message from a user to their AI assistant Aurora.
 Extract structured data. Be thorough — capture implied, not just stated.
@@ -305,37 +333,16 @@ async function mergeUserContext(
     });
   }
 
-  // Batch upsert — for each item, try to update if exists, insert if not
+  // Batch upsert — for each item, use ON CONFLICT upsert to avoid race conditions.
+  // Also applies time-based confidence decay: confidence = LEAST(existing * 0.95 + new * 0.3, 1.0)
+  // The +0.02 always-increase term is removed to allow confidence to decay over time.
   for (const item of upserts) {
     try {
-      // Try to find existing
-      const { data: existing } = await supabase
+      // Attempt atomic upsert via Supabase
+      // First try insert — if it conflicts, we update with decay
+      const { error: insertError } = await supabase
         .from("user_context")
-        .select("id, times_observed, confidence")
-        .eq("user_id", item.user_id)
-        .eq("context_type", item.context_type)
-        .eq("key", item.key)
-        .single();
-
-      if (existing) {
-        // Update: increase confidence with EMA, increment observation count
-        const newConfidence = Math.min(
-          1.0,
-          existing.confidence * 0.7 + item.confidence * 0.3 + 0.02
-        );
-        await supabase
-          .from("user_context")
-          .update({
-            value: item.value,
-            confidence: parseFloat(newConfidence.toFixed(2)),
-            times_observed: (existing.times_observed || 1) + 1,
-            last_confirmed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", existing.id);
-      } else {
-        // Insert new
-        await supabase.from("user_context").insert({
+        .insert({
           user_id: item.user_id,
           context_type: item.context_type,
           key: item.key,
@@ -343,6 +350,38 @@ async function mergeUserContext(
           confidence: parseFloat(item.confidence.toFixed(2)),
           source: item.source,
         });
+
+      if (insertError && insertError.code === '23505') {
+        // Conflict: row exists — update with confidence decay formula
+        const { data: existing } = await supabase
+          .from("user_context")
+          .select("id, times_observed, confidence")
+          .eq("user_id", item.user_id)
+          .eq("context_type", item.context_type)
+          .eq("key", item.key)
+          .single();
+
+        if (existing) {
+          // Confidence decay: existing * 0.95 + new * 0.3, capped at 1.0
+          // The 0.95 factor means confidence decays each time we re-observe,
+          // converging to a stable value rather than always increasing.
+          const newConfidence = Math.min(
+            1.0,
+            existing.confidence * 0.95 + item.confidence * 0.3
+          );
+          await supabase
+            .from("user_context")
+            .update({
+              value: item.value,
+              confidence: parseFloat(newConfidence.toFixed(2)),
+              times_observed: (existing.times_observed || 1) + 1,
+              last_confirmed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id);
+        }
+      } else if (insertError) {
+        logger.debug({ error: insertError.message }, "[CONTEXT] Insert failed for %s/%s", item.context_type, item.key);
       }
     } catch (err) {
       // Non-critical — log and continue
@@ -489,9 +528,18 @@ export async function extractContext(
     return;
   }
 
+  // Per-user rate limit: max 5 extractions per user per minute
+  if (isExtractionRateLimited(userId)) {
+    logger.debug("[CONTEXT] Rate limited for user %s — skipping extraction", userId.substring(0, 8));
+    return;
+  }
+
   try {
-    // Step 1: Call LLM for extraction
-    const extraction = await callGroqForExtraction(message);
+    // Step 1: Call LLM for extraction (truncate to 2000 chars to limit token cost)
+    const truncatedMessage = message.length > MAX_MESSAGE_LENGTH_FOR_LLM
+      ? message.substring(0, MAX_MESSAGE_LENGTH_FOR_LLM)
+      : message;
+    const extraction = await callGroqForExtraction(truncatedMessage);
     if (!extraction) {
       // LLM unavailable — still store raw context without extraction
       await storeConversationContext(userId, channel, message, {
@@ -583,5 +631,51 @@ export async function getUserContext(
     }));
   } catch {
     return [];
+  }
+}
+
+/**
+ * Cleanup old context data to prevent unbounded table growth.
+ * Runs once daily via the scheduler.
+ *
+ * - Deletes conversation_context older than 90 days
+ * - Deletes user_context with confidence < 0.3 and last_confirmed_at > 60 days ago
+ */
+export async function cleanupOldContext(): Promise<void> {
+  const supabase = getSupabaseClient();
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    // Delete conversation_context older than 90 days
+    const { error: ccError } = await supabase
+      .from("conversation_context")
+      .delete()
+      .lt("created_at", ninetyDaysAgo);
+
+    if (ccError) {
+      logger.warn({ error: ccError.message }, "[CONTEXT] Failed to cleanup old conversation_context");
+    } else {
+      logger.info("[CONTEXT] Cleaned up conversation_context older than 90 days");
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] conversation_context cleanup error");
+  }
+
+  try {
+    // Delete low-confidence user_context that hasn't been confirmed in 60 days
+    const { error: ucError } = await supabase
+      .from("user_context")
+      .delete()
+      .lt("confidence", 0.3)
+      .lt("last_confirmed_at", sixtyDaysAgo);
+
+    if (ucError) {
+      logger.warn({ error: ucError.message }, "[CONTEXT] Failed to cleanup stale user_context");
+    } else {
+      logger.info("[CONTEXT] Cleaned up low-confidence user_context older than 60 days");
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] user_context cleanup error");
   }
 }

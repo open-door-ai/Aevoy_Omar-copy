@@ -235,7 +235,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
       MachineDetection: 'DetectMessageEnd',
       AsyncAmdStatusCallback: `${callbackBase}/webhook/voice/amd-status`,
       AsyncAmdStatusCallbackMethod: 'POST',
-      TimeLimit: '600', // 10 minutes max — prevents runaway billing
+      TimeLimit: '420', // 7 minutes max — prevents runaway billing (C002)
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);
@@ -335,7 +335,7 @@ export async function callExternal(
       MachineDetection: 'DetectMessageEnd',
       AsyncAmdStatusCallback: `${callbackBase}/webhook/voice/amd-status`,
       AsyncAmdStatusCallbackMethod: 'POST',
-      TimeLimit: '300', // 5 minutes max — prevents runaway billing
+      TimeLimit: '420', // 7 minutes max — prevents runaway billing (C002)
     });
 
     const response = await twilioRequest("/Calls.json", "POST", params);

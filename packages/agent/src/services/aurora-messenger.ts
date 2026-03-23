@@ -45,6 +45,17 @@ export interface DeliveryResult {
 
 const FREE_CHANNELS: DeliveryChannel[] = ['email', 'telegram', 'in_app'];
 
+// ---- Escalation loop prevention ----
+
+/** Max escalations per original message chain to prevent infinite escalation loops */
+const MAX_ESCALATIONS = 3;
+
+/** SMS segment size — 160 chars for GSM-7, but we use 320 (2 segments) as a reasonable limit */
+const MAX_SMS_LENGTH = 320;
+
+/** Channel cost ordering for fallback (cheapest first) */
+const FALLBACK_CHANNEL_ORDER: DeliveryChannel[] = ['in_app', 'telegram', 'email', 'sms', 'whatsapp', 'voice'];
+
 // ---- Public API ----
 
 /**
@@ -91,19 +102,43 @@ export async function sendAuroraMessage(message: AuroraMessage): Promise<Deliver
   }
 
   // Step 5: Send via selected channel
-  const sent = await deliverMessage(userId, content, selectedChannel, message.emailSubject);
+  let sent = await deliverMessage(userId, content, selectedChannel, message.emailSubject);
+  let actualChannel = selectedChannel;
+
+  // Step 5b: On delivery failure, try next cheapest channel before giving up
+  if (!sent) {
+    console.log(`[AURORA-MSG] Delivery failed on ${selectedChannel}, trying fallback channels`);
+    for (const fallback of FALLBACK_CHANNEL_ORDER) {
+      if (fallback === selectedChannel) continue;
+      const available = await isChannelAvailable(userId, fallback);
+      if (!available) continue;
+      // Check budget for paid fallback channels
+      const fallbackCost = CHANNEL_COSTS[fallback];
+      if (fallbackCost > 0) {
+        const fallbackBudget = await checkBudget(userId, fallback);
+        if (!fallbackBudget.allowed) continue;
+      }
+      sent = await deliverMessage(userId, content, fallback, message.emailSubject);
+      if (sent) {
+        actualChannel = fallback;
+        console.log(`[AURORA-MSG] Fallback delivery succeeded via ${fallback}`);
+        break;
+      }
+    }
+  }
 
   // Step 6: Track cost
-  if (sent && costCents > 0) {
-    await trackSpend(userId, selectedChannel, costCents);
+  const actualCost = CHANNEL_COSTS[actualChannel];
+  if (sent && actualCost > 0) {
+    await trackSpend(userId, actualChannel, actualCost);
   }
 
   // Step 7: Schedule escalation for high/critical if needed
   if (sent && (priority === 'high' || priority === 'critical')) {
-    await scheduleEscalation(message, selectedChannel);
+    await scheduleEscalation(message, actualChannel);
   }
 
-  return { delivered: sent, channel: selectedChannel, queued: false };
+  return { delivered: sent, channel: actualChannel, queued: false };
 }
 
 // ---- Channel Selection ----
@@ -184,7 +219,11 @@ async function deliverMessage(
     switch (channel) {
       case 'sms': {
         if (!profile.phone) return false;
-        const result = await sendSms({ userId, to: profile.phone, body: content });
+        // Truncate SMS to MAX_SMS_LENGTH (2 segments) to control costs
+        const smsBody = content.length > MAX_SMS_LENGTH
+          ? content.substring(0, MAX_SMS_LENGTH - 3) + '...'
+          : content;
+        const result = await sendSms({ userId, to: profile.phone, body: smsBody });
         return result.success;
       }
 
@@ -296,12 +335,28 @@ async function queueForLater(message: AuroraMessage): Promise<void> {
 
 /**
  * Schedule an escalation: if no response within delay, send via a more urgent channel.
+ * Enforces MAX_ESCALATIONS per message chain to prevent infinite escalation loops (C006).
  */
 async function scheduleEscalation(message: AuroraMessage, originalChannel: DeliveryChannel): Promise<void> {
   // Only escalate if not already on voice (highest urgency)
   if (originalChannel === 'voice') return;
 
   try {
+    // Check escalation count for this user in the last 2 hours to prevent loops
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data: recentEscalations } = await getSupabaseClient()
+      .from('proactive_queue')
+      .select('id')
+      .eq('user_id', message.userId)
+      .eq('action_type', 'follow_up')
+      .gte('created_at', twoHoursAgo)
+      .limit(MAX_ESCALATIONS + 1);
+
+    if (recentEscalations && recentEscalations.length >= MAX_ESCALATIONS) {
+      console.log(`[AURORA-MSG] Escalation cap reached (${MAX_ESCALATIONS}) for user ${message.userId.slice(0, 8)} — stopping escalation chain`);
+      return;
+    }
+
     // Escalation: 15 min for critical, 60 min for high
     const delayMinutes = message.priority === 'critical' ? 15 : 60;
     const triggerAt = new Date(Date.now() + delayMinutes * 60 * 1000);
@@ -328,6 +383,7 @@ async function scheduleEscalation(message: AuroraMessage, originalChannel: Deliv
           originalChannel,
           escalationChannel,
           originalSource: message.source,
+          escalationCount: (recentEscalations?.length || 0) + 1,
           emailSubject: message.emailSubject,
         },
       });

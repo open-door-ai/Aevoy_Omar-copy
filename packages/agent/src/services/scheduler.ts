@@ -230,6 +230,19 @@ async function runProactiveChecks(): Promise<void> {
     logger.error('[SCHEDULER] Aurora proactive queue error:', error);
   }
 
+  // CONTEXT CLEANUP: Delete old conversation_context and stale user_context (daily, checked hourly)
+  try {
+    const now = new Date();
+    // Only run once per day (between 2:00-3:00 AM UTC)
+    if (now.getUTCHours() === 2) {
+      const { cleanupOldContext } = await import("./context-engine.js");
+      await cleanupOldContext();
+      logger.info('[SCHEDULER] Context cleanup completed');
+    }
+  } catch (error) {
+    logger.error('[SCHEDULER] Context cleanup error:', error);
+  }
+
   // AUTONOMOUS INTELLIGENCE: Run skill recommendations (daily at 4 AM UTC, after pattern detection)
   try {
     const now = new Date();
