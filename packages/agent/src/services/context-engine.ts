@@ -99,6 +99,85 @@ const SKIP_MESSAGES = new Set([
   'idk', 'idc', 'nvm', 'nm', 'nothing', 'nevermind',
 ]);
 
+// ---- Communication Style Extraction (FREE — regex only, no LLM) ----
+// Detects HOW the user communicates so Aurora can mirror their style over time.
+
+async function extractCommunicationStyle(message: string, userId: string): Promise<void> {
+  // Only analyze messages long enough to show style (>20 chars)
+  if (message.length < 20) return;
+
+  // Simple style detection (no LLM needed)
+  const style: Record<string, string> = {};
+
+  // Formality
+  const informal = /\b(gonna|wanna|gotta|ya|u|ur|lol|haha|nah|yep|nope|cuz|tho)\b/i;
+  const formal = /\b(therefore|however|furthermore|regarding|accordingly|sincerely)\b/i;
+  if (informal.test(message)) style['formality'] = 'casual';
+  else if (formal.test(message)) style['formality'] = 'formal';
+
+  // Verbosity
+  const wordCount = message.split(/\s+/).length;
+  if (wordCount > 30) style['verbosity'] = 'detailed';
+  else if (wordCount < 8) style['verbosity'] = 'brief';
+
+  // Uses emojis
+  if (/[\u{1F300}-\u{1F9FF}]/u.test(message)) style['uses_emoji'] = 'yes';
+
+  // Directness
+  if (/^(do|get|send|book|find|make|call|email|text)\b/i.test(message.trim())) {
+    style['directness'] = 'direct_commands';
+  }
+
+  // Nothing detected — skip the DB writes
+  if (Object.keys(style).length === 0) return;
+
+  // Store each detected style trait
+  const supabase = getSupabaseClient();
+  for (const [key, value] of Object.entries(style)) {
+    try {
+      // Try insert first; on conflict, update with observation count bump
+      const { error: insertError } = await supabase.from('user_context').insert({
+        user_id: userId,
+        context_type: 'preference' as ContextType,
+        key: `communication_style:${key}`,
+        value: { trait: key, observed: value },
+        confidence: 0.60,
+        source: 'observed',
+      });
+
+      if (insertError && insertError.code === '23505') {
+        // Row exists — bump times_observed and confidence
+        const { data: existing } = await supabase
+          .from('user_context')
+          .select('id, times_observed, confidence')
+          .eq('user_id', userId)
+          .eq('context_type', 'preference')
+          .eq('key', `communication_style:${key}`)
+          .single();
+
+        if (existing) {
+          const newConfidence = Math.min(1.0, existing.confidence * 0.95 + 0.15);
+          await supabase
+            .from('user_context')
+            .update({
+              value: { trait: key, observed: value },
+              confidence: parseFloat(newConfidence.toFixed(2)),
+              times_observed: (existing.times_observed || 1) + 1,
+              last_confirmed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existing.id);
+        }
+      } else if (insertError) {
+        logger.debug('[CONTEXT] Style insert failed for %s: %s', key, insertError.message);
+      }
+    } catch (err) {
+      logger.debug({ err: err instanceof Error ? err.message : String(err) },
+        '[CONTEXT] Style extraction failed for %s', key);
+    }
+  }
+}
+
 // ---- Instant Action Detection (FIX 1) ----
 // Zero-cost regex-based detection of actionable intents.
 // Runs IMMEDIATELY — no LLM call needed.
@@ -628,6 +707,14 @@ export async function extractContext(
   } catch (err) {
     // Never let action detection block extraction
     logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Action detection error");
+  }
+
+  // Communication style extraction (regex only, zero LLM cost).
+  // Runs before the LLM call so it's always free.
+  try {
+    await extractCommunicationStyle(message, userId);
+  } catch (err) {
+    logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Style extraction error");
   }
 
   // FIX 4: Expanded skip set — skip trivial messages for LLM extraction

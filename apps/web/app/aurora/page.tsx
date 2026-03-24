@@ -17,6 +17,7 @@ export default function AuroraFeed() {
   const [sending, setSending] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const feedTopRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -64,6 +65,28 @@ export default function AuroraFeed() {
   useEffect(() => {
     loadFeed();
   }, [loadFeed]);
+
+  /* ─── First-run onboarding check ─── */
+  useEffect(() => {
+    async function checkOnboarding() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: settings } = await supabase
+        .from("user_settings")
+        .select("aurora_onboarded")
+        .eq("user_id", user.id)
+        .single();
+
+      // If aurora_onboarded is not true, show inline welcome
+      if (!settings?.aurora_onboarded) {
+        setShowOnboarding(true);
+      }
+    }
+    checkOnboarding();
+  }, [supabase]);
 
   /* ─── Realtime subscriptions ─── */
   useEffect(() => {
@@ -252,6 +275,36 @@ export default function AuroraFeed() {
         ) : (
           <div className="max-w-2xl mx-auto space-y-8">
             <div ref={feedTopRef} />
+
+            {/* First-run inline welcome */}
+            {showOnboarding && (
+              <div className="bg-gradient-to-br from-[#6C5CE7]/10 to-[#A855F7]/10 border border-[#6C5CE7]/20 rounded-2xl p-6 text-center">
+                <h2 className="text-xl font-semibold text-[--aurora-text] mb-2">
+                  Meet Aurora
+                </h2>
+                <p className="text-sm text-[--aurora-text-secondary] mb-4 max-w-md mx-auto">
+                  I&apos;m your AI that actually does things. Tap the mic and
+                  tell me what&apos;s on your plate — or just start talking. I
+                  learn fast.
+                </p>
+                <button
+                  onClick={async () => {
+                    setShowOnboarding(false);
+                    if (userId) {
+                      await supabase
+                        .from("user_settings")
+                        .upsert(
+                          { user_id: userId, aurora_onboarded: true },
+                          { onConflict: "user_id" }
+                        );
+                    }
+                  }}
+                  className="text-xs text-[#6C5CE7] hover:underline"
+                >
+                  Got it
+                </button>
+              </div>
+            )}
 
             {/* Mic Button — the centerpiece */}
             <div className="flex justify-center pt-4 pb-2">
