@@ -25,13 +25,14 @@ import { executeToolCall, formatToolDescriptions, buildFunctionSchemas, parseToo
 import { callModel, classifyCall } from './model-router.js';
 import { logger } from '../utils/logger.js';
 import { loadToolsForTier, getToolNamesForTierClassification, expandTools, isToolLoaded } from './tool-loader.js';
+import { destroySession as destroyBrowserSession } from '../services/steel-browser.js';
 
 // ── Register all tools on module load ──
 import './tools/communication.js';
 import './tools/data.js';
 import './tools/files.js';
 import './tools/system.js';
-// Browser tools removed — Aurora focuses on communication and intelligence, not browser automation
+import './tools/browser.js';
 
 // ── Constants ──
 
@@ -266,7 +267,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       { suppressEmail: task.suppressEmail }
     );
 
-    // ── Cleanup (browser engines removed) ──
+    // ── Cleanup: close any Steel browser session ──
+    try { await destroyBrowserSession(taskId); } catch (err) { logger.debug(`[V3] Browser session cleanup (non-critical):`, err); }
 
     // ── Deduct total task cost from credit wallet (single deduction, no rounding loss) ──
     try {
@@ -309,7 +311,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     logger.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
 
-    // Cleanup (browser engines removed)
+    // Cleanup: close any Steel browser session
+    try { await destroyBrowserSession(taskId); } catch {}
 
     // Update task as failed
     if (taskId) {
