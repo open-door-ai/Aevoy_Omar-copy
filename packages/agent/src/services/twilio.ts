@@ -16,6 +16,7 @@ import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js"
 import { trackServiceCost } from "./ai.js";
 import { calculateSMSCost, SMS_MARKUP, VOICE_MARKUP, TWILIO_RATES } from "../utils/cost-calculator.js";
 import { trackError } from "../utils/error-tracker.js";
+import { logger } from "../utils/logger.js";
 
 // ---- Security: Input Sanitization ----
 
@@ -185,7 +186,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // User MUST have a dedicated number — demo number is never used for user tasks
     const fromNumber = await getUserFromNumber(request.userId);
     if (!fromNumber) {
-      console.warn(`[TWILIO] callUser blocked: user ${request.userId.slice(0, 8)} has no dedicated number`);
+      logger.warn({ userId: request.userId.slice(0, 8) }, '[TWILIO] callUser blocked: no dedicated number');
       return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
     }
 
@@ -194,12 +195,12 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     const cleanedNumber = (request.to || '').replace(/[^\d+]/g, '');
     const isNorthAmerican = /^\+?1[2-9]\d{9}$/.test(cleanedNumber);
     if (!isNorthAmerican) {
-      console.warn(`[TWILIO] BLOCKED international number: ${cleanedNumber.slice(0,5)}*** (only +1 NA numbers allowed)`);
+      logger.warn({ numberPrefix: cleanedNumber.slice(0, 5) }, '[TWILIO] BLOCKED international number (only +1 NA allowed)');
       return { success: false, error: 'International calls are not supported yet. Only US/Canada numbers (+1) are allowed.' };
     }
     // Block premium/toll numbers
     if (/^\+?1(900|976|950|540)/.test(cleanedNumber)) {
-      console.warn(`[TWILIO] BLOCKED premium number: ${cleanedNumber.slice(0,7)}***`);
+      logger.warn({ numberPrefix: cleanedNumber.slice(0, 7) }, '[TWILIO] BLOCKED premium number');
       return { success: false, error: 'Premium/toll numbers are not supported for safety.' };
     }
 
@@ -213,7 +214,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
         .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
         .limit(DEFAULT_DAILY_CALL_LIMIT + 1);
       if (todayCalls && todayCalls.length >= DEFAULT_DAILY_CALL_LIMIT) {
-        console.warn(`[TWILIO] Daily call limit (${DEFAULT_DAILY_CALL_LIMIT}) reached for user ${request.userId.slice(0,8)}`);
+        logger.warn({ userId: request.userId.slice(0, 8), limit: DEFAULT_DAILY_CALL_LIMIT }, '[TWILIO] Daily call limit reached');
         return { success: false, error: `Daily call limit reached (${DEFAULT_DAILY_CALL_LIMIT}). This resets at midnight.` };
       }
     } catch { /* Don't block calls on DB errors */ }
@@ -243,7 +244,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
 
     if (!response.ok) {
       const errorData = await response.text();
-      console.error(`[TWILIO] callUser API error: ${response.status} ${errorData}`);
+      logger.error({ status: response.status, errorData }, '[TWILIO] callUser API error');
       return { success: false, error: `Twilio API error: ${response.status}` };
     }
 
@@ -253,12 +254,12 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     // DO NOT log estimate here — it was never deducted when actual arrived, causing double-billing.
     await trackVoiceUsage(request.userId, 1);
 
-    console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
+    logger.info({ callSid: data.sid }, '[TWILIO] Callback initiated via URL');
     return { success: true, callSid: data.sid };
   } catch (error) {
     trackError('voice');
     const msg = error instanceof Error ? error.message : "Unknown error";
-    console.error("[TWILIO] Call error:", msg);
+    logger.error({ err: msg }, '[TWILIO] Call error');
     return { success: false, error: msg };
   }
 }
@@ -277,7 +278,7 @@ export async function callExternal(
   if (!config) return { success: false, error: "Twilio not configured" };
   const fromNumber = await getUserFromNumber(userId);
   if (!fromNumber) {
-    console.warn(`[TWILIO] callExternal blocked: user ${userId.slice(0, 8)} has no dedicated number`);
+    logger.warn({ userId: userId.slice(0, 8) }, '[TWILIO] callExternal blocked: no dedicated number');
     return { success: false, error: "You need a dedicated phone number to make calls. Visit your dashboard to get one." };
   }
 
@@ -285,11 +286,11 @@ export async function callExternal(
   const cleanedNumber = (to || '').replace(/[^\d+]/g, '');
   const isNorthAmerican = /^\+?1[2-9]\d{9}$/.test(cleanedNumber);
   if (!isNorthAmerican) {
-    console.warn(`[TWILIO] BLOCKED international number: ${cleanedNumber.slice(0,5)}*** (only +1 NA numbers allowed)`);
+    logger.warn({ numberPrefix: cleanedNumber.slice(0, 5) }, '[TWILIO] BLOCKED international number (callExternal)');
     return { success: false, error: 'International calls are not supported yet. Only US/Canada numbers (+1) are allowed.' };
   }
   if (/^\+?1(900|976|950|540)/.test(cleanedNumber)) {
-    console.warn(`[TWILIO] BLOCKED premium number: ${cleanedNumber.slice(0,7)}***`);
+    logger.warn({ numberPrefix: cleanedNumber.slice(0, 7) }, '[TWILIO] BLOCKED premium number (callExternal)');
     return { success: false, error: 'Premium/toll numbers are not supported for safety.' };
   }
 
@@ -303,7 +304,7 @@ export async function callExternal(
       .gte('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString())
       .limit(DEFAULT_DAILY_CALL_LIMIT + 1);
     if (todayCalls && todayCalls.length >= DEFAULT_DAILY_CALL_LIMIT) {
-      console.warn(`[TWILIO] Daily call limit (${DEFAULT_DAILY_CALL_LIMIT}) reached for user ${userId.slice(0,8)}`);
+      logger.warn({ userId: userId.slice(0, 8), limit: DEFAULT_DAILY_CALL_LIMIT }, '[TWILIO] Daily call limit reached (callExternal)');
       return { success: false, error: `Daily call limit reached (${DEFAULT_DAILY_CALL_LIMIT}). This resets at midnight.` };
     }
   } catch { /* Don't block calls on DB errors */ }
@@ -350,7 +351,7 @@ export async function callExternal(
     // Track usage count only — actual cost is logged by /webhook/voice/call-end StatusCallback.
     await trackVoiceUsage(userId, 1);
 
-    console.log(`[CALL-EXTERNAL] ConversationRelay call placed: to=${to}, from=${fromNumber || config.phoneNumber}, sid=${data.sid}, business=${businessName || 'unknown'}`);
+    logger.info({ to, from: fromNumber || config.phoneNumber, callSid: data.sid, business: businessName || 'unknown' }, '[CALL-EXTERNAL] ConversationRelay call placed');
     return { success: true, callSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
@@ -463,7 +464,7 @@ export async function sendSms(request: SmsRequest): Promise<{
     const config = getTwilioConfig();
     const from = config?.phoneNumber || '+16043321466';
     const messageId = fakeEmailServer.sendSMS(from, request.to, request.body);
-    console.log(`[TWILIO-TEST] SMS sent: ${messageId}`);
+    logger.info({ messageId }, '[TWILIO-TEST] SMS sent');
     return { success: true, messageSid: messageId };
   }
 
@@ -499,11 +500,11 @@ export async function sendSms(request: SmsRequest): Promise<{
       const dailyCap = (settings as any)?.daily_sms_limit ?? MAX_PROACTIVE_SMS_PER_DAY;
 
       if (dailySmsCount >= dailyCap) {
-        console.warn(`[SMS-CAP] User ${request.userId.slice(0, 8)} hit daily SMS cap (${dailySmsCount}/${dailyCap}). Skipping SMS: "${request.body.slice(0, 50)}"`);
+        logger.warn({ userId: request.userId.slice(0, 8), count: dailySmsCount, cap: dailyCap }, '[SMS-CAP] User hit daily SMS cap');
         return { success: false, error: `Daily SMS cap reached (${dailyCap}/day). Resets at midnight.` };
       }
     } catch (capErr) {
-      console.warn('[SMS-CAP] Failed to check daily cap:', capErr); // Don't block SMS on cap check failure
+      logger.warn({ err: capErr }, '[SMS-CAP] Failed to check daily cap'); // Don't block SMS on cap check failure
     }
   }
 
@@ -515,7 +516,7 @@ export async function sendSms(request: SmsRequest): Promise<{
     // User MUST have a dedicated number — demo number is never used for user SMS
     const fromNumber = await getUserFromNumber(request.userId);
     if (!fromNumber) {
-      console.warn(`[TWILIO] sendSms blocked: user ${request.userId.slice(0, 8)} has no dedicated number`);
+      logger.warn({ userId: request.userId.slice(0, 8) }, '[TWILIO] sendSms blocked: no dedicated number');
       return { success: false, error: "You need a dedicated phone number to send SMS. Visit your dashboard to get one." };
     }
 
@@ -539,7 +540,7 @@ export async function sendSms(request: SmsRequest): Promise<{
     const smsCost = calculateSMSCost(request.to, request.body?.length || 160);
     trackServiceCost(request.userId, "twilio", "sms_outbound", smsCost, "sms_outbound", undefined, SMS_MARKUP).catch(() => {});
 
-    console.log(`[TWILIO] SMS sent: ${data.sid}`);
+    logger.info({ messageSid: data.sid }, '[TWILIO] SMS sent');
     return { success: true, messageSid: data.sid };
   } catch (error) {
     trackError('sms');
@@ -566,7 +567,7 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
       .single();
 
     if (!profile) {
-      console.log(`[TWILIO] No user found for number ${data.to}`);
+      logger.info({ to: data.to }, '[TWILIO] No user found for number');
       return { processed: false };
     }
 
@@ -614,7 +615,7 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
         // Non-critical
       }
 
-      console.log(`[TWILIO] Verification code received for task ${pendingTask.id}`);
+      logger.info({ taskId: pendingTask.id }, '[TWILIO] Verification code received for task');
       return { processed: true, taskId: pendingTask.id, isVerificationCode: true };
     }
 
@@ -652,7 +653,7 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
           || /\b(create|make|build|find|search|sign\s?up|book\s+(?:me\s+)?a|write|send|get\s+me|order\s+me|help\s+me|tell\s+me|show\s+me|set\s+up|look\s+up|check\s+(?:my|if|on)|how\s+(?:to|do|can)|what\s+is|who\s+is)\b/i.test(msgLower);
 
         if (_smsLooksLikeNewTask && !isCancelRequest) {
-          console.log(`[TWILIO] SMS looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${data.body.slice(0, 60)}"`);
+          logger.info({ taskId: awaitingTask.id.slice(0, 8), body: data.body.slice(0, 60) }, '[TWILIO] SMS looks like new task, not reply');
           // Fall through to create new task
         } else if (isCancelRequest) {
           // User wants to cancel
@@ -664,11 +665,11 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
             completed_at: new Date().toISOString(),
           }).eq('id', awaitingTask.id);
 
-          console.log(`[TWILIO] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
+          logger.info({ taskId: awaitingTask.id.slice(0, 8) }, '[TWILIO] User cancelled awaiting task via SMS');
           return { processed: true, taskId: awaitingTask.id };
         } else {
           // User provided an answer — clear auto-proceed timer and re-process
-          console.log(`[TWILIO] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via SMS`);
+          logger.info({ taskId: awaitingTask.id.slice(0, 8) }, '[TWILIO] User replied to awaiting task via SMS');
 
           await getSupabaseClient().from('tasks').update({
             status: 'processing',
@@ -698,13 +699,13 @@ export async function handleIncomingSms(data: IncomingSmsData): Promise<{
       .single();
 
     if (taskRecord) {
-      console.log(`[TWILIO] SMS task created: ${taskRecord.id}`);
+      logger.info({ taskId: taskRecord.id }, '[TWILIO] SMS task created');
       return { processed: true, taskId: taskRecord.id };
     }
 
     return { processed: false };
   } catch (error) {
-    console.error("[TWILIO] Error handling SMS:", error);
+    logger.error({ err: error }, '[TWILIO] Error handling SMS');
     return { processed: false };
   }
 }
@@ -746,11 +747,11 @@ export async function extractSMSVerificationCode(
         .eq("code", code)
         .eq("source", "sms")
         .eq("used", false);
-      console.log(`[TWILIO] Found SMS verification code from tfa_codes for user ${userId.slice(0, 8)}`);
+      logger.info({ userId: userId.slice(0, 8) }, '[TWILIO] Found SMS verification code from tfa_codes');
       return code;
     }
   } catch (e) {
-    console.warn("[TWILIO] tfa_codes lookup failed:", e);
+    logger.warn({ err: e }, '[TWILIO] tfa_codes lookup failed');
   }
 
   // ── 2. Fall back to Twilio REST API ──
@@ -801,9 +802,7 @@ export async function extractSMSVerificationCode(
         msg.body.match(/\b(\d{6})\b/); // Fallback: standalone 6-digit number
 
       if (codeMatch?.[1]) {
-        console.log(
-          `[TWILIO] Found SMS verification code via REST API from ${msg.from}`
-        );
+        logger.info({ from: msg.from }, '[TWILIO] Found SMS verification code via REST API');
         // Store it in tfa_codes so subsequent lookups are faster
         try {
           const { storeTfaCode } = await import("./tfa.js");
@@ -813,7 +812,7 @@ export async function extractSMSVerificationCode(
       }
     }
   } catch (e) {
-    console.warn("[TWILIO] Twilio REST API SMS lookup failed:", e);
+    logger.warn({ err: e }, '[TWILIO] Twilio REST API SMS lookup failed');
   }
 
   return null;
@@ -851,10 +850,10 @@ export async function handleIncomingVoice(
 
     // Someone else is calling the user's Aurora number (forwarded call)
     // Act as a receptionist / assistant
-    console.log(`[TWILIO] Forwarded call for ${profile.username} from ${data.from}`);
+    logger.info({ username: profile.username, from: data.from }, '[TWILIO] Forwarded call');
     return await generateReceptionistTwiml(profile.id, profile.username, data.from);
   } catch (error) {
-    console.error("[TWILIO] Error handling voice:", error);
+    logger.error({ err: error }, '[TWILIO] Error handling voice');
     return await generateResponseTwiml("Sorry, an error occurred. Please try again later.");
   }
 }
@@ -918,7 +917,7 @@ export async function processVoiceCommand(
       .single();
 
     if (taskRecord) {
-      console.log(`[TWILIO] Voice task created: ${taskRecord.id}`);
+      logger.info({ taskId: taskRecord.id }, '[TWILIO] Voice task created');
 
       // Generate dynamic confirmation + smooth ending
       const confirmations = [
@@ -935,7 +934,7 @@ export async function processVoiceCommand(
 
     return generateResponseTwiml("Sorry, I had trouble creating your task. Give me another call!");
   } catch (error) {
-    console.error("[TWILIO] Voice processing error:", error);
+    logger.error({ err: error }, '[TWILIO] Voice processing error');
     return generateResponseTwiml("Sorry, something went wrong. Call me back and we'll try again!");
   }
 }
@@ -1042,7 +1041,7 @@ export async function provisionPhoneNumber(
       // Non-critical — don't fail provisioning if billing setup fails
     }
 
-    console.log(`[TWILIO] Provisioned number for user ${userId.slice(0, 8)}...`);
+    logger.info({ userId: userId.slice(0, 8), phoneNumber }, '[TWILIO] Provisioned number');
     return { success: true, phoneNumber };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
@@ -1093,7 +1092,7 @@ export async function releasePhoneNumber(userId: string): Promise<boolean> {
 
     return true;
   } catch (error) {
-    console.error("[TWILIO] Release error:", error);
+    logger.error({ err: error }, '[TWILIO] Release error');
     return false;
   }
 }
@@ -1204,7 +1203,7 @@ export async function initiateEmailConversation(
     const data = await response.json() as { sid: string };
     await trackVoiceUsage(userId, 1);
 
-    console.log(`[TWILIO] Email conversation initiated: ${data.sid}`);
+    logger.info({ callSid: data.sid }, '[TWILIO] Email conversation initiated');
     return { success: true, callSid: data.sid };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
@@ -1375,7 +1374,7 @@ Respond with JSON only: {"intent": "category", "confidence": 0.0-1.0}`;
 </Response>`;
     }
   } catch (error) {
-    console.error("[TWILIO] Email voice decision error:", error);
+    logger.error({ err: error }, '[TWILIO] Email voice decision error');
     return generateResponseTwiml("Sorry, I had trouble processing your response. I'll queue this in your dashboard for you to review.");
   }
 }

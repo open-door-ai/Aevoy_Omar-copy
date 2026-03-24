@@ -18,6 +18,7 @@ import { logger } from '../utils/logger.js';
 let schedulerInterval: NodeJS.Timeout | null = null;
 let proactiveInterval: NodeJS.Timeout | null = null;
 let checkinInterval: NodeJS.Timeout | null = null;
+let morningCheckinInterval: NodeJS.Timeout | null = null;
 
 /**
  * Start the scheduler - runs every minute
@@ -80,6 +81,17 @@ export function startScheduler(): void {
 
   logger.info('[SCHEDULER] Check-in engine started - checking every 5 minutes');
 
+  // Morning check-in briefings — runs every 60 seconds, checks user_settings.morning_checkin_time
+  checkMorningCheckins().catch((err: unknown) => logger.error({ err }, 'Morning check-in initial run failed'));
+  morningCheckinInterval = setInterval(async () => {
+    try {
+      await checkMorningCheckins();
+    } catch (error) {
+      logger.error('[SCHEDULER] Morning check-in error:', error);
+    }
+  }, 60 * 1000); // Every 60 seconds
+  logger.info('[SCHEDULER] Morning check-in engine started - checking every 60 seconds');
+
   // Start autonomous inbox management (polls every 5 minutes internally)
   import("./inbox-manager.js").then(({ startInboxManager }) => {
     startInboxManager();
@@ -129,6 +141,10 @@ export function stopScheduler(): void {
   if (checkinInterval) {
     clearInterval(checkinInterval);
     checkinInterval = null;
+  }
+  if (morningCheckinInterval) {
+    clearInterval(morningCheckinInterval);
+    morningCheckinInterval = null;
   }
   logger.info('[SCHEDULER] Stopped');
 }
@@ -1140,4 +1156,108 @@ async function runCompletionReports(opts: { includeDaily: boolean; includeWeekly
       // Non-critical, continue to next user
     }
   }
+}
+
+/**
+ * Morning check-in briefings via Aurora Messenger.
+ *
+ * Runs every 60 seconds. Queries user_settings.morning_checkin_time,
+ * compares against the user's local time (via profiles.timezone),
+ * and sends a morning briefing via sendAuroraMessage (auto-selects best channel).
+ *
+ * Deduplication: uses distributed_locks to ensure only one check-in per user per day.
+ * Uses a separate distributed lock so only one instance runs at a time.
+ */
+async function checkMorningCheckins(): Promise<void> {
+  const acquired = await acquireDistributedLock("scheduler_morning_checkins", 2 * 60_000);
+  if (!acquired) {
+    return; // Another instance is handling morning check-ins
+  }
+
+  try {
+    const supabase = getSupabaseClient();
+
+    // Get all users with morning check-in time configured
+    const { data: users } = await supabase
+      .from('user_settings')
+      .select('user_id, morning_checkin_time')
+      .not('morning_checkin_time', 'is', null);
+
+    if (!users || users.length === 0) {
+      await releaseDistributedLock("scheduler_morning_checkins");
+      return;
+    }
+
+    for (const user of users) {
+      try {
+        // Get user timezone from profile
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('timezone, username')
+          .eq('id', user.user_id)
+          .single();
+
+        const tz = profile?.timezone || 'America/Los_Angeles';
+
+        // Get current hour and minute in the user's timezone (DST-aware)
+        const userHour = getUserLocalHour(tz);
+        const userMinute = getUserLocalMinute(tz);
+
+        // Parse check-in time (format: "HH:MM" or "HH:MM:SS")
+        const timeParts = String(user.morning_checkin_time).split(':').map(Number);
+        const checkHour = timeParts[0];
+        const checkMinute = timeParts[1] || 0;
+
+        // Match within +/-1 minute window
+        const currentTotal = userHour * 60 + userMinute;
+        const targetTotal = checkHour * 60 + checkMinute;
+        let diff = Math.abs(currentTotal - targetTotal);
+        if (diff > 12 * 60) diff = 24 * 60 - diff; // midnight wrap
+
+        if (diff > 1) continue; // Not time yet
+
+        // Dedup: check if we already sent a morning check-in today for this user
+        const todayKey = `morning_checkin_${user.user_id}_${new Date().toISOString().split('T')[0]}`;
+        const { data: existing } = await supabase
+          .from('distributed_locks')
+          .select('lock_name')
+          .eq('lock_name', todayKey)
+          .limit(1);
+
+        if (existing && existing.length > 0) continue; // Already sent today
+
+        // Mark as sent for today (insert dedup lock — expires in 24h)
+        await supabase
+          .from('distributed_locks')
+          .upsert({
+            lock_name: todayKey,
+            locked_at: new Date().toISOString(),
+            locked_by: 'morning-checkin',
+            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          }, { onConflict: 'lock_name' });
+
+        // Send morning briefing via Aurora Messenger (picks best channel)
+        logger.info({ userId: user.user_id, username: profile?.username }, 'Morning check-in triggered');
+
+        try {
+          const { sendAuroraMessage } = await import('./aurora-messenger.js');
+          await sendAuroraMessage({
+            userId: user.user_id,
+            content: `Good morning${profile?.username ? `, ${profile.username}` : ''}! Here\'s your daily check-in from Aurora. Ready when you are -- just tell me what you need today.`,
+            priority: 'medium',
+            source: 'proactive',
+            emailSubject: '[Aurora] Morning Check-in',
+          });
+        } catch (err) {
+          logger.error({ err, userId: user.user_id }, 'Morning check-in delivery failed');
+        }
+      } catch (err) {
+        logger.error({ err, userId: user.user_id }, 'Morning check-in error for user');
+      }
+    }
+  } catch (error) {
+    logger.error('[SCHEDULER] Morning check-in scan error:', error);
+  }
+
+  await releaseDistributedLock("scheduler_morning_checkins");
 }

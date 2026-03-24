@@ -10,6 +10,7 @@ import OpenAI from 'openai';
 import type { ToolCall, ModelResponse, TaskTier } from './types.js';
 import { buildFunctionSchemas } from './tool-registry.js';
 import { trackError } from '../utils/error-tracker.js';
+import { logger } from '../utils/logger.js';
 
 // ── Model configurations ──
 
@@ -116,7 +117,7 @@ function isBackedOff(key: string): boolean {
 
 function setBackoff(key: string, durationMs: number): void {
   backoffUntil.set(key, Date.now() + durationMs);
-  console.log(`[V3-MODEL] ${key} backed off for ${Math.round(durationMs / 1000)}s`);
+  logger.info({ key, durationMs: Math.round(durationMs / 1000) }, `[V3-MODEL] ${key} backed off for ${Math.round(durationMs / 1000)}s`);
 }
 
 // ── Client initialization ──
@@ -193,7 +194,7 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
 
     // Skip models that have been unreliable this session (>60% failure rate)
     if (isModelUnreliable(key)) {
-      console.log(`[V3-MODEL] Skipping unreliable model ${key} (session failure rate too high)`);
+      logger.info({ model: key }, '[V3-MODEL] Skipping unreliable model (session failure rate too high)');
       continue;
     }
 
@@ -215,7 +216,7 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
           // With reduced tool schemas (6 instead of 38), requests are 75% smaller.
           // Shorter waits should work now. Try 5s, 15s, 30s.
           for (const waitMs of [5000, 15000, 30000]) {
-            console.log(`[V3-MODEL] Gemini 429 — waiting ${waitMs/1000}s then retrying`);
+            logger.info({ waitSec: waitMs / 1000 }, `[V3-MODEL] Gemini 429 — waiting ${waitMs/1000}s then retrying`);
             await new Promise(r => setTimeout(r, waitMs));
             try {
               return await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
@@ -243,9 +244,9 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
       // Timeout/abort: don't back off, just skip this attempt (next call retries Gemini)
       const isTimeout = err?.name === 'AbortError' || err?.message?.includes('abort') || err?.message?.includes('Timeout');
       if (isTimeout) {
-        console.warn(`[V3-MODEL] ${key} timeout — will retry next call`);
+        logger.warn({ model: key }, '[V3-MODEL] timeout — will retry next call');
       } else {
-        console.warn(`[V3-MODEL] ${key} error:`, err?.message || err);
+        logger.warn({ model: key, err: err?.message || err }, '[V3-MODEL] model error');
         setBackoff(key, 5000); // Brief 5s backoff for unknown errors
       }
       continue;
@@ -328,7 +329,7 @@ async function callProvider(
           const args = JSON.parse(tc.function.arguments || '{}');
           toolCalls.push({ name: tc.function.name, arguments: args });
         } catch {
-          console.warn(`[V3-MODEL] Failed to parse tool call args: ${tc.function.arguments}`);
+          logger.warn({ args: tc.function.arguments }, '[V3-MODEL] Failed to parse tool call args');
         }
       }
     }

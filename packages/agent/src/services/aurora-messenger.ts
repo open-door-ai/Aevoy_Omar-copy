@@ -20,6 +20,7 @@ import { getPreferredChannel } from "./channel-learner.js";
 import { sendSms, callUser } from "./twilio.js";
 import { sendResponse } from "./email.js";
 import type { DeliveryChannel } from "./cost-circuit-breaker.js";
+import { logger } from "../utils/logger.js";
 
 // ---- Types ----
 
@@ -89,7 +90,7 @@ export async function sendAuroraMessage(message: AuroraMessage): Promise<Deliver
     const budgetResult = await checkBudget(userId, selectedChannel);
     if (!budgetResult.allowed) {
       // Fall back to free channel
-      console.log(`[AURORA-MSG] Budget blocked (${selectedChannel}): ${budgetResult.reason}. Falling back to email.`);
+      logger.info({ channel: selectedChannel, reason: budgetResult.reason }, '[AURORA-MSG] Budget blocked, falling back to email');
       const fallbackChannel = await pickFreeChannel(userId);
       const sent = await deliverMessage(userId, content, fallbackChannel, message.emailSubject);
       return {
@@ -107,7 +108,7 @@ export async function sendAuroraMessage(message: AuroraMessage): Promise<Deliver
 
   // Step 5b: On delivery failure, try next cheapest channel before giving up
   if (!sent) {
-    console.log(`[AURORA-MSG] Delivery failed on ${selectedChannel}, trying fallback channels`);
+    logger.info({ channel: selectedChannel }, '[AURORA-MSG] Delivery failed, trying fallback channels');
     for (const fallback of FALLBACK_CHANNEL_ORDER) {
       if (fallback === selectedChannel) continue;
       const available = await isChannelAvailable(userId, fallback);
@@ -121,7 +122,7 @@ export async function sendAuroraMessage(message: AuroraMessage): Promise<Deliver
       sent = await deliverMessage(userId, content, fallback, message.emailSubject);
       if (sent) {
         actualChannel = fallback;
-        console.log(`[AURORA-MSG] Fallback delivery succeeded via ${fallback}`);
+        logger.info({ channel: fallback }, '[AURORA-MSG] Fallback delivery succeeded');
         break;
       }
     }
@@ -212,7 +213,7 @@ async function deliverMessage(
   try {
     const profile = await getUserProfile(userId);
     if (!profile) {
-      console.error(`[AURORA-MSG] No profile found for user ${userId.slice(0, 8)}`);
+      logger.error({ userId: userId.slice(0, 8) }, '[AURORA-MSG] No profile found for user');
       return false;
     }
 
@@ -260,11 +261,11 @@ async function deliverMessage(
         return true;
 
       default:
-        console.error(`[AURORA-MSG] Unknown channel: ${channel}`);
+        logger.error({ channel }, '[AURORA-MSG] Unknown channel');
         return false;
     }
   } catch (err) {
-    console.error(`[AURORA-MSG] deliverMessage error (${channel}):`, err);
+    logger.error({ err, channel }, '[AURORA-MSG] deliverMessage error');
     return false;
   }
 }
@@ -287,7 +288,7 @@ export async function isQuietHours(userId: string): Promise<boolean> {
     const hour = parseInt(formatter.format(new Date()));
     return hour >= 22 || hour < 7;
   } catch (err) {
-    console.warn('[AURORA-MSG] Quiet hours check failed:', err);
+    logger.warn({ err }, '[AURORA-MSG] Quiet hours check failed');
     return false; // On error, assume not quiet
   }
 }
@@ -328,9 +329,9 @@ async function queueForLater(message: AuroraMessage): Promise<void> {
         },
       });
 
-    console.log(`[AURORA-MSG] Queued message for ${message.userId.slice(0, 8)} — delivery at ${triggerAt.toISOString()}`);
+    logger.info({ userId: message.userId.slice(0, 8), triggerAt: triggerAt.toISOString() }, '[AURORA-MSG] Queued message for morning delivery');
   } catch (err) {
-    console.error('[AURORA-MSG] queueForLater error:', err);
+    logger.error({ err }, '[AURORA-MSG] queueForLater error');
   }
 }
 
@@ -354,7 +355,7 @@ async function scheduleEscalation(message: AuroraMessage, originalChannel: Deliv
       .limit(MAX_ESCALATIONS + 1);
 
     if (recentEscalations && recentEscalations.length >= MAX_ESCALATIONS) {
-      console.log(`[AURORA-MSG] Escalation cap reached (${MAX_ESCALATIONS}) for user ${message.userId.slice(0, 8)} — stopping escalation chain`);
+      logger.info({ userId: message.userId.slice(0, 8), cap: MAX_ESCALATIONS }, '[AURORA-MSG] Escalation cap reached — stopping chain');
       return;
     }
 
@@ -389,7 +390,7 @@ async function scheduleEscalation(message: AuroraMessage, originalChannel: Deliv
         },
       });
   } catch (err) {
-    console.error('[AURORA-MSG] scheduleEscalation error:', err);
+    logger.error({ err }, '[AURORA-MSG] scheduleEscalation error');
   }
 }
 
@@ -434,7 +435,7 @@ async function getUserProfile(userId: string): Promise<UserProfile | null> {
     profileCache.set(userId, { profile, cachedAt: Date.now() });
     return profile;
   } catch (err) {
-    console.error(`[AURORA-MSG] getUserProfile error for ${userId.slice(0, 8)}:`, err);
+    logger.error({ err, userId: userId.slice(0, 8) }, '[AURORA-MSG] getUserProfile error');
     return null;
   }
 }
@@ -463,7 +464,7 @@ async function insertConversationContext(
       });
   } catch (err) {
     // Non-critical — don't block delivery
-    console.error('[AURORA-MSG] insertConversationContext error:', err);
+    logger.error({ err }, '[AURORA-MSG] insertConversationContext error');
   }
 }
 
@@ -521,7 +522,7 @@ function getNext7AM(timezone: string): Date {
     const hoursUntil7AM = currentHour < 7 ? (7 - currentHour) : (24 - currentHour + 7);
     return new Date(now.getTime() + hoursUntil7AM * 60 * 60 * 1000);
   } catch (err) {
-    console.warn('[AURORA-MSG] Next morning calculation failed:', err);
+    logger.warn({ err }, '[AURORA-MSG] Next morning calculation failed');
     // Fallback: 8 hours from now
     return new Date(Date.now() + 8 * 60 * 60 * 1000);
   }
@@ -595,7 +596,7 @@ export async function handleProactiveFeedback(
     return { isFrustrated: false };
   }
 
-  console.log(`[AURORA-MSG] Frustration detected from user ${userId.slice(0, 8)}: "${responseText.slice(0, 80)}"`);
+  logger.info({ userId: userId.slice(0, 8), text: responseText.slice(0, 80) }, '[AURORA-MSG] Frustration detected from user');
 
   const supabase = getSupabaseClient();
 
@@ -641,7 +642,7 @@ export async function handleProactiveFeedback(
                 .update({ confidence: newConfidence })
                 .eq('id', pattern.id);
             }
-            console.log(`[AURORA-MSG] Reduced confidence by 0.10 for ${patterns.length} "${patternType}" patterns for user ${userId.slice(0, 8)}`);
+            logger.info({ userId: userId.slice(0, 8), patternType, patternCount: patterns.length }, '[AURORA-MSG] Reduced confidence for patterns');
           }
         }
       }
@@ -652,10 +653,10 @@ export async function handleProactiveFeedback(
       const { recordChannelResponse } = await import('./channel-learner.js');
       await recordChannelResponse(userId, 'in_app', 'proactive', 0, false);
     } catch (err) {
-      console.warn('[AURORA-MSG] channel-learner recordChannelResponse failed (non-critical):', err);
+      logger.warn({ err }, '[AURORA-MSG] channel-learner recordChannelResponse failed (non-critical)');
     }
   } catch (err) {
-    console.error('[AURORA-MSG] handleProactiveFeedback error:', err);
+    logger.error({ err }, '[AURORA-MSG] handleProactiveFeedback error');
   }
 
   return {
