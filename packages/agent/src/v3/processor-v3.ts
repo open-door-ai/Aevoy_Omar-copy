@@ -735,7 +735,7 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       // ── Dynamic tool filtering for LLM call ──
       // Use the loaded tool names as the filter. If browser activity is detected,
       // narrow further to just browser tools + web_search + ask_user for ~75% token savings.
-      const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot/i.test(m.content));
+      const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot|browser_screenshot/i.test(m.content));
       const toolsForCall = hasBrowserActivity ? 'browser' as const : loadedToolNames;
 
       // ── Smart step complexity detection ──

@@ -1175,31 +1175,34 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
     inputChannel: inputChannel || "email",
   };
 
-  try {
-    const result = await processTaskV3(taskReq);
+  // ── Fire-and-forget: respond immediately, process in background ──
+  // processTaskV3 creates the task record in DB, processes the task, and delivers
+  // the response via atomicCompleteTask (email/SMS/WS/etc). The frontend gets
+  // updates via Supabase realtime subscriptions on the tasks table.
+  // This avoids Railway's 30s HTTP timeout killing multi_step browser tasks.
+  res.json({
+    status: "accepted",
+    message: "Task received — processing now. You'll get the response via your channel.",
+  });
 
-    // Aurora Intelligence: extract context in background (non-blocking)
-    const messageContent = (taskReq.body || taskReq.subject || '').trim();
-    if (messageContent) {
-      extractContext(messageContent, userId, inputChannel || 'web').catch(err =>
-        logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
-      );
-    }
-
-    res.json({
-      status: "completed",
-      success: result.success,
-      response: result.response,
+  // Process in background — errors are handled inside processTaskV3 (user notification + DB update)
+  processTaskV3(taskReq)
+    .then((result) => {
+      logger.info(`[TASK-V2] Background task completed: success=${result.success}, taskId=${result.taskId}`);
+      // Aurora Intelligence: extract context in background (non-blocking)
+      const messageContent = (taskReq.body || taskReq.subject || '').trim();
+      if (messageContent) {
+        extractContext(messageContent, userId, inputChannel || 'web').catch(err =>
+          logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
+        );
+      }
+    })
+    .catch((error) => {
+      logger.error("[TASK-V2] Background processing failed:", error);
+    })
+    .finally(() => {
+      activeTasks--;
     });
-  } catch (error) {
-    logger.error("[TASK-V2] Processing failed:", error);
-    res.status(500).json({
-      status: "error",
-      message: "An unexpected error occurred while processing your task"
-    });
-  } finally {
-    activeTasks--;
-  }
 });
 
 /**

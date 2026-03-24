@@ -325,6 +325,60 @@ registerTool({
   },
 });
 
+// ── browser_screenshot — Take a screenshot for debugging ──
+
+registerTool({
+  name: 'browser_screenshot',
+  description: 'Take a screenshot of the current browser page. Useful for debugging blocked pages, CAPTCHAs, or understanding what the page looks like when DOM content is insufficient.',
+  category: 'browser',
+  parameters: {},
+  required: [],
+  async execute(_params, ctx): Promise<ToolCallResult> {
+    const page = await getPage(ctx.taskId);
+    if (!page) {
+      return { success: false, error: 'No browser session. Use browser_go first to navigate to a page.', cost: 0 };
+    }
+
+    try {
+      const screenshot = await page.screenshot({ type: 'jpeg', quality: 50 });
+      const base64 = screenshot.toString('base64');
+      // Don't return the actual image data to the model (too large for text context)
+      // Instead, analyze the page state and return a useful description
+      const title = await page.title();
+      const url = page.url();
+
+      // Check for common blocking indicators in the page content
+      const bodyText = await page.evaluate(() => {
+        return document.body?.innerText?.substring(0, 1000) || '';
+      });
+      const lowerBody = bodyText.toLowerCase();
+
+      let pageStatus = 'accessible';
+      if (lowerBody.includes('captcha') || lowerBody.includes('verify you are human') || lowerBody.includes('robot')) {
+        pageStatus = 'CAPTCHA DETECTED — this site is blocking automated access. Try a different site or use web_search instead.';
+      } else if (lowerBody.includes('access denied') || lowerBody.includes('403') || lowerBody.includes('forbidden')) {
+        pageStatus = 'ACCESS DENIED — this site is blocking you. Try: mobile version (m.site.com), a competitor, or web_search.';
+      } else if (lowerBody.includes('cloudflare') && (lowerBody.includes('checking') || lowerBody.includes('ray id'))) {
+        pageStatus = 'CLOUDFLARE BLOCK — anti-bot protection active. Do NOT retry this site. Use web_search or try a competitor.';
+      } else if (!bodyText.trim() || bodyText.trim().length < 20) {
+        pageStatus = 'PAGE APPEARS EMPTY — may be loading JavaScript content, or the site blocked rendering. Try browser_snapshot() after waiting, or navigate elsewhere.';
+      }
+
+      return {
+        success: true,
+        data: `Screenshot taken of "${title}" (${url}).\nPage status: ${pageStatus}\nVisible text preview: ${bodyText.substring(0, 500)}`,
+        cost: 0,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: `Screenshot failed: ${err instanceof Error ? err.message : 'unknown'}`,
+        cost: 0,
+      };
+    }
+  },
+});
+
 // ── browser_close — Close the browser session ──
 
 registerTool({
