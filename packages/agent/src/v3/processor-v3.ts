@@ -1270,14 +1270,14 @@ function cleanRawToolOutput(text: string): string {
     }
   }
 
-  // Extract active commitments
-  const commitmentLines = text.match(/^- .+(\(for .+\))?/gm);
-  if (commitmentLines) {
-    const commitments = commitmentLines
-      .filter(l => !l.includes('confidence:') && l.length > 5 && l.length < 200)
+  // Extract active commitments (only from the "Active commitments:" section)
+  const commitmentSection = text.match(/Active commitments:\n([\s\S]*?)(?:\n\n|$)/);
+  if (commitmentSection) {
+    const lines = commitmentSection[1].split('\n')
+      .filter(l => l.startsWith('- ') && l.length > 8 && !l.includes('no information') && !l.includes('No preferences') && !l.includes('Nothing learned'))
       .slice(0, 5);
-    if (commitments.length > 0) {
-      facts.push(`Active commitments:\n${commitments.join('\n')}`);
+    if (lines.length > 0) {
+      facts.push(`You're tracking these commitments:\n${lines.join('\n')}`);
     }
   }
 
