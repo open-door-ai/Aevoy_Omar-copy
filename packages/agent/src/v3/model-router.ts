@@ -9,6 +9,7 @@
 import OpenAI from 'openai';
 import type { ToolCall, ModelResponse, TaskTier } from './types.js';
 import { buildFunctionSchemas } from './tool-registry.js';
+import { trackError } from '../utils/error-tracker.js';
 
 // ── Model configurations ──
 
@@ -205,6 +206,7 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
       return result;
     } catch (err: any) {
       recordModelFailure(key);
+      trackError('ai');
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
         if (model.provider === 'gemini') {
           // Gemini TPM (tokens per minute) rate limit — tool-calling requests are large.

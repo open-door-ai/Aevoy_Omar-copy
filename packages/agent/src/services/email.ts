@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
+import { trackError } from "../utils/error-tracker.js";
 
 /**
  * SECURITY: Sanitize email header values to prevent header injection.
@@ -98,6 +99,7 @@ export async function sendResponse(options: EmailOptions): Promise<boolean> {
       console.log(`[EMAIL-SEND] SUCCESS — email sent to ${to}, id=${result.data?.id || 'unknown'}`);
       return true;
     } catch (error) {
+      trackError('email');
       console.error(`[EMAIL-SEND] Exception (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
       if (attempt < maxRetries) {
         await new Promise(resolve => setTimeout(resolve, 3000));

@@ -565,6 +565,68 @@ app.get("/health", async (_req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
+// ---- Error Rate Tracker (imported from standalone utility) ----
+import { trackError, getErrorCounts } from "./utils/error-tracker.js";
+export { trackError };
+
+// Public status endpoint — lightweight, no DB queries, just in-memory state
+app.get("/aurora/status", async (_req, res) => {
+  const status = {
+    operational: true,
+    services: {
+      ai: { status: 'operational', detail: '' },
+      sms: { status: 'operational', detail: '' },
+      voice: { status: 'operational', detail: '' },
+      email: { status: 'operational', detail: '' },
+    } as Record<string, { status: string; detail: string }>,
+    degraded: [] as string[],
+    lastChecked: new Date().toISOString(),
+  };
+
+  // Check AI model backoff status
+  try {
+    const { getBackoffStatus } = await import("./v3/model-router.js");
+    const backoff = getBackoffStatus();
+    const backedOffModels = Object.entries(backoff).filter(([_, v]) => v.backedOff);
+
+    if (backedOffModels.length > 0) {
+      const allBacked = backedOffModels.length >= 3;
+      status.services.ai = {
+        status: allBacked ? 'down' : 'degraded',
+        detail: allBacked
+          ? 'AI models temporarily unavailable. Retrying...'
+          : 'Some AI models rate-limited. Using fallbacks.',
+      };
+      if (allBacked) {
+        status.operational = false;
+      }
+      status.degraded.push('ai');
+    }
+  } catch {
+    // Model router not available — don't mark as down
+  }
+
+  // Check in-memory error rates for each service
+  const counts = getErrorCounts();
+
+  for (const svc of ['sms', 'voice', 'email'] as const) {
+    if (counts[svc] > 3) {
+      status.services[svc] = {
+        status: 'degraded',
+        detail: `${counts[svc]} errors in the last minute.`,
+      };
+      status.degraded.push(svc);
+    }
+  }
+
+  if (status.degraded.length > 0 && status.operational) {
+    // Degraded but not fully down
+    status.operational = true;
+  }
+
+  res.json(status);
+});
+
 // Debug: trigger proactive checks on demand (requires webhook secret)
 app.post("/debug/proactive", async (req, res) => {
   const secret = req.headers["x-webhook-secret"];

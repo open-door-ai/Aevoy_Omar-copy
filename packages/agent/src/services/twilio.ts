@@ -15,6 +15,7 @@ import type { VoiceCallRequest, SmsRequest, IncomingVoiceData, IncomingSmsData }
 import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
 import { trackServiceCost } from "./ai.js";
 import { calculateSMSCost, SMS_MARKUP, VOICE_MARKUP, TWILIO_RATES } from "../utils/cost-calculator.js";
+import { trackError } from "../utils/error-tracker.js";
 
 // ---- Security: Input Sanitization ----
 
@@ -255,6 +256,7 @@ export async function callUser(request: VoiceCallRequest): Promise<{
     console.log(`[TWILIO] Callback initiated via URL: ${data.sid}`);
     return { success: true, callSid: data.sid };
   } catch (error) {
+    trackError('voice');
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("[TWILIO] Call error:", msg);
     return { success: false, error: msg };
@@ -540,6 +542,7 @@ export async function sendSms(request: SmsRequest): Promise<{
     console.log(`[TWILIO] SMS sent: ${data.sid}`);
     return { success: true, messageSid: data.sid };
   } catch (error) {
+    trackError('sms');
     const msg = error instanceof Error ? error.message : "Unknown error";
     return { success: false, error: msg };
   }

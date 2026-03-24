@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2, LogOut, Sun, Moon } from "lucide-react";
+import { StatusBanner } from "@/components/aurora/StatusBanner";
 
 type AuroraTheme = "light" | "dark";
 
@@ -164,6 +165,9 @@ export default function AuroraLayout({
           </div>
         </div>
       </header>
+
+      {/* Service Status Banner — shows when degraded/down */}
+      <StatusBanner />
 
       {/* Logout Confirmation Dialog */}
       {showLogoutConfirm && (
