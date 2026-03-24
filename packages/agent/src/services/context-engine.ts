@@ -80,12 +80,113 @@ type ContextType = "routine" | "preference" | "relationship" | "commitment" |
 
 // ---- Constants ----
 
-const MIN_MESSAGE_LENGTH = 5;
+const MIN_MESSAGE_LENGTH = 8; // Messages under 8 chars are too short to be actionable
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = "llama-3.1-8b-instant"; // Fast, free
 const EXTRACTION_TIMEOUT_MS = 15_000; // 15s max for extraction
 const MAX_MESSAGE_LENGTH_FOR_LLM = 2000; // Truncate before sending to extraction LLM
 const MAX_EXTRACTIONS_PER_USER_PER_MINUTE = 5;
+
+// ---- Skip set for trivial messages ----
+// These are never worth sending to the LLM for extraction.
+// Action detection (FIX 1) runs separately and handles its own filtering.
+const SKIP_MESSAGES = new Set([
+  'ok', 'okay', 'k', 'yes', 'no', 'yep', 'nope', 'yeah', 'nah',
+  'sure', 'thanks', 'thank you', 'ty', 'thx', 'cool', 'nice',
+  'got it', 'sounds good', 'good', 'great', 'awesome', 'perfect',
+  'haha', 'lol', 'lmao', 'hm', 'hmm', 'mm', 'mhm', 'uh huh',
+  'hi', 'hey', 'hello', 'yo', 'sup', 'bye', 'later', 'gn',
+  'idk', 'idc', 'nvm', 'nm', 'nothing', 'nevermind',
+]);
+
+// ---- Instant Action Detection (FIX 1) ----
+// Zero-cost regex-based detection of actionable intents.
+// Runs IMMEDIATELY — no LLM call needed.
+
+const ACTION_INTENT_PATTERNS: RegExp[] = [
+  // "I need to..." / "I have to..." / "I should..." / "I gotta..."
+  /\bi\s+(need|have|got|gotta|should|must|want)\s+to\s+(.{5,80})/i,
+  // "Remind me to..."
+  /\bremind\s+me\s+to\s+(.{5,80})/i,
+  // "Don't let me forget..."
+  /\bdon'?t\s+let\s+me\s+forget\s+(.{5,80})/i,
+  // "I promised X..."
+  /\bi\s+promised\s+(\w+)\s+(.{5,50})/i,
+  // "Book me..." / "Schedule..."
+  /\b(book|schedule|reserve|set up|arrange)\s+(me\s+)?(.{5,80})/i,
+  // "Can you..." / "Could you..."
+  /\b(can|could|would)\s+you\s+(.{5,80})/i,
+];
+
+/**
+ * Instant action detection — runs via regex, zero LLM cost.
+ * If the user mentions something actionable ("I need to book a flight"),
+ * queues a proactive suggestion immediately so Aurora can offer help.
+ */
+async function detectAndQueueActions(
+  message: string,
+  userId: string,
+  channel: string
+): Promise<void> {
+  const lower = message.toLowerCase();
+
+  for (const pattern of ACTION_INTENT_PATTERNS) {
+    const match = lower.match(pattern);
+    if (match) {
+      // Extract the actionable part (always the last capture group)
+      const actionText = match[match.length - 1]?.trim();
+      if (!actionText || actionText.length < 5) continue;
+
+      // Clean up trailing punctuation
+      const cleanAction = actionText.replace(/[.!?,;:]+$/, '').trim();
+      if (!cleanAction) continue;
+
+      const supabase = getSupabaseClient();
+
+      // Deduplicate: skip if a similar suggestion was queued in the last hour
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      try {
+        const { data: existing } = await supabase
+          .from("proactive_queue")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("action_type", "suggest")
+          .gte("created_at", oneHourAgo)
+          .ilike("title", `%${cleanAction.substring(0, 30)}%`)
+          .limit(1);
+
+        if (existing && existing.length > 0) {
+          logger.debug("[CONTEXT] Skipping duplicate action suggestion for %s", cleanAction.substring(0, 40));
+          return;
+        }
+      } catch {
+        // Non-critical — proceed with insert
+      }
+
+      try {
+        await supabase.from("proactive_queue").insert({
+          user_id: userId,
+          action_type: "suggest",
+          title: `Heard you: "${cleanAction.substring(0, 60)}"`,
+          description: `You mentioned "${cleanAction}". Want me to help with that?`,
+          priority: 7, // High but not critical
+          confidence: 0.90,
+          trigger_at: new Date().toISOString(), // Trigger immediately
+          status: "pending",
+          preferred_channel: channel === "microphone" ? "in_app" : channel,
+        });
+
+        logger.info({ userId: userId.substring(0, 8), action: cleanAction.substring(0, 60) },
+          "[CONTEXT] Action intent detected — queued suggestion");
+      } catch (err) {
+        logger.debug({ err: err instanceof Error ? err.message : String(err) },
+          "[CONTEXT] Failed to queue action suggestion");
+      }
+
+      break; // Only queue one action per message
+    }
+  }
+}
 
 // ---- Per-user extraction rate limiter ----
 
@@ -516,15 +617,27 @@ export async function extractContext(
   userId: string,
   channel: string
 ): Promise<void> {
-  // Skip very short messages — not worth the extraction cost
-  if (!message || message.trim().length < MIN_MESSAGE_LENGTH) {
+  if (!message || message.trim().length < 3) {
     return;
   }
 
-  // Skip obvious non-content messages
-  const trimmed = message.trim().toLowerCase();
-  const skipPatterns = ["ok", "yes", "no", "thanks", "thank you", "sure", "yep", "nope", "k", "ty", "thx"];
-  if (skipPatterns.includes(trimmed)) {
+  // FIX 1: Run instant action detection FIRST (regex, zero cost).
+  // This runs even on short messages — "Book dentist" is only 12 chars but actionable.
+  try {
+    await detectAndQueueActions(message, userId, channel);
+  } catch (err) {
+    // Never let action detection block extraction
+    logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Action detection error");
+  }
+
+  // FIX 4: Expanded skip set — skip trivial messages for LLM extraction
+  const normalized = message.trim().toLowerCase().replace(/[.!?,]+$/g, '');
+  if (SKIP_MESSAGES.has(normalized)) {
+    return;
+  }
+
+  // Skip very short messages — not worth the LLM extraction cost
+  if (message.trim().length < MIN_MESSAGE_LENGTH) {
     return;
   }
 

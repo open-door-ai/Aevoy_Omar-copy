@@ -17,7 +17,7 @@ import { sendOverQuotaEmail } from '../services/email.js';
 import { trackServiceCost } from '../services/ai.js';
 import type { TaskRequest, TaskResult, InputChannel } from '../types/index.js';
 import type { TaskContext, TierClassification, ToolCall } from './types.js';
-import { buildTaskContext, loadTaskMemory, loadPersonality, buildSystemPrompt, buildTaskPrompt } from './context-builder.js';
+import { buildTaskContext, loadTaskMemory, loadPersonality, buildSystemPrompt, buildInstantPrompt, buildTaskPrompt } from './context-builder.js';
 import { atomicCompleteTask, sendViaChannel } from './channel-router.js';
 import { BudgetManager } from './budget-manager.js';
 import { TaskLedger } from './task-ledger.js';
@@ -479,10 +479,13 @@ Category:`;
 async function handleInstant(task: TaskRequest, ctx: TaskContext): Promise<string> {
   const taskText = task.subject === task.body ? task.subject : `${task.subject} ${task.body}`;
 
+  // FIX 3: Use concise instant prompt for cheap 8B models — saves tokens and latency
+  const systemPromptText = buildInstantPrompt(ctx.username, ctx.profile.timezone);
+
   // Use a fast, free model for conversational responses
   const result = await callModel({
     messages: [
-      { role: 'system', content: `You are Aurora, a friendly AI assistant. The human you are talking to is ${ctx.username}. You serve ${ctx.username}. When they ask "what do you know about me" or anything about themselves, they are asking what YOU (Aurora) know about THEM (${ctx.username}) — not asking you to describe yourself. Never confuse your identity with the user's identity.\n\nRespond naturally and concisely. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.\n\nIMPORTANT: You are NOT connected to the internet. You CANNOT browse websites, check prices, make calls, send emails, or access any external services. Only answer from your training knowledge. If the question requires live data, say "I'd need to look that up online — let me search for you" and nothing more.` },
+      { role: 'system', content: systemPromptText },
       { role: 'user', content: taskText },
     ],
     tier: 'instant',

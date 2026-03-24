@@ -63,6 +63,7 @@ interface PatternRow {
 const MIN_ACTION_CONFIDENCE = 0.85;
 const COMMITMENT_REMINDER_HOURS = 2; // Remind 2 hours before due
 const MAX_ACTIONS_PER_RUN = 10; // Cap actions generated per user per run
+const MAX_PROACTIVE_PER_DAY = 5; // Default daily frequency cap (configurable via user_settings)
 
 // ---- Commitment Scanning ----
 
@@ -342,9 +343,92 @@ export async function generateProactiveActions(userId: string): Promise<number> 
   return actionsGenerated;
 }
 
+// ---- FIX 2: Proactive Frequency Cap ----
+
+/**
+ * Check if a user has hit their daily proactive message limit.
+ * Returns true if under the limit (OK to send), false if limit reached.
+ */
+async function checkProactiveLimit(userId: string): Promise<boolean> {
+  const supabase = getSupabaseClient();
+  const today = new Date().toISOString().split('T')[0];
+
+  try {
+    const { count } = await supabase
+      .from("proactive_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("status", "delivered")
+      .gte("delivered_at", `${today}T00:00:00Z`);
+
+    return (count || 0) < MAX_PROACTIVE_PER_DAY;
+  } catch (err) {
+    logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[PROACTIVE-Q] Limit check failed — allowing");
+    return true; // Fail open — better to send than silently drop
+  }
+}
+
+// ---- FIX 5: Smart Proactive Timing ----
+
+/**
+ * Determine if a queued action should be delivered right now based on
+ * user timezone, action type, and priority.
+ */
+function shouldDeliverNow(action: { action_type: string; priority: number }, userTimezone: string): boolean {
+  // Parse the user's current hour
+  try {
+    const userTimeStr = new Date().toLocaleString('en-US', {
+      timeZone: userTimezone,
+      hour: 'numeric',
+      hour12: false,
+    });
+    const userHour = parseInt(userTimeStr, 10);
+
+    // Never deliver between 10 PM and 7 AM user time (unless critical)
+    if ((userHour >= 22 || userHour < 7) && action.priority < 9) {
+      return false;
+    }
+  } catch {
+    // Invalid timezone — allow delivery (fail open)
+  }
+
+  // Action suggestions (from listening) — deliver within 30 seconds
+  if (action.action_type === 'suggest' && action.priority >= 7) return true;
+
+  // Commitment reminders — deliver at the scheduled time
+  if (action.action_type === 'remind') return true;
+
+  // Follow-ups — deliver
+  if (action.action_type === 'follow_up') return true;
+
+  // Low-priority info — batch for morning or evening digest
+  if (action.priority <= 3) return false;
+
+  return true;
+}
+
+/**
+ * Load user timezone from their profile. Falls back to 'America/Los_Angeles'.
+ */
+async function getUserTimezone(userId: string): Promise<string> {
+  try {
+    const { data } = await getSupabaseClient()
+      .from("profiles")
+      .select("timezone")
+      .eq("id", userId)
+      .single();
+    return data?.timezone || 'America/Los_Angeles';
+  } catch {
+    return 'America/Los_Angeles';
+  }
+}
+
 /**
  * Process pending actions in the proactive queue.
  * Finds actions whose trigger_at has arrived and marks them for delivery.
+ *
+ * FIX 2: Checks daily frequency cap before delivering.
+ * FIX 5: Checks smart timing (user timezone, quiet hours).
  *
  * The actual delivery (SMS/email/etc.) will be handled by the
  * communication system. For now, this logs what would be sent.
@@ -372,13 +456,42 @@ export async function processQueue(): Promise<number> {
 
     if (!pendingActions || pendingActions.length === 0) return 0;
 
+    // Cache timezone lookups per user to avoid repeated DB queries
+    const timezoneCache = new Map<string, string>();
+
     for (const action of pendingActions) {
       try {
+        const userId = action.user_id as string;
+
+        // FIX 2: Check daily frequency cap (skip if limit reached, unless priority >= 9)
+        if ((action.priority as number) < 9) {
+          const underLimit = await checkProactiveLimit(userId);
+          if (!underLimit) {
+            logger.debug("[PROACTIVE-Q] Daily limit reached for user %s — skipping %s", userId.substring(0, 8), action.title);
+            continue;
+          }
+        }
+
+        // FIX 5: Check smart timing (user timezone, quiet hours)
+        let userTimezone = timezoneCache.get(userId);
+        if (!userTimezone) {
+          userTimezone = await getUserTimezone(userId);
+          timezoneCache.set(userId, userTimezone);
+        }
+
+        if (!shouldDeliverNow(
+          { action_type: action.action_type as string, priority: action.priority as number },
+          userTimezone
+        )) {
+          logger.debug("[PROACTIVE-Q] Not the right time for user %s — deferring %s", userId.substring(0, 8), action.title);
+          continue;
+        }
+
         // For now, log the action and mark as delivered
         // The communication system (Phase 3) will handle actual delivery
         logger.info(
           "[PROACTIVE-Q] Would deliver to user %s: [%s] %s — %s (priority: %d, channel: %s)",
-          (action.user_id as string).substring(0, 8),
+          userId.substring(0, 8),
           action.action_type,
           action.title,
           action.description || "(no description)",

@@ -116,6 +116,18 @@ async function loadUserProfile(userId: string): Promise<Record<string, any>> {
 }
 
 /**
+ * Build a concise system prompt for instant tier (cheap 8B models).
+ * Much shorter than the full buildSystemPrompt — saves tokens and latency.
+ */
+export function buildInstantPrompt(username?: string, timezone?: string): string {
+  const timeStr = timezone
+    ? new Date().toLocaleString('en-US', { timeZone: timezone })
+    : new Date().toLocaleString('en-US');
+
+  return `You are Aurora, a helpful AI assistant${username ? ` for ${username}` : ''}. Be concise, direct, and natural. Use contractions. If the user mentions needing to do something, acknowledge it and offer to help. Never show raw data or JSON. Always respond in plain conversational language.${username ? ` When they ask about themselves, they mean what YOU (Aurora) know about THEM (${username}).` : ''} Current time: ${timeStr}.`;
+}
+
+/**
  * Build the system prompt for multi-step tasks.
  * Includes personality, memory, budget, and tool descriptions.
  *
