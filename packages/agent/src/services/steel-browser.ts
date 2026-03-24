@@ -135,20 +135,25 @@ const activeSessions = new Map<string, SteelSession>();
  * Returns a Playwright Page ready for interaction.
  */
 export async function createSession(taskId: string): Promise<SteelSession> {
-  if (!STEEL_API_KEY) {
+  if (!STEEL_API_KEY && !STEEL_API_URL.includes('.railway.internal')) {
     throw new Error('STEEL_API_KEY not configured');
   }
   if (activeSessions.size >= MAX_CONCURRENT) {
     throw new Error('Max concurrent browser sessions reached');
   }
 
+  const isSelfHosted = STEEL_API_URL.includes('.railway.internal') || STEEL_API_URL.includes('localhost');
+
   // Create Steel session via API
-  const res = await fetch(`${STEEL_API_URL}/sessions`, {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (!isSelfHosted && STEEL_API_KEY) {
+    headers['steel-api-key'] = STEEL_API_KEY;
+  }
+
+  const apiBase = isSelfHosted ? `${STEEL_API_URL}/v1` : STEEL_API_URL;
+  const res = await fetch(`${apiBase}/sessions`, {
     method: 'POST',
-    headers: {
-      'steel-api-key': STEEL_API_KEY,
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       sessionTimeout: SESSION_TIMEOUT_MS,
     }),
@@ -163,7 +168,12 @@ export async function createSession(taskId: string): Promise<SteelSession> {
   logger.info(`[STEEL] Created session ${session.id} for task ${taskId.slice(0, 8)}`);
 
   // Connect via CDP WebSocket with timeout
-  const wsUrl = `wss://connect.steel.dev?apiKey=${STEEL_API_KEY}&sessionId=${session.id}`;
+  // Self-hosted (railway.internal): ws://host:port?sessionId=...
+  // Cloud (api.steel.dev): wss://connect.steel.dev?apiKey=...&sessionId=...
+  const isSelfHosted = STEEL_API_URL.includes('.railway.internal') || STEEL_API_URL.includes('localhost');
+  const wsUrl = isSelfHosted
+    ? `ws://${new URL(STEEL_API_URL).host}?sessionId=${session.id}`
+    : `wss://connect.steel.dev?apiKey=${STEEL_API_KEY}&sessionId=${session.id}`;
   let browser: Browser;
   try {
     browser = await Promise.race([
