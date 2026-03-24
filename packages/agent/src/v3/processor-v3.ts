@@ -370,7 +370,8 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
   }
 
   // Self-knowledge / memory recall / commitments — needs the recall tool
-  if (/\b(what do you know|what have you learned|tell me about (me|myself)|what('?s| is) my|do you remember|recall|my (preference|routine|habit|schedule|commitment|promise)|list.*(commitment|promise|task|reminder)|what.*(tracking|remember|know about me)|pending.*(commitment|task|reminder))\b/i.test(lower)) {
+  if (/\b(what do you know|what have you learned|tell me about (me|myself)|do you remember|my (preference|routine|habit|schedule))\b/i.test(lower) ||
+      /\b(commitments?|promises?|pending tasks?|what.*(tracking|remember)|list.*(commitment|task|reminder))/i.test(lower)) {
     return { tier: 'single_tool', tool: 'recall', reasoning: 'self-knowledge/commitments query — needs recall tool' };
   }
 
