@@ -987,7 +987,7 @@ export async function provisionPhoneNumber(
       PhoneNumber: phoneNumber,
       SmsUrl: `${config.webhookBaseUrl}/webhook/sms/${userId}`,
       VoiceUrl: `${config.webhookBaseUrl}/webhook/voice/${userId}`,
-      FriendlyName: `aevoy-${userId.slice(0, 8)}`,
+      FriendlyName: `aurora-${userId.slice(0, 8)}`,
     });
 
     const purchaseResponse = await twilioRequest("/IncomingPhoneNumbers.json", "POST", params);

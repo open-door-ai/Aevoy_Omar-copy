@@ -94,8 +94,8 @@ export async function createExcelFile(
     const workbook = new ExcelJS.Workbook();
 
     // Set workbook properties
-    workbook.creator = params.author || 'Aevoy AI Agent';
-    workbook.lastModifiedBy = params.author || 'Aevoy AI Agent';
+    workbook.creator = params.author || 'Aurora AI Agent';
+    workbook.lastModifiedBy = params.author || 'Aurora AI Agent';
     workbook.created = new Date();
     workbook.modified = new Date();
 

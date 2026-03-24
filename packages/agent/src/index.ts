@@ -120,19 +120,8 @@ import { handleVoiceWebSocket, getActiveSessionCount } from "./services/voice-co
 import { logger } from "./utils/logger.js";
 import { setupListenWebSocket } from "./routes/aurora-listen.js";
 
-// ---- Global Error Handlers ----
-// Prevents uncaught errors from crashing the process silently.
-// CLAUDE.md notes: "No global unhandledRejection handler — fix needed" — this fixes it.
-
-process.on('unhandledRejection', (reason, _promise) => {
-    logger.error({ reason: reason instanceof Error ? reason.message : String(reason) }, 'Unhandled Promise Rejection');
-});
-
-process.on('uncaughtException', (error) => {
-    logger.fatal({ error: error.message, stack: error.stack }, 'Uncaught Exception');
-    // Give logger time to flush, then exit (Railway will restart)
-    setTimeout(() => process.exit(1), 1000);
-});
+// ---- Global Error Handlers are at the END of the file ----
+// (single registration point to avoid duplicate handlers)
 
 const app = express();
 const PORT = process.env.AGENT_PORT || 3001;
@@ -4125,6 +4114,8 @@ process.on("unhandledRejection", (reason, promise) => {
   if (reason instanceof Error && reason.stack) {
     logger.error("[FATAL] Stack:", reason.stack);
   }
+  // Exit so Railway restarts the process — a hanging process is worse than a restart
+  setTimeout(() => process.exit(1), 1000);
 });
 
 process.on("SIGTERM", async () => {

@@ -82,7 +82,7 @@ export async function createPDF(params: PDFParams): Promise<PDFResult> {
         },
         info: {
           Title: params.title || params.filename,
-          Author: params.author || 'Aevoy AI Agent',
+          Author: params.author || 'Aurora AI Agent',
           Subject: params.subject || 'AI-Generated PDF'
         }
       });

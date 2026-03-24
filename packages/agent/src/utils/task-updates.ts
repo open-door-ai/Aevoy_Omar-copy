@@ -91,10 +91,10 @@ export function classifyUpdateRelevance(
   }
 
   // Shares key nouns with the active task — but exclude user identity tokens
-  // (email addresses, platform name "aevoy", usernames, passwords) which appear in every task
+  // (email addresses, platform name "aurora"/"aevoy", usernames, passwords) which appear in every task
   const stripIdentity = (s: string) => s
     .replace(/\S+@\S+\.\S+/g, '') // strip email addresses
-    .replace(/\baevoy\b/gi, '')     // strip company name
+    .replace(/\b(aevoy|aurora)\b/gi, '')     // strip company name
     .replace(/\bpassword\b/gi, '') // strip password label
     .replace(/\bemail\b/gi, '')    // strip email label
     .replace(/[^a-z\s]/g, '');

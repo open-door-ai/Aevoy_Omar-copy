@@ -99,7 +99,7 @@ const DEFAULT_SKILLS: Omit<Skill, "id">[] = [
   },
   {
     name: "create_excel",
-    provider: "aevoy",
+    provider: "aurora",
     action: "create_spreadsheet",
     description: "Create professional Excel spreadsheets with data, auto-styling, formulas, freeze panes, and auto-fit columns. Supports multiple sheets, custom formatting, and data validation.",
     required_scopes: [],
@@ -110,7 +110,7 @@ const DEFAULT_SKILLS: Omit<Skill, "id">[] = [
   },
   {
     name: "create_powerpoint",
-    provider: "aevoy",
+    provider: "aurora",
     action: "create_presentation",
     description: "Create stunning PowerPoint presentations with 5 layout types (title, content, section, comparison, blank). Supports themes, bullet points, images, and speaker notes.",
     required_scopes: [],
@@ -121,7 +121,7 @@ const DEFAULT_SKILLS: Omit<Skill, "id">[] = [
   },
   {
     name: "create_word",
-    provider: "aevoy",
+    provider: "aurora",
     action: "create_document",
     description: "Create professional Word documents with headings (6 levels), paragraphs, tables, bullet/numbered lists, and rich formatting. Perfect for reports, letters, and documentation.",
     required_scopes: [],
@@ -132,7 +132,7 @@ const DEFAULT_SKILLS: Omit<Skill, "id">[] = [
   },
   {
     name: "create_pdf",
-    provider: "aevoy",
+    provider: "aurora",
     action: "create_pdf",
     description: "Generate professional PDF documents with text, images, tables, and page breaks. Supports A4/Letter/Legal sizes, custom margins, fonts, colors, and metadata.",
     required_scopes: [],
