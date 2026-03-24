@@ -8,6 +8,7 @@
 import { registerTool } from '../tool-registry.js';
 import { updateMemoryWithFact, loadMemory } from '../../services/memory.js';
 import { getUserContext } from '../../services/context-engine.js';
+import { getSupabaseClient } from '../../utils/supabase.js';
 import type { ToolCallResult, TaskContext } from '../types.js';
 
 /** Weather lookup tool */
@@ -178,7 +179,30 @@ registerTool({
         console.warn('[V3-TOOL-DATA] Context engine lookup failed (non-critical):', err);
       }
 
-      const combined = [facts, contextSummary].filter(Boolean).join('\n\n--- Aurora Context ---\n');
+      // Query active commitments Aurora is tracking for the user
+      let commitmentsSummary = '';
+      try {
+        const { data: commitments } = await getSupabaseClient()
+          .from('commitments')
+          .select('description, committed_to, due_date, status')
+          .eq('user_id', ctx.userId)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (commitments && commitments.length > 0) {
+          commitmentsSummary = '\n\nActive commitments:\n' + commitments.map((c: { description: string; committed_to?: string; due_date?: string }) => {
+            let line = `- ${c.description}`;
+            if (c.committed_to) line += ` (for ${c.committed_to})`;
+            if (c.due_date) line += ` — due ${new Date(c.due_date).toLocaleDateString()}`;
+            return line;
+          }).join('\n');
+        }
+      } catch (err) {
+        // Non-critical — commitments table may not exist yet
+      }
+
+      const combined = [facts, contextSummary, commitmentsSummary].filter(Boolean).join('\n\n--- Aurora Context ---\n');
       return { success: true, data: combined || 'No memories or context found.', cost: 0 };
     } catch (err) {
       return { success: false, error: 'Failed to recall memory', cost: 0 };

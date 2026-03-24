@@ -68,6 +68,93 @@ const MIN_PATTERN_CONFIDENCE = 0.5;
 /** EMA smoothing factor (0-1, higher = more weight on recent data) */
 const EMA_ALPHA = 0.3;
 
+// ---- Dedup Helpers ----
+
+/**
+ * Determine if a newly detected pattern is "similar enough" to an existing one
+ * to be considered the same pattern (and thus updated instead of duplicated).
+ *
+ * Matching rules:
+ * - daily_routine / weekly_cycle: time windows within 2 hours of each other,
+ *   or same channel, or same day_of_week
+ * - preference: same key + category in trigger_conditions
+ * - relationship: same person_name
+ * - emotional: same emotion
+ * - trigger_response / financial: same key or description prefix
+ */
+function isSimilarPattern(
+  incoming: DetectedPatternRecord,
+  existing: { trigger_conditions: Record<string, unknown> | null; description: string }
+): boolean {
+  const a = incoming.trigger_conditions;
+  const b = existing.trigger_conditions ?? {};
+
+  switch (incoming.pattern_type) {
+    case "daily_routine": {
+      // Same channel → same pattern
+      if (a.channel && b.channel && a.channel === b.channel) return true;
+      // Both have time windows → check if within 2 hours
+      if (
+        typeof a.time_window_start === "number" &&
+        typeof b.time_window_start === "number"
+      ) {
+        const diff = Math.abs(
+          (a.time_window_start as number) - (b.time_window_start as number)
+        );
+        // Handle wraparound (e.g., 23 and 1 are 2 apart)
+        return diff <= 2 || diff >= 22;
+      }
+      // Same typical_hour within 2 hours
+      if (
+        typeof a.typical_hour === "number" &&
+        typeof b.typical_hour === "number"
+      ) {
+        const diff = Math.abs(
+          (a.typical_hour as number) - (b.typical_hour as number)
+        );
+        return diff <= 2 || diff >= 22;
+      }
+      return false;
+    }
+
+    case "weekly_cycle": {
+      return (
+        typeof a.day_of_week === "number" &&
+        a.day_of_week === b.day_of_week
+      );
+    }
+
+    case "preference": {
+      return (
+        a.key === b.key &&
+        a.category === b.category
+      );
+    }
+
+    case "relationship": {
+      return (
+        typeof a.person_name === "string" &&
+        a.person_name === b.person_name
+      );
+    }
+
+    case "emotional": {
+      return (
+        typeof a.emotion === "string" &&
+        a.emotion === b.emotion
+      );
+    }
+
+    default: {
+      // Fallback: match if descriptions share a meaningful prefix (first 40 chars)
+      return (
+        incoming.description.substring(0, 40) ===
+        existing.description.substring(0, 40)
+      );
+    }
+  }
+}
+
 // ---- Analysis Functions ----
 
 /**
@@ -401,36 +488,38 @@ export async function analyzePatterns(
     // Filter by minimum confidence
     const qualifiedPatterns = allNewPatterns.filter(p => p.confidence >= MIN_PATTERN_CONFIDENCE);
 
-    // Store/update patterns in DB
+    // Store/update patterns in DB (dedup by user_id + pattern_type + similar trigger_conditions)
     const supabase = getSupabaseClient();
     for (const pattern of qualifiedPatterns) {
       try {
-        // Check if a similar pattern already exists
-        const { data: existing } = await supabase
+        // Fetch all existing patterns of this type for the user to find similar ones
+        const { data: existingPatterns } = await supabase
           .from("detected_patterns")
-          .select("id, times_matched, confidence")
+          .select("id, times_matched, confidence, trigger_conditions, description")
           .eq("user_id", userId)
-          .eq("pattern_type", pattern.pattern_type)
-          .eq("description", pattern.description)
-          .limit(1);
+          .eq("pattern_type", pattern.pattern_type);
 
-        if (existing && existing.length > 0) {
-          // Update existing pattern
+        // Find a similar existing pattern using loose matching on trigger_conditions
+        const similar = existingPatterns?.find(ep => isSimilarPattern(pattern, ep));
+
+        if (similar) {
+          // Update existing pattern instead of creating a duplicate
           const updatedConfidence = parseFloat(
-            (existing[0].confidence * 0.6 + pattern.confidence * 0.4).toFixed(2)
+            (similar.confidence * 0.6 + pattern.confidence * 0.4).toFixed(2)
           );
           await supabase
             .from("detected_patterns")
             .update({
               confidence: updatedConfidence,
-              times_matched: (existing[0].times_matched || 0) + 1,
+              times_matched: (similar.times_matched || 0) + 1,
               last_matched_at: new Date().toISOString(),
               trigger_conditions: pattern.trigger_conditions,
+              description: pattern.description,
               updated_at: new Date().toISOString(),
             })
-            .eq("id", existing[0].id);
+            .eq("id", similar.id);
         } else {
-          // Insert new pattern
+          // Insert new pattern — no similar one exists
           await supabase.from("detected_patterns").insert({
             user_id: userId,
             pattern_type: pattern.pattern_type,
