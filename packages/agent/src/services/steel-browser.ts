@@ -170,7 +170,6 @@ export async function createSession(taskId: string): Promise<SteelSession> {
   // Connect via CDP WebSocket with timeout
   // Self-hosted (railway.internal): ws://host:port?sessionId=...
   // Cloud (api.steel.dev): wss://connect.steel.dev?apiKey=...&sessionId=...
-  const isSelfHosted = STEEL_API_URL.includes('.railway.internal') || STEEL_API_URL.includes('localhost');
   const wsUrl = isSelfHosted
     ? `ws://${new URL(STEEL_API_URL).host}?sessionId=${session.id}`
     : `wss://connect.steel.dev?apiKey=${STEEL_API_KEY}&sessionId=${session.id}`;
