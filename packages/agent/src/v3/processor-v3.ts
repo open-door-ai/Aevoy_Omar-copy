@@ -1270,7 +1270,18 @@ function cleanRawToolOutput(text: string): string {
     }
   }
 
-  // Extract commitments from the old memory system
+  // Extract active commitments
+  const commitmentLines = text.match(/^- .+(\(for .+\))?/gm);
+  if (commitmentLines) {
+    const commitments = commitmentLines
+      .filter(l => !l.includes('confidence:') && l.length > 5 && l.length < 200)
+      .slice(0, 5);
+    if (commitments.length > 0) {
+      facts.push(`Active commitments:\n${commitments.join('\n')}`);
+    }
+  }
+
+  // Extract name from old memory
   const nameMatch = text.match(/"answer":\s*"Call me (\w+)\."/);
   if (nameMatch) facts.push(`You asked to be called ${nameMatch[1]}`);
 
