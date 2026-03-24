@@ -11,7 +11,7 @@
 
 import { registerTool } from '../tool-registry.js';
 import type { ToolCallResult } from '../types.js';
-import { createSession, destroySession, getPage, applyStealthMeasures } from '../../services/steel-browser.js';
+import { createSession, destroySession, getPage, applyStealthMeasures, loadUserBrowserContext, saveUserBrowserContext } from '../../services/steel-browser.js';
 import { detectAndSolve } from '../../services/captcha-solver.js';
 
 // ── browser_go — Navigate to a URL ──
@@ -37,6 +37,16 @@ registerTool({
       // Basic URL validation
       if (!/^https?:\/\//i.test(url)) {
         return { success: false, error: 'URL must start with http:// or https://', cost: 0 };
+      }
+
+      // Restore saved cookies for this domain (if any exist for this user)
+      try {
+        const restored = await loadUserBrowserContext(page, ctx.userId, url);
+        if (restored) {
+          // Cookies loaded — navigation will use them automatically
+        }
+      } catch {
+        // Non-critical: proceed without saved context
       }
 
       // Smart retry with escalating anti-blocking strategies
@@ -450,6 +460,16 @@ registerTool({
   parameters: {},
   required: [],
   async execute(_params, ctx): Promise<ToolCallResult> {
+    // Save cookies/session state before closing (for future tasks on same domain)
+    try {
+      const page = await getPage(ctx.taskId);
+      if (page) {
+        await saveUserBrowserContext(page, ctx.userId);
+      }
+    } catch {
+      // Non-critical: proceed with session destruction
+    }
+
     await destroySession(ctx.taskId);
     return { success: true, data: 'Browser session closed.', cost: 0 };
   },

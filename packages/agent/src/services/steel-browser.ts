@@ -13,6 +13,7 @@
 
 import { chromium, type Browser, type Page } from 'playwright';
 import { logger } from '../utils/logger.js';
+import { getSupabaseClient } from '../utils/supabase.js';
 
 const STEEL_API_KEY = process.env.STEEL_API_KEY;
 const STEEL_API_URL = 'https://api.steel.dev/v1';
@@ -277,4 +278,102 @@ export async function cleanupOrphanedSessions(): Promise<void> {
  */
 export function getActiveSessionCount(): number {
   return activeSessions.size;
+}
+
+// ── Persistent Browser Context (Cookies) ──────────────────────────
+
+const CONTEXT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_COOKIES_PER_DOMAIN = 50;
+
+/**
+ * Save browser cookies for a user+domain so future tasks can restore the session.
+ * Stores in the `user_context` table with context_type='habit' and key='browser_session:<domain>'.
+ * Silently skips if there are fewer than 2 cookies (no meaningful session).
+ */
+export async function saveUserBrowserContext(page: Page, userId: string): Promise<void> {
+  try {
+    const pageUrl = page.url();
+    if (!pageUrl || pageUrl === 'about:blank') return;
+
+    const domain = new URL(pageUrl).hostname;
+    const cookies = await page.context().cookies();
+
+    // Only save if there are meaningful cookies (likely a logged-in session)
+    if (cookies.length < 2) return;
+
+    // Limit cookie count to prevent bloat
+    const trimmedCookies = cookies.slice(0, MAX_COOKIES_PER_DOMAIN);
+
+    const supabase = getSupabaseClient();
+    await supabase.from('user_context').upsert({
+      user_id: userId,
+      context_type: 'habit',
+      key: `browser_session:${domain}`,
+      value: {
+        cookies: trimmedCookies,
+        domain,
+        savedAt: Date.now(),
+      },
+      confidence: 1.0,
+      source: 'observed',
+      last_confirmed_at: new Date().toISOString(),
+      times_observed: 1,
+    }, { onConflict: 'user_id,context_type,key' });
+
+    logger.info({ userId, domain, cookieCount: trimmedCookies.length }, '[STEEL] Browser context saved');
+  } catch (err) {
+    logger.warn({ err }, '[STEEL] Failed to save browser context');
+  }
+}
+
+/**
+ * Load previously saved cookies for a domain and inject them into the browser context.
+ * Returns true if cookies were restored, false otherwise.
+ * Skips contexts older than 7 days.
+ */
+export async function loadUserBrowserContext(page: Page, userId: string, url: string): Promise<boolean> {
+  try {
+    const domain = new URL(url).hostname;
+    const supabase = getSupabaseClient();
+
+    const { data } = await supabase
+      .from('user_context')
+      .select('value')
+      .eq('user_id', userId)
+      .eq('context_type', 'habit')
+      .eq('key', `browser_session:${domain}`)
+      .single();
+
+    if (!data?.value?.cookies || !Array.isArray(data.value.cookies) || data.value.cookies.length === 0) {
+      return false;
+    }
+
+    // Check if saved context is expired
+    const savedAt = data.value.savedAt || 0;
+    if (Date.now() - savedAt > CONTEXT_EXPIRY_MS) {
+      logger.debug({ userId, domain }, '[STEEL] Saved browser context expired, skipping');
+      return false;
+    }
+
+    await page.context().addCookies(data.value.cookies);
+    logger.info({ userId, domain, cookieCount: data.value.cookies.length }, '[STEEL] Browser context restored');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Save browser context for a task before destroying its session.
+ * Call this with the userId before destroySession().
+ */
+export async function saveBrowserContextForTask(taskId: string, userId: string): Promise<void> {
+  const session = activeSessions.get(taskId);
+  if (!session) return;
+
+  try {
+    await saveUserBrowserContext(session.page, userId);
+  } catch (err) {
+    logger.debug({ err, taskId }, '[STEEL] Browser context save before destroy failed (non-critical)');
+  }
 }

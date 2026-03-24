@@ -25,7 +25,7 @@ import { executeToolCall, formatToolDescriptions, buildFunctionSchemas, parseToo
 import { callModel, classifyCall } from './model-router.js';
 import { logger } from '../utils/logger.js';
 import { loadToolsForTier, getToolNamesForTierClassification, expandTools, isToolLoaded } from './tool-loader.js';
-import { destroySession as destroyBrowserSession } from '../services/steel-browser.js';
+import { destroySession as destroyBrowserSession, saveBrowserContextForTask } from '../services/steel-browser.js';
 
 // ── Register all tools on module load ──
 import './tools/communication.js';
@@ -267,7 +267,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
       { suppressEmail: task.suppressEmail }
     );
 
-    // ── Cleanup: close any Steel browser session ──
+    // ── Cleanup: save browser context then close Steel session ──
+    try { await saveBrowserContextForTask(taskId, task.userId); } catch (err) { logger.debug(`[V3] Browser context save (non-critical):`, err); }
     try { await destroyBrowserSession(taskId); } catch (err) { logger.debug(`[V3] Browser session cleanup (non-critical):`, err); }
 
     // ── Deduct total task cost from credit wallet (single deduction, no rounding loss) ──
@@ -311,7 +312,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     logger.error(`[V3] Task ${taskId.slice(0, 8)} failed:`, errorMsg);
 
-    // Cleanup: close any Steel browser session
+    // Cleanup: save browser context then close Steel session
+    try { await saveBrowserContextForTask(taskId, task.userId); } catch {}
     try { await destroyBrowserSession(taskId); } catch {}
 
     // Update task as failed
