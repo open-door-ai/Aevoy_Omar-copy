@@ -4,7 +4,11 @@
  * Manages browser sessions via Steel.dev's hosted browser infrastructure.
  * Sessions connect over CDP WebSocket for Playwright control.
  *
- * Steel hobby plan: browser sessions + CDP, no proxy, no CAPTCHA solving.
+ * Includes anti-detection measures:
+ * - Random User-Agent rotation (realistic Chrome UAs)
+ * - Viewport randomization (near 1920x1080)
+ * - Stealth HTTP headers (Accept-Language, Accept-Encoding)
+ * - WebDriver property masking
  */
 
 import { chromium, type Browser, type Page } from 'playwright';
@@ -14,6 +18,107 @@ const STEEL_API_KEY = process.env.STEEL_API_KEY;
 const STEEL_API_URL = 'https://api.steel.dev/v1';
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per session
 const MAX_CONCURRENT = 3;
+
+// ── Anti-Detection: Realistic User Agents ──
+
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+];
+
+const MOBILE_USER_AGENTS = [
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+];
+
+function getRandomUA(mobile = false): string {
+  const pool = mobile ? MOBILE_USER_AGENTS : USER_AGENTS;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+/**
+ * Apply anti-detection stealth measures to a Playwright page.
+ * Works without paid proxies — pure header/fingerprint evasion.
+ */
+export async function applyStealthMeasures(page: Page, mobile = false): Promise<void> {
+  const ua = getRandomUA(mobile);
+
+  // Set stealth HTTP headers
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Sec-CH-UA': '"Chromium";v="131", "Not_A Brand";v="24"',
+    'Sec-CH-UA-Mobile': mobile ? '?1' : '?0',
+    'Sec-CH-UA-Platform': mobile ? '"Android"' : '"Windows"',
+    'Upgrade-Insecure-Requests': '1',
+  });
+
+  // Randomize viewport (near standard sizes, +/- some pixels)
+  const width = mobile
+    ? 390 + Math.floor(Math.random() * 30) - 15
+    : 1920 + Math.floor(Math.random() * 100) - 50;
+  const height = mobile
+    ? 844 + Math.floor(Math.random() * 30) - 15
+    : 1080 + Math.floor(Math.random() * 60) - 30;
+  await page.setViewportSize({ width, height });
+
+  // Mask WebDriver and automation indicators via page init script
+  await page.addInitScript(() => {
+    // Hide webdriver flag
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+    // Realistic plugins array (empty array looks suspicious)
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => [1, 2, 3, 4, 5], // non-empty, mimics real browser
+    });
+
+    // Realistic languages
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['en-US', 'en'],
+    });
+
+    // Chrome runtime mock (missing in headless)
+    if (!(window as unknown as Record<string, unknown>).chrome) {
+      (window as unknown as Record<string, unknown>).chrome = {
+        runtime: {},
+        loadTimes: () => ({}),
+        csi: () => ({}),
+      };
+    }
+
+    // Notification permission query (headless returns 'denied' too fast)
+    const originalQuery = window.navigator.permissions.query.bind(
+      window.navigator.permissions
+    );
+    window.navigator.permissions.query = (parameters: PermissionDescriptor) => {
+      if (parameters.name === 'notifications') {
+        return Promise.resolve({ state: 'prompt', onchange: null } as PermissionStatus);
+      }
+      return originalQuery(parameters);
+    };
+  });
+
+  // Set User-Agent via CDP (more reliable than header override)
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.setUserAgentOverride', {
+      userAgent: ua,
+      platform: mobile ? 'Linux armv81' : 'Win32',
+    });
+  } catch {
+    // CDP session may not be available in all contexts — headers still work
+    logger.debug('[STEEL] CDP UA override not available, using header-based UA');
+  }
+
+  logger.debug(`[STEEL] Stealth applied: ${ua.substring(0, 50)}..., viewport ${width}x${height}`);
+}
 
 interface SteelSession {
   sessionId: string;
@@ -75,6 +180,9 @@ export async function createSession(taskId: string): Promise<SteelSession> {
 
   const context = browser.contexts()[0];
   const page = context?.pages()[0] || await (context || await browser.newContext()).newPage();
+
+  // Apply anti-detection stealth measures (user-agent, viewport, headers)
+  await applyStealthMeasures(page);
 
   const steelSession: SteelSession = {
     sessionId: session.id,

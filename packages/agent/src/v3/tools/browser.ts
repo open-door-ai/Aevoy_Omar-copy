@@ -11,7 +11,8 @@
 
 import { registerTool } from '../tool-registry.js';
 import type { ToolCallResult } from '../types.js';
-import { createSession, destroySession, getPage } from '../../services/steel-browser.js';
+import { createSession, destroySession, getPage, applyStealthMeasures } from '../../services/steel-browser.js';
+import { detectAndSolve } from '../../services/captcha-solver.js';
 
 // ── browser_go — Navigate to a URL ──
 
@@ -38,7 +39,64 @@ registerTool({
         return { success: false, error: 'URL must start with http:// or https://', cost: 0 };
       }
 
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      // Smart retry with escalating anti-blocking strategies
+      let navigated = false;
+      let lastError = '';
+      let captchaCost = 0;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          if (attempt === 2) {
+            // Retry 2: Strip automation headers via route interception
+            await page.route('**/*', (route) => {
+              const headers = route.request().headers();
+              // Remove headers that signal automation
+              delete headers['sec-ch-ua-platform'];
+              // Override with cleaner headers
+              route.continue({
+                headers: {
+                  ...headers,
+                  'Cache-Control': 'max-age=0',
+                  'DNT': '1',
+                },
+              });
+            });
+          } else if (attempt === 3) {
+            // Retry 3: Switch to mobile user agent
+            await page.unrouteAll({ behavior: 'wait' }).catch(() => {});
+            await applyStealthMeasures(page, true); // mobile mode
+          }
+
+          // Add human-like delay between retries
+          if (attempt > 1) {
+            await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
+          }
+
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+          navigated = true;
+          break;
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : 'unknown';
+          // Don't retry on non-blocking errors
+          if (!lastError.includes('timeout') && !lastError.includes('ERR_') && !lastError.includes('net::')) {
+            break;
+          }
+        }
+      }
+
+      if (!navigated) {
+        return {
+          success: false,
+          error: `Site unreachable after 3 attempts: ${lastError}. Use web_search instead or try a different site.`,
+          cost: 0,
+        };
+      }
+
+      // Auto-detect and solve CAPTCHAs (transparent to the AI)
+      const captchaResult = await detectAndSolve(page);
+      if (captchaResult.hadCaptcha && captchaResult.solved) {
+        captchaCost = 0.002; // average CAPTCHA solving cost
+      }
 
       const title = await page.title();
 
@@ -77,30 +135,34 @@ registerTool({
         return items.join('\n');
       });
 
-      // Detect bot blocking / CAPTCHA / access denied
+      // Detect bot blocking AFTER CAPTCHA solving
       const lowerText = text.toLowerCase();
       const blocked =
         lowerText.includes('access denied') ||
         lowerText.includes('403 forbidden') ||
-        lowerText.includes('captcha') ||
-        lowerText.includes('verify you are human') ||
         lowerText.includes('bot detection') ||
         lowerText.includes('automated access') ||
-        lowerText.includes('please verify') ||
-        lowerText.includes('cloudflare') && lowerText.includes('checking');
+        (lowerText.includes('cloudflare') && lowerText.includes('checking'));
+
+      // Build status notes
+      let statusNote = '';
+      if (captchaResult.hadCaptcha && captchaResult.solved) {
+        statusNote = '\n\n[CAPTCHA was detected and solved automatically]';
+      } else if (captchaResult.note) {
+        statusNote = `\n\n${captchaResult.note}`;
+      }
 
       const blockWarning = blocked
-        ? '\n\n⚠️ BOT DETECTION: This site appears to be blocking automated access. Try: (1) a different URL or competitor site, (2) use web_search instead, (3) use a mobile version (m.site.com), or (4) try Google cached version.'
+        ? '\n\nBOT DETECTION: This site is blocking automated access. Try: (1) a different URL or competitor site, (2) use web_search instead, (3) try a mobile version (m.site.com).'
         : '';
 
       return {
         success: true,
-        data: `Page: ${title}\nURL: ${page.url()}\n\nContent:\n${text.substring(0, 2000)}\n\nInteractive elements:\n${elements}${blockWarning}`,
-        cost: 0.001,
+        data: `Page: ${title}\nURL: ${page.url()}\n\nContent:\n${text.substring(0, 2000)}\n\nInteractive elements:\n${elements}${statusNote}${blockWarning}`,
+        cost: 0.001 + captchaCost,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown';
-      // Detect timeout / connection refused as potential blocking
       if (msg.includes('timeout') || msg.includes('ERR_CONNECTION') || msg.includes('net::ERR')) {
         return {
           success: false,
