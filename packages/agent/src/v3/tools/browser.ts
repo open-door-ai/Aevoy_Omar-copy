@@ -77,15 +77,40 @@ registerTool({
         return items.join('\n');
       });
 
+      // Detect bot blocking / CAPTCHA / access denied
+      const lowerText = text.toLowerCase();
+      const blocked =
+        lowerText.includes('access denied') ||
+        lowerText.includes('403 forbidden') ||
+        lowerText.includes('captcha') ||
+        lowerText.includes('verify you are human') ||
+        lowerText.includes('bot detection') ||
+        lowerText.includes('automated access') ||
+        lowerText.includes('please verify') ||
+        lowerText.includes('cloudflare') && lowerText.includes('checking');
+
+      const blockWarning = blocked
+        ? '\n\n⚠️ BOT DETECTION: This site appears to be blocking automated access. Try: (1) a different URL or competitor site, (2) use web_search instead, (3) use a mobile version (m.site.com), or (4) try Google cached version.'
+        : '';
+
       return {
         success: true,
-        data: `Page: ${title}\nURL: ${page.url()}\n\nContent:\n${text.substring(0, 2000)}\n\nInteractive elements:\n${elements}`,
+        data: `Page: ${title}\nURL: ${page.url()}\n\nContent:\n${text.substring(0, 2000)}\n\nInteractive elements:\n${elements}${blockWarning}`,
         cost: 0.001,
       };
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      // Detect timeout / connection refused as potential blocking
+      if (msg.includes('timeout') || msg.includes('ERR_CONNECTION') || msg.includes('net::ERR')) {
+        return {
+          success: false,
+          error: `Site unreachable or blocking automated access: ${msg}. Try: a different site, web_search, or a mobile/cached version.`,
+          cost: 0,
+        };
+      }
       return {
         success: false,
-        error: `Navigation failed: ${err instanceof Error ? err.message : 'unknown'}`,
+        error: `Navigation failed: ${msg}`,
         cost: 0,
       };
     }
