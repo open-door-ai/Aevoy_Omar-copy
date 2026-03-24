@@ -56,9 +56,23 @@ export async function createSession(taskId: string): Promise<SteelSession> {
   const session = await res.json() as { id: string };
   logger.info(`[STEEL] Created session ${session.id} for task ${taskId.slice(0, 8)}`);
 
-  // Connect via CDP WebSocket
+  // Connect via CDP WebSocket with timeout
   const wsUrl = `wss://connect.steel.dev?apiKey=${STEEL_API_KEY}&sessionId=${session.id}`;
-  const browser = await chromium.connectOverCDP(wsUrl);
+  let browser: Browser;
+  try {
+    browser = await Promise.race([
+      chromium.connectOverCDP(wsUrl),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('CDP connection timeout (15s)')), 15_000)),
+    ]);
+  } catch (err) {
+    // Clean up the Steel session if we can't connect
+    await fetch(`${STEEL_API_URL}/sessions/${session.id}`, {
+      method: 'DELETE',
+      headers: { 'steel-api-key': STEEL_API_KEY! },
+    }).catch(() => {});
+    throw new Error(`Browser connection failed: ${err instanceof Error ? err.message : 'unknown'}`);
+  }
+
   const context = browser.contexts()[0];
   const page = context?.pages()[0] || await (context || await browser.newContext()).newPage();
 
