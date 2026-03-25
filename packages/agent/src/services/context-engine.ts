@@ -183,7 +183,7 @@ async function extractCommunicationStyle(message: string, userId: string): Promi
 // Runs IMMEDIATELY — no LLM call needed.
 
 const ACTION_INTENT_PATTERNS: RegExp[] = [
-  // "I need to..." / "I have to..." / "I should..." / "I gotta..."
+  // EXPLICIT: "I need to..." / "I have to..." / "I should..." / "I gotta..."
   /\bi\s+(need|have|got|gotta|should|must|want)\s+to\s+(.{5,80})/i,
   // "Remind me to..."
   /\bremind\s+me\s+to\s+(.{5,80})/i,
@@ -195,6 +195,16 @@ const ACTION_INTENT_PATTERNS: RegExp[] = [
   /\b(book|schedule|reserve|set up|arrange)\s+(me\s+)?(.{5,80})/i,
   // "Can you..." / "Could you..."
   /\b(can|could|would)\s+you\s+(.{5,80})/i,
+  // IMPLIED: "I keep forgetting to..." / "I keep meaning to..."
+  /\bi\s+keep\s+(forgetting|meaning|wanting|trying)\s+to\s+(.{5,80})/i,
+  // "X is due..." / "X is coming up..."
+  /\b(\w+\s+(?:insurance|bill|rent|payment|subscription|renewal))\s+is\s+due\b/i,
+  // "X needs the Y by Z" — someone else's deadline that affects the user
+  /\b(\w+)\s+(?:needs|wants|expects|is waiting for)\s+(?:the\s+)?(.{5,60})\s+by\s+(\w+)/i,
+  // "that's gonna be tight" / "running out of time" — stress about a deadline
+  /\b(due|deadline|by\s+\w+day|by\s+end\s+of)\b.*\b(tight|stressed|worried|behind|running out)/i,
+  // "shop around for..." / "look into..." / "figure out..."
+  /\b(shop around|look into|figure out|sort out|deal with|take care of)\s+(.{5,80})/i,
 ];
 
 /**
