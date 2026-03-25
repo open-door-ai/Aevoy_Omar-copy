@@ -1214,6 +1214,11 @@ function stripCredentialLeaks(text: string): string {
   // Also strip partial system tag leaks
   clean = clean.replace(/<system>[\s\S]*/gi, '');
 
+  // Strip internal action tags that AI sometimes generates
+  clean = clean.replace(/\[ACTION:\w+\([^\]]*\)\]/g, '');
+  clean = clean.replace(/\[TOOL:\w+\([^\]]*\)\]/g, '');
+  clean = clean.replace(/\[INTERNAL:[^\]]*\]/g, '');
+
   // Strip agent inbox email if it leaks into response
   const agentInbox = process.env.AGENT_INBOX_EMAIL;
   if (agentInbox) {
