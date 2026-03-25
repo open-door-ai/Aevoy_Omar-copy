@@ -10,19 +10,32 @@
 ### What Aurora IS
 Aurora is a simulated wearable AI experience. User taps a mic button (simulating an always-on pendant), speaks naturally, and Aurora listens, extracts context/intent, and acts autonomously. The user never gives commands — Aurora figures out what to do from ambient speech.
 
-### Architecture Flow (Current)
+### Architecture Flow (AFTER FIXES)
 ```
 Browser mic → getUserMedia (16kHz mono PCM)
   → WebSocket to /aurora/listen/ws
     → JWT auth via Supabase token
-    → Proxy to Deepgram (wss://api.deepgram.com, nova-2 model)
-      → Real-time transcripts back to server
-        → Batched (wait for 20+ words)
-          → extractContext() — Groq LLM extraction (async, fire-and-forget)
-            → Stores: user_context, conversation_context, commitments, proactive_queue
-              → proactive_queue processed HOURLY by scheduler
-                → Action executed (eventually)
-                  → User notified via sendAuroraMessage()
+    → Proxy to Deepgram (nova-2, interim_results=true, utterance_end_ms=1500)
+      → Interim transcripts → sent to browser for live display
+      → Final transcripts → buffer (5 word threshold)
+      → UtteranceEnd → flush buffer immediately
+        → extractContext() returns DetectedAction | null
+          → Stores: user_context, conversation_context, commitments
+          → IF action detected:
+            → Send intent_detected to browser (shows in feed instantly)
+            → Create V3 task IMMEDIATELY (not queued for later)
+            → V3 task includes user_context in AI prompt
+            → Task result arrives via Supabase realtime → feed updates
+          → IF no action:
+            → Context silently stored for future reference
+```
+
+### Architecture Flow (BEFORE FIXES — for reference)
+```
+Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utterance_end)
+  → Batched (wait for 20+ words) → extractContext (fire-and-forget)
+    → Stores context → proactive_queue (processed HOURLY by scheduler)
+      → Eventually maybe executed → user notified hours later
 ```
 
 ### Key Files
@@ -307,8 +320,60 @@ Live testing is blocked without a running agent server with valid API keys (Deep
 
 ## 10. CHANGES LOG
 
-_Updated as fixes are applied._
-
 | Date | Fix | Commit | Status |
 |------|-----|--------|--------|
-| | | | |
+| 2026-03-25 | Fix 1+2: Real-time processing + user context injection | `0a8742d` | DONE |
+| 2026-03-25 | Fix 3: Proactive queue "do" actions fix | `15bd7bc` | DONE |
+| 2026-03-25 | Fix 4: Test user seed script (Jordan Chen) | pending | DONE |
+
+### Fix 1+2 Details (commit 0a8742d)
+**Files changed:** 6 files, +385/-49 lines
+
+**aurora-listen.ts:**
+- Lowered transcript buffer from 20 words to 5 words
+- Added UtteranceEnd VAD handler that flushes buffer immediately on natural pauses
+- Enabled `interim_results=true` + `utterance_end_ms=1500` in Deepgram config
+- New `extractAndMaybeAct()` function: runs extractContext, and if an action is detected,
+  immediately creates a V3 task and sends `intent_detected` back to the browser
+- On session close, remaining buffer also goes through extractAndMaybeAct
+
+**context-engine.ts:**
+- `extractContext()` now returns `DetectedAction | null` (was void)
+- `detectAndQueueActions()` now returns the action for immediate caller use
+- Added LLM-based intent detection: when Groq extraction finds `tasks_implied` with confidence >= 0.7, also queues them as "do" actions
+- All early returns now propagate the detected action
+
+**context-builder.ts:**
+- New `loadUserContextSummary()` function: queries user_context table for high-confidence entries, groups by type, formats as human-readable text (~500 token cap)
+- `buildInstantPrompt()` now accepts optional `userContext` parameter
+- `buildSystemPrompt()` now accepts optional `userContext` parameter
+- Both inject context under "What you know about [user]" heading
+
+**processor-v3.ts:**
+- `handleInstant()` now calls `loadUserContextSummary()` and passes to prompt
+- `handleMultiStep()` now calls `loadUserContextSummary()` and passes to prompt
+- Both tool expansion rebuilds also include userContext
+
+**MicButton.tsx:**
+- New props: `onIntentDetected`, `onTranscript`
+- Handles `intent_detected` and `action_completed` WebSocket messages
+- Forwards interim transcripts for live display
+
+**aurora/page.tsx:**
+- Live interim transcript display above mic button while listening
+- `handleIntentDetected()` adds "Heard you mention: X — on it." card to feed
+- `handleTranscript()` manages live transcript state
+
+### Fix 3 Details (commit 15bd7bc)
+**proactive-queue.ts:**
+- "do" actions now load user profile (username, email) before creating V3 task
+- "do" actions bypass quiet hours (shouldDeliverNow returns true)
+- Tasks created with `suppressEmail: true` so results show in feed
+
+### Fix 4 Details (seed script)
+**packages/agent/scripts/seed-aurora-test-user.sql:**
+- Seeds 18 user_context entries for Jordan Chen (test user)
+- Seeds 3 commitments (insurance follow-up, Japan trip, Mom's birthday)
+- Seeds 2 detected patterns (MWF gym, Monday standup)
+- Uses same storage format as real context engine
+- Can be run against Supabase to populate test profile
