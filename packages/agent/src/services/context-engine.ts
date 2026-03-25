@@ -193,8 +193,8 @@ const ACTION_INTENT_PATTERNS: RegExp[] = [
   /\bi\s+promised\s+(\w+)\s+(.{5,50})/i,
   // "Book me..." / "Schedule..."
   /\b(book|schedule|reserve|set up|arrange)\s+(me\s+)?(.{5,80})/i,
-  // "Can you..." / "Could you..."
-  /\b(can|could|would)\s+you\s+(.{5,80})/i,
+  // NOTE: Removed "can you/could you" — direct requests go through normal task processing,
+  // not the action detection queue. Action detection is for things said in PASSING.
   // IMPLIED: "I keep forgetting to..." / "I keep meaning to..."
   /\bi\s+keep\s+(forgetting|meaning|wanting|trying)\s+to\s+(.{5,80})/i,
   // "X is due..." / "X is coming up..."
