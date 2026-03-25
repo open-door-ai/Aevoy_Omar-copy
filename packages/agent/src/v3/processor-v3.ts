@@ -1219,6 +1219,10 @@ function stripCredentialLeaks(text: string): string {
   clean = clean.replace(/\[TOOL:\w+\([^\]]*\)\]/g, '');
   clean = clean.replace(/\[INTERNAL:[^\]]*\]/g, '');
 
+  // Strip credential/auth references that might leak from old memory
+  clean = clean.replace(/(?:basic\s*auth|credentials?|password|login)\s*(?::|=)\s*\S+(?:\/\S+)?/gi, '[credentials redacted]');
+  clean = clean.replace(/admin\/admin/gi, '[redacted]');
+
   // Strip agent inbox email if it leaks into response
   const agentInbox = process.env.AGENT_INBOX_EMAIL;
   if (agentInbox) {
