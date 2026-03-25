@@ -16,6 +16,7 @@ export default function AuroraFeed() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [micVisible, setMicVisible] = useState(true);
@@ -40,6 +41,12 @@ export default function AuroraFeed() {
       } = await supabase.auth.getUser();
       if (!user) return;
       setUserId(user.id);
+
+      // Get session token for WebSocket auth (mic -> Deepgram pipeline)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        setAccessToken(session.access_token);
+      }
 
       const { data: tasks, error: tasksError } = await supabase
         .from("tasks")
@@ -366,7 +373,11 @@ export default function AuroraFeed() {
 
             {/* Mic Button — the centerpiece */}
             <div ref={micButtonRef} className="flex justify-center pt-4 pb-2">
-              <MicButton onListeningChange={setListening} />
+              <MicButton
+                onListeningChange={setListening}
+                userId={userId}
+                accessToken={accessToken}
+              />
             </div>
 
             {/* Post-onboarding summary: what Aurora learned */}

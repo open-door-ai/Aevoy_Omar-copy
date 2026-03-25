@@ -14,68 +14,261 @@ type MicState =
 
 interface MicButtonProps {
   onListeningChange: (isListening: boolean) => void;
+  userId?: string | null;
+  accessToken?: string | null;
 }
 
-export function MicButton({ onListeningChange }: MicButtonProps) {
+const AGENT_URL =
+  process.env.NEXT_PUBLIC_AGENT_URL ||
+  "https://agent-production-1339.up.railway.app";
+
+const WS_URL =
+  AGENT_URL.replace("https://", "wss://").replace("http://", "ws://") +
+  "/aurora/listen/ws";
+
+// Target format for Deepgram: linear16, 16kHz, mono
+const TARGET_SAMPLE_RATE = 16000;
+
+export function MicButton({
+  onListeningChange,
+  userId,
+  accessToken,
+}: MicButtonProps) {
   const [state, setState] = useState<MicState>("default");
+  const [serverMessage, setServerMessage] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastActivityRef = useRef<number>(Date.now());
+  const wsRef = useRef<WebSocket | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const isListeningRef = useRef(false);
 
-  const isListening = state === "listening" || state === "listening_silence" || state === "reconnecting";
+  const isListening =
+    state === "listening" ||
+    state === "listening_silence" ||
+    state === "reconnecting";
 
-  // Check mic permission on mount — show denied state immediately if blocked
+  // Keep ref in sync for use in closures that outlive render cycles
   useEffect(() => {
-    if (typeof navigator === 'undefined' || !navigator.permissions) return;
-    navigator.permissions.query({ name: 'microphone' as PermissionName }).then(result => {
-      if (result.state === 'denied') {
-        setState('permission_denied');
-      }
-      // Listen for permission changes
-      result.addEventListener('change', () => {
-        if (result.state === 'denied') {
-          setState('permission_denied');
-        } else if (result.state === 'granted' && state === 'permission_denied') {
-          setState('default');
+    isListeningRef.current = isListening;
+  }, [isListening]);
+
+  // Check mic permission on mount
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.permissions) return;
+    navigator.permissions
+      .query({ name: "microphone" as PermissionName })
+      .then((result) => {
+        if (result.state === "denied") {
+          setState("permission_denied");
         }
+        result.addEventListener("change", () => {
+          if (result.state === "denied") {
+            setState("permission_denied");
+          } else if (
+            result.state === "granted" &&
+            state === "permission_denied"
+          ) {
+            setState("default");
+          }
+        });
+      })
+      .catch(() => {
+        // permissions API not supported
       });
-    }).catch(() => {
-      // permissions API not supported — will check on click
-    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stopListening = useCallback(() => {
+  const cleanup = useCallback(() => {
+    // Close WebSocket
+    if (wsRef.current) {
+      if (
+        wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING
+      ) {
+        wsRef.current.close();
+      }
+      wsRef.current = null;
+    }
+
+    // Disconnect audio processor
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+
+    // Stop media stream tracks
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     analyserRef.current = null;
+
     if (audioCtxRef.current) {
       audioCtxRef.current.close();
       audioCtxRef.current = null;
     }
+
     if (silenceTimerRef.current) {
       clearInterval(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+
+    setServerMessage(null);
+  }, []);
+
+  const stopListening = useCallback(() => {
+    cleanup();
     setState("default");
     onListeningChange(false);
-  }, [onListeningChange]);
+  }, [onListeningChange, cleanup]);
 
   const startListening = useCallback(async () => {
     setState("requesting_permission");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Request audio at a sample rate close to our target for better quality
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: TARGET_SAMPLE_RATE,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
       streamRef.current = stream;
 
-      const audioCtx = new AudioContext();
+      const audioCtx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
       audioCtxRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(stream);
+
+      // Analyser for the visualizer
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       source.connect(analyser);
       analyserRef.current = analyser;
+
+      // ScriptProcessorNode to capture raw PCM and convert to linear16
+      // Buffer size 4096 at 16kHz = 256ms chunks
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      // Connect: source -> processor -> destination (required for processing)
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+
+      // Open WebSocket to agent server
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      let authenticated = false;
+
+      ws.onopen = () => {
+        // Send auth message first
+        if (userId && accessToken) {
+          ws.send(
+            JSON.stringify({
+              type: "auth",
+              userId: userId,
+              token: accessToken,
+            })
+          );
+        } else {
+          console.error("[MicButton] Missing userId or accessToken for WebSocket auth");
+          setServerMessage("Not signed in. Please refresh and try again.");
+          setState("error");
+          cleanup();
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === "authenticated") {
+            authenticated = true;
+            console.log("[MicButton] WebSocket authenticated, streaming audio");
+          } else if (msg.type === "transcript") {
+            // Server echoed a transcript back — could show in UI
+            console.log("[MicButton] Transcript:", msg.text);
+            setServerMessage(msg.text);
+            // Clear after 5s
+            setTimeout(() => setServerMessage(null), 5000);
+          } else if (msg.type === "error") {
+            console.error("[MicButton] Server error:", msg.message);
+            setServerMessage(msg.message);
+          } else if (msg.type === "budget_exceeded") {
+            setServerMessage("Listening budget exceeded for today.");
+            stopListening();
+          } else if (msg.type === "session_expired") {
+            setServerMessage("Session expired. Please reconnect.");
+            stopListening();
+          } else if (msg.type === "server_restarting") {
+            setServerMessage("Server restarting. Reconnecting...");
+            setState("reconnecting");
+          } else if (msg.type === "transcription_paused") {
+            setServerMessage(msg.message || "Transcription paused...");
+          }
+        } catch {
+          // Ignore non-JSON messages
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("[MicButton] WebSocket error:", err);
+      };
+
+      ws.onclose = (event) => {
+        console.log(
+          "[MicButton] WebSocket closed:",
+          event.code,
+          event.reason
+        );
+        // If we were listening, this is unexpected — use ref to avoid stale closure
+        if (isListeningRef.current) {
+          setState("reconnecting");
+          // After a brief delay, stop fully
+          setTimeout(() => {
+            stopListening();
+          }, 3000);
+        }
+      };
+
+      // Send audio data as linear16 PCM
+      processor.onaudioprocess = (e) => {
+        if (!authenticated || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+        const inputData = e.inputBuffer.getChannelData(0);
+
+        // The AudioContext is already at 16kHz (we requested it),
+        // but browsers may give a different rate. Handle resampling if needed.
+        const actualRate = audioCtx.sampleRate;
+        let samples: Float32Array;
+
+        if (actualRate !== TARGET_SAMPLE_RATE) {
+          // Simple linear interpolation resampling
+          const ratio = actualRate / TARGET_SAMPLE_RATE;
+          const outputLength = Math.floor(inputData.length / ratio);
+          samples = new Float32Array(outputLength);
+          for (let i = 0; i < outputLength; i++) {
+            const srcIdx = i * ratio;
+            const lo = Math.floor(srcIdx);
+            const hi = Math.min(lo + 1, inputData.length - 1);
+            const frac = srcIdx - lo;
+            samples[i] = inputData[lo] * (1 - frac) + inputData[hi] * frac;
+          }
+        } else {
+          samples = inputData;
+        }
+
+        // Convert float32 [-1, 1] to int16 [-32768, 32767]
+        const pcm16 = new Int16Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+          const s = Math.max(-1, Math.min(1, samples[i]));
+          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+
+        ws.send(pcm16.buffer);
+      };
 
       lastActivityRef.current = Date.now();
       setState("listening");
@@ -106,33 +299,30 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
       console.error("Mic access denied:", err);
       if (
         err instanceof DOMException &&
-        (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")
+        (err.name === "NotAllowedError" ||
+          err.name === "PermissionDeniedError")
       ) {
         setState("permission_denied");
       } else {
         setState("error");
       }
     }
-  }, [onListeningChange]);
+  }, [onListeningChange, userId, accessToken, cleanup, stopListening]);
 
   const handleClick = useCallback(() => {
     if (isListening) {
       stopListening();
     } else if (state === "permission_denied" || state === "error") {
-      // Retry
       startListening();
     } else if (state === "default") {
       startListening();
     }
   }, [isListening, state, startListening, stopListening]);
 
-  // WiFi recovery: detect offline/online during listening
+  // WiFi recovery
   useEffect(() => {
     const handleOffline = () => {
-      if (
-        state === "listening" ||
-        state === "listening_silence"
-      ) {
+      if (state === "listening" || state === "listening_silence") {
         setState("reconnecting");
       }
     };
@@ -152,15 +342,14 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      audioCtxRef.current?.close();
-      if (silenceTimerRef.current) clearInterval(silenceTimerRef.current);
+      cleanup();
     };
-  }, []);
+  }, [cleanup]);
 
-  // Determine visual properties based on state
+  // Visual properties
   const getButtonClasses = () => {
-    const base = "relative rounded-full transition-all duration-150 focus:outline-none";
+    const base =
+      "relative rounded-full transition-all duration-150 focus:outline-none";
     switch (state) {
       case "pressed":
         return `${base} w-[120px] h-[120px] scale-95`;
@@ -191,6 +380,10 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
   };
 
   const getStatusText = () => {
+    // Show server messages (transcripts, errors) when available
+    if (serverMessage && isListening) {
+      return serverMessage;
+    }
     switch (state) {
       case "requesting_permission":
         return "Waiting for permission...";
@@ -203,7 +396,7 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
       case "reconnecting":
         return "Reconnecting...";
       case "error":
-        return "Something went sideways. Tap to try again.";
+        return serverMessage || "Something went sideways. Tap to try again.";
       default:
         return "Tap to start listening";
     }
@@ -276,7 +469,7 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
   );
 }
 
-/* ─── Icons ─── */
+/* --- Icons --- */
 
 function MicIcon() {
   return (
@@ -310,7 +503,15 @@ function MicOffIcon() {
         strokeLinejoin="round"
         d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"
       />
-      <line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />
+      <line
+        x1="3"
+        y1="3"
+        x2="21"
+        y2="21"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+      />
     </svg>
   );
 }
@@ -371,7 +572,7 @@ function getBrowserPermissionHelp(): string {
   return "Mic blocked. Check your browser settings to allow microphone access.";
 }
 
-/* ─── Radial Waveform Visualizer (Canvas) ─── */
+/* --- Radial Waveform Visualizer (Canvas) --- */
 
 function RadialWaveform({ analyser }: { analyser: AnalyserNode | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
