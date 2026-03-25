@@ -487,23 +487,46 @@ export async function processQueue(): Promise<number> {
           continue;
         }
 
-        // For now, log the action and mark as delivered
-        // The communication system (Phase 3) will handle actual delivery
-        logger.info(
-          "[PROACTIVE-Q] Would deliver to user %s: [%s] %s — %s (priority: %d, channel: %s)",
-          userId.substring(0, 8),
-          action.action_type,
-          action.title,
-          action.description || "(no description)",
-          action.priority,
-          action.preferred_channel || "auto"
-        );
+        const actionType = action.action_type as string;
+        const actionDesc = (action.description || action.title || '') as string;
 
-        // Mark as delivered (placeholder — will be updated when communication system is built)
+        if (actionType === 'do' && actionDesc.length > 3) {
+          // ACTION TYPE: "do" — let the AI handle it as a real task
+          const { processTaskV3 } = await import('../v3/processor-v3.js');
+
+          // Fire and forget — the processor handles its own task record
+          processTaskV3({
+            userId,
+            username: '',
+            from: 'proactive',
+            subject: actionDesc,
+            body: actionDesc,
+            inputChannel: 'proactive',
+          }).catch(err => {
+            logger.error({ err, userId: userId.substring(0, 8) }, '[PROACTIVE-Q] Task execution failed');
+          });
+        } else {
+          // NON-ACTION: send a message via aurora-messenger
+          try {
+            const { sendAuroraMessage } = await import('./aurora-messenger.js');
+            await sendAuroraMessage({
+              userId,
+              content: actionDesc,
+              priority: (action.priority as number) >= 7 ? 'high' : 'medium',
+              source: 'proactive',
+              proactiveQueueId: action.id as string,
+            });
+          } catch (sendErr) {
+            logger.warn({ err: sendErr, userId: userId.substring(0, 8) }, '[PROACTIVE-Q] Message delivery failed');
+          }
+        }
+
+        // Mark as delivered
         await supabase
           .from("proactive_queue")
           .update({
-            status: "scheduled", // Set to 'scheduled' — communication system will set 'delivered'
+            status: "delivered",
+            delivered_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
           .eq("id", action.id);

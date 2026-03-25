@@ -253,23 +253,26 @@ async function detectAndQueueActions(
       }
 
       try {
+        // Store what the user said — not system language, not templates.
+        // The proactive processor will use the AI to generate a natural response
+        // based on context, not pre-programmed templates.
         await supabase.from("proactive_queue").insert({
           user_id: userId,
-          action_type: "suggest",
-          title: `Heard you: "${cleanAction.substring(0, 60)}"`,
-          description: `You mentioned "${cleanAction}". Want me to help with that?`,
-          priority: 7, // High but not critical
+          action_type: "do",
+          title: cleanAction.substring(0, 80),
+          description: cleanAction,
+          priority: 7,
           confidence: 0.90,
-          trigger_at: new Date().toISOString(), // Trigger immediately
+          trigger_at: new Date().toISOString(),
           status: "pending",
-          preferred_channel: channel === "microphone" ? "in_app" : channel,
-        });
+            preferred_channel: channel === "microphone" ? "in_app" : channel,
+          });
 
-        logger.info({ userId: userId.substring(0, 8), action: cleanAction.substring(0, 60) },
-          "[CONTEXT] Action intent detected — queued suggestion");
+          logger.info({ userId: userId.substring(0, 8), action: cleanAction.substring(0, 60) },
+            "[CONTEXT] Intent detected — queued for action");
       } catch (err) {
         logger.debug({ err: err instanceof Error ? err.message : String(err) },
-          "[CONTEXT] Failed to queue action suggestion");
+          "[CONTEXT] Failed to process action intent");
       }
 
       break; // Only queue one action per message
