@@ -63,7 +63,7 @@ export interface RecoveryResult {
   error?: string;
 }
 
-export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'web' | 'desktop' | 'proactive' | 'workflow' | 'telegram' | 'whatsapp';
+export type InputChannel = 'email' | 'sms' | 'voice' | 'chat' | 'web' | 'desktop' | 'proactive' | 'workflow' | 'telegram' | 'whatsapp' | 'microphone';
 
 export type MemoryType = 'short_term' | 'working' | 'long_term' | 'episodic';
 
