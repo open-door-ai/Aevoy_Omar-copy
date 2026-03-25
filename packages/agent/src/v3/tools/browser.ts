@@ -34,9 +34,23 @@ registerTool({
 
       const url = String(params.url);
 
-      // Basic URL validation
+      // URL validation — block dangerous protocols and private IPs
       if (!/^https?:\/\//i.test(url)) {
         return { success: false, error: 'URL must start with http:// or https://', cost: 0 };
+      }
+      try {
+        const parsed = new URL(url);
+        const host = parsed.hostname;
+        // Block private/internal IPs
+        if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0\.0|localhost|::1)/i.test(host)) {
+          return { success: false, error: 'Cannot navigate to private/internal addresses', cost: 0 };
+        }
+        // Block dangerous protocols that might slip through
+        if (/^(javascript|data|file|ftp):/i.test(url)) {
+          return { success: false, error: 'Protocol not allowed', cost: 0 };
+        }
+      } catch {
+        return { success: false, error: 'Invalid URL format', cost: 0 };
       }
 
       // Restore saved cookies for this domain (if any exist for this user)
