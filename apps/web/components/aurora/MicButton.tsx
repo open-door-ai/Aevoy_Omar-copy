@@ -14,6 +14,8 @@ type MicState =
 
 interface MicButtonProps {
   onListeningChange: (isListening: boolean) => void;
+  onIntentDetected?: (action: string) => void;
+  onTranscript?: (text: string, isFinal: boolean) => void;
   userId?: string | null;
   accessToken?: string | null;
 }
@@ -31,6 +33,8 @@ const TARGET_SAMPLE_RATE = 16000;
 
 export function MicButton({
   onListeningChange,
+  onIntentDetected,
+  onTranscript,
   userId,
   accessToken,
 }: MicButtonProps) {
@@ -188,11 +192,19 @@ export function MicButton({
             authenticated = true;
             console.log("[MicButton] WebSocket authenticated, streaming audio");
           } else if (msg.type === "transcript") {
-            // Server echoed a transcript back — could show in UI
-            console.log("[MicButton] Transcript:", msg.text);
-            setServerMessage(msg.text);
-            // Clear after 5s
-            setTimeout(() => setServerMessage(null), 5000);
+            // Forward transcript to parent for feed display
+            if (msg.is_final) {
+              setServerMessage(msg.text);
+              setTimeout(() => setServerMessage(null), 5000);
+            }
+            onTranscript?.(msg.text, !!msg.is_final);
+          } else if (msg.type === "intent_detected") {
+            // Aurora detected something actionable — notify the feed
+            console.log("[MicButton] Intent detected:", msg.action);
+            onIntentDetected?.(msg.action);
+          } else if (msg.type === "action_completed") {
+            // Aurora finished acting on a detected intent
+            console.log("[MicButton] Action completed:", msg.action);
           } else if (msg.type === "error") {
             console.error("[MicButton] Server error:", msg.message);
             setServerMessage(msg.message);

@@ -207,16 +207,25 @@ const ACTION_INTENT_PATTERNS: RegExp[] = [
   /\b(shop around|look into|figure out|sort out|deal with|take care of)\s+(.{5,80})/i,
 ];
 
+/** Result of action detection — exported so callers can act immediately */
+export interface DetectedAction {
+  actionText: string;
+  fullMessage: string;
+  queueId?: string;
+}
+
 /**
  * Instant action detection — runs via regex, zero LLM cost.
  * If the user mentions something actionable ("I need to book a flight"),
  * queues a proactive suggestion immediately so Aurora can offer help.
+ *
+ * Returns the detected action (if any) so callers can trigger immediate execution.
  */
-async function detectAndQueueActions(
+export async function detectAndQueueActions(
   message: string,
   userId: string,
   channel: string
-): Promise<void> {
+): Promise<DetectedAction | null> {
   const lower = message.toLowerCase();
 
   for (const pattern of ACTION_INTENT_PATTERNS) {
@@ -246,7 +255,7 @@ async function detectAndQueueActions(
 
         if (existing && existing.length > 0) {
           logger.debug("[CONTEXT] Skipping duplicate action suggestion for %s", cleanAction.substring(0, 40));
-          return;
+          return null;
         }
       } catch {
         // Non-critical — proceed with insert
@@ -256,7 +265,7 @@ async function detectAndQueueActions(
         // Store what the user said — not system language, not templates.
         // The proactive processor will use the AI to generate a natural response
         // based on context, not pre-programmed templates.
-        await supabase.from("proactive_queue").insert({
+        const { data: inserted } = await supabase.from("proactive_queue").insert({
           user_id: userId,
           action_type: "do",
           title: cleanAction.substring(0, 80),
@@ -265,11 +274,19 @@ async function detectAndQueueActions(
           confidence: 0.90,
           trigger_at: new Date().toISOString(),
           status: "pending",
-            preferred_channel: channel === "microphone" ? "in_app" : channel,
-          });
+          preferred_channel: channel === "microphone" ? "in_app" : channel,
+        })
+        .select("id")
+        .single();
 
-          logger.info({ userId: userId.substring(0, 8), action: cleanAction.substring(0, 60) },
-            "[CONTEXT] Intent detected — queued for action");
+        logger.info({ userId: userId.substring(0, 8), action: cleanAction.substring(0, 60) },
+          "[CONTEXT] Intent detected — queued for action");
+
+        return {
+          actionText: cleanAction,
+          fullMessage: message,
+          queueId: inserted?.id,
+        };
       } catch (err) {
         logger.debug({ err: err instanceof Error ? err.message : String(err) },
           "[CONTEXT] Failed to process action intent");
@@ -278,6 +295,7 @@ async function detectAndQueueActions(
       break; // Only queue one action per message
     }
   }
+  return null;
 }
 
 // ---- Per-user extraction rate limiter ----
@@ -700,6 +718,9 @@ async function trackChannelUsage(
  * This is the main entry point — called after every user message.
  * Runs asynchronously and never throws (all errors are caught internally).
  *
+ * Returns any detected actionable intent so callers can trigger
+ * immediate task execution (critical for real-time Aurora experience).
+ *
  * @param message - The user's message content
  * @param userId - The user's ID
  * @param channel - The channel the message came from (sms, email, web, etc.)
@@ -708,15 +729,17 @@ export async function extractContext(
   message: string,
   userId: string,
   channel: string
-): Promise<void> {
+): Promise<DetectedAction | null> {
   if (!message || message.trim().length < 3) {
-    return;
+    return null;
   }
 
-  // FIX 1: Run instant action detection FIRST (regex, zero cost).
+  // Run instant action detection FIRST (regex, zero cost).
   // This runs even on short messages — "Book dentist" is only 12 chars but actionable.
+  // Returns the detected action so callers (e.g., aurora-listen) can act immediately.
+  let detectedAction: DetectedAction | null = null;
   try {
-    await detectAndQueueActions(message, userId, channel);
+    detectedAction = await detectAndQueueActions(message, userId, channel);
   } catch (err) {
     // Never let action detection block extraction
     logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Action detection error");
@@ -730,21 +753,21 @@ export async function extractContext(
     logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Style extraction error");
   }
 
-  // FIX 4: Expanded skip set — skip trivial messages for LLM extraction
+  // Skip trivial messages for LLM extraction (action detection already ran above)
   const normalized = message.trim().toLowerCase().replace(/[.!?,]+$/g, '');
   if (SKIP_MESSAGES.has(normalized)) {
-    return;
+    return detectedAction;
   }
 
   // Skip very short messages — not worth the LLM extraction cost
   if (message.trim().length < MIN_MESSAGE_LENGTH) {
-    return;
+    return detectedAction;
   }
 
   // Per-user rate limit: max 5 extractions per user per minute
   if (isExtractionRateLimited(userId)) {
     logger.debug("[CONTEXT] Rate limited for user %s — skipping extraction", userId.substring(0, 8));
-    return;
+    return detectedAction;
   }
 
   try {
@@ -766,7 +789,7 @@ export async function extractContext(
         topics: [],
         sentiment: "neutral",
       });
-      return;
+      return detectedAction;
     }
 
     // Step 2: Store raw conversation context
@@ -780,6 +803,45 @@ export async function extractContext(
 
     // Step 5: Track channel preferences
     await trackChannelUsage(userId, channel, extraction.topics);
+
+    // Step 6: If the LLM found implied tasks with high confidence,
+    // also detect and queue them (covers intents the regex missed).
+    if (!detectedAction && extraction.tasks_implied?.length > 0) {
+      const topTask = extraction.tasks_implied
+        .filter(t => t.confidence >= 0.7)
+        .sort((a, b) => b.confidence - a.confidence)[0];
+
+      if (topTask) {
+        try {
+          const supabase = getSupabaseClient();
+          const { data: inserted } = await supabase.from("proactive_queue").insert({
+            user_id: userId,
+            action_type: "do",
+            title: topTask.description.substring(0, 80),
+            description: topTask.description,
+            priority: topTask.urgency === 'high' ? 8 : topTask.urgency === 'medium' ? 6 : 4,
+            confidence: topTask.confidence,
+            trigger_at: new Date().toISOString(),
+            status: "pending",
+            preferred_channel: channel === "microphone" ? "in_app" : channel,
+          })
+          .select("id")
+          .single();
+
+          detectedAction = {
+            actionText: topTask.description,
+            fullMessage: message,
+            queueId: inserted?.id,
+          };
+
+          logger.info({ userId: userId.substring(0, 8), action: topTask.description.substring(0, 60) },
+            "[CONTEXT] LLM-detected intent — queued for action");
+        } catch (err) {
+          logger.debug({ err: err instanceof Error ? err.message : String(err) },
+            "[CONTEXT] Failed to queue LLM-detected intent");
+        }
+      }
+    }
 
     const totalExtracted =
       (extraction.people_mentioned?.length || 0) +
@@ -806,6 +868,8 @@ export async function extractContext(
       userId.substring(0, 8)
     );
   }
+
+  return detectedAction;
 }
 
 /**

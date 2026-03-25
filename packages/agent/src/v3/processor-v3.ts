@@ -17,7 +17,7 @@ import { sendOverQuotaEmail } from '../services/email.js';
 import { trackServiceCost } from '../services/ai.js';
 import type { TaskRequest, TaskResult, InputChannel } from '../types/index.js';
 import type { TaskContext, TierClassification, ToolCall } from './types.js';
-import { buildTaskContext, loadTaskMemory, loadPersonality, buildSystemPrompt, buildInstantPrompt, buildTaskPrompt } from './context-builder.js';
+import { buildTaskContext, loadTaskMemory, loadPersonality, buildSystemPrompt, buildInstantPrompt, buildTaskPrompt, loadUserContextSummary } from './context-builder.js';
 import { atomicCompleteTask, sendViaChannel } from './channel-router.js';
 import { BudgetManager } from './budget-manager.js';
 import { TaskLedger } from './task-ledger.js';
@@ -489,8 +489,9 @@ Category:`;
 async function handleInstant(task: TaskRequest, ctx: TaskContext): Promise<string> {
   const taskText = task.subject === task.body ? task.subject : `${task.subject} ${task.body}`;
 
-  // FIX 3: Use concise instant prompt for cheap 8B models — saves tokens and latency
-  const systemPromptText = buildInstantPrompt(ctx.username, ctx.profile.timezone);
+  // Load user context so Aurora knows the user even for instant responses
+  const userContext = await loadUserContextSummary(ctx.userId);
+  const systemPromptText = buildInstantPrompt(ctx.username, ctx.profile.timezone, userContext);
 
   // Use a fast, free model for conversational responses
   const result = await callModel({
@@ -615,7 +616,10 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   const initialToolCount = allToolDefs.length;
   console.log(`[V3] Dynamic tool loading: ${loadedToolNames.length}/${initialToolCount} tools for multi_step tier`);
 
-  // ── Build system prompt with filtered tools ──
+  // ── Load Aurora's accumulated knowledge about the user ──
+  const userContext = await loadUserContextSummary(ctx.userId);
+
+  // ── Build system prompt with filtered tools + user context ──
   const toolDescriptions = formatToolDescriptions(loadedToolNames);
   const memoryContext = memory.facts ? `Known facts about user:\n${memory.facts}` : '';
   const systemPrompt = buildSystemPrompt(
@@ -624,7 +628,8 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     budget.formatForPrompt(),
     toolDescriptions,
     ctx.profile.timezone,
-    ctx.username
+    ctx.username,
+    userContext
   );
 
   // ── Build conversation ──
@@ -864,7 +869,8 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         budget.formatForPrompt(),
         expandedToolDescriptions,
         ctx.profile.timezone,
-        ctx.username
+        ctx.username,
+        userContext
       );
       // Update the system message in conversation
       messages[0] = { role: 'system', content: expandedSystemPrompt };

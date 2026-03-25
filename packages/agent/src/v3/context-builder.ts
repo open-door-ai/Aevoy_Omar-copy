@@ -6,6 +6,7 @@
 
 import { loadMemory } from '../services/memory.js';
 import { getCompiledPrompt } from '../services/personality.js';
+import { getUserContext } from '../services/context-engine.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 import type { TaskRequest } from '../types/index.js';
 import type { TaskContext, UserProfileContext, TaskTier } from './types.js';
@@ -116,16 +117,94 @@ async function loadUserProfile(userId: string): Promise<Record<string, any>> {
 }
 
 /**
+ * Load Aurora's accumulated knowledge about the user from the context engine.
+ * This is what makes Aurora feel like it KNOWS you — preferences, relationships,
+ * routines, commitments, etc. extracted from prior conversations.
+ *
+ * Returns a human-readable summary (capped at ~500 tokens) suitable for
+ * injection into any tier's system prompt.
+ */
+export async function loadUserContextSummary(userId: string): Promise<string> {
+  try {
+    const contexts = await getUserContext(userId);
+    if (!contexts || contexts.length === 0) return '';
+
+    const sections: string[] = [];
+
+    // Group by context type for readability
+    const grouped = new Map<string, Array<{ key: string; value: Record<string, unknown>; confidence: number }>>();
+    for (const ctx of contexts) {
+      const group = grouped.get(ctx.context_type) || [];
+      group.push(ctx);
+      grouped.set(ctx.context_type, group);
+    }
+
+    // Format each group into natural language
+    const typeLabels: Record<string, string> = {
+      relationship: 'People',
+      preference: 'Preferences',
+      routine: 'Routines',
+      commitment: 'Commitments',
+      location: 'Places',
+      habit: 'Habits',
+      emotion: 'Recent mood',
+      financial: 'Financial',
+      work: 'Work topics',
+      health: 'Health',
+    };
+
+    for (const [type, items] of grouped) {
+      const label = typeLabels[type] || type;
+      // Only include high-confidence items (>= 0.5) and cap at 8 per type
+      const filtered = items
+        .filter(i => i.confidence >= 0.5)
+        .slice(0, 8);
+
+      if (filtered.length === 0) continue;
+
+      const entries = filtered.map(item => {
+        const val = item.value;
+        // Extract the most readable field from the value object
+        if (val.name) return `${val.name}${val.relationship ? ` (${val.relationship})` : ''}`;
+        if (val.preference) return `${val.category || ''}: ${val.preference}`.replace(/^:\s*/, '');
+        if (val.place) return val.place as string;
+        if (val.emotion) return `${val.emotion}${val.trigger ? ` — triggered by: ${val.trigger}` : ''}`;
+        if (val.topic) return val.topic as string;
+        if (val.trait) return `${val.trait}: ${val.observed || ''}`;
+        // Fallback: first string value
+        const firstStr = Object.values(val).find(v => typeof v === 'string') as string | undefined;
+        return firstStr || item.key;
+      });
+
+      sections.push(`${label}: ${entries.join(', ')}`);
+    }
+
+    if (sections.length === 0) return '';
+
+    // Cap total length to prevent prompt bloat (~500 tokens ≈ 2000 chars)
+    let result = sections.join('\n');
+    if (result.length > 2000) {
+      result = result.substring(0, 2000) + '...';
+    }
+
+    return result;
+  } catch (err) {
+    console.warn('[V3-CONTEXT] User context load failed:', err);
+    return '';
+  }
+}
+
+/**
  * Build a concise system prompt for instant tier (cheap 8B models).
  * Much shorter than the full buildSystemPrompt — saves tokens and latency.
  * Includes few-shot examples to steer quality on small models.
  */
-export function buildInstantPrompt(username?: string, timezone?: string): string {
+export function buildInstantPrompt(username?: string, timezone?: string, userContext?: string): string {
   const timeStr = timezone
     ? new Date().toLocaleString('en-US', { timeZone: timezone })
     : new Date().toLocaleString('en-US');
 
-  return `You are Aurora, a sharp AI assistant${username ? ` for ${username}` : ''}.
+  let prompt = `You are Aurora, a sharp AI assistant${username ? ` for ${username}` : ''}.
 
 Rules:
 - Be concise. Use contractions. Sound human, not robotic.
@@ -140,6 +219,13 @@ Rules:
 - When they ask about themselves, they mean what YOU (Aurora) know about THEM (${username}).` : ''}
 
 Current time: ${timeStr}.`;
+
+  // Inject user context so Aurora knows the user even for instant responses
+  if (userContext) {
+    prompt += `\n\nWhat you know about ${username || 'this user'}:\n<untrusted-data>\n${userContext}\n</untrusted-data>`;
+  }
+
+  return prompt;
 }
 
 /**
@@ -156,7 +242,8 @@ export function buildSystemPrompt(
   budgetContext: string,
   toolDescriptions: string,
   timezone: string,
-  username?: string
+  username?: string,
+  userContext?: string
 ): string {
   const parts: string[] = [];
 
@@ -165,6 +252,13 @@ export function buildSystemPrompt(
   // Clear identity statement to prevent Aurora confusing itself with the user
   if (username) {
     parts.push(`IDENTITY CLARIFICATION: You are Aurora, an AI assistant. The human you are talking to is ${username}. You serve ${username}. When they ask "what do you know about me" or "tell me about myself," they are asking what YOU (Aurora) know about THEM (${username}) — not asking you to describe yourself. Never confuse your identity with the user's identity.`);
+  }
+
+  // Inject accumulated user context from the Aurora context engine.
+  // This is what makes Aurora feel like it KNOWS the user — their preferences,
+  // relationships, routines, commitments, emotions, etc.
+  if (userContext) {
+    parts.push(`WHAT YOU KNOW ABOUT ${username ? username.toUpperCase() : 'THIS USER'} (from prior conversations — use this to personalize your responses and make informed decisions):\n<untrusted-data>\n${sanitizeForPrompt(userContext)}\n</untrusted-data>`);
   }
 
   parts.push(`

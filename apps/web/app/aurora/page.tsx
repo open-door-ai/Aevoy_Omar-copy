@@ -22,6 +22,7 @@ export default function AuroraFeed() {
   const [micVisible, setMicVisible] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const [onboardingContext, setOnboardingContext] = useState<string[]>([]);
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
   const feedTopRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const micButtonRef = useRef<HTMLDivElement>(null);
@@ -114,12 +115,46 @@ export default function AuroraFeed() {
   /* ─── Toast when listening stops ─── */
   useEffect(() => {
     if (prevListening.current && !listening) {
-      setToast("Aurora stopped listening. Processing what it heard...");
-      const timer = setTimeout(() => setToast(null), 4000);
+      setLiveTranscript(null);
+      // Only show "processing" toast if we had activity
+      setToast("Aurora stopped listening.");
+      const timer = setTimeout(() => setToast(null), 3000);
       return () => clearTimeout(timer);
     }
     prevListening.current = listening;
   }, [listening]);
+
+  /* ─── Handle real-time transcript from mic ─── */
+  const handleTranscript = useCallback((text: string, isFinal: boolean) => {
+    if (isFinal) {
+      setLiveTranscript(null); // Clear interim, final will show briefly in MicButton
+    } else {
+      setLiveTranscript(text); // Show interim transcript live
+    }
+  }, []);
+
+  /* ─── Handle intent detected from mic ─── */
+  const handleIntentDetected = useCallback((action: string) => {
+    const now = new Date().toISOString();
+    const intentId = `intent-${Date.now()}`;
+
+    // Add a "working on it" card to the feed immediately
+    setFeedItems((prev) => [
+      {
+        id: intentId,
+        summary: `Heard you mention: "${action}" — on it.`,
+        channel: "microphone",
+        status: "processing" as const,
+        timestamp: now,
+        isUser: false,
+      },
+      ...prev,
+    ]);
+    scrollToTop();
+
+    // The real task result will arrive via the Supabase realtime subscription
+    // and replace or follow this card in the feed
+  }, [scrollToTop]);
 
   /* ─── Post-onboarding: load learned context ─── */
   useEffect(() => {
@@ -371,10 +406,21 @@ export default function AuroraFeed() {
               </div>
             )}
 
+            {/* Live transcript — shows what Aurora hears in real-time */}
+            {listening && liveTranscript && (
+              <div className="text-center px-4 animate-fadeIn">
+                <p className="text-sm text-[--aurora-text-secondary] italic">
+                  {liveTranscript}
+                </p>
+              </div>
+            )}
+
             {/* Mic Button — the centerpiece */}
             <div ref={micButtonRef} className="flex justify-center pt-4 pb-2">
               <MicButton
                 onListeningChange={setListening}
+                onIntentDetected={handleIntentDetected}
+                onTranscript={handleTranscript}
                 userId={userId}
                 accessToken={accessToken}
               />

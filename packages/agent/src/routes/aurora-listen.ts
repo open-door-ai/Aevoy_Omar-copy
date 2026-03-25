@@ -29,7 +29,10 @@ import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
 import { createClient } from '@supabase/supabase-js';
 import { extractContext } from '../services/context-engine.js';
+import type { DetectedAction } from '../services/context-engine.js';
 import { trackSpend } from '../services/cost-circuit-breaker.js';
+import { processTaskV3 } from '../v3/processor-v3.js';
+import { getSupabaseClient } from '../utils/supabase.js';
 import { logger } from '../utils/logger.js';
 
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
@@ -108,7 +111,8 @@ function buildDeepgramUrl(): string {
   return (
     'wss://api.deepgram.com/v1/listen?' +
     'encoding=linear16&sample_rate=16000&channels=1' +
-    '&model=nova-2&punctuate=true&vad_events=true&interim_results=false'
+    '&model=nova-2&punctuate=true&vad_events=true' +
+    '&interim_results=true&utterance_end_ms=1500'
   );
 }
 
@@ -131,6 +135,92 @@ function handleGracefulShutdown() {
 
 // Register once — idempotent via a module-level flag
 let shutdownRegistered = false;
+
+// ---- Extract context and immediately act on detected intents ----
+
+/**
+ * Runs context extraction on transcribed speech. If an actionable intent
+ * is detected, immediately creates a real V3 task so Aurora acts NOW,
+ * not on the next scheduler cycle.
+ *
+ * Also sends `intent_detected` back to the client so the feed can show
+ * what Aurora noticed in real-time.
+ */
+function extractAndMaybeAct(text: string, uid: string, clientWs: WebSocket): void {
+  extractContext(text, uid, 'microphone')
+    .then(async (detectedAction: DetectedAction | null) => {
+      if (!detectedAction) return;
+
+      // Tell the client what Aurora detected — shows in the feed immediately
+      if (clientWs.readyState === WebSocket.OPEN) {
+        try {
+          clientWs.send(JSON.stringify({
+            type: 'intent_detected',
+            action: detectedAction.actionText,
+            queueId: detectedAction.queueId,
+          }));
+        } catch { /* best effort */ }
+      }
+
+      // Look up user profile for the task
+      const supabase = getSupabaseClient();
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('username, email')
+        .eq('id', uid)
+        .single();
+
+      if (!profile) {
+        logger.warn({ userId: uid }, '[AURORA-LISTEN] No profile — cannot create task for detected intent');
+        return;
+      }
+
+      // Create and process a real V3 task from the detected intent.
+      // This is what makes Aurora ACT instead of just LISTEN.
+      logger.info({ userId: uid.substring(0, 8), action: detectedAction.actionText.substring(0, 60) },
+        '[AURORA-LISTEN] Creating immediate task from detected intent');
+
+      try {
+        const result = await processTaskV3({
+          userId: uid,
+          username: profile.username || 'user',
+          from: profile.email || `${profile.username}@aevoy.com`,
+          subject: detectedAction.actionText,
+          body: detectedAction.fullMessage,
+          inputChannel: 'web', // Process as a real task, not microphone (which is silenced)
+          suppressEmail: true, // Don't email — show in feed via realtime subscription
+        });
+
+        // Notify client that Aurora acted
+        if (clientWs.readyState === WebSocket.OPEN && result.response) {
+          try {
+            clientWs.send(JSON.stringify({
+              type: 'action_completed',
+              action: detectedAction.actionText,
+              taskId: result.taskId,
+              response: result.response.substring(0, 500),
+            }));
+          } catch { /* best effort */ }
+        }
+
+        // Mark the proactive queue item as acted_on
+        if (detectedAction.queueId) {
+          await supabase
+            .from('proactive_queue')
+            .update({
+              status: 'acted_on',
+              delivered_at: new Date().toISOString(),
+            })
+            .eq('id', detectedAction.queueId);
+        }
+      } catch (err) {
+        logger.error({ err, userId: uid }, '[AURORA-LISTEN] Failed to process detected intent as task');
+      }
+    })
+    .catch((err) => {
+      logger.error({ err, userId: uid }, 'Mic context extraction failed');
+    });
+}
 
 // ---- WebSocket setup ----
 
@@ -221,6 +311,19 @@ export function setupListenWebSocket(server: Server): void {
         try {
           const result = JSON.parse(data.toString());
 
+          // Interim transcript — echo for live display, don't process
+          if (result.type === 'Results' && !result.is_final) {
+            const transcript: string | undefined = result.channel?.alternatives?.[0]?.transcript;
+            if (transcript && transcript.trim().length > 0) {
+              sendJson(clientWs, {
+                type: 'transcript',
+                text: transcript.trim(),
+                is_final: false,
+              });
+            }
+            return;
+          }
+
           // Final transcript from Deepgram
           if (result.type === 'Results' && result.is_final) {
             const transcript: string | undefined = result.channel?.alternatives?.[0]?.transcript;
@@ -228,10 +331,9 @@ export function setupListenWebSocket(server: Server): void {
               const trimmed = transcript.trim();
               const wordCount = trimmed.split(/\s+/).length;
 
-              // Batch short transcripts (< MIN_WORDS_FOR_BATCH words)
+              // Batch very short transcripts (< MIN_WORDS_FOR_BATCH words)
               if (wordCount < MIN_WORDS_FOR_BATCH) {
                 pendingBatch += (pendingBatch ? ' ' : '') + trimmed;
-                // Don't echo or process yet — wait for next final to concatenate
                 return;
               }
 
@@ -243,28 +345,42 @@ export function setupListenWebSocket(server: Server): void {
 
               transcriptBuffer += ' ' + fullTranscript;
 
-              // Echo back to the browser for visual feedback
+              // Echo final transcript to browser
               sendJson(clientWs, {
                 type: 'transcript',
                 text: fullTranscript,
                 is_final: true,
               });
 
-              // After ~20+ words, run context extraction
-              if (transcriptBuffer.split(' ').length > 20) {
+              // Process in near-real-time: extract after just 5+ words
+              // (down from 20 — critical for the "Aurora acts while you speak" experience)
+              if (transcriptBuffer.split(/\s+/).filter(Boolean).length >= 5) {
                 const textToExtract = transcriptBuffer.trim();
                 transcriptBuffer = '';
 
-                // Fire and forget — don't block the audio stream
-                extractContext(textToExtract, userId!, 'microphone').catch((err) => {
-                  logger.error({ err, userId }, 'Mic context extraction failed');
-                });
+                // Extract context AND check for immediate actions
+                extractAndMaybeAct(textToExtract, userId!, clientWs);
               }
             }
           }
 
-          // Forward VAD events for waveform visualization
-          if (result.type === 'SpeechStarted' || result.type === 'UtteranceEnd') {
+          // UtteranceEnd = user paused speaking. Flush buffer immediately.
+          // This is the key: don't wait for word count — user's natural pause triggers processing.
+          if (result.type === 'UtteranceEnd') {
+            sendJson(clientWs, { type: result.type });
+
+            // Flush any accumulated text
+            const remaining = ((pendingBatch ? pendingBatch + ' ' : '') + transcriptBuffer).trim();
+            pendingBatch = '';
+            transcriptBuffer = '';
+
+            if (remaining.length > 3 && userId) {
+              extractAndMaybeAct(remaining, userId, clientWs);
+            }
+          }
+
+          // Forward SpeechStarted for waveform visualization
+          if (result.type === 'SpeechStarted') {
             sendJson(clientWs, { type: result.type });
           }
         } catch {
@@ -470,9 +586,7 @@ export function setupListenWebSocket(server: Server): void {
       // Flush remaining pending batch + transcript buffer
       const remaining = ((pendingBatch ? pendingBatch + ' ' : '') + transcriptBuffer).trim();
       if (remaining.length > 5 && userId) {
-        extractContext(remaining, userId, 'microphone').catch((err) => {
-          logger.error({ err, userId }, 'Final mic extraction failed');
-        });
+        extractAndMaybeAct(remaining, userId, clientWs);
       }
       pendingBatch = '';
       transcriptBuffer = '';
