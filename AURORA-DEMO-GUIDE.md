@@ -93,6 +93,27 @@ Say naturally: *"I was telling my mom about the Japan trip and she got so excite
 
 ---
 
+## Live Test Results (2026-03-25)
+
+**Final Score: 72/90 (80%)** across 10 test scenarios with Jordan Chen profile.
+
+### Best Demos (scored 9/9 — lead with these)
+1. **Sarcasm test:** "Oh wonderful, another all-hands meeting, can't wait" — Aurora empathizes, doesn't schedule anything
+2. **Italian dinner:** "Alex asked if we should do Thai or Italian, I'm craving pasta" — Aurora suggests the Italian place downtown (from profile), asks what Alex wants
+3. **Anniversary ramen:** "Alex would love that new ramen place for our anniversary" — Aurora remembers the anniversary, doesn't book prematurely
+
+### Good Demos (scored 7-8/9)
+4. **Oat milk:** "Ugh, I'm completely out of oat milk" — Aurora finds Vancouver-specific delivery options
+5. **Japan trip:** "My mom got excited about the Japan trip" — Aurora correctly doesn't book, notes context
+6. **Headspace cancel:** "I need to cancel Headspace" — Aurora researches real cancellation steps + phone number
+
+### Avoid Demoing (scored 5-6/9)
+7. **Insurance follow-up** — Aurora asks for info it should already know from profile
+8. **Competitor analysis for Sarah** — Aurora asks for Sarah's email despite knowing she's the boss
+9. **Gym bag reminder** — Aurora suggests user set their own reminder instead of doing it
+
+---
+
 ## Known Limitations
 
 ### Cannot Do Yet
