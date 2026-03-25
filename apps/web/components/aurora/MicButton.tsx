@@ -26,6 +26,26 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
 
   const isListening = state === "listening" || state === "listening_silence" || state === "reconnecting";
 
+  // Check mic permission on mount — show denied state immediately if blocked
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.permissions) return;
+    navigator.permissions.query({ name: 'microphone' as PermissionName }).then(result => {
+      if (result.state === 'denied') {
+        setState('permission_denied');
+      }
+      // Listen for permission changes
+      result.addEventListener('change', () => {
+        if (result.state === 'denied') {
+          setState('permission_denied');
+        } else if (result.state === 'granted' && state === 'permission_denied') {
+          setState('default');
+        }
+      });
+    }).catch(() => {
+      // permissions API not supported — will check on click
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const stopListening = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
