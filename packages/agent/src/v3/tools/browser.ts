@@ -103,8 +103,9 @@ registerTool({
       }
 
       // Auto-detect and solve CAPTCHAs (transparent to the AI, 30s max)
+      let captchaResult: { hadCaptcha: boolean; solved: boolean; note?: string } = { hadCaptcha: false, solved: true };
       try {
-        const captchaResult = await Promise.race([
+        captchaResult = await Promise.race([
           detectAndSolve(page),
           new Promise<{ hadCaptcha: boolean; solved: boolean; note?: string }>((resolve) =>
             setTimeout(() => resolve({ hadCaptcha: false, solved: false, note: 'CAPTCHA detection timed out' }), 30_000)
@@ -114,7 +115,7 @@ registerTool({
           captchaCost = 0.002;
         }
       } catch {
-        // CAPTCHA solving failed — continue with whatever content we have
+        captchaResult = { hadCaptcha: false, solved: false, note: 'CAPTCHA solving error' };
       }
 
       const title = await page.title();
