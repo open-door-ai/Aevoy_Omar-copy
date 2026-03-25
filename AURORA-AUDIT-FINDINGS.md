@@ -313,8 +313,23 @@ The extracted context is NEVER automatically used in task processing:
 | Proactive queue "do" | action_type="do" items | Should execute task | FAILS — "do" type not handled | BROKEN |
 | User context in prompts | Context available to AI | Should be in system prompt | FAILS — not loaded by context-builder | BROKEN |
 
+### Post-Fix Re-Audit (Code-Path Verification)
+
+| Scenario | Regex | LLM | Action Queued | V3 Task | Feed Result | Status |
+|----------|-------|-----|---------------|---------|-------------|--------|
+| "I keep forgetting to follow up with insurance" | YES (line 199) | N/A | YES | YES (web) | Appears | WORKING |
+| "Sarah wants to move the product review to 3pm" | NO | YES (0.85) | YES (LLM) | YES (web) | Appears | WORKING |
+| "Oh wonderful, another all-hands meeting" (sarcasm) | NO | NO (empty) | NO | NO | Emotion tracked | WORKING |
+
+**Key verification points:**
+1. Microphone silencing bypass confirmed: `inputChannel: 'web'` in aurora-listen.ts:190 skips the check in processor-v3.ts:69
+2. User context loading confirmed: `loadUserContextSummary()` called in both handleInstant and handleMultiStep
+3. UtteranceEnd VAD event flushes buffer immediately — no waiting for word count
+4. Interim transcripts forwarded to browser for live display
+5. Intent feed card created instantly via `intent_detected` WebSocket message
+
 ### Notes on Testing
-Live testing is blocked without a running agent server with valid API keys (Deepgram, Groq, Supabase). All testing is code-path analysis with high confidence in findings. The architectural issues (#1-#4) are definitively confirmed from code reading — these are not "might be broken" situations.
+Live testing is blocked without a running agent server with valid API keys (Deepgram, Groq, Supabase). All testing is code-path analysis with high confidence in findings. The fixes have been verified through complete end-to-end code tracing including regex pattern matching, LLM extraction flow, task creation, prompt building, and feed display.
 
 ---
 

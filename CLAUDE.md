@@ -31,6 +31,27 @@ pnpm --filter agent dev       # Agent dev (port 3001)
 
 ## Key File Paths
 
+### Aurora (Always-Listening Experience)
+- `apps/web/app/aurora/page.tsx` — Main Aurora feed (mic + feed + messages)
+- `apps/web/components/aurora/MicButton.tsx` — Mic capture, WebSocket audio streaming, visualizer
+- `packages/agent/src/routes/aurora-listen.ts` — WebSocket proxy to Deepgram, real-time intent detection
+- `packages/agent/src/services/context-engine.ts` — LLM context extraction from every message
+- `packages/agent/src/services/aurora-messenger.ts` — Central outbound delivery hub
+- `packages/agent/src/services/proactive-queue.ts` — Action generation + "do" task execution
+- `packages/agent/src/v3/context-builder.ts` — Builds AI prompts with user context injection
+- `packages/agent/scripts/seed-aurora-test-user.sql` — Test user (Jordan Chen) seed data
+- See `AURORA-AUDIT-FINDINGS.md` for detailed architecture and `AURORA-DEMO-GUIDE.md` for demo instructions
+
+### Aurora Speech Pipeline (how mic → action works)
+```
+Mic → 16kHz PCM → WebSocket → Deepgram (nova-2, interim+final+VAD)
+  → 5-word buffer OR UtteranceEnd pause → extractContext()
+    → Regex: 10 ACTION_INTENT_PATTERNS (instant, free)
+    → LLM: Groq (people, commitments, tasks, emotions)
+    → IF action detected → intent_detected to browser + processTaskV3() immediately
+    → User context (from user_context table) injected into all AI prompts
+```
+
 ### Agent Core
 - `packages/agent/src/index.ts` — Express routes (70+ endpoints, 4000+ lines)
 - `packages/agent/src/v3/processor-v3.ts` — V3 tiered processor (ACTIVE)
