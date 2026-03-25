@@ -262,6 +262,14 @@ async function runProactiveChecks(): Promise<void> {
     logger.error('[SCHEDULER] Context cleanup error:', error);
   }
 
+  // BROWSER SESSION CLEANUP: Kill orphaned Steel sessions (every run)
+  try {
+    const { cleanupOrphanedSessions } = await import("./steel-browser.js");
+    await cleanupOrphanedSessions();
+  } catch {
+    // Non-critical — Steel may not be configured
+  }
+
   // AUTONOMOUS INTELLIGENCE: Run skill recommendations (daily at 4 AM UTC, after pattern detection)
   try {
     const now = new Date();
