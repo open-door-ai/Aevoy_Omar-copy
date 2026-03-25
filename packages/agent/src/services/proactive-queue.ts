@@ -392,6 +392,9 @@ function shouldDeliverNow(action: { action_type: string; priority: number }, use
     // Invalid timezone — allow delivery (fail open)
   }
 
+  // "do" actions (from listening/context detection) — deliver immediately
+  if (action.action_type === 'do') return true;
+
   // Action suggestions (from listening) — deliver within 30 seconds
   if (action.action_type === 'suggest' && action.priority >= 7) return true;
 
@@ -495,6 +498,18 @@ export async function processQueue(): Promise<number> {
           // The AI decides: act if enough context, ask if not, note if ambiguous
           const { processTaskV3 } = await import('../v3/processor-v3.js');
 
+          // Load user profile for proper task creation
+          const { data: userProfile } = await supabase
+            .from('profiles')
+            .select('username, email')
+            .eq('id', userId)
+            .single();
+
+          if (!userProfile) {
+            logger.warn({ userId: userId.substring(0, 8) }, '[PROACTIVE-Q] No profile — skipping "do" action');
+            continue;
+          }
+
           // Build context-rich task body so the AI can make informed decisions
           const taskBody = `Aurora picked up something from a conversation: "${actionDesc}"
 
@@ -506,11 +521,12 @@ Based on what you know about the user, handle this appropriately:
 
           processTaskV3({
             userId,
-            username: '',
-            from: 'proactive',
+            username: userProfile.username || 'user',
+            from: userProfile.email || `${userProfile.username || 'user'}@aevoy.com`,
             subject: actionDesc,
             body: taskBody,
             inputChannel: 'proactive',
+            suppressEmail: true, // Show in feed, don't email
           }).catch(err => {
             logger.error({ err, userId: userId.substring(0, 8) }, '[PROACTIVE-Q] Task execution failed');
           });
