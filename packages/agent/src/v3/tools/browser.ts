@@ -102,10 +102,19 @@ registerTool({
         };
       }
 
-      // Auto-detect and solve CAPTCHAs (transparent to the AI)
-      const captchaResult = await detectAndSolve(page);
-      if (captchaResult.hadCaptcha && captchaResult.solved) {
-        captchaCost = 0.002; // average CAPTCHA solving cost
+      // Auto-detect and solve CAPTCHAs (transparent to the AI, 30s max)
+      try {
+        const captchaResult = await Promise.race([
+          detectAndSolve(page),
+          new Promise<{ hadCaptcha: boolean; solved: boolean; note?: string }>((resolve) =>
+            setTimeout(() => resolve({ hadCaptcha: false, solved: false, note: 'CAPTCHA detection timed out' }), 30_000)
+          ),
+        ]);
+        if (captchaResult.hadCaptcha && captchaResult.solved) {
+          captchaCost = 0.002;
+        }
+      } catch {
+        // CAPTCHA solving failed — continue with whatever content we have
       }
 
       const title = await page.title();
