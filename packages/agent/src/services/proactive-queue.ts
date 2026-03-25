@@ -491,16 +491,25 @@ export async function processQueue(): Promise<number> {
         const actionDesc = (action.description || action.title || '') as string;
 
         if (actionType === 'do' && actionDesc.length > 3) {
-          // ACTION TYPE: "do" — let the AI handle it as a real task
+          // ACTION TYPE: "do" — let the AI handle it with full context
+          // The AI decides: act if enough context, ask if not, note if ambiguous
           const { processTaskV3 } = await import('../v3/processor-v3.js');
 
-          // Fire and forget — the processor handles its own task record
+          // Build context-rich task body so the AI can make informed decisions
+          const taskBody = `Aurora picked up something from a conversation: "${actionDesc}"
+
+Based on what you know about the user, handle this appropriately:
+- If you have enough context to take action (you know who the person is, what needs to happen), do it.
+- If you need more information to act (who is this person? what specifically?), send a brief message asking.
+- If it's just a note to remember, save it and bring it up at the right time.
+- Never hallucinate details you don't know. If you're not sure, say so naturally.`;
+
           processTaskV3({
             userId,
             username: '',
             from: 'proactive',
             subject: actionDesc,
-            body: actionDesc,
+            body: taskBody,
             inputChannel: 'proactive',
           }).catch(err => {
             logger.error({ err, userId: userId.substring(0, 8) }, '[PROACTIVE-Q] Task execution failed');
