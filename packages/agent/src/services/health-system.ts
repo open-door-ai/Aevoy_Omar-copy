@@ -16,6 +16,7 @@
 
 import { getSupabaseClient } from '../utils/supabase.js';
 import { generateResponse } from './ai.js';
+import { logger } from '../utils/logger.js';
 
 export interface HealthStatus {
   overall: 'healthy' | 'degraded' | 'critical' | 'recovering';
@@ -80,11 +81,11 @@ class HealthSystem {
    */
   startMonitoring() {
     if (this.monitoringInterval) {
-      console.log('[HEALTH] Already monitoring');
+      logger.info('[HEALTH] Already monitoring');
       return;
     }
 
-    console.log('[HEALTH] Starting continuous health monitoring (30s interval)');
+    logger.info('[HEALTH] Starting continuous health monitoring (30s interval)');
 
     // Run immediately
     this.performHealthCheck();
@@ -102,7 +103,7 @@ class HealthSystem {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
       this.monitoringInterval = null;
-      console.log('[HEALTH] Stopped monitoring');
+      logger.info('[HEALTH] Stopped monitoring');
     }
   }
 
@@ -111,7 +112,7 @@ class HealthSystem {
    */
   private async performHealthCheck() {
     const start = Date.now();
-    console.log('[HEALTH] Performing health check...');
+    logger.info('[HEALTH] Performing health check...');
 
     // Check all subsystems in parallel
     const checks = await Promise.all([
@@ -166,7 +167,7 @@ class HealthSystem {
     this.healthStatus.lastCheck = new Date();
 
     const duration = Date.now() - start;
-    console.log(`[HEALTH] Check complete in ${duration}ms - Overall: ${this.healthStatus.overall}`);
+    logger.info(`[HEALTH] Check complete in ${duration}ms - Overall: ${this.healthStatus.overall}`);
 
     // If critical, LOG TO DATABASE
     if (this.healthStatus.overall === 'critical') {
@@ -427,8 +428,8 @@ class HealthSystem {
    * Initiate automatic repair for failed subsystem
    */
   private async initiateRepair(subsystem: string, health: SubsystemHealth) {
-    console.log(`[HEALTH] 🔧 Initiating repair for: ${subsystem}`);
-    console.log(`[HEALTH] Error: ${health.lastError}`);
+    logger.info(`[HEALTH] 🔧 Initiating repair for: ${subsystem}`);
+    logger.info(`[HEALTH] Error: ${health.lastError}`);
 
     // Mark as repair attempted
     health.autoRepairAttempted = true;
@@ -436,9 +437,9 @@ class HealthSystem {
 
     // Diagnose the issue
     const diagnostic = await this.diagnose(subsystem, health.lastError || 'Unknown error');
-    console.log(`[HEALTH] Diagnosis: ${diagnostic.rootCause}`);
-    console.log(`[HEALTH] Severity: ${diagnostic.severity}`);
-    console.log(`[HEALTH] Repair strategies: ${diagnostic.repairStrategies.length}`);
+    logger.info(`[HEALTH] Diagnosis: ${diagnostic.rootCause}`);
+    logger.info(`[HEALTH] Severity: ${diagnostic.severity}`);
+    logger.info(`[HEALTH] Repair strategies: ${diagnostic.repairStrategies.length}`);
 
     // Try each repair strategy in order of success probability
     const strategies = diagnostic.repairStrategies.sort((a, b) => b.successProbability - a.successProbability);
@@ -454,23 +455,23 @@ class HealthSystem {
       };
 
       this.repairQueue.push(repair);
-      console.log(`[HEALTH] Attempting repair strategy: ${strategy.name} (${strategy.successProbability}% success probability)`);
+      logger.info(`[HEALTH] Attempting repair strategy: ${strategy.name} (${strategy.successProbability}% success probability)`);
 
       const success = await this.executeRepairStrategy(subsystem, strategy);
 
       if (success) {
-        console.log(`[HEALTH] ✅ Repair successful: ${strategy.name}`);
+        logger.info(`[HEALTH] ✅ Repair successful: ${strategy.name}`);
         health.status = 'ok';
         health.failureCount = 0;
         health.autoRepairAttempted = false;
         this.repairQueue = this.repairQueue.filter(r => r !== repair);
         return;
       } else {
-        console.log(`[HEALTH] ❌ Repair failed: ${strategy.name}, trying next strategy...`);
+        logger.info(`[HEALTH] ❌ Repair failed: ${strategy.name}, trying next strategy...`);
       }
     }
 
-    console.error(`[HEALTH] ⚠️ All repair strategies failed for ${subsystem}. Manual intervention required.`);
+    logger.error(`[HEALTH] ⚠️ All repair strategies failed for ${subsystem}. Manual intervention required.`);
     await this.escalate(subsystem, diagnostic);
   }
 
@@ -515,7 +516,7 @@ Respond with JSON:
         return JSON.parse(jsonMatch[0]);
       }
     } catch (e) {
-      console.error('[HEALTH] Diagnostic AI failed:', e);
+      logger.error('[HEALTH] Diagnostic AI failed:', e);
     }
 
     // Fallback diagnostic
@@ -580,7 +581,7 @@ Respond with JSON:
    * Escalate to human when auto-repair fails
    */
   private async escalate(subsystem: string, diagnostic: DiagnosticResult) {
-    console.error('[HEALTH] 🚨 ESCALATING TO HUMAN');
+    logger.error('[HEALTH] 🚨 ESCALATING TO HUMAN');
 
     // Log to database for manual review
     try {
@@ -591,7 +592,7 @@ Respond with JSON:
         message: `CRITICAL: ${subsystem} auto-repair failed. Root cause: ${diagnostic.rootCause}`
       });
     } catch (e) {
-      console.error('[HEALTH] Failed to log escalation:', e);
+      logger.error('[HEALTH] Failed to log escalation:', e);
     }
 
     // TODO: Send alert email, SMS, or webhook
@@ -636,7 +637,7 @@ Respond with JSON:
         message: `CRITICAL HEALTH STATUS - Failed systems: ${failedSystems}`
       });
     } catch (e) {
-      console.error('[HEALTH] Failed to log critical incident:', e);
+      logger.error('[HEALTH] Failed to log critical incident:', e);
     }
   }
 
@@ -651,7 +652,7 @@ Respond with JSON:
    * Startup validation — run ONCE on boot, log all issues loudly
    */
   async runStartupValidation(): Promise<void> {
-    console.log('[HEALTH] ========== STARTUP VALIDATION ==========');
+    logger.info('[HEALTH] ========== STARTUP VALIDATION ==========');
     const issues: string[] = [];
 
     // 1. Critical env vars
@@ -725,14 +726,14 @@ Respond with JSON:
 
     // Report
     if (issues.length === 0) {
-      console.log('[HEALTH] ✅ All startup checks passed');
+      logger.info('[HEALTH] ✅ All startup checks passed');
     } else {
-      console.error(`[HEALTH] ⚠️ ${issues.length} startup issue(s):`);
+      logger.error(`[HEALTH] ⚠️ ${issues.length} startup issue(s):`);
       for (const issue of issues) {
-        console.error(`[HEALTH]   - ${issue}`);
+        logger.error(`[HEALTH]   - ${issue}`);
       }
     }
-    console.log('[HEALTH] ========================================');
+    logger.info('[HEALTH] ========================================');
   }
 }
 

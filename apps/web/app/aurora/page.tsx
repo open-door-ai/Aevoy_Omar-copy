@@ -18,8 +18,13 @@ export default function AuroraFeed() {
   const [userId, setUserId] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [micVisible, setMicVisible] = useState(true);
+  const [toast, setToast] = useState<string | null>(null);
+  const [onboardingContext, setOnboardingContext] = useState<string[]>([]);
   const feedTopRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const micButtonRef = useRef<HTMLDivElement>(null);
+  const prevListening = useRef(false);
 
   const supabase = createClient();
 
@@ -87,6 +92,44 @@ export default function AuroraFeed() {
     }
     checkOnboarding();
   }, [supabase]);
+
+  /* ─── Intersection observer: detect when mic scrolls out of view ─── */
+  useEffect(() => {
+    if (!micButtonRef.current) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setMicVisible(entry.isIntersecting),
+      { threshold: 0.5 }
+    );
+    observer.observe(micButtonRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  /* ─── Toast when listening stops ─── */
+  useEffect(() => {
+    if (prevListening.current && !listening) {
+      setToast("Aurora stopped listening. Processing what it heard...");
+      const timer = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+    prevListening.current = listening;
+  }, [listening]);
+
+  /* ─── Post-onboarding: load learned context ─── */
+  useEffect(() => {
+    if (showOnboarding || !userId) return;
+    async function loadOnboardingContext() {
+      const { data } = await supabase
+        .from("user_memory")
+        .select("content")
+        .eq("user_id", userId!)
+        .eq("source", "onboarding")
+        .limit(10);
+      if (data && data.length > 0) {
+        setOnboardingContext(data.map((d: { content: string }) => d.content));
+      }
+    }
+    loadOnboardingContext();
+  }, [showOnboarding, userId, supabase]);
 
   /* ─── Realtime subscriptions ─── */
   useEffect(() => {
@@ -249,6 +292,21 @@ export default function AuroraFeed() {
   /* ─── Render ─── */
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+      {/* Floating "Listening..." pill when mic scrolled out of view */}
+      {listening && !micVisible && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-[#6C5CE7] text-white text-sm font-medium shadow-lg shadow-[#6C5CE7]/25 flex items-center gap-2 animate-fadeIn">
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+          Aurora is listening...
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-30 px-4 py-2.5 rounded-xl bg-[--aurora-card] border border-[--aurora-card-border] text-sm text-[--aurora-text] shadow-lg animate-fadeIn">
+          {toast}
+        </div>
+      )}
+
       {/* Error Banner */}
       {error && (
         <div className="mx-4 mt-2 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center gap-3">
@@ -307,9 +365,32 @@ export default function AuroraFeed() {
             )}
 
             {/* Mic Button — the centerpiece */}
-            <div className="flex justify-center pt-4 pb-2">
+            <div ref={micButtonRef} className="flex justify-center pt-4 pb-2">
               <MicButton onListeningChange={setListening} />
             </div>
+
+            {/* Post-onboarding summary: what Aurora learned */}
+            {!showOnboarding && onboardingContext.length > 0 && (
+              <div className="bg-gradient-to-br from-[#6C5CE7]/5 to-[#A855F7]/5 border border-[#6C5CE7]/10 rounded-2xl p-5 animate-slideUp">
+                <h3 className="text-sm font-semibold text-[--aurora-text] mb-2">
+                  Here&apos;s what Aurora learned
+                </h3>
+                <ul className="space-y-1.5">
+                  {onboardingContext.map((ctx, i) => (
+                    <li key={i} className="text-sm text-[--aurora-text-secondary] flex items-start gap-2">
+                      <span className="text-[#6C5CE7] mt-0.5 shrink-0">&#8226;</span>
+                      {ctx}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  onClick={() => setOnboardingContext([])}
+                  className="text-xs text-[#6C5CE7] hover:underline mt-3"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             {/* Feed */}
             {feedItems.length > 0 && (

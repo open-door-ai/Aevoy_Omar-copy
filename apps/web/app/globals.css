@@ -285,3 +285,21 @@
 .animate-ping-slow {
   animation: ping-slow 2s ease-out infinite;
 }
+
+/* Feed card entrance animation */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out;
+}
+
+/* Fade-in for floating pill / toast */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}

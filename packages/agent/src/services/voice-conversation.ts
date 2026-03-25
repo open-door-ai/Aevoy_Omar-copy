@@ -15,6 +15,7 @@ import { calculateVoiceCost } from "../utils/cost-calculator.js";
 import { loadMemory, saveWorkingMemory, appendDailyLog } from "./memory.js";
 import { sanitizeTaskInput } from "../security/validator.js";
 import { getUnreadMessages, getRecentMessages, isEmailConnected } from "./inbox.js";
+import { logger } from '../utils/logger.js';
 
 // ---- Daily Voice Spend Tracking ----
 
@@ -58,8 +59,8 @@ async function sendSpendAlert(amount: number): Promise<void> {
         Body: `Aurora voice spend alert: $${amount.toFixed(2)} today. Daily cap: $${DAILY_VOICE_SPEND_CAP}. Check active calls.`,
       }).toString(),
     });
-    console.log(`[VOICE] Spend alert sent: $${amount.toFixed(2)}`);
-  } catch (e) { console.warn('[VOICE] Failed to send spend alert:', e); }
+    logger.info(`[VOICE] Spend alert sent: $${amount.toFixed(2)}`);
+  } catch (e) { logger.warn('[VOICE] Failed to send spend alert:', e); }
 }
 
 // ---- Twilio Call Termination ----
@@ -73,13 +74,13 @@ async function forceHangupCall(callSid: string): Promise<void> {
   if (!callSid || callSid.length < 10) {
     // CRITICAL: Empty or placeholder callSid means we can't terminate the Twilio call.
     // Log loudly so we can track this. The call will continue billing until Twilio's own timeout.
-    console.error(`[VOICE] FORCE-HANGUP FAILED: callSid is empty/invalid (${callSid || 'none'}). Call may still be billing!`);
+    logger.error(`[VOICE] FORCE-HANGUP FAILED: callSid is empty/invalid (${callSid || 'none'}). Call may still be billing!`);
     return;
   }
   try {
     const config = getTwilioConfig();
     if (!config) {
-      console.error(`[VOICE] FORCE-HANGUP FAILED: Twilio not configured. Call ${callSid} may still be billing!`);
+      logger.error(`[VOICE] FORCE-HANGUP FAILED: Twilio not configured. Call ${callSid} may still be billing!`);
       return;
     }
     const url = `https://api.twilio.com/2010-04-01/Accounts/${config.accountSid}/Calls/${callSid}.json`;
@@ -90,11 +91,11 @@ async function forceHangupCall(callSid: string): Promise<void> {
       body: 'Status=completed',
     });
     if (!res.ok) {
-      console.error(`[VOICE] Force-hangup HTTP ${res.status} for ${callSid}: ${await res.text().catch(() => 'no body')}`);
+      logger.error(`[VOICE] Force-hangup HTTP ${res.status} for ${callSid}: ${await res.text().catch(() => 'no body')}`);
     } else {
-      console.log(`[VOICE] Force-hangup: call ${callSid} terminated`);
+      logger.info(`[VOICE] Force-hangup: call ${callSid} terminated`);
     }
-  } catch (e) { console.error(`[VOICE] Force-hangup EXCEPTION for ${callSid}:`, e); }
+  } catch (e) { logger.error(`[VOICE] Force-hangup EXCEPTION for ${callSid}:`, e); }
 }
 
 // ---- Types ----
@@ -183,7 +184,7 @@ function cleanupSession(sessionId: string): void {
       session.hardKillTimer = null;
     }
     activeSessions.delete(sessionId);
-    console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} cleaned up (active: ${activeSessions.size})`);
+    logger.info(`[VOICE-WS] Session ${sessionId.slice(0, 8)} cleaned up (active: ${activeSessions.size})`);
   }
 }
 
@@ -197,7 +198,7 @@ setInterval(() => {
       : SESSION_TIMEOUT_MS;
     if (now - session.startedAt > timeout) {
       const mins = Math.round((now - session.startedAt) / 60000);
-      console.log(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
+      logger.info(`[VOICE-WS] Session ${id.slice(0, 8)} timed out after ${mins}m (type: ${session.callType})`);
       // Mark as intentional close (timeout)
       session.intentionalClose = true;
       // Track voice spend for the timed-out session
@@ -228,7 +229,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
   let sessionId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   if (activeSessions.size >= MAX_SESSIONS) {
-    console.warn("[VOICE-WS] Max sessions reached, rejecting connection");
+    logger.warn("[VOICE-WS] Max sessions reached, rejecting connection");
     ws.send(JSON.stringify({ type: "text", token: "I'm sorry, all lines are busy right now. Please try again in a few minutes.", last: true }));
     ws.send(JSON.stringify({ type: "end" }));
     ws.close();
@@ -237,7 +238,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
 
   // Daily voice spend cap — reject new calls if over budget
   if (dailyVoiceSpend >= DAILY_VOICE_SPEND_CAP) {
-    console.warn(`[VOICE-WS] Daily voice spend cap reached ($${dailyVoiceSpend.toFixed(2)}), rejecting call`);
+    logger.warn(`[VOICE-WS] Daily voice spend cap reached ($${dailyVoiceSpend.toFixed(2)}), rejecting call`);
     ws.send(JSON.stringify({ type: "text", token: "I'm temporarily unavailable. Please try again later or reach me by email or text.", last: true }));
     ws.send(JSON.stringify({ type: "end" }));
     ws.close();
@@ -253,7 +254,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
         case "setup": {
           const existingSession = activeSessions.get(sessionId);
           if (existingSession && existingSession.state !== 'setup') {
-            console.log(`[VOICE-WS] Duplicate setup for ${sessionId.slice(0,8)} — ignoring`);
+            logger.info(`[VOICE-WS] Duplicate setup for ${sessionId.slice(0,8)} — ignoring`);
             break;
           }
           await handleSetup(ws, message, sessionId);
@@ -271,12 +272,12 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
         case "interrupt":
           if (session) {
             session.lastActivityAt = Date.now();
-            console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} interrupted at: "${message.utteranceUntilInterrupt?.slice(0, 50)}"`);
+            logger.info(`[VOICE-WS] ${sessionId.slice(0, 8)} interrupted at: "${message.utteranceUntilInterrupt?.slice(0, 50)}"`);
           }
           break;
 
         case "error":
-          console.error(`[VOICE-WS] Session error: ${message.description}`);
+          logger.error(`[VOICE-WS] Session error: ${message.description}`);
           break;
 
         default:
@@ -284,7 +285,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
           break;
       }
     } catch (err) {
-      console.error("[VOICE-WS] Message processing error:", err);
+      logger.error("[VOICE-WS] Message processing error:", err);
     }
   });
 
@@ -308,7 +309,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
         session.silenceWatchdog = null;
       }
       const duration = Math.round((Date.now() - session.startedAt) / 1000);
-      console.log(`[VOICE-WS] Session ${sessionId.slice(0, 8)} closed after ${duration}s (${session.conversationHistory.length} exchanges)`);
+      logger.info(`[VOICE-WS] Session ${sessionId.slice(0, 8)} closed after ${duration}s (${session.conversationHistory.length} exchanges)`);
       // Track voice spend on every session close
       const closeDurationMin = duration / 60;
       const closeEstimatedCost = closeDurationMin * 0.0585; // FULL_BUNDLE_OUTBOUND_PER_MIN from cost-calculator.ts
@@ -325,7 +326,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
       // Every unexpected disconnect spawned a new call ($0.23+ each), which could
       // also disconnect and spawn another. Only re-enable after cost controls are proven.
       if (!session.intentionalClose) {
-        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} UNEXPECTED DISCONNECT (auto-callback disabled to prevent cost cascade)`);
+        logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} UNEXPECTED DISCONNECT (auto-callback disabled to prevent cost cascade)`);
       }
 
       // Force-terminate the Twilio call leg on WebSocket close — critical cost control.
@@ -337,7 +338,7 @@ export async function handleVoiceWebSocket(ws: WebSocket, request: IncomingMessa
 
   ws.on("error", (err) => {
     clearInterval(pingInterval);
-    console.error(`[VOICE-WS] WebSocket error:`, err);
+    logger.error(`[VOICE-WS] WebSocket error:`, err);
     // Force-terminate on error too — don't leave call leg alive
     const session = activeSessions.get(sessionId);
     if (session) forceHangupCall(session.callSid).catch(() => {});
@@ -355,7 +356,7 @@ async function handleSetup(ws: WebSocket, message: any, sessionId: string): Prom
   const isDemo = callType === "demo";
   const isInterview = callType === "demo_interview";
   const isOnboardingSetup = callType === "onboarding_setup";
-  console.log(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}${isDemo ? " (DEMO)" : ""}${isInterview ? " (INTERVIEW)" : ""}${isOnboardingSetup ? " (ONBOARDING)" : ""}`);
+  logger.info(`[VOICE-WS] Setup: callSid=${callSid?.slice(0, 10)}, from=${from}, userId=${userId?.slice(0, 8)}, type=${callType}${isDemo ? " (DEMO)" : ""}${isInterview ? " (INTERVIEW)" : ""}${isOnboardingSetup ? " (ONBOARDING)" : ""}`);
 
   // ── RACE-CONDITION FIX ────────────────────────────────────────────────────
   // Register a placeholder session BEFORE any async DB work.
@@ -493,7 +494,7 @@ CRITICAL RULES:
 
 VOICE STYLE: Warm, casual, like a friend making a call. Not corporate. Not robotic.`;
 
-    console.log(`[VOICE-WS] External call setup: business=${bizName}, caller=${callerName}`);
+    logger.info(`[VOICE-WS] External call setup: business=${bizName}, caller=${callerName}`);
   }
 
   // ---- CALLBACK CALL — inject the full message as conversation context ----
@@ -511,7 +512,7 @@ RULES:
 - Be conversational — don't just read the message robotically.
 - After delivering the message, ask if they need anything else.
 - Keep it brief and friendly.`;
-    console.log(`[VOICE-WS] Callback with full message: ${callbackMsg.slice(0, 80)}...`);
+    logger.info(`[VOICE-WS] Callback with full message: ${callbackMsg.slice(0, 80)}...`);
   }
 
   if (userId) {
@@ -523,13 +524,13 @@ RULES:
           .select("display_name, username, bot_name, phone_number, timezone, unified_pin_hash, voice_pin_hash, voice_pin, pin_attempts, pin_locked_until, email")
           .eq("id", userId)
           .single()
-          .then(r => r, (e: any) => { console.error("[VOICE-WS] Profile load failed:", e); return { data: null }; }),
+          .then(r => r, (e: any) => { logger.error("[VOICE-WS] Profile load failed:", e); return { data: null }; }),
         getSupabaseClient()
           .from("user_settings")
           .select("greeting_style")
           .eq("user_id", userId)
           .single()
-          .then(r => r, (e: any) => { console.error("[VOICE-WS] Settings load failed:", e); return { data: null }; }),
+          .then(r => r, (e: any) => { logger.error("[VOICE-WS] Settings load failed:", e); return { data: null }; }),
         loadMemory(userId, undefined, "voice").catch(() => ({ facts: "", recentLogs: "", workingMemories: [], episodicMemories: [] })),
       ]);
 
@@ -578,7 +579,7 @@ RULES:
           needsPin = true;
         }
       } else {
-        console.warn(`[VOICE-WS] No profile found for ${userId.slice(0, 8)} — proceeding with defaults`);
+        logger.warn(`[VOICE-WS] No profile found for ${userId.slice(0, 8)} — proceeding with defaults`);
       }
 
       // Format memory context — for demo/onboarding, APPEND user memory to Aurora identity prompt
@@ -597,11 +598,11 @@ RULES:
         }
       }
     } catch (setupErr) {
-      console.error(`[VOICE-WS] Setup DB error for ${userId.slice(0, 8)} — proceeding with defaults:`, setupErr);
+      logger.error(`[VOICE-WS] Setup DB error for ${userId.slice(0, 8)} — proceeding with defaults:`, setupErr);
       // Don't return — always create the session so the call doesn't hang
     }
 
-    console.log(`[VOICE-WS] Loaded context for ${userId.slice(0, 8)}: profile=${userProfile.length}ch, memory=${memoryContext.length}ch`);
+    logger.info(`[VOICE-WS] Loaded context for ${userId.slice(0, 8)}: profile=${userProfile.length}ch, memory=${memoryContext.length}ch`);
   }
 
   // Update the placeholder session with fully loaded data (in-place, preserving the Map entry)
@@ -618,7 +619,7 @@ RULES:
   session.lastMemoryRefresh = Date.now();
   session.userProfile = userProfile;
 
-  console.log(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
+  logger.info(`[VOICE-WS] Session ready: ${sessionId.slice(0, 8)} (state: ${session.state}, active: ${activeSessions.size})`);
 
   // ── HARD MAX DURATION TIMER ────────────────────────────────────────────────
   // Fires regardless of speech activity — absolute ceiling to prevent runaway billing.
@@ -633,7 +634,7 @@ RULES:
     if (!s) return;
     s.intentionalClose = true;
     const mins = Math.round(maxDurationMs / 60000);
-    console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} HARD KILL TIMER (${mins}min max reached)`);
+    logger.info(`[VOICE-WS] ${sessionId.slice(0, 8)} HARD KILL TIMER (${mins}min max reached)`);
     try {
       s.ws.send(JSON.stringify({ type: "text", token: "I need to wrap up now. It was great talking with you!", last: true }));
       s.ws.send(JSON.stringify({ type: "end" }));
@@ -669,7 +670,7 @@ RULES:
       // Hangup threshold reached — end the call
       // Mark as intentional close (silence hangup)
       currentSession.intentionalClose = true;
-      console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE HANG-UP (${Math.round(silentFor / 1000)}s silent, type=${currentSession.callType})`);
+      logger.info(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE HANG-UP (${Math.round(silentFor / 1000)}s silent, type=${currentSession.callType})`);
       try {
         const farewell = currentSession.callType === 'external_call'
           ? "No response detected. Ending the call. Goodbye."
@@ -686,7 +687,7 @@ RULES:
     } else if (silentFor >= SILENCE_WARN_MS && currentSession.silenceWarnings === 0) {
       // Warning threshold reached — prompt the user once
       currentSession.silenceWarnings = 1;
-      console.log(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE WARNING (${Math.round(silentFor / 1000)}s silent)`);
+      logger.info(`[VOICE-WS] ${sessionId.slice(0, 8)} SILENCE WARNING (${Math.round(silentFor / 1000)}s silent)`);
       try {
         currentSession.ws.send(JSON.stringify({ type: "text", token: "Hey, you still there?", last: true }));
       } catch { /* ignore */ }
@@ -716,7 +717,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   const isHangupCommand = /\b(hang up|end (the )?call|disconnect|stop (the )?call|end this|i('m| am) done|that('s| is) it|let me go|drop the call)\b/i.test(lowerVoice);
   if (isHangupCommand) {
     session.intentionalClose = true;
-    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} EXPLICIT HANG-UP command: "${voicePrompt.slice(0, 50)}"`);
+    logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} EXPLICIT HANG-UP command: "${voicePrompt.slice(0, 50)}"`);
     try {
       session.ws.send(JSON.stringify({ type: "text", token: "Got it — hanging up now. Talk soon!", last: true }));
       session.ws.send(JSON.stringify({ type: "end" }));
@@ -736,7 +737,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     // Over budget — send farewell and hang up
     // Mark as intentional close (budget exceeded)
     session.intentionalClose = true;
-    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET EXCEEDED ($${estimatedCostUsd.toFixed(3)} > $${session.callBudgetUsd}) — hanging up`);
+    logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET EXCEEDED ($${estimatedCostUsd.toFixed(3)} > $${session.callBudgetUsd}) — hanging up`);
     const budgetFarewell = "I need to wrap up now — we've been on a while. It was great chatting! Talk soon.";
     if (session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(JSON.stringify({ type: "text", token: budgetFarewell, last: true }));
@@ -753,7 +754,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   if (estimatedCostUsd > session.callBudgetUsd * 0.8 && !session.budgetWarned) {
     // 80% budget warning — inject note into AI context
     session.budgetWarned = true;
-    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET 80% ($${estimatedCostUsd.toFixed(3)} of $${session.callBudgetUsd})`);
+    logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} BUDGET 80% ($${estimatedCostUsd.toFixed(3)} of $${session.callBudgetUsd})`);
     // Note is injected into the memory context so the AI wraps up naturally
     const budgetNote = "\n\n⚠️ Call budget at 80%. Wrap up the conversation soon.";
     if (!session.memoryContext.includes("Call budget at 80%")) {
@@ -774,7 +775,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
          voicePrompt.toLowerCase().trim().split(' ').filter((w: string) => session.lastResponseText.toLowerCase().includes(w)).length > voicePrompt.split(' ').length * 0.5)
       : false;
     if (echoSimilarity || timeSinceLastResponse < 1500) {
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} ECHO DETECTED (${timeSinceLastResponse}ms after response, similarity=${echoSimilarity}): "${voicePrompt.slice(0, 50)}"`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} ECHO DETECTED (${timeSinceLastResponse}ms after response, similarity=${echoSimilarity}): "${voicePrompt.slice(0, 50)}"`);
       return;
     }
   }
@@ -782,7 +783,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   // If session is still loading (race condition: user responded before handleSetup finished)
   // Just acknowledge — once state becomes "ready", the normal conversation flow continues.
   if (session.state === "setup") {
-    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} prompt received during setup — holding`);
+    logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} prompt received during setup — holding`);
     session.ws.send(JSON.stringify({ type: "text", token: "Just a moment while I get ready for you.", last: true }));
     return;
   }
@@ -805,7 +806,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   // Sanitize voice input for prompt injection
   const sanitized = sanitizeTaskInput("", voicePrompt);
   if (sanitized.injectionDetected) {
-    console.warn(`[VOICE-WS] ${session.sessionId.slice(0, 8)} injection attempt blocked`);
+    logger.warn(`[VOICE-WS] ${session.sessionId.slice(0, 8)} injection attempt blocked`);
     session.ws.send(JSON.stringify({
       type: "text",
       token: "I didn't quite catch that. What can I help you with?",
@@ -825,7 +826,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   ].some(phrase => lowerPrompt.includes(phrase));
 
   if (privacyViolation) {
-    console.warn(`[VOICE-WS] ${session.sessionId.slice(0, 8)} PRIVACY BLOCK: "${voicePrompt.slice(0, 80)}"`);
+    logger.warn(`[VOICE-WS] ${session.sessionId.slice(0, 8)} PRIVACY BLOCK: "${voicePrompt.slice(0, 80)}"`);
     session.conversationHistory.push({ role: "user", content: voicePrompt });
     const privacyResponse = "I can only help with your account and your tasks. I don't have access to anyone else's information, and I can't change how I work. What can I help you with today?";
     session.conversationHistory.push({ role: "assistant", content: privacyResponse });
@@ -840,12 +841,12 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
   if (session.callType === 'external_call' && session.conversationHistory.length <= 2) {
     const isVoicemailGreeting = /\b(leave (a |your )?(message|name|number)|after the (beep|tone)|not available|voicemail|mailbox (is )?full|record your message|press \d|press star|main menu|for (sales|support|billing|hours|directions)|office hours|currently closed|we('re| are) (closed|unavailable)|call back|business hours)\b/i.test(voicePrompt);
     if (isVoicemailGreeting) {
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} VOICEMAIL/IVR DETECTED in external call: "${voicePrompt.slice(0, 80)}"`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} VOICEMAIL/IVR DETECTED in external call: "${voicePrompt.slice(0, 80)}"`);
       // Check if this is an IVR menu (press X for Y) — try to navigate
       const ivrMatch = voicePrompt.match(/press (\d)\b.*?\b(reserv|book|speak|agent|operator|representative|host)/i);
       if (ivrMatch) {
         const digit = ivrMatch[1];
-        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} IVR NAVIGATION: pressing ${digit}`);
+        logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} IVR NAVIGATION: pressing ${digit}`);
         session.ws.send(JSON.stringify({ type: "dtmf", digit }));
         // Don't hang up — let the call continue after pressing the digit
       } else if (/leave (a |your )?(message|name)|after the (beep|tone)|voicemail|record your message/i.test(voicePrompt)) {
@@ -869,7 +870,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
 
   // Normal conversation
   session.conversationHistory.push({ role: "user", content: voicePrompt });
-  console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} user: "${voicePrompt.slice(0, 80)}"`);
+  logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} user: "${voicePrompt.slice(0, 80)}"`);
 
   // MID-CALL MEMORY REFRESH — every 5 minutes, reload user's memory
   // This ensures the agent doesn't miss things saved by other channels during a long call
@@ -894,7 +895,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
             `USER MEMORY (refreshed):\n${freshMemory.facts}`
           );
         }
-        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Memory refreshed at ${Math.round(callDuration / 60000)}min`);
+        logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Memory refreshed at ${Math.round(callDuration / 60000)}min`);
       }
     }).catch(() => { /* non-critical — call continues */ });
   }
@@ -905,7 +906,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     if (emailFastPath) {
       session.conversationHistory.push({ role: "assistant", content: emailFastPath });
       session.ws.send(JSON.stringify({ type: "text", token: emailFastPath, last: true }));
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} email fast path: "${emailFastPath.slice(0, 80)}"`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} email fast path: "${emailFastPath.slice(0, 80)}"`);
       return;
     }
 
@@ -936,7 +937,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     // If thinking message was already sent, the real response will queue after it naturally.
     // ConversationRelay doesn't support a "clear" message type — TTS messages are queued sequentially.
     if (thinkingSent) {
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Thinking message was sent — real response queued after it`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Thinking message was sent — real response queued after it`);
     }
 
     // Extract [REMEMBER:...] and [SAVE:...] tags before sending to TTS
@@ -964,7 +965,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
 
       if (digits.length > 0) {
         const allDigits = digits.join('');
-        console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} SENDING DTMF: ${allDigits}`);
+        logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} SENDING DTMF: ${allDigits}`);
         // Send each digit individually — ConversationRelay uses { type: "dtmf", digit: "X" }
         for (const d of allDigits) {
           session.ws.send(JSON.stringify({ type: "dtmf", digit: d }));
@@ -985,7 +986,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     session.lastResponseAt = Date.now();
     session.lastResponseText = cleanedResponse;
 
-    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} assistant: "${response.slice(0, 80)}"`);
+    logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} assistant: "${response.slice(0, 80)}"`);
 
     // ── GOODBYE DETECTION ─────────────────────────────────────────────────
     // When BOTH user speech AND AI response contain farewell signals, schedule
@@ -995,7 +996,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
     if (userGoodbye && aiGoodbye) {
       // Mark as intentional close (goodbye)
       session.intentionalClose = true;
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Conversation-end detected — hanging up in 3s`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} Conversation-end detected — hanging up in 3s`);
       setTimeout(() => {
         try {
           if (session.ws.readyState === WebSocket.OPEN) {
@@ -1014,7 +1015,7 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       for (const mem of memories) {
         saveWorkingMemory(session.userId, mem).catch(() => {});
       }
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${memories.length} memories`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${memories.length} memories`);
     }
 
     // Save structured interview data from [SAVE:] tags (async, non-blocking)
@@ -1022,13 +1023,13 @@ async function handlePrompt(session: VoiceSession, message: any): Promise<void> 
       for (const save of saves) {
         saveInterviewField(session.userId, save.field, save.value).catch(() => {});
       }
-      console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${saves.length} interview fields`);
+      logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} saved ${saves.length} interview fields`);
     }
 
     // Check if the AI wants to create a task from this conversation
     await maybeCreateTask(session, voicePrompt, response);
   } catch (err) {
-    console.error(`[VOICE-WS] Response generation error:`, err);
+    logger.error(`[VOICE-WS] Response generation error:`, err);
     session.ws.send(JSON.stringify({
       type: "text",
       token: "I had a brief hiccup. Could you repeat that?",
@@ -1043,7 +1044,7 @@ async function handleDtmf(session: VoiceSession, message: any): Promise<void> {
 
   if (session.state === "awaiting_pin") {
     session.pinDigits += digit;
-    console.log(`[VOICE-WS] PIN digit received: ${session.pinDigits.length} digits so far`);
+    logger.info(`[VOICE-WS] PIN digit received: ${session.pinDigits.length} digits so far`);
 
     // Verify when we have 4-6 digits (check after each digit >= 4)
     if (session.pinDigits.length >= 4) {
@@ -1079,7 +1080,7 @@ async function verifyPinAndTransition(session: VoiceSession, pin: string): Promi
       timezone: session.timezone,
     });
     session.ws.send(JSON.stringify({ type: "text", token: greeting, last: true }));
-    console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} PIN verified, entering conversation`);
+    logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} PIN verified, entering conversation`);
   } else {
     session.pinAttempts++;
     if (session.pinAttempts >= 5) {
@@ -1200,7 +1201,7 @@ async function saveInterviewField(userId: string, field: string, value: string):
       await saveWorkingMemory(userId, `Interview: ${field} = ${value}`);
   }
 
-  console.log(`[VOICE-INTERVIEW] Saved ${field}=${value.slice(0, 50)} for user ${userId.slice(0, 8)}`);
+  logger.info(`[VOICE-INTERVIEW] Saved ${field}=${value.slice(0, 50)} for user ${userId.slice(0, 8)}`);
 }
 
 /**
@@ -1214,9 +1215,9 @@ async function saveInterviewFromConversation(session: VoiceSession): Promise<voi
       .from("profiles")
       .update({ onboarding_interview_status: "phone_call_completed" })
       .eq("id", session.userId);
-    console.log(`[VOICE-INTERVIEW] Marked interview complete for ${session.userId.slice(0, 8)}`);
+    logger.info(`[VOICE-INTERVIEW] Marked interview complete for ${session.userId.slice(0, 8)}`);
   } catch (err) {
-    console.error("[VOICE-INTERVIEW] Failed to mark interview complete:", err);
+    logger.error("[VOICE-INTERVIEW] Failed to mark interview complete:", err);
   }
 }
 
@@ -1243,9 +1244,9 @@ async function saveConversationToMemory(session: VoiceSession): Promise<void> {
       await saveWorkingMemory(session.userId, summary);
     }
 
-    console.log(`[VOICE-WS] Saved conversation to memory for ${session.userId.slice(0, 8)}`);
+    logger.info(`[VOICE-WS] Saved conversation to memory for ${session.userId.slice(0, 8)}`);
   } catch (err) {
-    console.error("[VOICE-WS] Failed to save conversation to memory:", err);
+    logger.error("[VOICE-WS] Failed to save conversation to memory:", err);
   }
 }
 
@@ -1268,7 +1269,7 @@ async function handleEmailVoiceQuery(session: VoiceSession, voicePrompt: string)
   const isEmailQuery = EMAIL_VOICE_KEYWORDS.some(kw => lowerPrompt.includes(kw));
   if (!isEmailQuery) return null;
 
-  console.log(`[VOICE-WS] ${session.sessionId.slice(0, 8)} email fast path triggered`);
+  logger.info(`[VOICE-WS] ${session.sessionId.slice(0, 8)} email fast path triggered`);
 
   try {
     const connected = await isEmailConnected(session.userId);
@@ -1336,7 +1337,7 @@ async function handleEmailVoiceQuery(session: VoiceSession, voicePrompt: string)
 
     return `You have ${count} ${isSpecificQuery ? '' : 'unread '}email${count !== 1 ? 's' : ''}. The latest: ${top3}.`;
   } catch (err) {
-    console.error(`[VOICE-WS] Email fast path error:`, err);
+    logger.error(`[VOICE-WS] Email fast path error:`, err);
     return "I tried checking your email but ran into an issue. Try asking me again in a moment.";
   }
 }
@@ -1362,9 +1363,9 @@ async function maybeCreateTask(session: VoiceSession, userSpeech: string, aiResp
       body: userSpeech,
       inputChannel: "voice",
     });
-    console.log(`[VOICE-WS] Task created from voice: "${userSpeech.slice(0, 60)}"`);
+    logger.info(`[VOICE-WS] Task created from voice: "${userSpeech.slice(0, 60)}"`);
   } catch (err) {
-    console.error("[VOICE-WS] Failed to create task from voice:", err);
+    logger.error("[VOICE-WS] Failed to create task from voice:", err);
   }
 }
 
@@ -1386,7 +1387,7 @@ async function logCallHistory(session: VoiceSession, durationSeconds: number): P
         pin_required: session.state === "awaiting_pin",
         pin_success: session.state !== "awaiting_pin",
       })
-      .then(() => {}, (e: any) => console.error("[VOICE-WS] Call history insert failed:", e));
+      .then(() => {}, (e: any) => logger.error("[VOICE-WS] Call history insert failed:", e));
 
     // Voice call cost is tracked by /webhook/voice/call-end StatusCallback (actual duration from Twilio).
     // DO NOT log cost here — it was being double-billed (once here on WS close, once on StatusCallback).
@@ -1407,7 +1408,7 @@ function handleAmdVoicemail(callSid: string): void {
   }
 
   if (!targetSession) {
-    console.log(`[AMD] No active session found for callSid ${callSid.slice(0, 10)} — may not have connected yet`);
+    logger.info(`[AMD] No active session found for callSid ${callSid.slice(0, 10)} — may not have connected yet`);
     return;
   }
 
@@ -1416,13 +1417,13 @@ function handleAmdVoicemail(callSid: string): void {
 
   // Mark as intentional close (voicemail detected)
   session.intentionalClose = true;
-  console.log(`[AMD] Voicemail detected for session ${session.sessionId.slice(0, 8)} — leaving message and hanging up`);
+  logger.info(`[AMD] Voicemail detected for session ${session.sessionId.slice(0, 8)} — leaving message and hanging up`);
 
   let voicemailMsg: string;
   if (session.callType === 'external_call') {
     const bizName = 'the person you asked me to call';
     voicemailMsg = `Hi, this is ${session.botName} calling on behalf of ${session.userName}. Please call back when convenient. Thank you, have a great day. Goodbye.`;
-    console.log(`[AMD] Leaving voicemail at ${bizName}`);
+    logger.info(`[AMD] Leaving voicemail at ${bizName}`);
   } else {
     // AI calling the user
     voicemailMsg = `Hey ${session.userName}, it's ${session.botName}. Give me a call back when you're free! Talk soon.`;
@@ -1454,6 +1455,6 @@ export function getActiveSessionCount(): number {
  * when Twilio AMD detects a machine/voicemail on an outbound call.
  */
 export function triggerAmdHangup(callSid: string, answeredBy: string): void {
-  console.log(`[AMD] triggerAmdHangup: callSid=${callSid.slice(0, 10)} answeredBy=${answeredBy}`);
+  logger.info(`[AMD] triggerAmdHangup: callSid=${callSid.slice(0, 10)} answeredBy=${answeredBy}`);
   handleAmdVoicemail(callSid);
 }

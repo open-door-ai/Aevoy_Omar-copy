@@ -24,6 +24,7 @@ import {
   handleVerificationCodeReply,
 } from "./task-router.js";
 import { maskEmail } from "../utils/logging.js";
+import { logger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,29 +65,29 @@ let isPolling = false;
 
 export function startInboxPoller(): void {
   if (!INBOX_EMAIL || !INBOX_PASSWORD) {
-    console.log(
+    logger.info(
       "[INBOX-POLLER] Skipping — AGENT_INBOX_EMAIL / AGENT_INBOX_PASSWORD not configured"
     );
     return;
   }
 
   if (pollerInterval) {
-    console.log("[INBOX-POLLER] Already running");
+    logger.info("[INBOX-POLLER] Already running");
     return;
   }
 
-  console.log(
+  logger.info(
     `[INBOX-POLLER] Starting — polling ${maskEmail(INBOX_EMAIL)} every ${POLL_INTERVAL / 1000}s`
   );
 
   // Run immediately, then on interval
   pollInbox().catch((err) =>
-    console.error("[INBOX-POLLER] Initial poll error:", err)
+    logger.error("[INBOX-POLLER] Initial poll error:", err)
   );
 
   pollerInterval = setInterval(() => {
     pollInbox().catch((err) =>
-      console.error("[INBOX-POLLER] Poll error:", err)
+      logger.error("[INBOX-POLLER] Poll error:", err)
     );
   }, POLL_INTERVAL);
 }
@@ -96,7 +97,7 @@ export function stopInboxPoller(): void {
     clearInterval(pollerInterval);
     pollerInterval = null;
   }
-  console.log("[INBOX-POLLER] Stopped");
+  logger.info("[INBOX-POLLER] Stopped");
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +142,7 @@ async function pollInbox(): Promise<void> {
         return;
       }
 
-      console.log(`[INBOX-POLLER] Found ${uids.length} unread email(s)`);
+      logger.info(`[INBOX-POLLER] Found ${uids.length} unread email(s)`);
 
       // Process up to 20 per cycle to avoid blocking
       const MAX_EMAILS_PER_POLL = 20;
@@ -150,7 +151,7 @@ async function pollInbox(): Promise<void> {
 
       for (const uid of batch) {
         if (emailsProcessed >= MAX_EMAILS_PER_POLL) {
-          console.log(`[INBOX-POLLER] Reached ${MAX_EMAILS_PER_POLL} emails this cycle — will continue next poll`);
+          logger.info(`[INBOX-POLLER] Reached ${MAX_EMAILS_PER_POLL} emails this cycle — will continue next poll`);
           break;
         }
         emailsProcessed++;
@@ -204,10 +205,10 @@ async function pollInbox(): Promise<void> {
           try {
             await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
           } catch (flagErr) {
-            console.warn(`[INBOX-POLLER] Failed to mark uid=${uid} as read (already processed):`, flagErr);
+            logger.warn(`[INBOX-POLLER] Failed to mark uid=${uid} as read (already processed):`, flagErr);
           }
         } catch (msgErr) {
-          console.error(
+          logger.error(
             `[INBOX-POLLER] Error processing uid=${uid}:`,
             msgErr
           );
@@ -219,7 +220,7 @@ async function pollInbox(): Promise<void> {
       await client.logout();
     }
   } catch (err) {
-    console.error("[INBOX-POLLER] Connection error:", err);
+    logger.error("[INBOX-POLLER] Connection error:", err);
   } finally {
     await releaseDistributedLock("inbox_poller");
     isPolling = false;
@@ -393,13 +394,13 @@ async function sendPinReply(toEmail: string, username: string, originalSubject: 
   // Sanitize email address — prevent CRLF header injection
   const sanitizedTo = toEmail.replace(/[\r\n\t]/g, '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitizedTo)) {
-    console.warn(`[INBOX-POLLER] Invalid reply-to address: ${maskEmail(toEmail)}`);
+    logger.warn(`[INBOX-POLLER] Invalid reply-to address: ${maskEmail(toEmail)}`);
     return;
   }
 
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) {
-    console.log(`[INBOX-POLLER] No RESEND_API_KEY — cannot send PIN reply for ${username}`);
+    logger.info(`[INBOX-POLLER] No RESEND_API_KEY — cannot send PIN reply for ${username}`);
     return;
   }
 
@@ -418,7 +419,7 @@ async function sendPinReply(toEmail: string, username: string, originalSubject: 
       }),
     });
   } catch (err) {
-    console.error("[INBOX-POLLER] Failed to send PIN reply:", err);
+    logger.error("[INBOX-POLLER] Failed to send PIN reply:", err);
   }
 }
 
@@ -481,10 +482,10 @@ Reply with one word only:`;
     const raw = response.choices[0]?.message?.content?.trim().toLowerCase() || 'medium';
     const valid: EmailPriority[] = ['spam', 'newsletter', 'notification', 'low', 'medium', 'high', 'urgent'];
     const priority = valid.find(p => raw.startsWith(p)) || 'medium';
-    console.log(`[FULL-SEND] categorizePriority from="${from}" subject="${subject.substring(0, 60)}" → ${priority}`);
+    logger.info(`[FULL-SEND] categorizePriority from="${from}" subject="${subject.substring(0, 60)}" → ${priority}`);
     return priority;
   } catch (err) {
-    console.error('[FULL-SEND] categorizePriority error:', err);
+    logger.error('[FULL-SEND] categorizePriority error:', err);
     return 'medium'; // Safe default — don't silently drop
   }
 }
@@ -502,7 +503,7 @@ async function sendAutoReply(
   // Sanitize email address — prevent CRLF header injection
   const sanitizedTo = toEmail.replace(/[\r\n\t]/g, '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitizedTo)) {
-    console.warn(`[INBOX-POLLER] Invalid reply-to address: ${maskEmail(toEmail)}`);
+    logger.warn(`[INBOX-POLLER] Invalid reply-to address: ${maskEmail(toEmail)}`);
     return;
   }
 
@@ -523,9 +524,9 @@ async function sendAutoReply(
         text: `${replyBody}\n\n— ${fromUsername}'s AI assistant`,
       }),
     });
-    console.log(`[FULL-SEND] Auto-reply sent to ${maskEmail(toEmail)}`);
+    logger.info(`[FULL-SEND] Auto-reply sent to ${maskEmail(toEmail)}`);
   } catch (err) {
-    console.error("[FULL-SEND] Auto-reply failed:", err);
+    logger.error("[FULL-SEND] Auto-reply failed:", err);
   }
 }
 
@@ -590,7 +591,7 @@ async function forwardToAdmin(email: ParsedInboxEmail, username: string): Promis
   // Sanitize email address — prevent CRLF header injection
   const sanitizedFrom = email.from.replace(/[\r\n\t]/g, '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitizedFrom)) {
-    console.warn(`[INBOX-POLLER] Invalid forward-from address: ${maskEmail(email.from)}`);
+    logger.warn(`[INBOX-POLLER] Invalid forward-from address: ${maskEmail(email.from)}`);
     return;
   }
 
@@ -598,7 +599,7 @@ async function forwardToAdmin(email: ParsedInboxEmail, username: string): Promis
   try {
     const resendKey = process.env.RESEND_API_KEY;
     if (!resendKey) {
-      console.log(`[INBOX-POLLER] No RESEND_API_KEY — cannot forward bypass email for ${username}@aevoy.com`);
+      logger.info(`[INBOX-POLLER] No RESEND_API_KEY — cannot forward bypass email for ${username}@aevoy.com`);
       return;
     }
     await fetch("https://api.resend.com/emails", {
@@ -614,9 +615,9 @@ async function forwardToAdmin(email: ParsedInboxEmail, username: string): Promis
         text: `Forwarded from: ${email.from}\nTo: ${email.to}\nDate: ${email.date}\n\n${email.body}`,
       }),
     });
-    console.log(`[INBOX-POLLER] Forwarded ${username}@aevoy.com email to admin`);
+    logger.info(`[INBOX-POLLER] Forwarded ${username}@aevoy.com email to admin`);
   } catch (err) {
-    console.error(`[INBOX-POLLER] Forward to admin failed:`, err);
+    logger.error(`[INBOX-POLLER] Forward to admin failed:`, err);
   }
 }
 
@@ -643,7 +644,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   }
 
   if (!username) {
-    console.log(
+    logger.info(
       `[INBOX-POLLER] Could not extract username from To: ${email.to}, skipping`
     );
     return;
@@ -651,7 +652,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
 
   // Bypass admin/system emails — forward directly, skip AI processing
   if (BYPASS_USERNAMES.includes(username.toLowerCase())) {
-    console.log(`[INBOX-POLLER] Bypass: ${username}@aevoy.com → forwarding to admin`);
+    logger.info(`[INBOX-POLLER] Bypass: ${username}@aevoy.com → forwarding to admin`);
     await forwardToAdmin(email, username);
     return;
   }
@@ -665,7 +666,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
 
   const user = users?.[0];
   if (!user) {
-    console.log(`[INBOX-POLLER] User not found: ${username}`);
+    logger.info(`[INBOX-POLLER] User not found: ${username}`);
     return;
   }
 
@@ -677,7 +678,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   // getting picked up by the IMAP poller. Processing them creates infinite loops and
   // triggers false PIN challenges.
   if (senderEmail.endsWith('@aevoy.com')) {
-    console.log(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Aurora system email)`);
+    logger.info(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Aurora system email)`);
     return;
   }
 
@@ -729,7 +730,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   if (!isKnownSender && (isServiceEmail || isNoReplyEmail)) {
     // Service/automated email — allow through but log it. Content will be sanitized
     // by the AI system prompt's injection protection before processing.
-    console.log(`[INBOX-POLLER] Service email from ${maskEmail(senderEmail)} → ${username} (domain: ${senderDomain}, noreply: ${isNoReplyEmail}) — bypassing PIN`);
+    logger.info(`[INBOX-POLLER] Service email from ${maskEmail(senderEmail)} → ${username} (domain: ${senderDomain}, noreply: ${isNoReplyEmail}) — bypassing PIN`);
     // Fall through to normal processing (no PIN required)
   } else if (!isKnownSender) {
     // Unknown HUMAN sender — require PIN authentication
@@ -740,7 +741,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
       // No PIN set — tell sender to contact the user
       await sendPinReply(email.from, username, email.subject,
         `This email address only accepts emails from ${username}'s registered email. To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aurora settings.`);
-      console.log(`[INBOX-POLLER] Unknown sender ${maskEmail(senderEmail)} for ${username}, no PIN set — sent setup instructions`);
+      logger.info(`[INBOX-POLLER] Unknown sender ${maskEmail(senderEmail)} for ${username}, no PIN set — sent setup instructions`);
       return;
     }
 
@@ -751,7 +752,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
       // No PIN found — reply asking for PIN
       await sendPinReply(email.from, username, email.subject,
         `Hi! This is ${username}'s AI assistant at Aurora.\n\nI received your email, but I don't recognize your email address. To verify your identity, please reply with your 4-6 digit security PIN in the subject line or body of your email.\n\nIf you don't have a PIN, please ask ${username} to share it with you.`);
-      console.log(`[INBOX-POLLER] Sent PIN request to ${maskEmail(senderEmail)} for ${username}`);
+      logger.info(`[INBOX-POLLER] Sent PIN request to ${maskEmail(senderEmail)} for ${username}`);
       return;
     }
 
@@ -773,7 +774,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     // PIN valid — strip PIN from subject/body before processing
     email.subject = email.subject.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || email.subject;
     email.body = email.body.replace(new RegExp(`\\b${pinMatch[1]}\\b`), "").trim() || email.body;
-    console.log(`[INBOX-POLLER] PIN verified for ${maskEmail(senderEmail)} → ${username}`);
+    logger.info(`[INBOX-POLLER] PIN verified for ${maskEmail(senderEmail)} → ${username}`);
   }
 
   // ---------------------------------------------------------------------------
@@ -805,7 +806,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
 
       // spam / newsletter: silently skip — no task, no reply
       if (priority === 'spam' || priority === 'newsletter') {
-        console.log(`[FULL-SEND] Dropping ${priority} email from ${maskEmail(email.from)} — subject: "${email.subject.substring(0, 60)}"`);
+        logger.info(`[FULL-SEND] Dropping ${priority} email from ${maskEmail(email.from)} — subject: "${email.subject.substring(0, 60)}"`);
         return; // skip processing entirely
       }
 
@@ -826,7 +827,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
           completed_at: new Date().toISOString(),
           action_count: autoReplyEnabled ? 1 : 0,
         });
-        console.log(`[FULL-SEND] ${priority} email auto-handled (reply=${autoReplyEnabled}) from ${maskEmail(email.from)}`);
+        logger.info(`[FULL-SEND] ${priority} email auto-handled (reply=${autoReplyEnabled}) from ${maskEmail(email.from)}`);
         return;
       }
 
@@ -847,7 +848,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
             completed_at: new Date().toISOString(),
             action_count: 1,
           });
-          console.log(`[FULL-SEND] medium email auto-replied to ${maskEmail(email.from)}`);
+          logger.info(`[FULL-SEND] medium email auto-replied to ${maskEmail(email.from)}`);
           return;
         }
         // auto-reply off but medium threshold — fall through to normal processing
@@ -877,10 +878,10 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
               to: userProfile.phone_number,
               body: `[Aurora] ${urgentLabel} email from ${email.from}: "${email.subject.substring(0, 80)}" — replied on your behalf. Check your inbox.`,
             });
-            console.log(`[FULL-SEND] SMS alert sent for ${priority} email`);
+            logger.info(`[FULL-SEND] SMS alert sent for ${priority} email`);
           }
         } catch (smsErr) {
-          console.error("[FULL-SEND] SMS notification failed:", smsErr);
+          logger.error("[FULL-SEND] SMS notification failed:", smsErr);
         }
 
         // Also create a task so the user can see it in activity
@@ -894,12 +895,12 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
           completed_at: new Date().toISOString(),
           action_count: (autoReplyEnabled && shouldAutoReplyHigh ? 1 : 0) + 1,
         });
-        console.log(`[FULL-SEND] ${priority} email handled — reply sent + user notified`);
+        logger.info(`[FULL-SEND] ${priority} email handled — reply sent + user notified`);
         return;
       }
 
       // If we get here, threshold excluded this priority level → fall through to normal processing
-      console.log(`[FULL-SEND] priority=${priority} below threshold="${threshold}" — routing to normal processor`);
+      logger.info(`[FULL-SEND] priority=${priority} below threshold="${threshold}" — routing to normal processor`);
     }
   }
 
@@ -908,7 +909,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     email.subject,
     email.body
   );
-  console.log(
+  logger.info(
     `[INBOX-POLLER] Routing: user=${username} type=${emailType} taskId=${taskId || "none"}`
   );
 
@@ -1002,7 +1003,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
             || /\b(create|make|build|find|search|sign\s?up|book\s+(?:me\s+)?a|write|send|get\s+me|order\s+me|help\s+me|tell\s+me|show\s+me|set\s+up|look\s+up|check\s+(?:my|if|on)|how\s+(?:to|do|can)|what\s+is|who\s+is)\b/i.test(emailLower);
 
           if (_emailLooksLikeNewTask && !isCancelRequest) {
-            console.log(`[INBOX-POLLER] Email looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${emailText.slice(0, 60)}"`);
+            logger.info(`[INBOX-POLLER] Email looks like new task, not reply to ${awaitingTask.id.slice(0, 8)}: "${emailText.slice(0, 60)}"`);
             // Fall through to create new task
           } else if (isCancelRequest) {
             await getSupabaseClient().from('tasks').update({
@@ -1013,11 +1014,11 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
               completed_at: new Date().toISOString(),
             }).eq('id', awaitingTask.id);
 
-            console.log(`[INBOX-POLLER] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
+            logger.info(`[INBOX-POLLER] User cancelled awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
             return;
           } else {
             // User provided an answer — clear timer and re-process with their reply
-            console.log(`[INBOX-POLLER] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
+            logger.info(`[INBOX-POLLER] User replied to awaiting task ${awaitingTask.id.slice(0, 8)} via email`);
 
             await getSupabaseClient().from('tasks').update({
               status: 'processing',
@@ -1082,7 +1083,7 @@ export async function fetchRecentEmails(
   minutesBack = 30
 ): Promise<FetchedEmail[]> {
   if (!INBOX_EMAIL || !INBOX_PASSWORD) {
-    console.log("[READ-EMAIL] IMAP not configured, falling back to DB");
+    logger.info("[READ-EMAIL] IMAP not configured, falling back to DB");
     return fetchFromDatabase(forAddress, limit);
   }
 
@@ -1144,7 +1145,7 @@ export async function fetchRecentEmails(
             date: env.date?.toISOString() || new Date().toISOString(),
           });
         } catch (msgErr) {
-          console.warn(`[READ-EMAIL] Error fetching uid=${uid}:`, msgErr);
+          logger.warn(`[READ-EMAIL] Error fetching uid=${uid}:`, msgErr);
         }
       }
     } finally {
@@ -1152,10 +1153,10 @@ export async function fetchRecentEmails(
       await client.logout();
     }
 
-    console.log(`[READ-EMAIL] Fetched ${results.length} emails for ${forAddress}`);
+    logger.info(`[READ-EMAIL] Fetched ${results.length} emails for ${forAddress}`);
     return results;
   } catch (err) {
-    console.error("[READ-EMAIL] IMAP fetch failed, falling back to DB:", err);
+    logger.error("[READ-EMAIL] IMAP fetch failed, falling back to DB:", err);
     return fetchFromDatabase(forAddress, limit);
   }
 }

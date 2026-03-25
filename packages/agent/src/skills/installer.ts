@@ -13,6 +13,7 @@ import { SkillDownloader } from "./downloader.js";
 import { SkillAuditor } from "./auditor.js";
 import { getSupabaseClient } from "../utils/supabase.js";
 import vm from "vm";
+import { logger } from '../utils/logger.js';
 
 export interface SkillInstallationResult {
   success: boolean;
@@ -47,7 +48,7 @@ export class SkillInstaller {
   ): Promise<SkillInstallationResult> {
     const { skipAudit = false, forceReinstall = false } = options;
 
-    console.log(`[INSTALLER] Installing skill: ${skillId}`);
+    logger.info(`[INSTALLER] Installing skill: ${skillId}`);
 
     try {
       // Step 1: Fetch skill manifest from registry
@@ -63,13 +64,13 @@ export class SkillInstaller {
         };
       }
 
-      console.log(`[INSTALLER] Found skill: ${skill.name} from ${skill.source}`);
+      logger.info(`[INSTALLER] Found skill: ${skill.name} from ${skill.source}`);
 
       // Step 2: Check if already installed (unless forceReinstall)
       if (!forceReinstall && userId) {
         const existing = await this.isSkillInstalled(userId, skillId);
         if (existing) {
-          console.log(`[INSTALLER] Skill already installed for user ${userId}`);
+          logger.info(`[INSTALLER] Skill already installed for user ${userId}`);
           return {
             success: true,
             skillId,
@@ -81,7 +82,7 @@ export class SkillInstaller {
       }
 
       // Step 3: Download skill code
-      console.log(`[INSTALLER] Downloading code from ${skill.codeUrl}...`);
+      logger.info(`[INSTALLER] Downloading code from ${skill.codeUrl}...`);
       const downloadResult = await this.downloader.downloadSkill(skill);
 
       if (!downloadResult.success || !downloadResult.code) {
@@ -94,7 +95,7 @@ export class SkillInstaller {
         };
       }
 
-      console.log(
+      logger.info(
         `[INSTALLER] Downloaded ${downloadResult.size} bytes, hash: ${downloadResult.hash?.slice(0, 16)}...`
       );
 
@@ -110,20 +111,20 @@ export class SkillInstaller {
             error: "Code hash mismatch - potential tampering detected",
           };
         }
-        console.log(`[INSTALLER] Hash verified ✓`);
+        logger.info(`[INSTALLER] Hash verified ✓`);
       }
 
       // Step 5: Security audit
       let auditResult;
       if (!skipAudit) {
-        console.log(`[INSTALLER] Starting security audit...`);
+        logger.info(`[INSTALLER] Starting security audit...`);
         auditResult = await this.auditor.auditSkill({
           code: downloadResult.code,
           manifest: skill,
           source: skill.source,
         });
 
-        console.log(`[INSTALLER] Audit complete: ${auditResult.securityScore}/100`);
+        logger.info(`[INSTALLER] Audit complete: ${auditResult.securityScore}/100`);
 
         if (!auditResult.passed || auditResult.securityScore < 85) {
           // Log security failure
@@ -138,7 +139,7 @@ export class SkillInstaller {
           };
         }
       } else {
-        console.log(`[INSTALLER] Skipping audit (skipAudit=true)`);
+        logger.info(`[INSTALLER] Skipping audit (skipAudit=true)`);
         auditResult = {
           passed: true,
           securityScore: 100,
@@ -149,20 +150,20 @@ export class SkillInstaller {
 
       // Step 6: Store skill in database
       if (userId) {
-        console.log(`[INSTALLER] Storing in database for user ${userId}...`);
+        logger.info(`[INSTALLER] Storing in database for user ${userId}...`);
         await this.storeSkill(userId, skillId, downloadResult.code, skill, auditResult);
       } else {
-        console.log(`[INSTALLER] Storing globally (no user specified)...`);
+        logger.info(`[INSTALLER] Storing globally (no user specified)...`);
         await this.storeSkillGlobally(skillId, downloadResult.code, skill, auditResult);
       }
 
       // Step 7: Load into runtime
-      console.log(`[INSTALLER] Loading into V8 runtime...`);
+      logger.info(`[INSTALLER] Loading into V8 runtime...`);
       await this.loadSkillIntoRuntime(skillId, downloadResult.code, skill.sandbox || {});
 
       const installedAt = new Date().toISOString();
 
-      console.log(`[INSTALLER] ✅ Installation complete: ${skillId}`);
+      logger.info(`[INSTALLER] ✅ Installation complete: ${skillId}`);
 
       return {
         success: true,
@@ -173,7 +174,7 @@ export class SkillInstaller {
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`[INSTALLER] Installation failed:`, error);
+      logger.error(`[INSTALLER] Installation failed:`, error);
 
       return {
         success: false,
@@ -247,7 +248,7 @@ export class SkillInstaller {
   ): Promise<void> {
     // For global skills, store with a system user ID or in a separate table
     // For now, skip database storage for global installs
-    console.log(`[INSTALLER] Global storage not yet implemented, skipping DB`);
+    logger.info(`[INSTALLER] Global storage not yet implemented, skipping DB`);
   }
 
   /**
@@ -281,8 +282,8 @@ export class SkillInstaller {
     const context = vm.createContext({
       fetch: createSandboxedFetch(sandbox.allowedDomains || []),
       console: {
-        log: (...args: any[]) => console.log(`[SKILL:${skillId}]`, ...args),
-        error: (...args: any[]) => console.error(`[SKILL:${skillId}]`, ...args),
+        log: (...args: any[]) => logger.info(`[SKILL:${skillId}]`, ...args),
+        error: (...args: any[]) => logger.error(`[SKILL:${skillId}]`, ...args),
       },
       setTimeout,
       clearTimeout,
@@ -302,7 +303,7 @@ export class SkillInstaller {
 
     globalThis.SKILL_EXECUTORS[skillId] = context;
 
-    console.log(`[INSTALLER] Skill loaded into runtime: ${skillId}`);
+    logger.info(`[INSTALLER] Skill loaded into runtime: ${skillId}`);
   }
 
   /**
@@ -337,7 +338,7 @@ export class SkillInstaller {
         .eq("skill_id", skillId);
 
       if (error) {
-        console.error(`[INSTALLER] Uninstall failed:`, error);
+        logger.error(`[INSTALLER] Uninstall failed:`, error);
         return false;
       }
 
@@ -346,10 +347,10 @@ export class SkillInstaller {
         delete globalThis.SKILL_EXECUTORS[skillId];
       }
 
-      console.log(`[INSTALLER] Uninstalled: ${skillId}`);
+      logger.info(`[INSTALLER] Uninstalled: ${skillId}`);
       return true;
     } catch (error) {
-      console.error(`[INSTALLER] Uninstall error:`, error);
+      logger.error(`[INSTALLER] Uninstall error:`, error);
       return false;
     }
   }
@@ -367,7 +368,7 @@ export class SkillInstaller {
       .order("installed_at", { ascending: false });
 
     if (error || !data) {
-      console.error(`[INSTALLER] List failed:`, error);
+      logger.error(`[INSTALLER] List failed:`, error);
       return [];
     }
 

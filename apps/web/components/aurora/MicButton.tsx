@@ -9,6 +9,7 @@ type MicState =
   | "permission_denied"
   | "listening"
   | "listening_silence"
+  | "reconnecting"
   | "error";
 
 interface MicButtonProps {
@@ -23,7 +24,7 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastActivityRef = useRef<number>(Date.now());
 
-  const isListening = state === "listening" || state === "listening_silence";
+  const isListening = state === "listening" || state === "listening_silence" || state === "reconnecting";
 
   const stopListening = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -105,6 +106,29 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
     }
   }, [isListening, state, startListening, stopListening]);
 
+  // WiFi recovery: detect offline/online during listening
+  useEffect(() => {
+    const handleOffline = () => {
+      if (
+        state === "listening" ||
+        state === "listening_silence"
+      ) {
+        setState("reconnecting");
+      }
+    };
+    const handleOnline = () => {
+      if (state === "reconnecting") {
+        setState("listening");
+      }
+    };
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [state]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -127,6 +151,8 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
       case "listening":
       case "listening_silence":
         return `${base} w-[140px] h-[140px]`;
+      case "reconnecting":
+        return `${base} w-[140px] h-[140px]`;
       case "error":
         return `${base} w-[120px] h-[120px]`;
       default:
@@ -137,6 +163,9 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
   const getBackgroundClasses = () => {
     if (state === "permission_denied" || state === "error") {
       return "absolute inset-0 rounded-full bg-[#3A3A3C] shadow-lg";
+    }
+    if (state === "reconnecting") {
+      return "absolute inset-0 rounded-full bg-gradient-to-br from-[#F59E0B] to-[#D97706] shadow-lg shadow-[#F59E0B]/25";
     }
     return "absolute inset-0 rounded-full bg-gradient-to-br from-[#7C3AED] to-[#6C5CE7] shadow-lg shadow-[#6C5CE7]/25";
   };
@@ -151,6 +180,8 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
         return "Aurora is listening...";
       case "listening_silence":
         return "It's quiet in here.";
+      case "reconnecting":
+        return "Reconnecting...";
       case "error":
         return "Something went sideways. Tap to try again.";
       default:
@@ -197,6 +228,8 @@ export function MicButton({ onListeningChange }: MicButtonProps) {
             <MicOffIcon />
           ) : state === "error" ? (
             <ExclamationIcon />
+          ) : state === "reconnecting" ? (
+            <SpinnerIcon />
           ) : isListening ? (
             <RadialWaveform analyser={analyserRef.current} />
           ) : (

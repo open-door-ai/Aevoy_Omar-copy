@@ -25,6 +25,7 @@ import type { Memory, Action, AIResponse, TaskType, ModelProvider } from "../typ
 import { withTimeout } from "../utils/timeout.js";
 import { CircuitBreaker } from "../execution/retry.js";
 import { getAdaptiveChain, recordModelOutcome } from "./model-intelligence.js";
+import { logger } from '../utils/logger.js';
 
 // ---- Response Cache (LRU, 100 entries, 5-min TTL) ----
 
@@ -92,14 +93,14 @@ function isModelBackedOff(provider: string, model: string): boolean {
 export function setModelRefusalBackoff(provider: string, model: string): void {
   const key = `${provider}:${model}`;
   rateLimitBackoff.set(key, Date.now() + 300000); // 5-minute backoff for refusals
-  console.log(`[AI] Model ${key} backed off 5min for task refusal`);
+  logger.info(`[AI] Model ${key} backed off 5min for task refusal`);
 }
 
 /** Mark a model as rate-limited for the given duration */
 function setModelBackoff(provider: string, model: string, durationMs: number): void {
   const key = `${provider}:${model}`;
   rateLimitBackoff.set(key, Date.now() + durationMs);
-  console.log(`[BACKOFF] ${key} backed off for ${Math.round(durationMs/1000)}s`);
+  logger.info(`[BACKOFF] ${key} backed off for ${Math.round(durationMs/1000)}s`);
 }
 
 // ---- Global AI concurrency limiter ----
@@ -152,7 +153,7 @@ function getOpenRouterClient(apiKey: string): OpenAI {
 // Clean up cached OpenRouter clients every 10 minutes
 setInterval(() => {
   openRouterClients.clear();
-  console.log('[AI] OpenRouter client cache cleared');
+  logger.info('[AI] OpenRouter client cache cleared');
 }, 10 * 60 * 1000);
 
 // ---- OpenRouter user settings cache (5-min TTL) ----
@@ -1551,20 +1552,20 @@ You can execute Python or JavaScript code directly. Use this when:
 
 Actions:
 - [ACTION:run_code("python", "import json\ndata = {'result': 42}\nprint(json.dumps(data))")]
-- [ACTION:run_code("javascript", "const nums = [1,2,3,4,5]\nconsole.log(nums.reduce((a,b)=>a+b,0))")]
+- [ACTION:run_code("javascript", "const nums = [1,2,3,4,5]\nlogger.info(nums.reduce((a,b)=>a+b,0))")]
 
 RULES:
 - No network access in sandbox (no requests, no fetch)
 - No file system access (use write_file to save results after computing)
 - 10 second timeout, 64MB memory limit
-- Use print() for Python output, console.log() for JavaScript
+- Use print() for Python output, logger.info() for JavaScript
 - For data analysis: Python with csv/json modules works well
 - For text manipulation and JSON: JavaScript works well
 - After computing: use write_file() to save results if user needs them later
 
 EXAMPLES:
 "Analyze this CSV data" → run_code("python", "import csv, io\ndata='''name,age\\nAlice,30\\nBob,25'''\nreader=csv.DictReader(io.StringIO(data))\nfor row in reader: print(row)")
-"Calculate compound interest" → run_code("javascript", "const p=1000,r=0.05,n=10\nconsole.log('Final:', p*Math.pow(1+r,n))")
+"Calculate compound interest" → run_code("javascript", "const p=1000,r=0.05,n=10\nlogger.info('Final:', p*Math.pow(1+r,n))")
 "Generate HTML table" → run_code("python", "rows=[['Alice',30],['Bob',25]]\nprint('<table>')\nfor r in rows: print(f'<tr><td>{r[0]}</td><td>{r[1]}</td></tr>')\nprint('</table>')")
 
 GOING THE EXTRA MILE — EVERY TIME:
@@ -1828,7 +1829,7 @@ async function _generateResponseInner(
     const cacheKey = getCacheKey(taskType, userPrompt, taskSubject, userId);
     const cached = getCachedResponse(cacheKey);
     if (cached) {
-      console.log(`[AI] Cache hit for ${taskType}`);
+      logger.info(`[AI] Cache hit for ${taskType}`);
       return cached;
     }
   }
@@ -1852,7 +1853,7 @@ async function _generateResponseInner(
         extra: { apiKey: orSettings.apiKey },
       };
       chain = [orConfig, ...chain];
-      console.log(`[AI] OpenRouter enabled for user ${userId}: ${orModel} (${orSettings.modelPreset})`);
+      logger.info(`[AI] OpenRouter enabled for user ${userId}: ${orModel} (${orSettings.modelPreset})`);
     }
   }
 
@@ -1894,7 +1895,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
     // Check circuit breaker (per-model, not per-provider)
     const cb = getCircuitBreaker(config.provider, config.model);
     if (!cb.canExecute()) {
-      console.log(`[AI] ${config.provider}/${config.model} circuit breaker open, skipping`);
+      logger.info(`[AI] ${config.provider}/${config.model} circuit breaker open, skipping`);
       providerErrors.push(`${config.provider}/${config.model}: circuit breaker open`);
       continue;
     }
@@ -1907,7 +1908,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
       const timeout = taskType === 'generate' ? Math.max(baseTimeout, 240000)
         : taskType === 'complex' ? Math.max(baseTimeout, 120000)
         : baseTimeout;
-      console.log(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms`);
+      logger.info(`[AI] Attempting ${config.provider}/${config.model} | taskType=${taskType} | timeout=${timeout}ms`);
       const startTime = Date.now();
       const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
 
@@ -1920,7 +1921,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
       const cost = calculateCost(config, result.inputTokens, result.outputTokens, result.cacheReadTokens, result.cacheCreationTokens);
       const totalTokens = result.inputTokens + result.outputTokens;
 
-      console.log(`[AI] ${config.provider}/${config.model} success | Tokens: ${totalTokens} | Cost: $${cost.toFixed(6)}${result.cacheReadTokens ? ` (${result.cacheReadTokens} cached)` : ''}`);
+      logger.info(`[AI] ${config.provider}/${config.model} success | Tokens: ${totalTokens} | Cost: $${cost.toFixed(6)}${result.cacheReadTokens ? ` (${result.cacheReadTokens} cached)` : ''}`);
       cb.recordSuccess();
 
       // Track cost
@@ -1983,7 +1984,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         if (schedMatch) syntheticActions.push({ type: 'schedule', params: { description: schedMatch[1].trim(), cronExpression: 'once' } } as Action);
 
         if (syntheticActions.length > 0) {
-          console.log(`[SYNTHETIC-ACTION] Extracted ${syntheticActions.length} actions from text-only response (provider: ${config.provider}/${config.model})`);
+          logger.info(`[SYNTHETIC-ACTION] Extracted ${syntheticActions.length} actions from text-only response (provider: ${config.provider}/${config.model})`);
           parsedActions.push(...syntheticActions);
         }
       }
@@ -2009,7 +2010,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
       const errorCode = (error as Record<string, unknown>)?.code;
       const errorType = error instanceof Error ? error.constructor.name : 'unknown';
       const errorDetail = `${config.provider}/${config.model}: [${errorType}${errorStatus ? ' ' + errorStatus : ''}${errorCode ? '/' + errorCode : ''}] ${errorMessage.substring(0, 200)}`;
-      console.error(`[AI-FAIL] ${errorDetail}`);
+      logger.error(`[AI-FAIL] ${errorDetail}`);
       providerErrors.push(errorDetail);
 
       // Handle 429 rate limit: check Retry-After header
@@ -2017,7 +2018,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         const retryMatch = errorMessage.match(/retry.after[:\s]*(\d+)/i);
         const retryAfterSec = retryMatch ? parseInt(retryMatch[1]) : 0;
         if (retryAfterSec > 0 && retryAfterSec <= 10) {
-          console.log(`[AI] Rate limited, waiting ${retryAfterSec}s and retrying same model...`);
+          logger.info(`[AI] Rate limited, waiting ${retryAfterSec}s and retrying same model...`);
           await new Promise(resolve => setTimeout(resolve, retryAfterSec * 1000));
           try {
             const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
@@ -2068,7 +2069,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
   );
   if (allRateLimited) {
     const delayMs = 45000 + Math.random() * 15000; // 45-60s — Groq rate limits are per-minute
-    console.log(`[AI] All ${providerErrors.length} models rate-limited/backed-off. Waiting ${Math.round(delayMs / 1000)}s before global retry...`);
+    logger.info(`[AI] All ${providerErrors.length} models rate-limited/backed-off. Waiting ${Math.round(delayMs / 1000)}s before global retry...`);
     await new Promise(resolve => setTimeout(resolve, delayMs));
 
     // Clear backoff for retry candidates (we've waited long enough)
@@ -2081,7 +2082,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
       try {
         const timeout = MODEL_TIMEOUTS[config.provider] || 30000;
         const maxOutputTokens = (taskType === 'generate' || taskType === 'complex') ? 8192 : 4096;
-        console.log(`[AI] Global retry: ${config.provider}/${config.model}`);
+        logger.info(`[AI] Global retry: ${config.provider}/${config.model}`);
         const result = await withTimeout(
           callProvider(config, systemPromptWithUser, effectiveUserPrompt, maxOutputTokens),
           timeout,
@@ -2093,7 +2094,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         cb.recordSuccess();
         await trackApiCall(userId, config.model, result.inputTokens, result.outputTokens, cost, config.provider, taskId, taskType);
         result.content = stripThinkTags(result.content);
-        console.log(`[AI] Global retry SUCCESS: ${config.provider}/${config.model} | Tokens: ${totalTokens}`);
+        logger.info(`[AI] Global retry SUCCESS: ${config.provider}/${config.model} | Tokens: ${totalTokens}`);
         return {
           content: result.content,
           actions: parseActions(result.content),
@@ -2103,14 +2104,14 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
         };
       } catch (retryErr: unknown) {
         const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        console.log(`[AI] Global retry failed: ${config.provider}/${config.model}: ${msg.substring(0, 100)}`);
+        logger.info(`[AI] Global retry failed: ${config.provider}/${config.model}: ${msg.substring(0, 100)}`);
       }
     }
   }
 
   // All models failed — inject browse action for browser tasks, or give honest error.
   // NEVER return "I'm processing..." placeholder — it gets stored as the final response.
-  console.error(`[AI] All models in chain failed for taskType=${taskType}. Errors: ${providerErrors.join(' | ')}`);
+  logger.error(`[AI] All models in chain failed for taskType=${taskType}. Errors: ${providerErrors.join(' | ')}`);
   if (userId) {
     trackApiCall(userId, `ALL-FAILED:${taskType}:${providerErrors.map(e => e.substring(0, 80)).join('|')}`, 0, 0, 0, "groq", taskId, "all-models-failed").catch(() => {});
   }
@@ -2120,7 +2121,7 @@ Plain text descriptions do NOTHING. ONLY [ACTION:...] tags get executed. Output 
   const domainMatch = (taskSubject || '').match(/\b(\S+\.(com|ca|org|net|io|co|app))\b/i);
   if (isBrowserSubject || domainMatch) {
     const browseUrl = domainMatch ? `https://www.${domainMatch[1]}` : `https://www.google.com/search?q=${encodeURIComponent(taskSubject || 'search')}`;
-    console.log(`[AI] All models failed but task needs browser — injecting browse(${browseUrl})`);
+    logger.info(`[AI] All models failed but task needs browser — injecting browse(${browseUrl})`);
     return {
       content: `Starting the task now...`,
       actions: [{ type: 'browse' as const, params: { url: browseUrl } }] as Action[],
@@ -2215,13 +2216,13 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
       const clean = stripNarration(content);
       if (clean && clean.length > 20 && !isWholeResponsePassive(clean) && !isMetaDescription(clean)) {
         trackApiCall(userId, "mistralai/mistral-small-3.1-24b-instruct:free", 0, 0, 0, "openrouter", taskId, "fallback_direct_answer").catch(() => {});
-        console.log(`[FALLBACK-OR] Direct answer via OpenRouter (${clean.length} chars, $0)`);
+        logger.info(`[FALLBACK-OR] Direct answer via OpenRouter (${clean.length} chars, $0)`);
         return { content: clean, cost: 0, tokensUsed: 0 };
       } else if (clean && isMetaDescription(clean)) {
-        console.warn(`[FALLBACK-OR] OpenRouter returned meta-description — falling through to next model`);
+        logger.warn(`[FALLBACK-OR] OpenRouter returned meta-description — falling through to next model`);
       }
     } catch (orErr) {
-      console.warn(`[FALLBACK-OR] OpenRouter fallback failed: ${orErr instanceof Error ? orErr.message : String(orErr)}`);
+      logger.warn(`[FALLBACK-OR] OpenRouter fallback failed: ${orErr instanceof Error ? orErr.message : String(orErr)}`);
     }
   }
 
@@ -2246,11 +2247,11 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
         const groqOutputTokens = res.usage?.completion_tokens || 100;
         const groqCost = (groqInputTokens * 0.11 + groqOutputTokens * 0.34) / 1_000_000;
         trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", groqInputTokens, groqOutputTokens, groqCost, "groq", taskId, "fallback_direct_answer").catch(() => {});
-        console.log(`[FALLBACK-GROQ] Direct answer via Groq (${clean.length} chars, $${groqCost.toFixed(5)})`);
+        logger.info(`[FALLBACK-GROQ] Direct answer via Groq (${clean.length} chars, $${groqCost.toFixed(5)})`);
         return { content: clean, cost: groqCost, tokensUsed: groqInputTokens + groqOutputTokens };
       }
     } catch (groqErr) {
-      console.warn(`[FALLBACK-GROQ] Groq fallback failed: ${groqErr instanceof Error ? groqErr.message : String(groqErr)}`);
+      logger.warn(`[FALLBACK-GROQ] Groq fallback failed: ${groqErr instanceof Error ? groqErr.message : String(groqErr)}`);
     }
   }
 
@@ -2271,13 +2272,13 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "fallback_direct_answer").catch(() => {});
-        console.log(`[FALLBACK-GEMINI] Direct answer via Gemini (${clean.length} chars, $0)`);
+        logger.info(`[FALLBACK-GEMINI] Direct answer via Gemini (${clean.length} chars, $0)`);
         return { content: clean, cost: 0, tokensUsed: inTok + outTok };
       }
     } catch (gemErr) {
       const errMsg = gemErr instanceof Error ? gemErr.message : String(gemErr);
       if (errMsg.includes('429')) setModelBackoff('gemini', 'gemini-2.5-flash', 120000);
-      console.warn(`[FALLBACK-GEMINI] Gemini fallback failed: ${errMsg}`);
+      logger.warn(`[FALLBACK-GEMINI] Gemini fallback failed: ${errMsg}`);
     }
   }
 
@@ -2302,17 +2303,17 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
         const dsOutputTokens = res.usage?.completion_tokens || 100;
         const dsCost = (dsInputTokens * 0.27 + dsOutputTokens * 1.10) / 1_000_000;
         trackApiCall(userId, "deepseek-chat", dsInputTokens, dsOutputTokens, dsCost, "deepseek", taskId, "fallback_direct_answer").catch(() => {});
-        console.log(`[FALLBACK-DEEPSEEK] Direct answer (${clean.length} chars, $${dsCost.toFixed(5)})`);
+        logger.info(`[FALLBACK-DEEPSEEK] Direct answer (${clean.length} chars, $${dsCost.toFixed(5)})`);
         return { content: clean, cost: dsCost, tokensUsed: dsInputTokens + dsOutputTokens };
       }
     } catch (dsErr) {
-      console.warn(`[FALLBACK-DEEPSEEK] DeepSeek fallback failed: ${dsErr instanceof Error ? dsErr.message : String(dsErr)}`);
+      logger.warn(`[FALLBACK-DEEPSEEK] DeepSeek fallback failed: ${dsErr instanceof Error ? dsErr.message : String(dsErr)}`);
     }
   }
 
   // All models returned meta-descriptions or failed — retry WITHOUT search context (pure general knowledge)
   if (hasContext) {
-    console.warn(`[FALLBACK] All models returned meta-descriptions. Retrying without search context (general knowledge).`);
+    logger.warn(`[FALLBACK] All models returned meta-descriptions. Retrying without search context (general knowledge).`);
     const gkResult = await generateForcedDirectAnswer(userRequest, '', username, userId, taskId);
     if (gkResult.content && gkResult.content.length > 30) {
       return gkResult;
@@ -2328,7 +2329,7 @@ Rules: Use past or present tense only. Max 5 bullets for lists. Be specific and 
       .trim()
       .substring(0, 1500);
     if (rawText.length > 50) {
-      console.warn(`[FALLBACK-RAW] All 4 models failed — returning raw search data (${rawText.length} chars)`);
+      logger.warn(`[FALLBACK-RAW] All 4 models failed — returning raw search data (${rawText.length} chars)`);
       return { content: `Here's what I found:\n\n${rawText}`, cost: 0, tokensUsed: 0 };
     }
   }
@@ -2435,12 +2436,12 @@ export async function generateBrowserStepResponse(
         const cacheRead = usageAny?.cache_read_input_tokens || 0;
         const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
         const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] BrowserStep (Haiku-PRIORITY complex) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        logger.info(`[AI] BrowserStep (Haiku-PRIORITY complex) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step-complex").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] BrowserStep (Haiku-PRIORITY) failed: ${error instanceof Error ? error.message : String(error)} — falling through to cheap cascade`);
+      logger.warn(`[AI] BrowserStep (Haiku-PRIORITY) failed: ${error instanceof Error ? error.message : String(error)} — falling through to cheap cascade`);
     }
   }
 
@@ -2462,15 +2463,15 @@ export async function generateBrowserStepResponse(
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.075 + outTok * 0.30) / 1_000_000;
-        console.log(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        logger.info(`[AI] BrowserStep (Gemini Flash) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "gemini", taskId, "browser-step").catch(() => {});
         return { content, cost };
       } else if (stripped.length > 10) {
-        console.warn(`[AI] BrowserStep (Gemini Flash) rejected — no action command in: "${stripped.substring(0, 120)}"`);
+        logger.warn(`[AI] BrowserStep (Gemini Flash) rejected — no action command in: "${stripped.substring(0, 120)}"`);
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(`[AI] BrowserStep (Gemini Flash) failed: ${errMsg}`);
+      logger.warn(`[AI] BrowserStep (Gemini Flash) failed: ${errMsg}`);
       // Back off Gemini briefly on 429 — just skip 1-2 steps, not the whole task.
       // Previously 10 min caused ALL remaining steps to cascade to Haiku ($0.005/call).
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
@@ -2498,12 +2499,12 @@ export async function generateBrowserStepResponse(
         const cacheRead = usageAny?.cache_read_input_tokens || 0;
         const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
         const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] BrowserStep (Haiku fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
+        logger.info(`[AI] BrowserStep (Haiku fallback) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out`);
         if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "browser-step").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] BrowserStep (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(`[AI] BrowserStep (Haiku) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -2519,12 +2520,12 @@ export async function generateBrowserStepResponse(
       const stripped = stripThinkTags(response.choices[0]?.message?.content || '');
       const content = extractActionLines(stripped);
       if (content.length > 10 && isValidBrowserAction(content)) {
-        console.log(`[AI] BrowserStep (Groq Scout last-resort) | $0`);
+        logger.info(`[AI] BrowserStep (Groq Scout last-resort) | $0`);
         if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", 0, 0, 0, "groq", taskId, "browser-step").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
-      console.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(`[AI] BrowserStep (Groq Scout) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -2609,13 +2610,13 @@ export async function generateVisionResponse(
           if (content.length > 10) {
             const inTok = response.usage?.prompt_tokens || 0;
             const outTok = response.usage?.completion_tokens || 0;
-            console.log(`[AI] VisionText (Groq ${fm.name}) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+            logger.info(`[AI] VisionText (Groq ${fm.name}) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
             if (userId) trackApiCall(userId, fm.model, inTok, outTok, 0, "groq", taskId, "browser-step").catch(() => {});
             return { content, cost: 0 };
           }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.warn(`[AI] VisionText (Groq ${fm.name}) failed: ${errMsg}`);
+          logger.warn(`[AI] VisionText (Groq ${fm.name}) failed: ${errMsg}`);
           // Rate limit backoff: skip this model for 60s
           if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
             rateLimitBackoff.set(backoffKey, Date.now() + 60000);
@@ -2647,13 +2648,13 @@ export async function generateVisionResponse(
           if (content.length > 10) {
             const inTok = response.usage?.prompt_tokens || 0;
             const outTok = response.usage?.completion_tokens || 0;
-            console.log(`[AI] VisionText (Cerebras GPT-OSS-120B) | $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+            logger.info(`[AI] VisionText (Cerebras GPT-OSS-120B) | $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
             if (userId) trackApiCall(userId, "gpt-oss-120b", inTok, outTok, 0, "cerebras", taskId, "browser-step").catch(() => {});
             return { content, cost: 0 };
           }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.warn(`[AI] VisionText (Cerebras) failed: ${errMsg}`);
+          logger.warn(`[AI] VisionText (Cerebras) failed: ${errMsg}`);
           if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
             rateLimitBackoff.set(cerebrasBackoffKey, Date.now() + 60000);
           }
@@ -2679,19 +2680,19 @@ export async function generateVisionResponse(
         if (content.length > 10) {
           const inTok = response.usage?.prompt_tokens || 0;
           const outTok = response.usage?.completion_tokens || 0;
-          console.log(`[AI] VisionText (Gemini 2.5 Flash) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+          logger.info(`[AI] VisionText (Gemini 2.5 Flash) | ~$0 | ${inTok}in/${outTok}out | ${content.length} chars`);
           if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, 0, "google", taskId, "browser-step").catch(() => {});
           return { content, cost: 0 };
         }
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        console.warn(`[AI] VisionText (Gemini 2.5 Flash) failed: ${errMsg}`);
+        logger.warn(`[AI] VisionText (Gemini 2.5 Flash) failed: ${errMsg}`);
         if (userId) trackApiCall(userId, `ERR:gemini-flash:${errMsg.substring(0, 60)}`, 0, 0, 0, "google", taskId, "browser-step-error").catch(() => {});
       }
     }
 
     // If all fast text models fail, fall through to the full vision cascade below
-    console.warn(`[AI] VisionText fast path failed — falling through to vision cascade`);
+    logger.warn(`[AI] VisionText fast path failed — falling through to vision cascade`);
   }
 
   // ═══ 1. Gemini Flash — cheap, fast, different rate pool, supports images ═══
@@ -2714,13 +2715,13 @@ export async function generateVisionResponse(
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.075 + outTok * 0.30) / 1_000_000;
-        console.log(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        logger.info(`[AI] Vision (Gemini Flash) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
         if (userId) trackApiCall(userId, "gemini-2.5-flash", inTok, outTok, cost, "google", taskId, "vision").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(`[AI] Vision (Gemini Flash) failed: ${errMsg}`);
+      logger.warn(`[AI] Vision (Gemini Flash) failed: ${errMsg}`);
       // Back off Gemini briefly on 429 — 15s (skip 1-2 steps), not 10 min
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
         rateLimitBackoff.set(geminiBackoffKey, Date.now() + 15000);
@@ -2749,13 +2750,13 @@ export async function generateVisionResponse(
         const inTok = response.usage?.prompt_tokens || 0;
         const outTok = response.usage?.completion_tokens || 0;
         const cost = (inTok * 0.11 + outTok * 0.34) / 1_000_000;
-        console.log(`[AI] Vision (Groq Llama4 Scout) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
+        logger.info(`[AI] Vision (Groq Llama4 Scout) | Cost: $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${content.length} chars`);
         if (userId) trackApiCall(userId, "llama-4-scout-17b-16e-instruct", inTok, outTok, cost, "groq", taskId, "vision").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${errMsg}`);
+      logger.warn(`[AI] Vision (Groq Llama4 Scout) failed: ${errMsg}`);
       // Update shared backoff map so fast text shortcut also skips Scout
       if (errMsg.includes('429') || errMsg.toLowerCase().includes('rate limit')) {
         rateLimitBackoff.set(scoutBackoffKey, Date.now() + 60000);
@@ -2794,13 +2795,13 @@ export async function generateVisionResponse(
         if (content.length > 10) {
           const inTok = response.usage?.prompt_tokens || 0;
           const outTok = response.usage?.completion_tokens || 0;
-          console.log(`[AI] Vision (${fm.name} FREE) | Cost: $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
+          logger.info(`[AI] Vision (${fm.name} FREE) | Cost: $0 | ${inTok}in/${outTok}out | ${content.length} chars`);
           if (userId) trackApiCall(userId, fm.model, inTok, outTok, 0, "openrouter", taskId, "vision").catch(() => {});
           return { content, cost: 0 };
         }
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        console.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
+        logger.warn(`[AI] Vision (${fm.name} FREE) failed: ${msg}`);
         // 5 min backoff for exhausted/rate-limited free models — prevents wasting 7×25s on dead models
         // Also backoff on 404 (model doesn't support image input) — 1 hour since this won't change
         if (msg.includes('404')) {
@@ -2844,12 +2845,12 @@ export async function generateVisionResponse(
 
       if (content.length > 5) {
         const cost = (inputTokens * 0.27 + outputTokens * 1.10) / 1_000_000;
-        console.log(`[AI] Vision (DeepSeek text-fallback) | Cost: $${cost.toFixed(6)} | ${inputTokens}in/${outputTokens}out | ${content.length} chars`);
+        logger.info(`[AI] Vision (DeepSeek text-fallback) | Cost: $${cost.toFixed(6)} | ${inputTokens}in/${outputTokens}out | ${content.length} chars`);
         if (userId) trackApiCall(userId, "deepseek-chat", inputTokens, outputTokens, cost, "deepseek", taskId, "vision").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] Vision (DeepSeek text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(`[AI] Vision (DeepSeek text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -2874,12 +2875,12 @@ export async function generateVisionResponse(
 
       if (content.length > 5) {
         // Groq is free but track for visibility
-        console.log(`[AI] Vision (Groq text-fallback) | Cost: ~$0 | ${content.length} chars`);
+        logger.info(`[AI] Vision (Groq text-fallback) | Cost: ~$0 | ${content.length} chars`);
         if (userId) trackApiCall(userId, "meta-llama/llama-4-scout-17b-16e-instruct", 0, 0, 0, "groq", taskId, "vision").catch(() => {});
         return { content, cost: 0 };
       }
     } catch (error) {
-      console.warn(`[AI] Vision (Groq text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(`[AI] Vision (Groq text-fallback) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -2906,12 +2907,12 @@ export async function generateVisionResponse(
         const cacheRead = usageAny?.cache_read_input_tokens || 0;
         const cacheCreate = usageAny?.cache_creation_input_tokens || 0;
         const cost = calculateAnthropicCost(inTok, outTok, cacheRead, cacheCreate, 'haiku');
-        console.log(`[AI] Vision (Haiku LAST-RESORT) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${hasImage ? 'with screenshot' : 'text-only'}`);
+        logger.info(`[AI] Vision (Haiku LAST-RESORT) | $${cost.toFixed(6)} | ${inTok}in/${outTok}out | ${hasImage ? 'with screenshot' : 'text-only'}`);
         if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "vision-lastresort").catch(() => {});
         return { content, cost };
       }
     } catch (error) {
-      console.warn(`[AI] Vision (Haiku last-resort) failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(`[AI] Vision (Haiku last-resort) failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -3060,7 +3061,7 @@ PASS = false if ANY of:
       const content = geminiResp.choices[0]?.message?.content || '';
       const pass = /PASS:\s*true/i.test(content);
       const reason = content.match(/REASON:\s*(.+)/i)?.[1] || content;
-      console.log(`[QUALITY-EVAL] Gemini: pass=${pass} — ${reason.substring(0, 100)}`);
+      logger.info(`[QUALITY-EVAL] Gemini: pass=${pass} — ${reason.substring(0, 100)}`);
       return { pass, feedback: reason.trim(), cost: 0 };
     }
 
@@ -3078,12 +3079,12 @@ PASS = false if ANY of:
       const inTok = haikuResp.usage?.input_tokens || 0;
       const outTok = haikuResp.usage?.output_tokens || 0;
       const cost = calculateAnthropicCost(inTok, outTok, 0, 0, 'haiku');
-      console.log(`[QUALITY-EVAL] Haiku: pass=${pass} — ${reason.substring(0, 100)} | $${cost.toFixed(6)}`);
+      logger.info(`[QUALITY-EVAL] Haiku: pass=${pass} — ${reason.substring(0, 100)} | $${cost.toFixed(6)}`);
       if (userId) trackApiCall(userId, "claude-haiku-4-5-20251001", inTok, outTok, cost, "anthropic", taskId, "quality-eval").catch(() => {});
       return { pass, feedback: reason.trim(), cost };
     }
   } catch (err) {
-    console.warn(`[QUALITY-EVAL] Error: ${err instanceof Error ? err.message : err}`);
+    logger.warn(`[QUALITY-EVAL] Error: ${err instanceof Error ? err.message : err}`);
   }
 
   // If evaluation fails, pass by default (don't block on eval failure)
@@ -3094,7 +3095,7 @@ PASS = false if ANY of:
  * Generate a mock response for testing
  */
 function generateMockResponse(username: string, taskSubject: string, taskBody: string): AIResponse {
-  console.log("[AI] Using mock response mode");
+  logger.info("[AI] Using mock response mode");
 
   const mockContent = `Hello ${username}! I received your request about "${taskSubject}".
 
@@ -3164,7 +3165,7 @@ export function parseActions(response: string): Action[] {
         actions.push(action);
       }
     } catch (error) {
-      console.error(`Failed to parse action: [ACTION:${actionType}(${paramsStr.slice(0, 50)}...)]`, error);
+      logger.error(`Failed to parse action: [ACTION:${actionType}(${paramsStr.slice(0, 50)}...)]`, error);
     }
   }
 
@@ -3295,7 +3296,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
         const sheets = JSON.parse(sheetsStr);
         return { type: "create_excel", params: { filename, sheets } };
       } catch (error) {
-        console.error('[EXCEL] Failed to parse sheets JSON:', error);
+        logger.error('[EXCEL] Failed to parse sheets JSON:', error);
         return null;
       }
     }
@@ -3312,7 +3313,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
         const slides = JSON.parse(slidesStr);
         return { type: "create_powerpoint", params: { filename, slides } };
       } catch (error) {
-        console.error('[POWERPOINT] Failed to parse slides JSON:', error);
+        logger.error('[POWERPOINT] Failed to parse slides JSON:', error);
         return null;
       }
     }
@@ -3329,7 +3330,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
         const sections = JSON.parse(sectionsStr);
         return { type: "create_word", params: { filename, sections } };
       } catch (error) {
-        console.error('[WORD] Failed to parse sections JSON:', error);
+        logger.error('[WORD] Failed to parse sections JSON:', error);
         return null;
       }
     }
@@ -3346,7 +3347,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
         const content = JSON.parse(contentStr);
         return { type: "create_pdf", params: { filename, content } };
       } catch (error) {
-        console.error('[PDF] Failed to parse content JSON:', error);
+        logger.error('[PDF] Failed to parse content JSON:', error);
         return null;
       }
     }
@@ -3357,7 +3358,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
         const params = JSON.parse(paramsStr);
         return { type: "screenshot_ocr", params };
       } catch (error) {
-        console.error('[OCR] Failed to parse params JSON:', error);
+        logger.error('[OCR] Failed to parse params JSON:', error);
         // Fallback: empty params = full page screenshot with default settings
         return { type: "screenshot_ocr", params: {} };
       }
@@ -3389,7 +3390,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
         const steps = JSON.parse(stepsStr);
         return { type: "create_campaign", params: { name, steps } };
       } catch (error) {
-        console.error('[CAMPAIGN] Failed to parse steps JSON:', error);
+        logger.error('[CAMPAIGN] Failed to parse steps JSON:', error);
         return null;
       }
     }
@@ -3464,7 +3465,7 @@ function parseAction(type: string, paramsStr: string): Action | null {
     }
 
     default:
-      console.warn(`Unknown action type: ${type}`);
+      logger.warn(`Unknown action type: ${type}`);
       return null;
   }
 }
@@ -3583,7 +3584,7 @@ export async function classifyTask(userMessage: string): Promise<{
     /\bmultiplied\s+by\b/i,
   ];
   if (mathPatterns.some(p => p.test(text)) && text.length < 100) {
-    console.log("[AI] Math task detected, skipping browser");
+    logger.info("[AI] Math task detected, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
 
@@ -3592,13 +3593,13 @@ export async function classifyTask(userMessage: string): Promise<{
     /^(hi|hello|hey|thanks|thank you|ok|okay|bye|good morning|good night|how are you)\b/i,
   ];
   if (greetingPatterns.some(p => p.test(text)) && text.length < 80) {
-    console.log("[AI] Greeting detected, skipping browser");
+    logger.info("[AI] Greeting detected, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
 
   // 3. Memory commands
   if (/^remember\b/i.test(text) && text.length < 200) {
-    console.log("[AI] Memory task detected, skipping browser");
+    logger.info("[AI] Memory task detected, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
 
@@ -3613,7 +3614,7 @@ export async function classifyTask(userMessage: string): Promise<{
   const hasUrl = /https?:\/\//i.test(text) || /www\./i.test(text);
 
   if (knowledgePatterns.some(p => p.test(text)) && !hasUrl && !hasLiveDataIntent && text.length < 150) {
-    console.log("[AI] Simple knowledge question, skipping browser");
+    logger.info("[AI] Simple knowledge question, skipping browser");
     return { taskType: "general", goal: userMessage, needsBrowser: false, domains: [] };
   }
 
@@ -3658,6 +3659,6 @@ export async function classifyTask(userMessage: string): Promise<{
     domains.push(urlMatch[1]);
   }
 
-  console.log(`[AI] classifyTask: type="${taskType}", needsBrowser=${needsBrowser}, domains=${domains.length}`);
+  logger.info(`[AI] classifyTask: type="${taskType}", needsBrowser=${needsBrowser}, domains=${domains.length}`);
   return { taskType, goal: userMessage, needsBrowser, domains };
 }

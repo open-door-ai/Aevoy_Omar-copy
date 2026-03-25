@@ -97,7 +97,7 @@ export function FeedCard({
   // User message: lighter background, no channel icon
   if (isUser) {
     return (
-      <div className="rounded-xl bg-[--aurora-card]/50 border border-[--aurora-card-border]/50 p-4 transition-all">
+      <div className="rounded-xl bg-[--aurora-card]/50 border border-[--aurora-card-border]/50 p-4 transition-all animate-slideUp">
         <p className="text-[15px] leading-relaxed text-[--aurora-text]/80">
           {displayText}
         </p>
@@ -120,7 +120,7 @@ export function FeedCard({
 
   // Aurora response: card styling with channel icon
   return (
-    <div className="rounded-xl border border-[--aurora-card-border] bg-[--aurora-card] p-4 transition-all hover:border-[#6C5CE7]/20">
+    <div className="rounded-xl border border-[--aurora-card-border] bg-[--aurora-card] p-4 transition-all hover:border-[#6C5CE7]/20 animate-slideUp">
       <div className="flex items-start gap-3">
         <div className="mt-0.5 p-1.5 rounded-lg bg-[#6C5CE7]/10 shrink-0">
           <Icon className="w-3.5 h-3.5 text-[#6C5CE7]" />

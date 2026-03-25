@@ -21,6 +21,7 @@
 
 import { getSupabaseClient } from "../utils/supabase.js";
 import { updateMemoryWithFact } from "./memory.js";
+import { logger } from '../utils/logger.js';
 
 // ---- Extra Mile Action Types ----
 
@@ -245,10 +246,10 @@ async function executeExtraMileAction(
     case "SAVE_MEMORY": {
       try {
         await updateMemoryWithFact(userId, action.params.fact);
-        console.log(`[EXTRA-MILE] Saved memory: "${action.params.fact.substring(0, 60)}"`);
+        logger.info(`[EXTRA-MILE] Saved memory: "${action.params.fact.substring(0, 60)}"`);
         return action.label;
       } catch (err) {
-        console.warn("[EXTRA-MILE] Memory save failed:", err);
+        logger.warn("[EXTRA-MILE] Memory save failed:", err);
         return null;
       }
     }
@@ -256,7 +257,7 @@ async function executeExtraMileAction(
     case "ADD_CALENDAR": {
       const isoTime = parseCalendarDatetime(action.params.datetime);
       if (!isoTime) {
-        console.warn(`[EXTRA-MILE] Could not parse calendar time: "${action.params.datetime}"`);
+        logger.warn(`[EXTRA-MILE] Could not parse calendar time: "${action.params.datetime}"`);
         return null;
       }
       try {
@@ -271,10 +272,10 @@ async function executeExtraMileAction(
         });
         if (error) throw error;
         const loc = action.params.location ? ` at ${action.params.location}` : "";
-        console.log(`[EXTRA-MILE] Calendar event added: "${action.params.title}"${loc}`);
+        logger.info(`[EXTRA-MILE] Calendar event added: "${action.params.title}"${loc}`);
         return `${action.label}${loc}`;
       } catch (err) {
-        console.warn("[EXTRA-MILE] Calendar insert failed:", err);
+        logger.warn("[EXTRA-MILE] Calendar insert failed:", err);
         return null;
       }
     }
@@ -282,7 +283,7 @@ async function executeExtraMileAction(
     case "SCHEDULE_REMINDER": {
       const isoTime = parseReminderTime(action.params.when);
       if (!isoTime) {
-        console.warn(`[EXTRA-MILE] Could not parse reminder time: "${action.params.when}"`);
+        logger.warn(`[EXTRA-MILE] Could not parse reminder time: "${action.params.when}"`);
         return null;
       }
       try {
@@ -296,10 +297,10 @@ async function executeExtraMileAction(
           created_at: new Date().toISOString(),
         });
         if (error) throw error;
-        console.log(`[EXTRA-MILE] Reminder scheduled: "${action.params.description.substring(0, 60)}" at ${isoTime}`);
+        logger.info(`[EXTRA-MILE] Reminder scheduled: "${action.params.description.substring(0, 60)}" at ${isoTime}`);
         return action.label;
       } catch (err) {
-        console.warn("[EXTRA-MILE] Reminder schedule failed:", err);
+        logger.warn("[EXTRA-MILE] Reminder schedule failed:", err);
         return null;
       }
     }
@@ -315,10 +316,10 @@ async function executeExtraMileAction(
           source: "extra_mile_search_queue",
           created_at: new Date().toISOString(),
         });
-        console.log(`[EXTRA-MILE] Related search queued: "${action.params.query.substring(0, 60)}"`);
+        logger.info(`[EXTRA-MILE] Related search queued: "${action.params.query.substring(0, 60)}"`);
         return action.label;
       } catch (err) {
-        console.warn("[EXTRA-MILE] Search queue failed:", err);
+        logger.warn("[EXTRA-MILE] Search queue failed:", err);
         return null;
       }
     }
@@ -407,25 +408,25 @@ Or output: NONE (if no concrete data available for any action)`;
     ]).catch(() => "");
 
     if (!aiOutput || aiOutput.trim() === "NONE" || aiOutput.trim() === "") {
-      console.log("[EXTRA-MILE] AI returned no actionable extras");
+      logger.info("[EXTRA-MILE] AI returned no actionable extras");
       return "";
     }
 
-    console.log(`[EXTRA-MILE] AI output (${aiOutput.length} chars): ${aiOutput.substring(0, 200)}`);
+    logger.info(`[EXTRA-MILE] AI output (${aiOutput.length} chars): ${aiOutput.substring(0, 200)}`);
 
     const ideas = parseExtraMileIdeas(aiOutput);
     if (ideas.length === 0) {
-      console.log("[EXTRA-MILE] No parseable actions in AI output");
+      logger.info("[EXTRA-MILE] No parseable actions in AI output");
       return "";
     }
 
-    console.log(`[EXTRA-MILE] Parsed ${ideas.length} action(s) to execute`);
+    logger.info(`[EXTRA-MILE] Parsed ${ideas.length} action(s) to execute`);
 
     // Execute up to 3 actions, with per-action timeout
     const done: string[] = [];
     for (const idea of ideas.slice(0, 3)) {
       if (Date.now() - startTime > EXTRA_MILE_TIMEOUT_MS) {
-        console.log("[EXTRA-MILE] Timeout — stopping early");
+        logger.info("[EXTRA-MILE] Timeout — stopping early");
         break;
       }
 
@@ -436,13 +437,13 @@ Or output: NONE (if no concrete data available for any action)`;
             setTimeout(() => reject(new Error(`Extra mile action timeout: ${idea.type}`)), 8_000)
           ),
         ]).catch(err => {
-          console.warn(`[EXTRA-MILE] Action ${idea.type} timed out or failed:`, err instanceof Error ? err.message : err);
+          logger.warn(`[EXTRA-MILE] Action ${idea.type} timed out or failed:`, err instanceof Error ? err.message : err);
           return null;
         });
 
         if (label) done.push(label);
       } catch (actionErr) {
-        console.warn(`[EXTRA-MILE] Action ${idea.type} threw:`, actionErr);
+        logger.warn(`[EXTRA-MILE] Action ${idea.type} threw:`, actionErr);
       }
     }
 
@@ -453,12 +454,12 @@ Or output: NONE (if no concrete data available for any action)`;
       ? done[0]
       : done.slice(0, -1).join(", ") + " and " + done[done.length - 1];
 
-    console.log(`[EXTRA-MILE] Completed ${done.length} extra action(s) in ${Date.now() - startTime}ms: ${summary}`);
+    logger.info(`[EXTRA-MILE] Completed ${done.length} extra action(s) in ${Date.now() - startTime}ms: ${summary}`);
     return summary;
 
   } catch (err) {
     // Non-critical — never let extra mile affect the main response
-    console.warn("[EXTRA-MILE] Top-level error (suppressed):", err instanceof Error ? err.message : err);
+    logger.warn("[EXTRA-MILE] Top-level error (suppressed):", err instanceof Error ? err.message : err);
     return "";
   }
 }

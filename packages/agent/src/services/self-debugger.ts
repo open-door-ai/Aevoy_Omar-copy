@@ -20,6 +20,7 @@
 
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { Action, ActionResult } from "../types/index.js";
+import { logger } from '../utils/logger.js';
 
 export interface DebugHypothesis {
   cause: string;
@@ -63,8 +64,8 @@ export async function diagnoseFailure(
 ): Promise<DebugHypothesis[]> {
   const hypotheses: DebugHypothesis[] = [];
 
-  console.log(`[DEBUG] Diagnosing failure: ${action.type} on ${context.domain} (attempt ${context.previousAttempts + 1})`);
-  console.log(`[DEBUG] Error: ${error}`);
+  logger.info(`[DEBUG] Diagnosing failure: ${action.type} on ${context.domain} (attempt ${context.previousAttempts + 1})`);
+  logger.info(`[DEBUG] Error: ${error}`);
 
   // Analyze error message to determine likely causes
   const errorLower = error.toLowerCase();
@@ -182,7 +183,7 @@ export async function diagnoseFailure(
   // Sort by likelihood descending
   hypotheses.sort((a, b) => b.likelihood - a.likelihood);
 
-  console.log(`[DEBUG] Generated ${hypotheses.length} hypotheses, most likely: ${hypotheses[0]?.cause}`);
+  logger.info(`[DEBUG] Generated ${hypotheses.length} hypotheses, most likely: ${hypotheses[0]?.cause}`);
   return hypotheses;
 }
 
@@ -198,26 +199,26 @@ export async function applyFix(
     executionEngine?: unknown; // ExecutionEngine instance
   }
 ): Promise<{ success: boolean; error?: string }> {
-  console.log(`[DEBUG] Applying fix: ${fix.type}`);
+  logger.info(`[DEBUG] Applying fix: ${fix.type}`);
 
   switch (fix.type) {
     case "retry_different_method": {
       const methods = fix.params.fallbackMethods as string[];
-      console.log(`[DEBUG] Trying fallback methods: ${methods.join(", ")}`);
+      logger.info(`[DEBUG] Trying fallback methods: ${methods.join(", ")}`);
       // This would be called by the action executor
       return { success: true }; // Indicates fix was applied, actual retry happens in executor
     }
 
     case "add_wait": {
       const waitMs = fix.params.waitMs as number;
-      console.log(`[DEBUG] Adding ${waitMs}ms wait before retry`);
+      logger.info(`[DEBUG] Adding ${waitMs}ms wait before retry`);
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       return { success: true };
     }
 
     case "clear_session": {
       const domain = fix.params.domain as string;
-      console.log(`[DEBUG] Clearing session for ${domain}`);
+      logger.info(`[DEBUG] Clearing session for ${domain}`);
       try {
         // Clear user_sessions table entry
         await getSupabaseClient()
@@ -225,7 +226,7 @@ export async function applyFix(
           .delete()
           .eq("user_id", context.userId)
           .eq("domain", domain);
-        console.log(`[DEBUG] Session cleared for ${domain}`);
+        logger.info(`[DEBUG] Session cleared for ${domain}`);
         return { success: true };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -233,30 +234,30 @@ export async function applyFix(
     }
 
     case "use_vision": {
-      console.log(`[DEBUG] Enabling vision mode for retry`);
+      logger.info(`[DEBUG] Enabling vision mode for retry`);
       // This would set a flag for the execution engine to use vision
       return { success: true };
     }
 
     case "escalate_execution": {
       const escalateTo = fix.params.escalateTo as string;
-      console.log(`[DEBUG] Escalating execution level to ${escalateTo}`);
+      logger.info(`[DEBUG] Escalating execution level to ${escalateTo}`);
       // This would trigger iterative deepening escalation
       return { success: true };
     }
 
     case "refresh_oauth": {
       const service = fix.params.service as string;
-      console.log(`[DEBUG] OAuth refresh needed for ${service}`);
+      logger.info(`[DEBUG] OAuth refresh needed for ${service}`);
       // TODO: Implement automatic OAuth refresh
       // For now, this is handled by oauth-manager.ts checkAndRefreshExpiring()
-      console.log(`[DEBUG] Flagged OAuth refresh for ${service}`);
+      logger.info(`[DEBUG] Flagged OAuth refresh for ${service}`);
       return { success: true };
     }
 
     case "ask_user": {
       const reason = fix.params.reason as string;
-      console.log(`[DEBUG] Escalating to user: ${reason}`);
+      logger.info(`[DEBUG] Escalating to user: ${reason}`);
       // This would send clarification request to user
       return { success: true };
     }
@@ -282,14 +283,14 @@ export async function debugAndFix(
   const hypotheses = await diagnoseFailure(action, error, context);
 
   if (hypotheses.length === 0) {
-    console.log(`[DEBUG] No fix hypotheses generated`);
+    logger.info(`[DEBUG] No fix hypotheses generated`);
     return { fixed: false, appliedFix: null, attempts: 0, finalError: error };
   }
 
   // Try fixes in order of likelihood
   for (let i = 0; i < Math.min(hypotheses.length, 3); i++) {
     const hypothesis = hypotheses[i];
-    console.log(`[DEBUG] Attempt ${i + 1}: ${hypothesis.cause} (${hypothesis.likelihood}% likely)`);
+    logger.info(`[DEBUG] Attempt ${i + 1}: ${hypothesis.cause} (${hypothesis.likelihood}% likely)`);
 
     const fixResult = await applyFix(hypothesis.suggestedFix, action, { userId: context.userId, domain: context.domain });
 
@@ -303,11 +304,11 @@ export async function debugAndFix(
         attempts: i + 1,
       };
     } else {
-      console.log(`[DEBUG] Fix failed: ${fixResult.error}`);
+      logger.info(`[DEBUG] Fix failed: ${fixResult.error}`);
     }
   }
 
-  console.log(`[DEBUG] All fixes exhausted, could not auto-fix`);
+  logger.info(`[DEBUG] All fixes exhausted, could not auto-fix`);
   return {
     fixed: false,
     appliedFix: null,
@@ -361,9 +362,9 @@ async function recordSuccessfulFix(
       { onConflict: "domain,task_type,action_type,correction_hint" }
     );
 
-    console.log(`[DEBUG] Recorded successful fix: ${fixType} for ${actionType} on ${domain}`);
+    logger.info(`[DEBUG] Recorded successful fix: ${fixType} for ${actionType} on ${domain}`);
   } catch (error) {
-    console.error("[DEBUG] Error recording fix:", error);
+    logger.error("[DEBUG] Error recording fix:", error);
   }
 }
 
@@ -403,10 +404,10 @@ export async function getKnownFixes(domain: string, taskType: string, actionType
       };
     });
 
-    console.log(`[DEBUG] Found ${fixes.length} known fixes for ${actionType} on ${domain}`);
+    logger.info(`[DEBUG] Found ${fixes.length} known fixes for ${actionType} on ${domain}`);
     return fixes;
   } catch (error) {
-    console.error("[DEBUG] Error querying known fixes:", error);
+    logger.error("[DEBUG] Error querying known fixes:", error);
     return [];
   }
 }

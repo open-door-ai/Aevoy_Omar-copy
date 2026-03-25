@@ -20,6 +20,7 @@ import { sendResponse } from './email.js';
 import { sendSms } from './twilio.js';
 import { quickValidate } from './ai.js';
 import type { TaskRequest } from '../types/index.js';
+import { logger } from '../utils/logger.js';
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.MONITORING_INTERVAL_MS || '') || 15 * 60 * 1000;
 const DEFAULT_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
@@ -134,9 +135,9 @@ export async function registerMonitoringJob(
         input_channel: 'proactive',
         started_at: new Date().toISOString(),
       });
-      console.log(`[MONITORING] Registered legacy ${job.type} job for user ${job.userId.substring(0, 8)}`);
+      logger.info(`[MONITORING] Registered legacy ${job.type} job for user ${job.userId.substring(0, 8)}`);
     } catch (err) {
-      console.error('[MONITORING] Failed to register legacy job:', err);
+      logger.error('[MONITORING] Failed to register legacy job:', err);
     }
     return;
   }
@@ -144,7 +145,7 @@ export async function registerMonitoringJob(
   // New API: string-based
   const userId = userIdOrJob;
   if (!username || !jobDescription) {
-    console.error('[MONITORING] registerMonitoringJob: username and jobDescription are required');
+    logger.error('[MONITORING] registerMonitoringJob: username and jobDescription are required');
     return;
   }
 
@@ -160,11 +161,11 @@ export async function registerMonitoringJob(
     const userJobs = monitoringJobs.get(userId) || [];
     const activeCount = userJobs.filter(j => j.isActive).length;
     if (activeCount >= maxJobs) {
-      console.warn(`[MONITORING] User ${userId.slice(0, 8)} already has ${activeCount} active monitors (cap: ${maxJobs}) — blocking new one: "${jobDescription.slice(0, 60)}"`);
+      logger.warn(`[MONITORING] User ${userId.slice(0, 8)} already has ${activeCount} active monitors (cap: ${maxJobs}) — blocking new one: "${jobDescription.slice(0, 60)}"`);
       return; // Silently skip — don't error, just don't create over the cap
     }
   } catch (capErr) {
-    console.warn('[MONITORING] Failed to check monitor job cap:', capErr); // Non-fatal
+    logger.warn('[MONITORING] Failed to check monitor job cap:', capErr); // Non-fatal
   }
 
   const interval = checkIntervalMs ?? parseIntervalMs(jobDescription);
@@ -185,7 +186,7 @@ export async function registerMonitoringJob(
   // De-duplicate: don't register same description twice
   const alreadyExists = existing.some(j => j.description === jobDescription && j.isActive);
   if (alreadyExists) {
-    console.log(`[MONITORING] Job already registered for user ${userId.substring(0, 8)}: "${jobDescription.substring(0, 60)}"`);
+    logger.info(`[MONITORING] Job already registered for user ${userId.substring(0, 8)}: "${jobDescription.substring(0, 60)}"`);
     return;
   }
   existing.push(job);
@@ -201,10 +202,10 @@ export async function registerMonitoringJob(
     });
   } catch (err) {
     // Non-fatal: in-memory store is the source of truth for current process
-    console.warn('[MONITORING] Could not persist job to Supabase:', err);
+    logger.warn('[MONITORING] Could not persist job to Supabase:', err);
   }
 
-  console.log(`[MONITORING] Registered job for user ${userId.substring(0, 8)}: "${jobDescription.substring(0, 60)}" (every ${Math.round(interval / 60000)}min)`);
+  logger.info(`[MONITORING] Registered job for user ${userId.substring(0, 8)}: "${jobDescription.substring(0, 60)}" (every ${Math.round(interval / 60000)}min)`);
 }
 
 /**
@@ -223,7 +224,7 @@ export function stopMonitoringJob(userId: string, jobId: string): boolean {
   const job = jobs.find(j => j.id === jobId);
   if (!job) return false;
   job.isActive = false;
-  console.log(`[MONITORING] Stopped job ${jobId} for user ${userId.substring(0, 8)}`);
+  logger.info(`[MONITORING] Stopped job ${jobId} for user ${userId.substring(0, 8)}`);
   return true;
 }
 
@@ -277,7 +278,7 @@ function extractPlatformUrl(description: string): string | null {
 }
 
 async function runJobCheck(job: MonitoringJob): Promise<void> {
-  console.log(`[MONITORING] Running check for job ${job.id} (user ${job.userId.substring(0, 8)}): "${job.description.substring(0, 60)}"`);
+  logger.info(`[MONITORING] Running check for job ${job.id} (user ${job.userId.substring(0, 8)}): "${job.description.substring(0, 60)}"`);
 
   try {
     // Fetch user profile for notification routing
@@ -288,7 +289,7 @@ async function runJobCheck(job: MonitoringJob): Promise<void> {
       .single();
 
     if (!profile) {
-      console.warn(`[MONITORING] User ${job.userId.substring(0, 8)} not found — skipping job`);
+      logger.warn(`[MONITORING] User ${job.userId.substring(0, 8)} not found — skipping job`);
       job.isActive = false;
       return;
     }
@@ -350,16 +351,16 @@ What do you find?`;
     }
 
     if (!aiResponse || aiResponse === 'NO_UPDATE' || aiResponse.toUpperCase().includes('NO_UPDATE') || aiResponse.toUpperCase().includes('NOTHING NEW')) {
-      console.log(`[MONITORING] No update for job ${job.id}`);
+      logger.info(`[MONITORING] No update for job ${job.id}`);
       return;
     }
 
     // AI found something actionable — notify user
-    console.log(`[MONITORING] Actionable update for job ${job.id}: "${aiResponse.substring(0, 100)}"`);
+    logger.info(`[MONITORING] Actionable update for job ${job.id}: "${aiResponse.substring(0, 100)}"`);
 
     await notifyUser(job, profile, settings, aiResponse);
   } catch (err) {
-    console.error(`[MONITORING] Error running job check ${job.id}:`, err);
+    logger.error(`[MONITORING] Error running job check ${job.id}:`, err);
   } finally {
     // Update last checked + next check timestamps
     job.lastCheckedAt = new Date().toISOString();
@@ -401,7 +402,7 @@ async function notifyUser(
       });
     }
   } catch (sendErr) {
-    console.error(`[MONITORING] Failed to send notification for job ${job.id}:`, sendErr);
+    logger.error(`[MONITORING] Failed to send notification for job ${job.id}:`, sendErr);
     try {
       await sendResponse({
         to: profile.email,
@@ -424,18 +425,18 @@ async function notifyUser(
  */
 async function runHeartbeat(): Promise<void> {
   if (isHeartbeatRunning) {
-    console.log('[MONITORING] Heartbeat already running, skipping');
+    logger.info('[MONITORING] Heartbeat already running, skipping');
     return;
   }
 
   const acquired = await acquireDistributedLock('monitoring_heartbeat', HEARTBEAT_INTERVAL_MS);
   if (!acquired) {
-    console.log('[MONITORING] Could not acquire lock — another instance running');
+    logger.info('[MONITORING] Could not acquire lock — another instance running');
     return;
   }
 
   isHeartbeatRunning = true;
-  console.log('[MONITORING] Heartbeat starting');
+  logger.info('[MONITORING] Heartbeat starting');
 
   try {
     const now = Date.now();
@@ -446,7 +447,7 @@ async function runHeartbeat(): Promise<void> {
         if (!job.isActive) continue;
         if (new Date(job.nextCheckAt).getTime() <= now) {
           // Run check non-blocking (catch errors per job)
-          runJobCheck(job).catch(err => console.error(`[MONITORING] Unhandled job check error:`, err));
+          runJobCheck(job).catch(err => logger.error(`[MONITORING] Unhandled job check error:`, err));
         }
       }
     }
@@ -460,34 +461,34 @@ async function runHeartbeat(): Promise<void> {
       .lt('started_at', new Date(now - 5 * 60 * 1000).toISOString()); // At least 5 min old
 
     if (legacyJobs?.length) {
-      console.log(`[MONITORING] Checking ${legacyJobs.length} legacy monitoring tasks`);
+      logger.info(`[MONITORING] Checking ${legacyJobs.length} legacy monitoring tasks`);
 
       for (const job of legacyJobs) {
         try {
           const metadata = JSON.parse(job.input_text || '{}');
           if (metadata.expiresAt && new Date(metadata.expiresAt) < new Date()) {
             await getSupabaseClient().from('tasks').update({ status: 'completed' }).eq('id', job.id);
-            console.log(`[MONITORING] Legacy job ${job.id} expired`);
+            logger.info(`[MONITORING] Legacy job ${job.id} expired`);
             continue;
           }
           await getSupabaseClient().from('tasks').update({
             updated_at: new Date().toISOString(),
           }).eq('id', job.id);
-          console.log(`[MONITORING] Checked legacy job ${job.id} for user ${job.user_id?.substring(0, 8)}`);
+          logger.info(`[MONITORING] Checked legacy job ${job.id} for user ${job.user_id?.substring(0, 8)}`);
         } catch (jobErr) {
-          console.error(`[MONITORING] Error checking legacy job ${job.id}:`, jobErr);
+          logger.error(`[MONITORING] Error checking legacy job ${job.id}:`, jobErr);
         }
       }
     } else {
-      console.log('[MONITORING] No legacy monitoring jobs');
+      logger.info('[MONITORING] No legacy monitoring jobs');
     }
 
   } catch (err) {
-    console.error('[MONITORING] Heartbeat error:', err);
+    logger.error('[MONITORING] Heartbeat error:', err);
   } finally {
     isHeartbeatRunning = false;
     await releaseDistributedLock('monitoring_heartbeat');
-    console.log('[MONITORING] Heartbeat complete');
+    logger.info('[MONITORING] Heartbeat complete');
   }
 }
 
@@ -531,10 +532,10 @@ async function restorePersistedJobs(): Promise<void> {
     }
 
     if (restored > 0) {
-      console.log(`[MONITORING] Restored ${restored} monitoring jobs from Supabase`);
+      logger.info(`[MONITORING] Restored ${restored} monitoring jobs from Supabase`);
     }
   } catch (err) {
-    console.warn('[MONITORING] Could not restore persisted jobs:', err);
+    logger.warn('[MONITORING] Could not restore persisted jobs:', err);
   }
 }
 
@@ -548,17 +549,17 @@ async function restorePersistedJobs(): Promise<void> {
  */
 export function startMonitoringService(): void {
   if (monitoringInterval) return;
-  console.log(`[MONITORING] Starting heartbeat service (interval: ${HEARTBEAT_INTERVAL_MS / 60000}min)`);
+  logger.info(`[MONITORING] Starting heartbeat service (interval: ${HEARTBEAT_INTERVAL_MS / 60000}min)`);
 
   // Restore jobs from previous run
-  restorePersistedJobs().catch(console.error);
+  restorePersistedJobs().catch((err: unknown) => logger.error("monitoring error", err));
 
   // Run immediately on startup
-  runHeartbeat().catch(console.error);
+  runHeartbeat().catch((err: unknown) => logger.error("monitoring error", err));
 
   // Then every HEARTBEAT_INTERVAL_MS
   monitoringInterval = setInterval(() => {
-    runHeartbeat().catch(console.error);
+    runHeartbeat().catch((err: unknown) => logger.error("monitoring error", err));
   }, HEARTBEAT_INTERVAL_MS);
 
   monitoringInterval.unref(); // Don't prevent clean process exit
@@ -568,6 +569,6 @@ export function stopMonitoringService(): void {
   if (monitoringInterval) {
     clearInterval(monitoringInterval);
     monitoringInterval = null;
-    console.log('[MONITORING] Heartbeat service stopped');
+    logger.info('[MONITORING] Heartbeat service stopped');
   }
 }

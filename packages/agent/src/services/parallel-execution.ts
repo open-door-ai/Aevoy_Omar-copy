@@ -17,6 +17,7 @@
 
 import { getSupabaseClient } from "../utils/supabase.js";
 import type { DeepingLevel } from "./iterative-deepening.js";
+import { logger } from '../utils/logger.js';
 
 export interface ParallelStrategy {
   id: string;
@@ -60,8 +61,8 @@ export async function executeInParallel(
 ): Promise<ParallelExecutionResult> {
   const { taskType, domain, maxConcurrent = 4, raceMode = true } = options;
 
-  console.log(`[PARALLEL] Starting ${strategies.length} strategies in parallel for ${domain}`);
-  console.log(
+  logger.info(`[PARALLEL] Starting ${strategies.length} strategies in parallel for ${domain}`);
+  logger.info(
     `[PARALLEL] Strategies: ${strategies.map((s) => s.name).join(", ")}`
   );
 
@@ -81,13 +82,13 @@ export async function executeInParallel(
     strategy: ParallelStrategy
   ): Promise<ParallelResult> => {
     const strategyStart = Date.now();
-    console.log(`[PARALLEL] Launching strategy: ${strategy.name}`);
+    logger.info(`[PARALLEL] Launching strategy: ${strategy.name}`);
 
     try {
       const result = await strategy.executor();
       const duration = Date.now() - strategyStart;
 
-      console.log(
+      logger.info(
         `[PARALLEL] Strategy ${strategy.name} ${result.success ? "SUCCEEDED" : "FAILED"} in ${duration}ms`
       );
 
@@ -98,7 +99,7 @@ export async function executeInParallel(
       };
     } catch (error) {
       const duration = Date.now() - strategyStart;
-      console.error(`[PARALLEL] Strategy ${strategy.name} threw error:`, error);
+      logger.error(`[PARALLEL] Strategy ${strategy.name} threw error:`, error);
 
       return {
         success: false,
@@ -120,7 +121,7 @@ export async function executeInParallel(
       firstSuccess = true;
       winningStrategy = strategy.id;
 
-      console.log(`[PARALLEL] ✓ Winner: ${strategy.name} — cancelling others`);
+      logger.info(`[PARALLEL] ✓ Winner: ${strategy.name} — cancelling others`);
 
       // Cancel all other strategies
       for (const [id, controller] of abortControllers.entries()) {
@@ -155,10 +156,10 @@ export async function executeInParallel(
     await recordParallelWinner(taskType, domain, winningStrategy);
   }
 
-  console.log(`[PARALLEL] Execution complete in ${totalDuration}ms`);
-  console.log(`[PARALLEL] Winner: ${winningStrategy || "none"}`);
-  console.log(`[PARALLEL] Cancelled: ${cancelledCount}`);
-  console.log(`[PARALLEL] Total cost: $${totalCost.toFixed(4)}`);
+  logger.info(`[PARALLEL] Execution complete in ${totalDuration}ms`);
+  logger.info(`[PARALLEL] Winner: ${winningStrategy || "none"}`);
+  logger.info(`[PARALLEL] Cancelled: ${cancelledCount}`);
+  logger.info(`[PARALLEL] Total cost: $${totalCost.toFixed(4)}`);
 
   return {
     success: firstSuccess,
@@ -192,7 +193,7 @@ export async function getOptimizedStrategyOrder(
       .limit(20);
 
     if (error || !data || data.length === 0) {
-      console.log(`[PARALLEL] No history for ${domain}, using default order`);
+      logger.info(`[PARALLEL] No history for ${domain}, using default order`);
       return strategies;
     }
 
@@ -220,13 +221,13 @@ export async function getOptimizedStrategyOrder(
     scoredStrategies.sort((a, b) => b.score - a.score);
 
     const ordered = scoredStrategies.map((s) => s.strategy);
-    console.log(
+    logger.info(
       `[PARALLEL] Optimized order: ${ordered.map((s) => s.name).join(" → ")}`
     );
 
     return ordered;
   } catch (error) {
-    console.error("[PARALLEL] Error optimizing order:", error);
+    logger.error("[PARALLEL] Error optimizing order:", error);
     return strategies;
   }
 }
@@ -254,9 +255,9 @@ async function recordParallelWinner(
       { onConflict: "domain,action_type" }
     );
 
-    console.log(`[PARALLEL] Recorded winner: ${strategyId} for ${domain}`);
+    logger.info(`[PARALLEL] Recorded winner: ${strategyId} for ${domain}`);
   } catch (error) {
-    console.error("[PARALLEL] Error recording winner:", error);
+    logger.error("[PARALLEL] Error recording winner:", error);
   }
 }
 
@@ -334,12 +335,12 @@ export function shouldUseParallelExecution(
   // 3. Task type is complex (login, multi-step, form)
 
   if (historicalSuccessRate === 0) {
-    console.log(`[PARALLEL] Unknown domain — using parallel execution`);
+    logger.info(`[PARALLEL] Unknown domain — using parallel execution`);
     return true;
   }
 
   if (historicalSuccessRate < 80) {
-    console.log(
+    logger.info(
       `[PARALLEL] Low success rate (${historicalSuccessRate}%) — using parallel execution`
     );
     return true;
@@ -347,10 +348,10 @@ export function shouldUseParallelExecution(
 
   const complexTasks = ["login", "signup", "checkout", "form_fill", "multi_step"];
   if (complexTasks.some((ct) => taskType.includes(ct))) {
-    console.log(`[PARALLEL] Complex task type — using parallel execution`);
+    logger.info(`[PARALLEL] Complex task type — using parallel execution`);
     return true;
   }
 
-  console.log(`[PARALLEL] High success rate — skipping parallel execution`);
+  logger.info(`[PARALLEL] High success rate — skipping parallel execution`);
   return false;
 }

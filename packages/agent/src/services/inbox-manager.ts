@@ -13,6 +13,7 @@ import { isNylasConnected, getUnreadMessages as getNylasUnread, sendEmail as sen
 import { sendResponse } from "./email.js";
 import { processVoiceCall } from "./twilio.js";
 import { schedulerHeartbeat } from "../utils/scheduler-heartbeat.js";
+import { logger } from '../utils/logger.js';
 
 // Configuration
 // Global tick every 15 minutes; per-user interval respected via lastChecked map
@@ -52,21 +53,21 @@ const userConfigCache = new Map<string, UserInboxConfig>();
  */
 export function startInboxManager(): void {
   if (managerInterval) {
-    console.log("[INBOX-MANAGER] Already running");
+    logger.info("[INBOX-MANAGER] Already running");
     return;
   }
 
-  console.log("[INBOX-MANAGER] Starting - global tick every 15 min, per-user intervals respected");
+  logger.info("[INBOX-MANAGER] Starting - global tick every 15 min, per-user intervals respected");
 
   // Run immediately, then on interval
   processAllInboxes().catch((err) =>
-    console.error("[INBOX-MANAGER] Initial run error:", err)
+    logger.error("[INBOX-MANAGER] Initial run error:", err)
   );
 
   managerInterval = setInterval(() => {
     processAllInboxes()
       .then(() => schedulerHeartbeat.record('inbox_manager'))
-      .catch((err) => console.error("[INBOX-MANAGER] Poll error:", err));
+      .catch((err) => logger.error("[INBOX-MANAGER] Poll error:", err));
   }, POLL_INTERVAL_MS);
 }
 
@@ -78,14 +79,14 @@ export function stopInboxManager(): void {
     clearInterval(managerInterval);
     managerInterval = null;
   }
-  console.log("[INBOX-MANAGER] Stopped");
+  logger.info("[INBOX-MANAGER] Stopped");
 }
 
 /**
  * Process all enabled user inboxes
  */
 async function processAllInboxes(): Promise<void> {
-  console.log("[INBOX-MANAGER] Starting inbox check cycle");
+  logger.info("[INBOX-MANAGER] Starting inbox check cycle");
 
   try {
     // Get all users with inbox management enabled
@@ -95,11 +96,11 @@ async function processAllInboxes(): Promise<void> {
       .eq("enabled", true);
 
     if (!enabledUsers || enabledUsers.length === 0) {
-      console.log("[INBOX-MANAGER] No users with inbox management enabled");
+      logger.info("[INBOX-MANAGER] No users with inbox management enabled");
       return;
     }
 
-    console.log(`[INBOX-MANAGER] Processing ${enabledUsers.length} users`);
+    logger.info(`[INBOX-MANAGER] Processing ${enabledUsers.length} users`);
     const now = new Date();
 
     for (const user of enabledUsers) {
@@ -110,7 +111,7 @@ async function processAllInboxes(): Promise<void> {
         if (lastCheck) {
           const minutesSinceLastCheck = (now.getTime() - lastCheck.getTime()) / 60000;
           if (minutesSinceLastCheck < intervalMinutes) {
-            console.log(`[INBOX-MANAGER] Skipping user ${user.user_id} — checked ${Math.round(minutesSinceLastCheck)}m ago (interval: ${intervalMinutes}m)`);
+            logger.info(`[INBOX-MANAGER] Skipping user ${user.user_id} — checked ${Math.round(minutesSinceLastCheck)}m ago (interval: ${intervalMinutes}m)`);
             continue;
           }
         }
@@ -136,14 +137,14 @@ async function processAllInboxes(): Promise<void> {
           lastChecked: now,
         });
       } catch (err) {
-        console.error(`[INBOX-MANAGER] Error processing user ${user.user_id}:`, err);
+        logger.error(`[INBOX-MANAGER] Error processing user ${user.user_id}:`, err);
         // Continue with next user
       }
     }
 
-    console.log("[INBOX-MANAGER] Completed inbox check cycle");
+    logger.info("[INBOX-MANAGER] Completed inbox check cycle");
   } catch (err) {
-    console.error("[INBOX-MANAGER] Fatal error in processAllInboxes:", err);
+    logger.error("[INBOX-MANAGER] Fatal error in processAllInboxes:", err);
   }
 }
 
@@ -169,7 +170,7 @@ async function processUserInbox(userId: string, config: Omit<UserInboxConfig, "u
   // Check daily email limit
   const emailsProcessedToday = await getEmailsProcessedToday(userId);
   if (emailsProcessedToday >= config.settings.maxEmailsPerDay) {
-    console.log(`[INBOX-MANAGER] User ${userId} hit daily email limit`);
+    logger.info(`[INBOX-MANAGER] User ${userId} hit daily email limit`);
     return;
   }
 
@@ -192,13 +193,13 @@ async function processUserInbox(userId: string, config: Omit<UserInboxConfig, "u
   } else if (config.emailProvider === "imap") {
     messages = await getUnreadMessages(userId, 20) as typeof messages;
   } else {
-    console.log(`[INBOX-MANAGER] User ${userId} has no email provider connected`);
+    logger.info(`[INBOX-MANAGER] User ${userId} has no email provider connected`);
     return;
   }
 
   if (messages.length === 0) return;
 
-  console.log(`[INBOX-MANAGER] User ${userId}: ${messages.length} unread emails`);
+  logger.info(`[INBOX-MANAGER] User ${userId}: ${messages.length} unread emails`);
 
   // Process each email
   for (const message of messages) {
@@ -209,7 +210,7 @@ async function processUserInbox(userId: string, config: Omit<UserInboxConfig, "u
 
       await processEmail(userId, {...message, body: message.body || ""}, config);
     } catch (err) {
-      console.error(`[INBOX-MANAGER] Error processing email ${message.id}:`, err);
+      logger.error(`[INBOX-MANAGER] Error processing email ${message.id}:`, err);
     }
   }
 }
@@ -228,15 +229,15 @@ async function processEmail(
   },
   config: Omit<UserInboxConfig, "userId">
 ): Promise<void> {
-  console.log(`[INBOX-MANAGER] Processing email from ${message.from}: ${message.subject}`);
+  logger.info(`[INBOX-MANAGER] Processing email from ${message.from}: ${message.subject}`);
 
   // Step 1: Cheap classification (Gemini Flash or Groq)
   const classification = await classifyEmailCheap(message);
-  console.log(`[INBOX-MANAGER] Classified as: ${classification.type} (confidence: ${classification.confidence})`);
+  logger.info(`[INBOX-MANAGER] Classified as: ${classification.type} (confidence: ${classification.confidence})`);
 
   // Step 2: Decide action based on classification and autonomy level
   const action = determineAction(classification, config);
-  console.log(`[INBOX-MANAGER] Suggested action: ${action.type}`);
+  logger.info(`[INBOX-MANAGER] Suggested action: ${action.type}`);
 
   // Step 3: Execute or queue
   if (action.type === "delete" && config.settings.deleteSpam && config.autonomyLevel >= 25) {
@@ -369,7 +370,7 @@ Respond with JSON only:
       }
     }
   } catch (err) {
-    console.error("[INBOX-MANAGER] Classification error:", err);
+    logger.error("[INBOX-MANAGER] Classification error:", err);
   }
 
   // Fallback: assume complex
@@ -463,7 +464,7 @@ Respond naturally and concisely.`;
         return data.choices?.[0]?.message?.content || "I'll get back to you soon.";
       }
     } catch (err) {
-      console.error("[INBOX-MANAGER] Response generation error:", err);
+      logger.error("[INBOX-MANAGER] Response generation error:", err);
     }
   }
 
@@ -478,12 +479,12 @@ async function executeDelete(
   messageId: string,
   _provider: string | null
 ): Promise<void> {
-  console.log(`[INBOX-MANAGER] Deleting email ${messageId} for user ${userId}`);
+  logger.info(`[INBOX-MANAGER] Deleting email ${messageId} for user ${userId}`);
   const success = await deleteMessage(userId, messageId);
   if (success) {
-    console.log(`[INBOX-MANAGER] Deleted email ${messageId} successfully`);
+    logger.info(`[INBOX-MANAGER] Deleted email ${messageId} successfully`);
   } else {
-    console.error(`[INBOX-MANAGER] Failed to delete email ${messageId} — will retry next cycle`);
+    logger.error(`[INBOX-MANAGER] Failed to delete email ${messageId} — will retry next cycle`);
   }
 }
 
@@ -504,7 +505,7 @@ async function executeSend(
     await sendViaUserEmail(userId, to, `Re: ${message.subject}`, response);
   }
   
-  console.log(`[INBOX-MANAGER] Sent response to ${to}`);
+  logger.info(`[INBOX-MANAGER] Sent response to ${to}`);
 }
 
 /**
@@ -534,7 +535,7 @@ async function queueForApproval(
     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hour expiry
   }, { onConflict: "user_id, external_email_id" });
 
-  console.log(`[INBOX-MANAGER] Queued email for approval: ${message.subject}`);
+  logger.info(`[INBOX-MANAGER] Queued email for approval: ${message.subject}`);
 }
 
 /**
@@ -545,7 +546,7 @@ async function handleMeetingRequest(
   message: { id: string; from: string; subject: string; body: string },
   config: Omit<UserInboxConfig, "userId">
 ): Promise<void> {
-  console.log(`[INBOX-MANAGER] Meeting request detected: ${message.subject}`);
+  logger.info(`[INBOX-MANAGER] Meeting request detected: ${message.subject}`);
 
   // Use cheap AI to extract meeting details
   let meetingDetails = "";
@@ -605,7 +606,7 @@ async function initiateVoiceCall(
   message: { id: string; from: string; subject: string; body: string },
   config: Omit<UserInboxConfig, "userId">
 ): Promise<void> {
-  console.log(`[INBOX-MANAGER] Initiating voice call for user ${userId}`);
+  logger.info(`[INBOX-MANAGER] Initiating voice call for user ${userId}`);
   
   // Get queue ID for this email
   const { data: queueItem } = await getSupabaseClient()
