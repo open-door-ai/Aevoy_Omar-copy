@@ -1174,17 +1174,18 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
     message: "Task received — processing now. You'll get the response via your channel.",
   });
 
+  // Aurora Intelligence: ALWAYS extract context (even for microphone — especially for microphone)
+  const messageContent = (taskReq.body || taskReq.subject || '').trim();
+  if (messageContent) {
+    extractContext(messageContent, userId, inputChannel || 'web').catch(err =>
+      logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
+    );
+  }
+
   // Process in background — errors are handled inside processTaskV3 (user notification + DB update)
   processTaskV3(taskReq)
     .then((result) => {
       logger.info(`[TASK-V2] Background task completed: success=${result.success}, taskId=${result.taskId}`);
-      // Aurora Intelligence: extract context in background (non-blocking)
-      const messageContent = (taskReq.body || taskReq.subject || '').trim();
-      if (messageContent) {
-        extractContext(messageContent, userId, inputChannel || 'web').catch(err =>
-          logger.error({ err: err instanceof Error ? err.message : String(err) }, 'Context extraction failed')
-        );
-      }
     })
     .catch((error) => {
       logger.error("[TASK-V2] Background processing failed:", error);
