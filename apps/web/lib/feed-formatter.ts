@@ -33,6 +33,12 @@ const RAW_DATA_PATTERNS = [
   /\*\*Also did for you:\*\*/, // Markdown artifacts
   /Saved to memory:/i, // Internal memory operations
   /\[CRED_/i, // Credential placeholders
+  /TOP RESULT LINKS:/i, // Search result formatting leak
+  /Data found during search:/i, // Internal search label
+  /Action \d+ \(/i, // Internal action label (e.g. "Action 1 (search):")
+  /PRICES FOUND IN RESULTS:/i, // Price extraction internal
+  /Search\/action data:/i, // Internal search data label
+  /Browsed:.*\./i, // Browser debug output
 ];
 
 // JSON-like multiline pattern
