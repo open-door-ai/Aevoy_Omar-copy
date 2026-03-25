@@ -375,21 +375,10 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
 
   // ── Ultra-fast pattern detection (no AI call needed) ──
 
-  // Greetings
-  if (/^(hi|hello|hey|sup|yo|howdy|good\s*(morning|afternoon|evening|night)|what'?s\s*up|hola)[\s!?.]*$/i.test(lower)) {
-    return { tier: 'instant', reasoning: 'greeting' };
-  }
-
-  // Commitments / acknowledgment-type messages — user is telling Aurora something to remember,
-  // NOT asking for a web search. The context engine extracts commitments in the background.
-  if (/\b(i promised|i need to|i have to|i've got to|i gotta|don'?t let me forget|i told .+ i would|i committed to|i agreed to)\b/i.test(lower) && lower.length < 200) {
-    return { tier: 'instant', reasoning: 'commitment acknowledgment' };
-  }
-
-  // Self-knowledge / memory recall / commitments — needs the recall tool
-  if (/\b(what do you know|what have you learned|tell me about (me|myself)|do you remember|my (preference|routine|habit|schedule))\b/i.test(lower) ||
-      /\b(commitments?|promises?|pending tasks?|what.*(tracking|remember)|list.*(commitment|task|reminder))/i.test(lower)) {
-    return { tier: 'single_tool', tool: 'recall', reasoning: 'self-knowledge/commitments query — needs recall tool' };
+  // Only SHORT messages (under 15 chars) with no substance get instant tier
+  // Everything else goes to the AI classifier — no pre-programming
+  if (lower.length < 15 && /^(hi|hello|hey|yo|sup|ok|thanks|bye|gn|k|yes|no|yep|nope)[\s!?.]*$/i.test(lower)) {
+    return { tier: 'instant', reasoning: 'trivial greeting/ack' };
   }
 
   // Weather
