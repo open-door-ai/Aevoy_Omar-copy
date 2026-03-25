@@ -17,7 +17,7 @@ import { getSupabaseClient } from '../utils/supabase.js';
 
 const STEEL_API_KEY = process.env.STEEL_API_KEY;
 const STEEL_API_URL = 'https://api.steel.dev/v1';
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per session
+const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per session — complex flows need more time
 const MAX_CONCURRENT = 3;
 
 // ── Anti-Detection: Realistic User Agents ──
