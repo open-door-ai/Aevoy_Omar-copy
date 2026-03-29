@@ -522,62 +522,38 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Use Steel.dev cloud browser (own IPs, avoids datacenter CAPTCHA blocks)
-      // Falls back to local Chrome if Steel isn't configured
-      const steelKey = process.env.STEEL_API_KEY;
-      let stagehand: any;
-      let chromeProc: any = null;
-      let steelSessionId: string | null = null;
+      // Local Chrome via raw CDP (proven working with Stagehand CUA on Railway)
+      const { spawn } = await import('child_process');
+      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
+      const debugPort = 9222 + Math.floor(Math.random() * 1000);
+      const chromeProc = spawn(chromePath, [
+        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', '--disable-gpu',
+        `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
+        'about:blank',
+      ], { stdio: 'pipe' });
+      await new Promise(r => setTimeout(r, 2000));
 
-      if (steelKey) {
-        // Create Steel session
-        const steelRes = await fetch('https://api.steel.dev/v1/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'steel-api-key': steelKey },
-          body: JSON.stringify({ timeout: 300000 }),
-        });
-        if (!steelRes.ok) throw new Error(`Steel session failed: ${steelRes.status}`);
-        const steelSession = await steelRes.json() as any;
-        steelSessionId = steelSession.id;
-        const cdpWsUrl = `wss://connect.steel.dev?apiKey=${steelKey}&sessionId=${steelSessionId}`;
-
-        stagehand = new Stagehand({
-          env: 'LOCAL' as const,
-          localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
-          model: 'google/gemini-2.5-flash' as any,
-          verbose: 1,
-        });
-      } else {
-        // Local Chrome fallback
-        const { spawn } = await import('child_process');
-        const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-        const debugPort = 9222 + Math.floor(Math.random() * 1000);
-        chromeProc = spawn(chromePath, [
-          '--headless', '--no-sandbox', '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', '--disable-gpu',
-          `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
-          'about:blank',
-        ], { stdio: 'pipe' });
-        await new Promise(r => setTimeout(r, 2000));
-        let cdpWsUrl: string;
-        try {
-          const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
-          const data = await resp.json() as any;
-          cdpWsUrl = data.webSocketDebuggerUrl;
-        } catch (e: any) {
-          chromeProc.kill();
-          throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
-        }
-        stagehand = new Stagehand({
-          env: 'LOCAL' as const,
-          localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
-          model: 'google/gemini-2.5-flash' as any,
-          verbose: 1,
-        });
+      let cdpWsUrl: string;
+      try {
+        const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+        const data = await resp.json() as any;
+        cdpWsUrl = data.webSocketDebuggerUrl;
+      } catch (e: any) {
+        chromeProc.kill();
+        throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
       }
 
+      const stagehand = new Stagehand({
+        env: 'LOCAL' as const,
+        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
+        model: 'google/gemini-2.5-flash' as any,
+        verbose: 1,
+      });
       await stagehand.init();
       const page = stagehand.context.pages()[0];
+      const steelSessionId: string | null = null;
+      const steelKey = process.env.STEEL_API_KEY;
 
       // ── FIX 5: Load saved cookies for the target domain ──
       if (startUrl) {
