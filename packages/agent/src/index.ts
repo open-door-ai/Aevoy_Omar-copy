@@ -1083,20 +1083,29 @@ app.get("/debug/stagehand-cua", async (req, res) => {
     } catch (e: any) {
       steps.push(`   Playwright chromium.launch() FAILED: ${e.message?.substring(0, 100)}`);
     }
-    steps.push("3. Creating Stagehand instance...");
+    // Launch Chrome via Playwright (proven to work on Railway), get CDP URL
+    steps.push("3. Launching Chrome via Playwright for CDP...");
+    const { chromium: pw } = await import("playwright");
+    const pwServer = await pw.launchServer({
+      headless: true,
+      executablePath: chromePath,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+    });
+    const wsEndpoint = pwServer.wsEndpoint();
+    steps.push(`   Playwright server WS endpoint: ${wsEndpoint}`);
+    // Connect Stagehand to the Playwright-launched Chrome via CDP URL
+    steps.push("4. Creating Stagehand with cdpUrl...");
     const stagehand = new Stagehand({
       env: "LOCAL" as any,
       localBrowserLaunchOptions: {
-        headless: true,
-        executablePath: chromePath,
-        chromiumSandbox: false,
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--remote-debugging-port=0"],
+        cdpUrl: wsEndpoint,
       },
       model: "google/gemini-2.5-flash" as any,
       verbose: 2,
     });
-    steps.push("3. Calling stagehand.init()...");
+    steps.push("5. Calling stagehand.init()...");
     await stagehand.init();
+    steps.push("5a. Stagehand init OK!");
     steps.push("4. Init OK. Getting page...");
     const page = stagehand.context.pages()[0];
     await page.goto("https://example.com");
