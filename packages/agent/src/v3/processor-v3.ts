@@ -964,20 +964,11 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
 
-      // ── FIX 7: browser_agent result-is-completion ──
-      // When browser_agent returns ANY result, deliver it to the user. Don't auto-retry.
-      if (tc.name === 'browser_agent' && result.success) {
-        const resultText = String(result.data || '');
-        logger.info(`[V3] browser_agent completed — delivering result to user`);
-        messages.push({ role: 'tool', content: resultText, tool_call_id: tc.name });
-        messages.push({
-          role: 'user',
-          content: 'The browser agent completed its work. Respond to the user with what was found. If the task was partially completed (e.g. time unavailable), tell the user what IS available and ask what they want to do next. Do NOT call browser_agent again unless the user asks.',
-        });
-        // Count as meaningful since browser_agent did real work
-        meaningfulActions++;
-        staleStreak = 0;
-        continue;
+      // browser_agent result = DONE. Return to user. No retry. No outer loop.
+      if (tc.name === 'browser_agent') {
+        const resultText = String(result.data || result.error || 'Browser agent completed with no output.');
+        logger.info(`[V3] browser_agent done (success=${result.success}) — returning to user`);
+        return resultText;
       }
 
       // ── FIX 3: Track meaningful vs stale actions ──

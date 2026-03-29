@@ -502,168 +502,87 @@ registerTool({
   },
 });
 
-// ── browser_agent — Stagehand v3 autonomous agent for complex multi-step tasks ──
+// ── browser_agent — Stagehand v3 autonomous agent ──
+// Simple. The agent handles everything. No custom abstractions.
 
 registerTool({
   name: 'browser_agent',
-  description: 'Use this for complex multi-step browser tasks: bookings, signups, form filling, purchases. Provide a natural language instruction and the agent handles navigation, clicking, filling, and verification autonomously. Much better than manual browser_go/click/fill for complex workflows.',
+  description: 'Autonomous browser agent. Give it a natural language instruction and it navigates, clicks, fills forms, and completes tasks on any website. Handles React SPAs, date pickers, dropdowns, and complex workflows.',
   category: 'browser',
   parameters: {
-    instruction: { type: 'string', description: 'Natural language instruction for what to accomplish (e.g. "Book a table for 2 at 7pm on Saturday")' },
-    start_url: { type: 'string', description: 'Starting URL to navigate to before executing the instruction' },
-    max_steps: { type: 'number', description: 'Maximum steps (default 25)' },
+    instruction: { type: 'string', description: 'What to do (e.g. "Book a table for 2 at 7pm on Saturday at Earls Ambleside")' },
+    start_url: { type: 'string', description: 'URL to start at (optional — agent can navigate on its own)' },
   },
   required: ['instruction'],
   async execute(params, ctx): Promise<ToolCallResult> {
     const instruction = String(params.instruction);
     const startUrl = params.start_url ? String(params.start_url) : undefined;
-    const maxSteps = Number(params.max_steps) || 25;
 
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
-
-      // Local Chrome via raw CDP (proven working with Stagehand CUA on Railway)
       const { spawn } = await import('child_process');
+
+      // Launch Chrome with raw CDP (proven on Railway)
       const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-      const debugPort = 9222 + Math.floor(Math.random() * 1000);
-      const chromeProc = spawn(chromePath, [
+      const port = 9222 + Math.floor(Math.random() * 1000);
+      const proxyUrl = process.env.PROXY_URL;
+      const chrome = spawn(chromePath, [
         '--headless', '--no-sandbox', '--disable-setuid-sandbox',
         '--disable-dev-shm-usage', '--disable-gpu',
-        `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
+        `--remote-debugging-port=${port}`, '--remote-debugging-address=0.0.0.0',
+        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
         'about:blank',
       ], { stdio: 'pipe' });
       await new Promise(r => setTimeout(r, 2000));
 
-      let cdpWsUrl: string;
-      try {
-        const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
-        const data = await resp.json() as any;
-        cdpWsUrl = data.webSocketDebuggerUrl;
-      } catch (e: any) {
-        chromeProc.kill();
-        throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
-      }
+      const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
+      const { webSocketDebuggerUrl } = await versionResp.json() as any;
 
+      // Init Stagehand — connect to our Chrome
       const stagehand = new Stagehand({
         env: 'LOCAL' as const,
-        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
+        localBrowserLaunchOptions: { cdpUrl: webSocketDebuggerUrl },
         model: 'google/gemini-2.5-flash' as any,
-        verbose: 1,
+        verbose: 0,
       });
       await stagehand.init();
-      const page = stagehand.context.pages()[0];
-      const steelSessionId: string | null = null;
-      const steelKey = process.env.STEEL_API_KEY;
 
-      // ── FIX 5: Load saved cookies for the target domain ──
+      // Navigate to start URL if provided
       if (startUrl) {
-        try {
-          const domain = new URL(startUrl).hostname;
-          const { data: savedCookies } = await (await import('../../utils/supabase.js')).getSupabaseClient()
-            .from('browser_contexts')
-            .select('context_data')
-            .eq('user_id', ctx.userId)
-            .eq('domain', domain)
-            .single();
-          if (savedCookies?.context_data?.cookies) {
-            await stagehand.context.addCookies(savedCookies.context_data.cookies);
-          }
-        } catch { /* no saved cookies, that's fine */ }
+        const page = stagehand.context.pages()[0];
+        await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
       }
 
-      if (startUrl) {
-        await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(async () => {
-          await page.goto(startUrl!, { waitUntil: 'domcontentloaded' as any, timeoutMs: 15000 });
-        });
-      }
+      // Run agent in HYBRID mode — DOM tools + coordinate tools
+      // Hybrid handles React dropdowns (via DOM act()) AND visual elements (via coordinates)
+      const agent = stagehand.agent({
+        mode: 'hybrid',
+        model: 'google/gemini-2.5-flash' as any,
+      });
 
-      // ── CUA model fallback — Gemini first (Anthropic has no credits) ──
-      const cuaModels: Array<{modelName: string; apiKey: string | undefined}> = [];
-      if (process.env.GOOGLE_API_KEY) {
-        cuaModels.push({ modelName: 'google/gemini-2.5-computer-use-preview-10-2025', apiKey: process.env.GOOGLE_API_KEY });
-      }
-      // Anthropic as fallback only if credits are restored
-      if (process.env.ANTHROPIC_API_KEY) {
-        cuaModels.push({ modelName: 'anthropic/claude-sonnet-4-6', apiKey: process.env.ANTHROPIC_API_KEY });
-      }
+      const result = await agent.execute({
+        instruction,
+        maxSteps: 30,
+      });
 
-      let result: any;
-      let lastCuaError = '';
-      for (const cuaModel of cuaModels) {
-        try {
-          const agent = stagehand.agent({
-            mode: 'cua',
-            model: { modelName: cuaModel.modelName as any, apiKey: cuaModel.apiKey },
-          });
-          result = await agent.execute({ instruction, maxSteps });
-          break;
-        } catch (cuaErr: any) {
-          lastCuaError = cuaErr.message || String(cuaErr);
-          const { logger: log } = await import('../../utils/logger.js');
-          log.warn(`[BROWSER_AGENT] CUA ${cuaModel.modelName} failed: ${lastCuaError.substring(0, 100)}, trying next...`);
-          continue; // Always try next model, regardless of error type
-        }
-      }
-      if (!result) {
-        throw new Error(`All CUA models failed. Last: ${lastCuaError}`);
-      }
-
+      // Extract result
       const actions = (result as any).actions || [];
-      const finalMessage = (result as any).message || (result as any).finalMessage || '';
-      const pageUrl = page.url();
-      const pageTitle = await page.title().catch(() => '');
-
-      const pageText = await page.evaluate(() => {
-        const body = document.body;
-        if (!body) return '';
-        const clone = body.cloneNode(true) as HTMLElement;
-        clone.querySelectorAll('script,style,noscript,svg').forEach(el => el.remove());
-        return clone.innerText?.substring(0, 2000) || '';
-      }).catch(() => '');
-
-      // ── FIX 5: Save cookies after successful session ──
-      try {
-        const cookies = await stagehand.context.cookies();
-        if (cookies.length > 0 && pageUrl) {
-          const domain = new URL(pageUrl).hostname;
-          await (await import('../../utils/supabase.js')).getSupabaseClient()
-            .from('browser_contexts')
-            .upsert({
-              user_id: ctx.userId,
-              domain,
-              context_data: { cookies, savedAt: new Date().toISOString() },
-            }, { onConflict: 'user_id,domain' });
-        }
-      } catch { /* non-critical */ }
+      const message = (result as any).message || (result as any).finalMessage || '';
+      const page = stagehand.context.pages()[0];
+      const url = page?.url() || '';
+      const title = await page?.title() || '';
 
       await stagehand.close().catch(() => {});
-      if (chromeProc) chromeProc.kill();
-      // Release Steel session
-      if (steelSessionId && steelKey) {
-        fetch(`https://api.steel.dev/v1/sessions/${steelSessionId}`, {
-          method: 'DELETE', headers: { 'steel-api-key': steelKey },
-        }).catch(() => {});
-      }
-
-      const actionSummary = actions.length > 0
-        ? `\n\nActions taken (${actions.length} steps):\n${actions.map((a: any, i: number) => `${i + 1}. ${a.reasoning || a.type || 'action'}`).join('\n')}`
-        : '';
-      const costEstimate = actions.length * 0.005;
+      chrome.kill();
 
       return {
         success: true,
-        data: `${finalMessage}\n\nFinal page: ${pageTitle} (${pageUrl})\n\nPage content:\n${pageText.substring(0, 1000)}${actionSummary}`,
-        cost: costEstimate,
+        data: `${message}\n\nPage: ${title} (${url})\n\nSteps: ${actions.length}`,
+        cost: actions.length * 0.005,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const { logger: log } = await import('../../utils/logger.js');
-      log.error({ err: msg }, '[BROWSER_AGENT] Failed');
-      return {
-        success: false,
-        error: `Browser agent error: ${msg.substring(0, 200)}`,
-        cost: 0,
-      };
+      return { success: false, error: `Browser agent: ${msg.substring(0, 200)}`, cost: 0 };
     }
   },
 });
