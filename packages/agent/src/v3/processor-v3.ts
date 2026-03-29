@@ -684,15 +684,11 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     }
 
     // ── Goal progress checks + iteration caps ──
-    // At iteration 20: ask AI to self-assess progress
-    if (iterations === 20) {
+    // At iteration 15: force escalation check — if browser isn't working, use other tools
+    if (iterations === 15) {
       messages.push({
         role: 'user',
-        content: `PROGRESS CHECK (iteration 20): Are you making REAL progress toward the goal? Specifically:
-- If this is a signup: have you filled the form and clicked submit?
-- If this is a search: have you found at least 1 concrete result?
-- If this is a booking: have you selected a date/time and started the booking?
-If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver what you have.`
+        content: `PROGRESS CHECK (step 15): Have you completed the task yet? If the browser is blocked, stuck, or the website isn't cooperating — STOP browsing and escalate NOW. You have make_call and send_email tools. Use them. Call the business. Email them. Don't keep retrying a broken browser approach.`
       });
     }
     // At iteration 50: second progress check — are you still making progress?
@@ -748,8 +744,11 @@ If NOT, you're stuck. IMMEDIATELY try a completely different approach or deliver
       // ── Dynamic tool filtering for LLM call ──
       // Use the loaded tool names as the filter. If browser activity is detected,
       // narrow further to just browser tools + web_search + ask_user for ~75% token savings.
+      // BUT: after 15 steps without progress, unlock ALL tools so the AI can escalate
+      // to make_call, send_email, etc. — don't trap it in browser-only mode.
       const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot|browser_screenshot/i.test(m.content));
-      const toolsForCall = hasBrowserActivity ? 'browser' as const : loadedToolNames;
+      const stuckInBrowser = hasBrowserActivity && (iterations - lastMeaningfulProgress) > 15;
+      const toolsForCall = (hasBrowserActivity && !stuckInBrowser) ? 'browser' as const : loadedToolNames;
 
       // ── Smart step complexity detection ──
       // After a snapshot or read (simple data), the AI just needs to decide what to click/fill.
