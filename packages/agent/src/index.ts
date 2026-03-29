@@ -1047,6 +1047,57 @@ app.get("/debug/voice-twiml", (req, res) => {
   });
 });
 
+// ---- Stagehand CUA diagnostic endpoint ----
+app.get("/debug/stagehand-cua", async (req, res) => {
+  const secret = req.query.secret;
+  if (!verifyWebhookSecret(secret as string)) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const steps: string[] = [];
+  try {
+    steps.push("1. Importing Stagehand...");
+    const { Stagehand } = await import("@browserbasehq/stagehand");
+    steps.push("2. Creating instance...");
+    const chromePath = process.env.CHROME_PATH || "/usr/bin/google-chrome-stable";
+    steps.push(`   CHROME_PATH: ${chromePath}`);
+    steps.push(`   DISPLAY: ${process.env.DISPLAY}`);
+    const stagehand = new Stagehand({
+      env: "LOCAL" as any,
+      localBrowserLaunchOptions: {
+        headless: false,
+        executablePath: chromePath,
+        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+      },
+      model: "google/gemini-2.5-flash" as any,
+      verbose: 2,
+    });
+    steps.push("3. Calling stagehand.init()...");
+    await stagehand.init();
+    steps.push("4. Init OK. Getting page...");
+    const page = stagehand.context.pages()[0];
+    await page.goto("https://example.com");
+    steps.push("5. Navigated to example.com");
+    steps.push("6. Creating CUA agent...");
+    const agent = stagehand.agent({
+      mode: "cua",
+      model: {
+        modelName: "google/gemini-2.5-computer-use-preview-10-2025" as any,
+        apiKey: process.env.GOOGLE_API_KEY,
+      },
+    });
+    steps.push("7. Agent created. Executing...");
+    const result = await agent.execute({ instruction: "What text is on this page?", maxSteps: 3 });
+    steps.push(`8. Result: ${JSON.stringify(result).substring(0, 300)}`);
+    await stagehand.close().catch(() => {});
+    steps.push("9. Done.");
+    res.json({ success: true, steps });
+  } catch (err: any) {
+    steps.push(`ERROR: ${err.message}`);
+    steps.push(`STACK: ${err.stack?.substring(0, 500)}`);
+    res.json({ success: false, steps, error: err.message });
+  }
+});
+
 // ---- Email diagnostic endpoint (protected by webhook secret) ----
 app.post("/debug/email-test", async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
