@@ -664,6 +664,16 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   const progressNotes: string[] = []; // Running log of what was accomplished
   const triedDomains = new Set<string>(); // Domains we've already visited
 
+  // ── Failed approaches memory (Change 2) ──
+  // Track what didn't work so the AI never retries the same broken approach.
+  const failedApproaches: string[] = [];
+
+  // ── Objective progress measurement (Change 3) ──
+  // Count REAL successful actions: page navigations to new URLs, form fills that worked,
+  // button clicks that changed the page. Don't rely on AI self-assessment.
+  let successfulActions = 0;
+  let lastSuccessfulActionIter = 0;
+
   // ── Dynamic cost tracking state ──
   const iterCosts: number[] = []; // Cost per iteration (sliding window for running average)
   let costWrapUpInjected = false;  // Whether we've injected the $1 wrap-up message
@@ -683,13 +693,20 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         : 'I ran out of time working on your task. Could you try a simpler version of the request?';
     }
 
-    // ── Goal progress checks + iteration caps ──
-    // At iteration 15: force escalation check — if browser isn't working, use other tools
-    if (iterations === 15) {
+    // ── Objective progress measurement (Change 3) ──
+    // If successfulActions hasn't increased in the last 5 iterations, force a replan.
+    // Don't ask the AI if it's making progress — measure it.
+    if (iterations > 5 && (iterations - lastSuccessfulActionIter) >= 5) {
+      // Inject failed approaches so AI doesn't retry them
+      const failedList = failedApproaches.length > 0
+        ? `\nThese approaches already failed — DO NOT retry them:\n${failedApproaches.map((f, i) => `${i + 1}. ${f}`).join('\n')}`
+        : '';
+
       messages.push({
         role: 'user',
-        content: `PROGRESS CHECK (step 15): Have you completed the task yet? If the browser is blocked, stuck, or the website isn't cooperating — STOP browsing and escalate NOW. You have make_call and send_email tools. Use them. Call the business. Email them. Don't keep retrying a broken browser approach.`
+        content: `REPLAN REQUIRED: ${iterations - lastSuccessfulActionIter} steps with no successful page change, form fill, or new URL navigation. Your current approach is not working.${failedList}\n\nTake a browser_screenshot NOW to see what's actually on screen. Then plan your next 3 actions based on what you SEE, not what you assume. If the site is blocked/broken, use make_call or send_email instead.`
       });
+      lastSuccessfulActionIter = iterations; // Reset to prevent spamming
     }
     // At iteration 50: second progress check — are you still making progress?
     if (iterations === 50 && !wrapUpInjected) {
@@ -921,12 +938,29 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
       if (result.success) {
         actionSuccessCount++;
         consecutiveFailures = 0;
+        // Objective progress: count REAL successful actions (page changes, fills, new URLs)
+        const resultStr = String(result.data || '');
+        const isRealProgress = (
+          (tc.name === 'browser_go' && !resultStr.includes('error') && !resultStr.includes('blocked')) ||
+          (tc.name === 'browser_fill' && !resultStr.includes('MISS') && !resultStr.includes('FAIL')) ||
+          (tc.name === 'browser_click' && resultStr.length > 10) ||
+          (tc.name === 'make_call' || tc.name === 'send_email' || tc.name === 'send_sms')
+        );
+        if (isRealProgress) {
+          successfulActions++;
+          lastSuccessfulActionIter = iterations;
+        }
         // Track meaningful progress (form fills, successful clicks, navigation)
         if (tc.name === 'browser_fill' || tc.name === 'browser_click' || tc.name === 'browser_click_text' || tc.name === 'browser_select') {
           lastMeaningfulProgress = iterations;
         }
       } else {
         consecutiveFailures++;
+        // Record failed approach so it's never retried
+        const failDesc = `${tc.name}(${JSON.stringify(tc.arguments).substring(0, 80)}) → ${String(result.error || 'failed').substring(0, 60)}`;
+        failedApproaches.push(failDesc);
+        // Cap at 20 to prevent prompt bloat
+        if (failedApproaches.length > 20) failedApproaches.shift();
       }
 
       // Track domains visited
