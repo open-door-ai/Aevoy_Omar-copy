@@ -879,11 +879,20 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
     const unloadedTools = modelResponse.toolCalls.filter(tc => !isToolLoaded(tc.name, loadedToolNames));
     if (unloadedTools.length > 0) {
       const missingNames = unloadedTools.map(tc => tc.name);
-      console.log(`[V3] Tool expansion triggered: LLM requested unloaded tools [${missingNames.join(', ')}]`);
+      // Block manual browser tools from being expanded back in
+      const blockedTools = ['browser_go', 'browser_click', 'browser_fill', 'browser_snapshot', 'browser_screenshot'];
+      const allowedMissing = missingNames.filter(n => !blockedTools.includes(n));
+      if (allowedMissing.length === 0) {
+        console.log(`[V3] Blocked expansion of manual browser tools [${missingNames.join(', ')}] — use browser_agent`);
+        // Tell the AI to use browser_agent instead
+        messages.push({ role: 'tool', content: 'These browser tools are not available. Use browser_agent instead for all browser interaction.', tool_call_id: missingNames[0] });
+        continue;
+      }
+      console.log(`[V3] Tool expansion triggered: LLM requested unloaded tools [${allowedMissing.join(', ')}]`);
 
-      // Expand to full tool set
-      const expandedDefs = expandTools(loadedToolNames, missingNames[0], allToolDefs);
-      loadedToolNames = expandedDefs.map(t => t.name);
+      // Expand to full tool set but filter out blocked tools
+      const expandedDefs = expandTools(loadedToolNames, allowedMissing[0], allToolDefs);
+      loadedToolNames = expandedDefs.map(t => t.name).filter(n => !blockedTools.includes(n));
 
       // Rebuild system prompt with the expanded tool descriptions
       const expandedToolDescriptions = formatToolDescriptions(loadedToolNames);
