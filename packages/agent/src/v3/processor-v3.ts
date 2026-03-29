@@ -670,9 +670,13 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   const progressNotes: string[] = []; // Running log of what was accomplished
   const triedDomains = new Set<string>(); // Domains we've already visited
 
-  // ── Failed approaches memory (Change 2) ──
-  // Track what didn't work so the AI never retries the same broken approach.
+  // ── Failed approaches memory ──
   const failedApproaches: string[] = [];
+
+  // ── browser_agent invocation cap ──
+  // Max 2 browser_agent calls per task. After 2, the task must complete or return what it has.
+  let browserAgentCalls = 0;
+  const MAX_BROWSER_AGENT_CALLS = 2;
 
   // ── Objective progress measurement (Change 3) ──
   // Count REAL successful actions: page navigations to new URLs, form fills that worked,
@@ -922,11 +926,22 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
       const tc = modelResponse.toolCalls[i];
       logger.info(`[V3] Step ${iterations}.${i + 1}: ${tc.name}(${JSON.stringify(tc.arguments).substring(0, 100)})`);
 
+      // ── browser_agent cap: max 2 invocations per task ──
+      if (tc.name === 'browser_agent') {
+        browserAgentCalls++;
+        if (browserAgentCalls > MAX_BROWSER_AGENT_CALLS) {
+          logger.info(`[V3] browser_agent cap reached (${MAX_BROWSER_AGENT_CALLS}). Forcing completion.`);
+          messages.push({
+            role: 'tool',
+            content: 'Browser agent limit reached. You must now respond to the user with whatever you have. Do NOT call browser_agent again. Summarize what you found and ask the user what they want to do next.',
+            tool_call_id: tc.name,
+          });
+          continue;
+        }
+      }
+
       let result;
       try {
-        // Tool-registry handles timeouts: 900s for browser tools, 120s for others.
-        // No outer timeout here — the 60s race was killing BrightData escalation
-        // (VPS fail 30s + BrightData connect 30s + navigate 30s = 90s minimum).
         result = await executeToolCall(tc, ctx);
         ledger.recordObservation(tc.name, tc.arguments, result);
       } catch (toolErr) {
@@ -934,6 +949,27 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         logger.error(`[V3] Tool ${tc.name} error: ${errMsg}`);
         result = { success: false, error: `Tool error: ${errMsg}`, cost: 0 };
         ledger.recordObservation(tc.name, tc.arguments, result);
+      }
+
+      // ── browser_agent result-is-completion: if the agent returns availability info
+      // or partial results, treat it as complete — don't retry ──
+      if (tc.name === 'browser_agent' && result.success) {
+        const resultText = String(result.data || '');
+        const hasUsefulInfo = /availab|not available|earliest|booked|confirmed|reservation|no times|fully booked|sold out/i.test(resultText);
+        if (hasUsefulInfo) {
+          logger.info(`[V3] browser_agent returned useful info — delivering to user directly`);
+          // Inject a strong directive to deliver this result, not retry
+          messages.push({
+            role: 'tool',
+            content: resultText,
+            tool_call_id: tc.name,
+          });
+          messages.push({
+            role: 'user',
+            content: 'The browser found real information. Respond to the user with this information NOW. Do NOT call browser_agent again. If a time was unavailable, tell the user what IS available and ask if they want that instead.',
+          });
+          continue;
+        }
       }
 
       // Track action counts for quality gate
