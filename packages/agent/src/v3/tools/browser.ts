@@ -503,7 +503,9 @@ registerTool({
 });
 
 // ── browser_agent — Stagehand v3 autonomous agent ──
-// Simple. The agent handles everything. No custom abstractions.
+// Uses Steel browser (self-hosted on Railway) for non-datacenter IP.
+// Falls back to local Chrome if Steel unavailable.
+// Hybrid mode: DOM tools + coordinate tools for React SPAs.
 
 registerTool({
   name: 'browser_agent',
@@ -520,52 +522,74 @@ registerTool({
 
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
-      const { spawn } = await import('child_process');
 
-      // Launch Chrome with raw CDP (proven on Railway)
-      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-      const port = 9222 + Math.floor(Math.random() * 1000);
-      const proxyUrl = process.env.PROXY_URL;
-      const chrome = spawn(chromePath, [
-        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', '--disable-gpu',
-        `--remote-debugging-port=${port}`, '--remote-debugging-address=0.0.0.0',
-        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
-        'about:blank',
-      ], { stdio: 'pipe' });
-      await new Promise(r => setTimeout(r, 2000));
+      // Try Steel browser first (self-hosted on Railway, different IP than agent)
+      // Fall back to local Chrome if Steel unavailable
+      const steelUrl = process.env.STEEL_API_URL || '';
+      const steelKey = process.env.STEEL_API_KEY || '';
+      const isSelfHosted = steelUrl.includes('.railway.internal') || steelUrl.includes('localhost');
+      let cdpWsUrl: string | null = null;
+      let steelSessionId: string | null = null;
+      let chromeProc: any = null;
 
-      const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
-      const { webSocketDebuggerUrl } = await versionResp.json() as any;
+      if (steelUrl && (steelKey || isSelfHosted)) {
+        try {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (!isSelfHosted && steelKey) headers['steel-api-key'] = steelKey;
+          const apiBase = isSelfHosted ? `${steelUrl}/v1` : steelUrl;
+          const res = await fetch(`${apiBase}/sessions`, {
+            method: 'POST', headers,
+            body: JSON.stringify({ sessionTimeout: 300000 }),
+          });
+          if (res.ok) {
+            const session = await res.json() as any;
+            steelSessionId = session.id;
+            cdpWsUrl = isSelfHosted
+              ? `ws://${new URL(steelUrl).host}?sessionId=${steelSessionId}`
+              : `wss://connect.steel.dev?apiKey=${steelKey}&sessionId=${steelSessionId}`;
+          }
+        } catch { /* Steel unavailable, fall through to local Chrome */ }
+      }
 
-      // Init Stagehand — connect to our Chrome
+      // Local Chrome fallback
+      if (!cdpWsUrl) {
+        const { spawn } = await import('child_process');
+        const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
+        const port = 9222 + Math.floor(Math.random() * 1000);
+        chromeProc = spawn(chromePath, [
+          '--headless', '--no-sandbox', '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', '--disable-gpu',
+          `--remote-debugging-port=${port}`, '--remote-debugging-address=0.0.0.0',
+          'about:blank',
+        ], { stdio: 'pipe' });
+        await new Promise(r => setTimeout(r, 2000));
+        const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
+        const data = await versionResp.json() as any;
+        cdpWsUrl = data.webSocketDebuggerUrl;
+      }
+
+      // Init Stagehand via CDP
       const stagehand = new Stagehand({
         env: 'LOCAL' as const,
-        localBrowserLaunchOptions: { cdpUrl: webSocketDebuggerUrl },
+        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl! },
         model: 'google/gemini-2.5-flash' as any,
         verbose: 0,
       });
       await stagehand.init();
 
-      // Navigate to start URL if provided
       if (startUrl) {
         const page = stagehand.context.pages()[0];
         await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
       }
 
-      // Run agent in HYBRID mode — DOM tools + coordinate tools
-      // Hybrid handles React dropdowns (via DOM act()) AND visual elements (via coordinates)
+      // Hybrid mode: DOM tools (act, fillForm) + coordinate tools (click, type)
       const agent = stagehand.agent({
         mode: 'hybrid',
         model: 'google/gemini-2.5-flash' as any,
       });
 
-      const result = await agent.execute({
-        instruction,
-        maxSteps: 30,
-      });
+      const result = await agent.execute({ instruction, maxSteps: 30 });
 
-      // Extract result
       const actions = (result as any).actions || [];
       const message = (result as any).message || (result as any).finalMessage || '';
       const page = stagehand.context.pages()[0];
@@ -573,7 +597,14 @@ registerTool({
       const title = await page?.title() || '';
 
       await stagehand.close().catch(() => {});
-      chrome.kill();
+      if (chromeProc) chromeProc.kill();
+      // Release Steel session
+      if (steelSessionId && steelUrl) {
+        const headers: Record<string, string> = {};
+        if (steelKey) headers['steel-api-key'] = steelKey;
+        const apiBase = isSelfHosted ? `${steelUrl}/v1` : steelUrl;
+        fetch(`${apiBase}/sessions/${steelSessionId}`, { method: 'DELETE', headers }).catch(() => {});
+      }
 
       return {
         success: true,
