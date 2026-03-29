@@ -1083,22 +1083,34 @@ app.get("/debug/stagehand-cua", async (req, res) => {
     } catch (e: any) {
       steps.push(`   Playwright chromium.launch() FAILED: ${e.message?.substring(0, 100)}`);
     }
-    // Launch Chrome via Playwright (proven to work on Railway), get CDP URL
-    steps.push("3. Launching Chrome via Playwright for CDP...");
-    const { chromium: pw } = await import("playwright");
-    const pwServer = await pw.launchServer({
-      headless: true,
-      executablePath: chromePath,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-    });
-    const wsEndpoint = pwServer.wsEndpoint();
-    steps.push(`   Playwright server WS endpoint: ${wsEndpoint}`);
-    // Connect Stagehand to the Playwright-launched Chrome via CDP URL
-    steps.push("4. Creating Stagehand with cdpUrl...");
+    // Launch Chrome directly with remote debugging, then connect Stagehand via raw CDP
+    steps.push("3. Launching Chrome with --remote-debugging-port=9222...");
+    const { execSync: execS, spawn } = await import("child_process");
+    const chromeProc = spawn(chromePath, [
+      "--headless", "--no-sandbox", "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage", "--disable-gpu",
+      "--remote-debugging-port=9222", "--remote-debugging-address=0.0.0.0",
+      "about:blank"
+    ], { stdio: "pipe" });
+    // Wait for Chrome to start and open the debugging port
+    await new Promise(r => setTimeout(r, 2000));
+    // Get the WebSocket debugger URL from Chrome's JSON endpoint
+    let cdpWsUrl = "";
+    try {
+      const resp = await fetch("http://127.0.0.1:9222/json/version");
+      const data = await resp.json() as any;
+      cdpWsUrl = data.webSocketDebuggerUrl;
+      steps.push(`   Chrome CDP WS URL: ${cdpWsUrl}`);
+    } catch (e: any) {
+      steps.push(`   Failed to get CDP URL: ${e.message}`);
+      chromeProc.kill();
+      throw new Error(`Chrome debugging port not accessible: ${e.message}`);
+    }
+    steps.push("4. Creating Stagehand with raw CDP URL...");
     const stagehand = new Stagehand({
       env: "LOCAL" as any,
       localBrowserLaunchOptions: {
-        cdpUrl: wsEndpoint,
+        cdpUrl: cdpWsUrl,
       },
       model: "google/gemini-2.5-flash" as any,
       verbose: 2,
