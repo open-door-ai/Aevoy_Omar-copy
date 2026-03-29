@@ -38,17 +38,16 @@ const TIER_MODELS: Record<string, ModelConfig[]> = {
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
     { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
   ],
-  // Simple steps within multi-step (snapshot reads, simple clicks): Gemini first (cheaper + better tool calling)
+  // Simple steps within multi-step (snapshot reads, simple clicks): DeepSeek first (no quota wall)
   simple_step: [
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
   ],
   // Multi-step browser/tool tasks (complex reasoning, planning, multi-field forms):
-  // Gemini Flash first (best tool-calling + browser reasoning at $0.15/$0.60)
-  // → DeepSeek fallback (cheap, no quota wall) → Haiku (absolute last resort)
+  // DeepSeek first (no quota wall, $0.28/$0.42) → Gemini → Haiku
   multi_step: [
-    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
     { provider: 'deepseek', model: 'deepseek-chat', costPerMInput: 0.28, costPerMOutput: 0.42, supportsToolCalling: true },
+    { provider: 'gemini', model: 'gemini-2.5-flash', costPerMInput: 0.15, costPerMOutput: 0.60, supportsToolCalling: true },
     { provider: 'haiku', model: 'claude-haiku-4-5-20251001', costPerMInput: 1.00, costPerMOutput: 5.00, supportsToolCalling: true },
   ],
 };
