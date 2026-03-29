@@ -592,9 +592,12 @@ registerTool({
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack?.substring(0, 300) : '';
+      const { logger: log } = await import('../../utils/logger.js');
+      log.error({ err: msg, stack }, '[BROWSER_AGENT] Stagehand CUA failed');
       return {
         success: false,
-        error: `Browser agent failed: ${msg}. Try using browser_go + browser_click manually, or use make_call/send_email as alternative.`,
+        error: `Browser agent error: ${msg}${stack ? ` | Stack: ${stack.substring(0, 150)}` : ''}`,
         cost: 0,
       };
     }
