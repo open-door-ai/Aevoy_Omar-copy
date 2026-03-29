@@ -501,3 +501,93 @@ registerTool({
     return { success: true, data: 'Browser session closed.', cost: 0 };
   },
 });
+
+// ── browser_agent — Stagehand v3 autonomous agent for complex multi-step tasks ──
+
+registerTool({
+  name: 'browser_agent',
+  description: 'Use this for complex multi-step browser tasks: bookings, signups, form filling, purchases. Provide a natural language instruction and the agent handles navigation, clicking, filling, and verification autonomously. Much better than manual browser_go/click/fill for complex workflows.',
+  category: 'browser',
+  parameters: {
+    instruction: { type: 'string', description: 'Natural language instruction for what to accomplish (e.g. "Book a table for 2 at 7pm on Saturday")' },
+    start_url: { type: 'string', description: 'Starting URL to navigate to before executing the instruction' },
+    max_steps: { type: 'number', description: 'Maximum steps (default 25)' },
+  },
+  required: ['instruction'],
+  async execute(params, ctx): Promise<ToolCallResult> {
+    const instruction = String(params.instruction);
+    const startUrl = params.start_url ? String(params.start_url) : undefined;
+    const maxSteps = Number(params.max_steps) || 25;
+
+    try {
+      const { Stagehand } = await import('@browserbasehq/stagehand');
+
+      // Initialize Stagehand with local browser (Railway has Chrome + Xvfb installed)
+      const stagehand = new Stagehand({
+        env: 'LOCAL' as const,
+        localBrowserLaunchOptions: {
+          headless: true,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+        },
+        model: 'google/gemini-2.5-flash' as any,
+        verbose: 0,
+      });
+
+      await stagehand.init();
+      const page = stagehand.context.pages()[0];
+
+      // Navigate to start URL if provided
+      if (startUrl) {
+        await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(async () => {
+          await page.goto(startUrl!, { waitUntil: 'domcontentloaded' as any, timeoutMs: 15000 });
+        });
+      }
+
+      // Run the agent with the instruction
+      const agent = stagehand.agent({
+        model: 'google/gemini-2.5-flash',
+      });
+
+      const result = await agent.execute({
+        instruction,
+        maxSteps,
+      });
+
+      // Extract the result
+      const actions = (result as any).actions || [];
+      const finalMessage = (result as any).message || (result as any).finalMessage || '';
+      const pageUrl = page.url();
+      const pageTitle = await page.title().catch(() => '');
+
+      // Get final page text for context
+      const pageText = await page.evaluate(() => {
+        const body = document.body;
+        if (!body) return '';
+        const clone = body.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll('script,style,noscript,svg').forEach(el => el.remove());
+        return clone.innerText?.substring(0, 2000) || '';
+      }).catch(() => '');
+
+      await stagehand.close().catch(() => {});
+
+      const actionSummary = actions.length > 0
+        ? `\n\nActions taken (${actions.length} steps):\n${actions.map((a: any, i: number) => `${i + 1}. ${a.reasoning || a.type || 'action'}`).join('\n')}`
+        : '';
+
+      const costEstimate = actions.length * 0.003; // ~$0.003 per step average
+
+      return {
+        success: true,
+        data: `${finalMessage}\n\nFinal page: ${pageTitle} (${pageUrl})\n\nPage content:\n${pageText.substring(0, 1000)}${actionSummary}`,
+        cost: costEstimate,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        error: `Browser agent failed: ${msg}. Try using browser_go + browser_click manually, or use make_call/send_email as alternative.`,
+        cost: 0,
+      };
+    }
+  },
+});
