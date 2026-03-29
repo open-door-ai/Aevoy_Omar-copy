@@ -135,67 +135,92 @@ const activeSessions = new Map<string, SteelSession>();
  * Returns a Playwright Page ready for interaction.
  */
 export async function createSession(taskId: string): Promise<SteelSession> {
-  if (!STEEL_API_KEY && !STEEL_API_URL.includes('.railway.internal')) {
-    throw new Error('STEEL_API_KEY not configured');
-  }
   if (activeSessions.size >= MAX_CONCURRENT) {
     throw new Error('Max concurrent browser sessions reached');
   }
 
+  // Try Steel.dev first, fall back to local Chrome if it fails
+  let browser: Browser;
+  let sessionId: string;
+  let usedLocal = false;
+
   const isSelfHosted = STEEL_API_URL.includes('.railway.internal') || STEEL_API_URL.includes('localhost');
 
-  // Create Steel session via API
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (!isSelfHosted && STEEL_API_KEY) {
-    headers['steel-api-key'] = STEEL_API_KEY;
+  if (STEEL_API_KEY || isSelfHosted) {
+    try {
+      // Create Steel session via API
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (!isSelfHosted && STEEL_API_KEY) {
+        headers['steel-api-key'] = STEEL_API_KEY;
+      }
+
+      const apiBase = isSelfHosted ? `${STEEL_API_URL}/v1` : STEEL_API_URL;
+      const res = await fetch(`${apiBase}/sessions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          sessionTimeout: SESSION_TIMEOUT_MS,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(`Steel session creation failed: ${(err as Record<string, string>).message || res.status}`);
+      }
+
+      const session = await res.json() as { id: string };
+      sessionId = session.id;
+      logger.info(`[STEEL] Created session ${sessionId} for task ${taskId.slice(0, 8)}`);
+
+      // Connect via CDP WebSocket with timeout
+      const wsUrl = isSelfHosted
+        ? `ws://${new URL(STEEL_API_URL).host}?sessionId=${sessionId}`
+        : `wss://connect.steel.dev?apiKey=${STEEL_API_KEY}&sessionId=${sessionId}`;
+      browser = await Promise.race([
+        chromium.connectOverCDP(wsUrl),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('CDP connection timeout (15s)')), 15_000)),
+      ]);
+    } catch (steelErr) {
+      logger.warn(`[STEEL] Steel failed, falling back to local Chrome: ${steelErr instanceof Error ? steelErr.message : 'unknown'}`);
+      // Fall through to local Chrome
+      browser = null as unknown as Browser;
+      sessionId = '';
+    }
   }
 
-  const apiBase = isSelfHosted ? `${STEEL_API_URL}/v1` : STEEL_API_URL;
-  const res = await fetch(`${apiBase}/sessions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      sessionTimeout: SESSION_TIMEOUT_MS,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Steel session creation failed: ${(err as Record<string, string>).message || res.status}`);
+  // Fallback: launch local Chrome (already installed on Railway via Dockerfile)
+  if (!browser!) {
+    try {
+      browser = await chromium.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-blink-features=AutomationControlled',
+        ],
+      });
+      sessionId = `local-${taskId.slice(0, 8)}-${Date.now()}`;
+      usedLocal = true;
+      logger.info(`[STEEL] Using local Chrome for task ${taskId.slice(0, 8)}`);
+    } catch (localErr) {
+      throw new Error(`Both Steel and local Chrome failed. Steel: connection issue. Local: ${localErr instanceof Error ? localErr.message : 'unknown'}`);
+    }
   }
 
-  const session = await res.json() as { id: string };
-  logger.info(`[STEEL] Created session ${session.id} for task ${taskId.slice(0, 8)}`);
-
-  // Connect via CDP WebSocket with timeout
-  // Self-hosted (railway.internal): ws://host:port?sessionId=...
-  // Cloud (api.steel.dev): wss://connect.steel.dev?apiKey=...&sessionId=...
-  const wsUrl = isSelfHosted
-    ? `ws://${new URL(STEEL_API_URL).host}?sessionId=${session.id}`
-    : `wss://connect.steel.dev?apiKey=${STEEL_API_KEY}&sessionId=${session.id}`;
-  let browser: Browser;
-  try {
-    browser = await Promise.race([
-      chromium.connectOverCDP(wsUrl),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('CDP connection timeout (15s)')), 15_000)),
-    ]);
-  } catch (err) {
-    // Clean up the Steel session if we can't connect
-    await fetch(`${STEEL_API_URL}/sessions/${session.id}`, {
-      method: 'DELETE',
-      headers: { 'steel-api-key': STEEL_API_KEY! },
-    }).catch(() => {});
-    throw new Error(`Browser connection failed: ${err instanceof Error ? err.message : 'unknown'}`);
-  }
-
-  const context = browser.contexts()[0];
-  const page = context?.pages()[0] || await (context || await browser.newContext()).newPage();
+  const context = usedLocal
+    ? await browser.newContext()
+    : (browser.contexts()[0] || await browser.newContext());
+  const page = usedLocal
+    ? await context.newPage()
+    : (context.pages()[0] || await context.newPage());
 
   // Apply anti-detection stealth measures (user-agent, viewport, headers)
   await applyStealthMeasures(page);
 
   const steelSession: SteelSession = {
-    sessionId: session.id,
+    sessionId: sessionId!,
     browser,
     page,
     createdAt: Date.now(),
@@ -220,15 +245,19 @@ export async function destroySession(taskId: string): Promise<void> {
     logger.debug(`[STEEL] Browser close error for task ${taskId.slice(0, 8)} (non-critical):`, err);
   }
 
-  // Release Steel session via API
-  try {
-    await fetch(`${STEEL_API_URL}/sessions/${session.sessionId}`, {
-      method: 'DELETE',
-      headers: { 'steel-api-key': STEEL_API_KEY! },
-    });
-    logger.info(`[STEEL] Destroyed session ${session.sessionId} for task ${taskId.slice(0, 8)}`);
-  } catch (err) {
-    logger.warn(`[STEEL] Session release failed for ${session.sessionId}:`, err);
+  // Release Steel session via API (skip for local Chrome sessions)
+  if (!session.sessionId.startsWith('local-')) {
+    try {
+      await fetch(`${STEEL_API_URL}/sessions/${session.sessionId}`, {
+        method: 'DELETE',
+        headers: { 'steel-api-key': STEEL_API_KEY! },
+      });
+      logger.info(`[STEEL] Destroyed session ${session.sessionId} for task ${taskId.slice(0, 8)}`);
+    } catch (err) {
+      logger.warn(`[STEEL] Session release failed for ${session.sessionId}:`, err);
+    }
+  } else {
+    logger.info(`[STEEL] Closed local Chrome session for task ${taskId.slice(0, 8)}`);
   }
 
   activeSessions.delete(taskId);
