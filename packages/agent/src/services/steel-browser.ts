@@ -191,6 +191,7 @@ export async function createSession(taskId: string): Promise<SteelSession> {
   // Fallback: launch local Chrome (already installed on Railway via Dockerfile)
   if (!browser!) {
     try {
+      const proxyUrl = process.env.PROXY_URL;
       browser = await chromium.launch({
         headless: true,
         args: [
@@ -199,6 +200,7 @@ export async function createSession(taskId: string): Promise<SteelSession> {
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--disable-blink-features=AutomationControlled',
+          ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
         ],
       });
       sessionId = `local-${taskId.slice(0, 8)}-${Date.now()}`;

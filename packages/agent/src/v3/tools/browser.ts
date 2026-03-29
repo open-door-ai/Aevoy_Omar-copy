@@ -522,20 +522,21 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Launch Chrome directly with remote debugging, then connect Stagehand via raw CDP
+      // ── FIX 1: Residential proxy for all browser traffic ──
+      const proxyUrl = process.env.PROXY_URL; // e.g. http://user:pass@premium-residential.geonode.com:9000
       const { spawn } = await import('child_process');
       const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-      // Use a unique port per task to avoid conflicts with concurrent sessions
       const debugPort = 9222 + Math.floor(Math.random() * 1000);
-      const chromeProc = spawn(chromePath, [
+      const chromeArgs = [
         '--headless', '--no-sandbox', '--disable-setuid-sandbox',
         '--disable-dev-shm-usage', '--disable-gpu',
         `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
-        'about:blank'
-      ], { stdio: 'pipe' });
-      // Wait for Chrome to start
+        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
+        'about:blank',
+      ];
+      const chromeProc = spawn(chromePath, chromeArgs, { stdio: 'pipe' });
       await new Promise(r => setTimeout(r, 2000));
-      // Get raw CDP WebSocket URL
+
       let cdpWsUrl: string;
       try {
         const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
@@ -543,32 +544,45 @@ registerTool({
         cdpWsUrl = data.webSocketDebuggerUrl;
       } catch (e: any) {
         chromeProc.kill();
-        throw new Error(`Chrome debugging port ${debugPort} not accessible: ${e.message}`);
+        throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
       }
-      // Connect Stagehand to Chrome via raw CDP
+
       const stagehand = new Stagehand({
         env: 'LOCAL' as const,
-        localBrowserLaunchOptions: {
-          cdpUrl: cdpWsUrl,
-        },
+        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
         model: 'google/gemini-2.5-flash' as any,
         verbose: 1,
       });
       await stagehand.init();
       const page = stagehand.context.pages()[0];
 
-      // Navigate to start URL if provided
+      // ── FIX 5: Load saved cookies for the target domain ──
+      if (startUrl) {
+        try {
+          const domain = new URL(startUrl).hostname;
+          const { data: savedCookies } = await (await import('../../utils/supabase.js')).getSupabaseClient()
+            .from('browser_contexts')
+            .select('context_data')
+            .eq('user_id', ctx.userId)
+            .eq('domain', domain)
+            .single();
+          if (savedCookies?.context_data?.cookies) {
+            await stagehand.context.addCookies(savedCookies.context_data.cookies);
+          }
+        } catch { /* no saved cookies, that's fine */ }
+      }
+
       if (startUrl) {
         await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(async () => {
           await page.goto(startUrl!, { waitUntil: 'domcontentloaded' as any, timeoutMs: 15000 });
         });
       }
 
-      // Run the agent in CUA mode — vision-based, coordinate clicking
-      // Fallback chain: Gemini CU → Gemini 3 Flash → Anthropic Haiku (if key available)
+      // ── FIX 6: CUA model fallback chain — silently try next on any error ──
       const cuaModels = [
         { modelName: 'google/gemini-2.5-computer-use-preview-10-2025', apiKey: process.env.GOOGLE_API_KEY },
         { modelName: 'google/gemini-3-flash-preview', apiKey: process.env.GOOGLE_API_KEY },
+        ...(process.env.ANTHROPIC_API_KEY ? [{ modelName: 'anthropic/claude-sonnet-4-6', apiKey: process.env.ANTHROPIC_API_KEY }] : []),
         ...(process.env.ANTHROPIC_API_KEY ? [{ modelName: 'anthropic/claude-haiku-4-5-20251001', apiKey: process.env.ANTHROPIC_API_KEY }] : []),
       ];
 
@@ -581,28 +595,23 @@ registerTool({
             model: { modelName: cuaModel.modelName as any, apiKey: cuaModel.apiKey },
           });
           result = await agent.execute({ instruction, maxSteps });
-          break; // success
+          break;
         } catch (cuaErr: any) {
           lastCuaError = cuaErr.message || String(cuaErr);
           const { logger: log } = await import('../../utils/logger.js');
-          log.warn(`[BROWSER_AGENT] CUA model ${cuaModel.modelName} failed: ${lastCuaError.substring(0, 100)}, trying next...`);
-          if (lastCuaError.includes('429') || lastCuaError.includes('quota') || lastCuaError.includes('RESOURCE_EXHAUSTED')) {
-            continue; // try next model
-          }
-          throw cuaErr; // non-quota error, don't retry
+          log.warn(`[BROWSER_AGENT] CUA ${cuaModel.modelName} failed: ${lastCuaError.substring(0, 100)}, trying next...`);
+          continue; // Always try next model, regardless of error type
         }
       }
       if (!result) {
-        throw new Error(`All CUA models exhausted. Last error: ${lastCuaError}`);
+        throw new Error(`All CUA models failed. Last: ${lastCuaError}`);
       }
 
-      // Extract the result
       const actions = (result as any).actions || [];
       const finalMessage = (result as any).message || (result as any).finalMessage || '';
       const pageUrl = page.url();
       const pageTitle = await page.title().catch(() => '');
 
-      // Get final page text for context
       const pageText = await page.evaluate(() => {
         const body = document.body;
         if (!body) return '';
@@ -611,14 +620,28 @@ registerTool({
         return clone.innerText?.substring(0, 2000) || '';
       }).catch(() => '');
 
+      // ── FIX 5: Save cookies after successful session ──
+      try {
+        const cookies = await stagehand.context.cookies();
+        if (cookies.length > 0 && pageUrl) {
+          const domain = new URL(pageUrl).hostname;
+          await (await import('../../utils/supabase.js')).getSupabaseClient()
+            .from('browser_contexts')
+            .upsert({
+              user_id: ctx.userId,
+              domain,
+              context_data: { cookies, savedAt: new Date().toISOString() },
+            }, { onConflict: 'user_id,domain' });
+        }
+      } catch { /* non-critical */ }
+
       await stagehand.close().catch(() => {});
       chromeProc.kill();
 
       const actionSummary = actions.length > 0
         ? `\n\nActions taken (${actions.length} steps):\n${actions.map((a: any, i: number) => `${i + 1}. ${a.reasoning || a.type || 'action'}`).join('\n')}`
         : '';
-
-      const costEstimate = actions.length * 0.003; // ~$0.003 per step average
+      const costEstimate = actions.length * 0.005;
 
       return {
         success: true,
@@ -627,12 +650,11 @@ registerTool({
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack?.substring(0, 300) : '';
       const { logger: log } = await import('../../utils/logger.js');
-      log.error({ err: msg, stack }, '[BROWSER_AGENT] Stagehand CUA failed');
+      log.error({ err: msg }, '[BROWSER_AGENT] Failed');
       return {
         success: false,
-        error: `Browser agent error: ${msg}${stack ? ` | Stack: ${stack.substring(0, 150)}` : ''}`,
+        error: `Browser agent error: ${msg.substring(0, 200)}`,
         cost: 0,
       };
     }

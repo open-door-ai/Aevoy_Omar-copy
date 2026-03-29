@@ -673,21 +673,17 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   // ── Failed approaches memory ──
   const failedApproaches: string[] = [];
 
-  // ── browser_agent invocation cap ──
-  // Max 2 browser_agent calls per task. After 2, the task must complete or return what it has.
-  let browserAgentCalls = 0;
-  const MAX_BROWSER_AGENT_CALLS = 2;
+  // ── FIX 3: Dynamic progress tracking — stale_streak ──
+  // meaningful_actions: actions that changed state (new page, form filled, data extracted)
+  // stale_streak: consecutive actions that did NOT change state
+  let meaningfulActions = 0;
+  let staleStreak = 0;
+  let replanCount = 0; // how many times we've forced a replan
 
-  // ── Objective progress measurement (Change 3) ──
-  // Count REAL successful actions: page navigations to new URLs, form fills that worked,
-  // button clicks that changed the page. Don't rely on AI self-assessment.
-  let successfulActions = 0;
-  let lastSuccessfulActionIter = 0;
-
-  // ── Dynamic cost tracking state ──
-  const iterCosts: number[] = []; // Cost per iteration (sliding window for running average)
-  let costWrapUpInjected = false;  // Whether we've injected the $1 wrap-up message
-  let costForceDelivered = false;  // Whether we've hit the $2 force-deliver threshold
+  // ── FIX 4: Dynamic cost circuit breaker ──
+  let cumulativeCost = 0;
+  const COST_WARN = 0.50;
+  const COST_STOP = 1.00;
 
   // ── Multi-step loop ──
   let iterations = 0;
@@ -703,20 +699,38 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
         : 'I ran out of time working on your task. Could you try a simpler version of the request?';
     }
 
-    // ── Objective progress measurement (Change 3) ──
-    // If successfulActions hasn't increased in the last 5 iterations, force a replan.
-    // Don't ask the AI if it's making progress — measure it.
-    if (iterations > 5 && (iterations - lastSuccessfulActionIter) >= 5) {
-      // Inject failed approaches so AI doesn't retry them
+    // ── FIX 3: Dynamic progress tracking — stale_streak ──
+    // Force replan at 8 stale actions, force stop at 16 (8 after replan)
+    if (staleStreak >= 8 && replanCount === 0) {
+      replanCount++;
+      staleStreak = 0;
       const failedList = failedApproaches.length > 0
-        ? `\nThese approaches already failed — DO NOT retry them:\n${failedApproaches.map((f, i) => `${i + 1}. ${f}`).join('\n')}`
+        ? `\nFailed approaches — DO NOT retry:\n${failedApproaches.slice(-5).map((f, i) => `${i + 1}. ${f}`).join('\n')}`
         : '';
-
       messages.push({
         role: 'user',
-        content: `REPLAN REQUIRED: ${iterations - lastSuccessfulActionIter} steps with no successful page change, form fill, or new URL navigation. Your current approach is not working.${failedList}\n\nTake a browser_screenshot NOW to see what's actually on screen. Then plan your next 3 actions based on what you SEE, not what you assume. If the site is blocked/broken, use make_call or send_email instead.`
+        content: `REPLAN: 8 consecutive actions with no state change. Your current approach is stuck.${failedList}\nCompletely change strategy. If the site is broken, tell the user what you found so far.`
       });
-      lastSuccessfulActionIter = iterations; // Reset to prevent spamming
+    } else if (staleStreak >= 8 && replanCount >= 1) {
+      // Already replanned once and still stale — stop
+      const partial = ledger.getPartialResults();
+      logger.info(`[V3] Stopping: 16+ stale actions after replan. meaningfulActions=${meaningfulActions}`);
+      return partial !== 'No results gathered yet.'
+        ? `Here's what I found so far:\n\n${partial}`
+        : messages.filter(m => m.role === 'assistant' && m.content && m.content.length > 20).pop()?.content || 'I couldn\'t complete this task — the site wasn\'t cooperating. Want me to try a different approach?';
+    }
+
+    // ── FIX 4: Cost circuit breaker ──
+    if (cumulativeCost >= COST_STOP) {
+      logger.error(`[V3] COST STOP: $${cumulativeCost.toFixed(2)} exceeded $${COST_STOP}. Stopping.`);
+      const partial = ledger.getPartialResults();
+      return partial !== 'No results gathered yet.'
+        ? `Here's what I found (cost limit reached):\n\n${partial}`
+        : 'Task stopped due to cost limit. Something went wrong — please try again.';
+    }
+    if (cumulativeCost >= COST_WARN && !wrapUpInjected) {
+      wrapUpInjected = true;
+      logger.warn(`[V3] COST WARN: $${cumulativeCost.toFixed(2)} exceeded $${COST_WARN}`);
     }
     // At iteration 50: second progress check — are you still making progress?
     if (iterations === 50 && !wrapUpInjected) {
@@ -822,6 +836,7 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     // Track AI cost
     if (modelResponse.cost > 0) {
       await budget.trackCost('v3', modelResponse.model, modelResponse.cost, `v3:step${iterations}`);
+      cumulativeCost += modelResponse.cost;
     }
 
     // ── No tool calls = AI provided final answer ──
@@ -935,19 +950,8 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
       const tc = modelResponse.toolCalls[i];
       logger.info(`[V3] Step ${iterations}.${i + 1}: ${tc.name}(${JSON.stringify(tc.arguments).substring(0, 100)})`);
 
-      // ── browser_agent cap: max 2 invocations per task ──
-      if (tc.name === 'browser_agent') {
-        browserAgentCalls++;
-        if (browserAgentCalls > MAX_BROWSER_AGENT_CALLS) {
-          logger.info(`[V3] browser_agent cap reached (${MAX_BROWSER_AGENT_CALLS}). Forcing completion.`);
-          messages.push({
-            role: 'tool',
-            content: 'Browser agent limit reached. You must now respond to the user with whatever you have. Do NOT call browser_agent again. Summarize what you found and ask the user what they want to do next.',
-            tool_call_id: tc.name,
-          });
-          continue;
-        }
-      }
+      // browser_agent invocations are controlled by stale_streak, not a hard cap.
+      // If it makes progress, it can run. If it stalls, stale_streak stops it.
 
       let result;
       try {
@@ -960,56 +964,47 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
 
-      // ── browser_agent result-is-completion: if the agent returns availability info
-      // or partial results, treat it as complete — don't retry ──
+      // ── FIX 7: browser_agent result-is-completion ──
+      // When browser_agent returns ANY result, deliver it to the user. Don't auto-retry.
       if (tc.name === 'browser_agent' && result.success) {
         const resultText = String(result.data || '');
-        const hasUsefulInfo = /availab|not available|earliest|booked|confirmed|reservation|no times|fully booked|sold out/i.test(resultText);
-        if (hasUsefulInfo) {
-          logger.info(`[V3] browser_agent returned useful info — delivering to user directly`);
-          // Inject a strong directive to deliver this result, not retry
-          messages.push({
-            role: 'tool',
-            content: resultText,
-            tool_call_id: tc.name,
-          });
-          messages.push({
-            role: 'user',
-            content: 'The browser found real information. Respond to the user with this information NOW. Do NOT call browser_agent again. If a time was unavailable, tell the user what IS available and ask if they want that instead.',
-          });
-          continue;
-        }
+        logger.info(`[V3] browser_agent completed — delivering result to user`);
+        messages.push({ role: 'tool', content: resultText, tool_call_id: tc.name });
+        messages.push({
+          role: 'user',
+          content: 'The browser agent completed its work. Respond to the user with what was found. If the task was partially completed (e.g. time unavailable), tell the user what IS available and ask what they want to do next. Do NOT call browser_agent again unless the user asks.',
+        });
+        // Count as meaningful since browser_agent did real work
+        meaningfulActions++;
+        staleStreak = 0;
+        continue;
       }
 
-      // Track action counts for quality gate
+      // ── FIX 3: Track meaningful vs stale actions ──
       actionCount++;
+      const resultStr = String(result.data || result.error || '');
       if (result.success) {
         actionSuccessCount++;
         consecutiveFailures = 0;
-        // Objective progress: count REAL successful actions (page changes, fills, new URLs)
-        const resultStr = String(result.data || '');
-        const isRealProgress = (
-          (tc.name === 'browser_go' && !resultStr.includes('error') && !resultStr.includes('blocked')) ||
-          (tc.name === 'browser_fill' && !resultStr.includes('MISS') && !resultStr.includes('FAIL')) ||
-          (tc.name === 'browser_click' && resultStr.length > 10) ||
-          (tc.name === 'make_call' || tc.name === 'send_email' || tc.name === 'send_sms')
-        );
-        if (isRealProgress) {
-          successfulActions++;
-          lastSuccessfulActionIter = iterations;
-        }
-        // Track meaningful progress (form fills, successful clicks, navigation)
-        if (tc.name === 'browser_fill' || tc.name === 'browser_click' || tc.name === 'browser_click_text' || tc.name === 'browser_select') {
+        // Did this action change state?
+        const isStateful = resultStr.length > 50; // got substantial data back
+        if (isStateful) {
+          meaningfulActions++;
+          staleStreak = 0;
           lastMeaningfulProgress = iterations;
+        } else {
+          staleStreak++;
         }
       } else {
         consecutiveFailures++;
-        // Record failed approach so it's never retried
+        staleStreak++;
         const failDesc = `${tc.name}(${JSON.stringify(tc.arguments).substring(0, 80)}) → ${String(result.error || 'failed').substring(0, 60)}`;
         failedApproaches.push(failDesc);
-        // Cap at 20 to prevent prompt bloat
         if (failedApproaches.length > 20) failedApproaches.shift();
       }
+
+      // ── FIX 4: Track cost ──
+      cumulativeCost += (result.cost || 0);
 
       // Track domains visited
       if (tc.name === 'browser_go' && tc.arguments?.url) {
@@ -1137,50 +1132,8 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
       sameUrlCount = 0;
     }
 
-    // ── Dynamic cost awareness ──
-    // Track per-iteration cost and compute running average.
-    // This replaces the old static "iteration 80 + $0.30" check with adaptive guidance.
-    const iterCost = modelResponse.cost; // AI model cost for this iteration
-    iterCosts.push(iterCost);
-
-    // Running average over last N iterations
-    const windowCosts = iterCosts.slice(-DYNAMIC_COST_CONFIG.costWindowSize);
-    const avgCostPerIter = windowCosts.reduce((a, b) => a + b, 0) / windowCosts.length;
-
-    // Warn in logs (not to AI) if per-iteration cost is high
-    if (avgCostPerIter > DYNAMIC_COST_CONFIG.highCostPerIterWarn && iterations > 5) {
-      logger.warn(`[V3] High cost/iter: $${avgCostPerIter.toFixed(4)}/iter (avg last ${windowCosts.length}), total $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
-    }
-
-    // At $1.00 total: inject wrap-up guidance (once)
-    if (!costWrapUpInjected && budget.totalSpent >= DYNAMIC_COST_CONFIG.wrapUpThreshold) {
-      costWrapUpInjected = true;
-      logger.info(`[V3] Cost wrap-up threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
-      messages.push({
-        role: 'user',
-        content: `COST AWARENESS: You've spent $${budget.totalSpent.toFixed(2)} across ${iterations} steps (avg $${avgCostPerIter.toFixed(4)}/step). Be efficient with remaining budget:
-1. If you have PARTIAL results — deliver them now. Something is better than nothing.
-2. If a site keeps blocking you — switch to a DIFFERENT site immediately, don't keep retrying.
-3. Make every remaining step count — no more exploratory browsing.
-4. You CAN keep going if you're close to completing the task. But stop wasting steps on approaches that clearly aren't working.`
-      });
-    }
-
-    // At $2.00 total: force deliver partial results
-    if (!costForceDelivered && budget.totalSpent >= DYNAMIC_COST_CONFIG.forceDeliverThreshold) {
-      costForceDelivered = true;
-      logger.info(`[V3] Cost force-deliver threshold hit: $${budget.totalSpent.toFixed(3)} at step ${iterations}`);
-      // Build the best partial result we can
-      const progressSummary = progressNotes.filter(n => !n.startsWith('\u2717')).slice(-10).join('\n');
-      const domainsVisited = [...triedDomains].join(', ');
-      const lastAiContent = messages.filter(m => m.role === 'assistant' && m.content && m.content.length > 20)
-        .pop()?.content?.substring(0, 500) || '';
-      const partial = ledger.getPartialResults();
-      const bestResult = partial !== 'No results gathered yet.' ? partial
-        : progressSummary ? progressSummary
-        : lastAiContent || 'I was working on your task but used significant resources without a complete result.';
-      return `I've spent significant effort ($${budget.totalSpent.toFixed(2)}) across ${iterations} steps${domainsVisited ? ` visiting ${domainsVisited}` : ''}. Here's what I accomplished:\n\n${bestResult}`;
-    }
+    // Cost tracking is handled by the circuit breaker at the top of the loop (FIX 4).
+    // No additional cost logic here — cumulativeCost is already checked above.
 
     // Vision tool overuse
     if (screenshotCount > 8 && iterations > 15) {
