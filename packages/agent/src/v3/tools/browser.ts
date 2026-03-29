@@ -96,7 +96,10 @@ registerTool({
             await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
           }
 
-          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 25000 }).catch(async () => {
+            // networkidle may timeout on heavy sites — fall back to domcontentloaded
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          });
           navigated = true;
           break;
         } catch (err) {
@@ -146,9 +149,9 @@ registerTool({
       // Get interactive elements with index numbers
       const elements = await page.evaluate(() => {
         const items: string[] = [];
-        const selector = 'a, button, input, select, textarea, [role="button"], [onclick]';
+        const selector = 'a, button, input, select, textarea, [role="button"], [role="combobox"], [role="listbox"], [role="option"], [role="tab"], [onclick], [data-testid]';
         document.querySelectorAll(selector).forEach((el, i) => {
-          if (i > 30) return; // Cap at 30 elements to keep context manageable
+          if (i > 50) return; // Cap at 50 elements for complex booking pages
           const tag = el.tagName.toLowerCase();
           const text = (el as HTMLElement).innerText?.substring(0, 50)?.trim();
           const type = el.getAttribute('type') || '';
