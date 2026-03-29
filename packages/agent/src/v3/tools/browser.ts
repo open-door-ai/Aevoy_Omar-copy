@@ -543,9 +543,14 @@ registerTool({
         });
       }
 
-      // Run the agent with the instruction
+      // Run the agent in CUA mode — vision-based, coordinate clicking
+      // This is what makes it work on complex SPAs, custom widgets, date pickers
       const agent = stagehand.agent({
-        model: 'google/gemini-2.5-flash',
+        mode: 'cua',
+        model: {
+          modelName: 'google/gemini-2.5-computer-use-preview-10-2025',
+          apiKey: process.env.GOOGLE_API_KEY,
+        },
       });
 
       const result = await agent.execute({
