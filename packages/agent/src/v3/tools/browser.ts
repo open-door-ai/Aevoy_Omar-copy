@@ -545,15 +545,13 @@ registerTool({
       }
 
       // Run the agent in CUA mode — vision-based, coordinate clicking
-      // Try Anthropic CUA first (proven to work), fall back to Gemini CUA
-      const anthropicKey = process.env.ANTHROPIC_API_KEY;
-      const googleKey = process.env.GOOGLE_API_KEY;
-
+      // Gemini computer use: cheapest CUA model, handles complex SPAs + date pickers
       const agent = stagehand.agent({
         mode: 'cua',
-        model: anthropicKey
-          ? { modelName: 'anthropic/claude-sonnet-4-6' as any, apiKey: anthropicKey }
-          : { modelName: 'google/gemini-2.5-computer-use-preview-10-2025' as any, apiKey: googleKey },
+        model: {
+          modelName: 'google/gemini-2.5-computer-use-preview-10-2025' as any,
+          apiKey: process.env.GOOGLE_API_KEY,
+        },
       });
 
       const result = await agent.execute({
