@@ -524,10 +524,13 @@ registerTool({
 
       // Initialize Stagehand with local browser
       // headless: false + Xvfb display :99 on Railway for CUA screenshot support
+      // executablePath: Chrome installed via Dockerfile on Railway
+      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
       const stagehand = new Stagehand({
         env: 'LOCAL' as const,
         localBrowserLaunchOptions: {
           headless: false,
+          executablePath: chromePath,
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
         },
         model: 'google/gemini-2.5-flash' as any,
