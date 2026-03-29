@@ -53,7 +53,38 @@ registerTool({
         }
       }
 
-      // "at Xpm/am"
+      // Helper: convert local hour/min in user's timezone to a UTC Date
+      function localTimeToUtc(baseDate: Date, hour: number, min: number, tz: string): Date {
+        // Build an ISO-ish string in the target timezone, then let Date parse it as UTC
+        // Step 1: Get the UTC offset for the target timezone at the given date
+        const utcStr = baseDate.toLocaleString('en-US', { timeZone: 'UTC' });
+        const tzStr = baseDate.toLocaleString('en-US', { timeZone: tz });
+        const utcMs = new Date(utcStr).getTime();
+        const tzMs = new Date(tzStr).getTime();
+        const offsetMs = tzMs - utcMs; // positive = ahead of UTC
+        // Step 2: Create a date at the desired local time, then subtract offset to get UTC
+        const localDate = new Date(baseDate);
+        localDate.setHours(hour, min, 0, 0);
+        return new Date(localDate.getTime() - offsetMs);
+      }
+
+      // "tomorrow at X" — check BEFORE bare "at X" to prevent wrong-day scheduling
+      if (!nextRun && /tomorrow/i.test(timeStr)) {
+        const atMatch = timeStr.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i);
+        let hour = 9, min = 0;
+        if (atMatch) {
+          hour = parseInt(atMatch[1]);
+          min = parseInt(atMatch[2] || '0');
+          const meridiem = (atMatch[3] || '').replace(/\./g, '').toLowerCase();
+          if (meridiem === 'pm' && hour < 12) hour += 12;
+          if (meridiem === 'am' && hour === 12) hour = 0;
+        }
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        nextRun = localTimeToUtc(tomorrow, hour, min, timezone);
+      }
+
+      // "at Xpm/am" (today or next occurrence)
       if (!nextRun) {
         const atMatch = timeStr.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i);
         if (atMatch) {
@@ -62,30 +93,9 @@ registerTool({
           const meridiem = (atMatch[3] || '').replace(/\./g, '').toLowerCase();
           if (meridiem === 'pm' && hour < 12) hour += 12;
           if (meridiem === 'am' && hour === 12) hour = 0;
-          nextRun = new Date(now);
-          // Set time in user's timezone by using UTC offset calculation
-          const utcTarget = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-          const offset = utcTarget.getTime() - now.getTime();
-          nextRun = new Date(now);
-          nextRun.setHours(hour, min, 0, 0);
-          nextRun = new Date(nextRun.getTime() - offset);
-          if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1);
+          nextRun = localTimeToUtc(now, hour, min, timezone);
+          if (nextRun <= now) nextRun = new Date(nextRun.getTime() + 86400000); // +1 day
         }
-      }
-
-      // "tomorrow at X"
-      if (!nextRun && /tomorrow/i.test(timeStr)) {
-        const atMatch = timeStr.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-        let hour = 9, min = 0;
-        if (atMatch) {
-          hour = parseInt(atMatch[1]);
-          min = parseInt(atMatch[2] || '0');
-          const meridiem = (atMatch[3] || '').toLowerCase();
-          if (meridiem === 'pm' && hour < 12) hour += 12;
-        }
-        nextRun = new Date(now);
-        nextRun.setDate(nextRun.getDate() + 1);
-        nextRun.setHours(hour, min, 0, 0);
       }
 
       // "every X" (recurring)
@@ -110,9 +120,8 @@ registerTool({
         const cronDay = cronDayMap[freq] || '*';
         cronExpression = freq === 'hour' ? `0 * * * *` : `${min} ${hour} * * ${cronDay}`;
 
-        nextRun = new Date(now);
-        nextRun.setHours(hour, min, 0, 0);
-        if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1);
+        nextRun = localTimeToUtc(now, hour, min, timezone);
+        if (nextRun <= now) nextRun = new Date(nextRun.getTime() + 86400000);
       }
 
       if (!nextRun) {
