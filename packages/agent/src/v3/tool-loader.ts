@@ -21,7 +21,7 @@ const TOOL_CATEGORIES: Record<string, readonly string[]> = {
   information: ['web_search', 'weather', 'recall'],
   calendar: ['check_calendar', 'create_event'],
   task: ['schedule_task', 'remember'],
-  browser: ['browser_go', 'browser_click', 'browser_fill', 'browser_snapshot', 'browser_screenshot', 'browser_close'],
+  browser: ['browser_agent', 'browser_close'],
   user: ['ask_user'],
   content: ['generate_image', 'create_document'],
   inbox: ['read_inbox'],
