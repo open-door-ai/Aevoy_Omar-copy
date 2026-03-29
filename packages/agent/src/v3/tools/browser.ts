@@ -522,36 +522,60 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Local Chrome via raw CDP (proven working on Railway)
-      const { spawn } = await import('child_process');
-      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-      const debugPort = 9222 + Math.floor(Math.random() * 1000);
-      const proxyUrl = process.env.PROXY_URL;
-      const chromeProc = spawn(chromePath, [
-        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', '--disable-gpu',
-        `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
-        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
-        'about:blank',
-      ], { stdio: 'pipe' });
-      await new Promise(r => setTimeout(r, 2000));
+      // Use Steel.dev cloud browser (own IPs, avoids datacenter CAPTCHA blocks)
+      // Falls back to local Chrome if Steel isn't configured
+      const steelKey = process.env.STEEL_API_KEY;
+      let stagehand: any;
+      let chromeProc: any = null;
+      let steelSessionId: string | null = null;
 
-      let cdpWsUrl: string;
-      try {
-        const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
-        const data = await resp.json() as any;
-        cdpWsUrl = data.webSocketDebuggerUrl;
-      } catch (e: any) {
-        chromeProc.kill();
-        throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
+      if (steelKey) {
+        // Create Steel session
+        const steelRes = await fetch('https://api.steel.dev/v1/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'steel-api-key': steelKey },
+          body: JSON.stringify({ timeout: 300000 }),
+        });
+        if (!steelRes.ok) throw new Error(`Steel session failed: ${steelRes.status}`);
+        const steelSession = await steelRes.json() as any;
+        steelSessionId = steelSession.id;
+        const cdpWsUrl = `wss://connect.steel.dev?apiKey=${steelKey}&sessionId=${steelSessionId}`;
+
+        stagehand = new Stagehand({
+          env: 'LOCAL' as const,
+          localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
+          model: 'google/gemini-2.5-flash' as any,
+          verbose: 1,
+        });
+      } else {
+        // Local Chrome fallback
+        const { spawn } = await import('child_process');
+        const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
+        const debugPort = 9222 + Math.floor(Math.random() * 1000);
+        chromeProc = spawn(chromePath, [
+          '--headless', '--no-sandbox', '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', '--disable-gpu',
+          `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
+          'about:blank',
+        ], { stdio: 'pipe' });
+        await new Promise(r => setTimeout(r, 2000));
+        let cdpWsUrl: string;
+        try {
+          const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+          const data = await resp.json() as any;
+          cdpWsUrl = data.webSocketDebuggerUrl;
+        } catch (e: any) {
+          chromeProc.kill();
+          throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
+        }
+        stagehand = new Stagehand({
+          env: 'LOCAL' as const,
+          localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
+          model: 'google/gemini-2.5-flash' as any,
+          verbose: 1,
+        });
       }
 
-      const stagehand = new Stagehand({
-        env: 'LOCAL' as const,
-        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
-        model: 'google/gemini-2.5-flash' as any,
-        verbose: 1,
-      });
       await stagehand.init();
       const page = stagehand.context.pages()[0];
 
@@ -638,6 +662,12 @@ registerTool({
 
       await stagehand.close().catch(() => {});
       if (chromeProc) chromeProc.kill();
+      // Release Steel session
+      if (steelSessionId && steelKey) {
+        fetch(`https://api.steel.dev/v1/sessions/${steelSessionId}`, {
+          method: 'DELETE', headers: { 'steel-api-key': steelKey },
+        }).catch(() => {});
+      }
 
       const actionSummary = actions.length > 0
         ? `\n\nActions taken (${actions.length} steps):\n${actions.map((a: any, i: number) => `${i + 1}. ${a.reasoning || a.type || 'action'}`).join('\n')}`
