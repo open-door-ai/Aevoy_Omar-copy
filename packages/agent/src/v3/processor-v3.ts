@@ -572,7 +572,8 @@ Respond with JSON: {"to": "+1234567890", "body": "Message text"}`,
 
     schedule_task: `Extract what to schedule and when.
 User timezone: ${ctx.profile.timezone}. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.
-Respond with JSON: {"description": "what to do", "time": "when", "action_type": "reminder|call|task"}`,
+IMPORTANT: Pass the "time" field EXACTLY as the user phrased it — do NOT convert or interpret times. If they said "tomorrow at 9am", pass "tomorrow at 9am". If they said "in 5 minutes", pass "in 5 minutes". The tool handles all time parsing.
+Respond with JSON: {"description": "what to do", "time": "user's exact time phrase", "action_type": "reminder|call|task"}`,
 
     generate_image: `Extract image description and optional style.
 Respond with JSON: {"prompt": "detailed description", "style": "style or empty"}`,
