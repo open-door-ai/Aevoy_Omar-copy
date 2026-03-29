@@ -522,37 +522,54 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // ── FIX 1: Residential proxy for all browser traffic ──
-      const proxyUrl = process.env.PROXY_URL; // e.g. http://user:pass@premium-residential.geonode.com:9000
-      const { spawn } = await import('child_process');
-      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-      const debugPort = 9222 + Math.floor(Math.random() * 1000);
-      const chromeArgs = [
-        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', '--disable-gpu',
-        `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
-        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
-        'about:blank',
-      ];
-      const chromeProc = spawn(chromePath, chromeArgs, { stdio: 'pipe' });
-      await new Promise(r => setTimeout(r, 2000));
+      // Use Browserbase cloud browser (own IPs, built-in stealth, designed for Stagehand)
+      // Falls back to local Chrome if Browserbase isn't configured
+      const bbApiKey = process.env.BROWSERBASE_API_KEY;
+      const bbProjectId = process.env.BROWSERBASE_PROJECT_ID;
+      const useBrowserbase = !!(bbApiKey && bbProjectId);
 
-      let cdpWsUrl: string;
-      try {
-        const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
-        const data = await resp.json() as any;
-        cdpWsUrl = data.webSocketDebuggerUrl;
-      } catch (e: any) {
-        chromeProc.kill();
-        throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
+      let stagehand: any;
+      let chromeProc: any = null;
+
+      if (useBrowserbase) {
+        stagehand = new Stagehand({
+          env: 'BROWSERBASE' as const,
+          apiKey: bbApiKey,
+          projectId: bbProjectId,
+          model: 'google/gemini-2.5-flash' as any,
+          verbose: 1,
+        });
+      } else {
+        // Local Chrome fallback with optional proxy
+        const { spawn } = await import('child_process');
+        const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
+        const debugPort = 9222 + Math.floor(Math.random() * 1000);
+        const proxyUrl = process.env.PROXY_URL;
+        chromeProc = spawn(chromePath, [
+          '--headless', '--no-sandbox', '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', '--disable-gpu',
+          `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
+          ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : []),
+          'about:blank',
+        ], { stdio: 'pipe' });
+        await new Promise(r => setTimeout(r, 2000));
+        let cdpWsUrl: string;
+        try {
+          const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+          const data = await resp.json() as any;
+          cdpWsUrl = data.webSocketDebuggerUrl;
+        } catch (e: any) {
+          chromeProc.kill();
+          throw new Error(`Chrome port ${debugPort} not accessible: ${e.message}`);
+        }
+        stagehand = new Stagehand({
+          env: 'LOCAL' as const,
+          localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
+          model: 'google/gemini-2.5-flash' as any,
+          verbose: 1,
+        });
       }
 
-      const stagehand = new Stagehand({
-        env: 'LOCAL' as const,
-        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
-        model: 'google/gemini-2.5-flash' as any,
-        verbose: 1,
-      });
       await stagehand.init();
       const page = stagehand.context.pages()[0];
 
@@ -578,13 +595,17 @@ registerTool({
         });
       }
 
-      // ── FIX 6: CUA model fallback chain — silently try next on any error ──
-      const cuaModels = [
-        { modelName: 'google/gemini-2.5-computer-use-preview-10-2025', apiKey: process.env.GOOGLE_API_KEY },
-        { modelName: 'google/gemini-3-flash-preview', apiKey: process.env.GOOGLE_API_KEY },
-        ...(process.env.ANTHROPIC_API_KEY ? [{ modelName: 'anthropic/claude-sonnet-4-6', apiKey: process.env.ANTHROPIC_API_KEY }] : []),
-        ...(process.env.ANTHROPIC_API_KEY ? [{ modelName: 'anthropic/claude-haiku-4-5-20251001', apiKey: process.env.ANTHROPIC_API_KEY }] : []),
-      ];
+      // ── CUA model fallback — use ALL available API keys ──
+      const cuaModels: Array<{modelName: string; apiKey: string | undefined}> = [];
+      // Anthropic FIRST — proven CUA support, key is live
+      if (process.env.ANTHROPIC_API_KEY) {
+        cuaModels.push({ modelName: 'anthropic/claude-sonnet-4-6', apiKey: process.env.ANTHROPIC_API_KEY });
+        cuaModels.push({ modelName: 'anthropic/claude-haiku-4-5-20251001', apiKey: process.env.ANTHROPIC_API_KEY });
+      }
+      // Then Gemini
+      if (process.env.GOOGLE_API_KEY) {
+        cuaModels.push({ modelName: 'google/gemini-2.5-computer-use-preview-10-2025', apiKey: process.env.GOOGLE_API_KEY });
+      }
 
       let result: any;
       let lastCuaError = '';
@@ -636,7 +657,7 @@ registerTool({
       } catch { /* non-critical */ }
 
       await stagehand.close().catch(() => {});
-      chromeProc.kill();
+      if (chromeProc) chromeProc.kill();
 
       const actionSummary = actions.length > 0
         ? `\n\nActions taken (${actions.length} steps):\n${actions.map((a: any, i: number) => `${i + 1}. ${a.reasoning || a.type || 'action'}`).join('\n')}`
