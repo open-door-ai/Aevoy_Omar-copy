@@ -140,6 +140,8 @@ export async function loadUserContextSummary(userId: string): Promise<string> {
     }
 
     // Format each group into natural language
+    // Order matters — location and relationships first so they don't get truncated
+    const typeOrder = ['location', 'relationship', 'preference', 'commitment', 'routine', 'habit', 'work', 'emotion', 'financial', 'health'];
     const typeLabels: Record<string, string> = {
       relationship: 'People',
       preference: 'Preferences',
@@ -153,7 +155,14 @@ export async function loadUserContextSummary(userId: string): Promise<string> {
       health: 'Health',
     };
 
-    for (const [type, items] of grouped) {
+    // Sort grouped entries by priority order
+    const sortedTypes = [...grouped.entries()].sort((a, b) => {
+      const ai = typeOrder.indexOf(a[0]);
+      const bi = typeOrder.indexOf(b[0]);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    for (const [type, items] of sortedTypes) {
       const label = typeLabels[type] || type;
       // Only include high-confidence items (>= 0.5) and cap at 8 per type
       const filtered = items
