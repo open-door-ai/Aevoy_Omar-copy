@@ -131,16 +131,50 @@
 
 ---
 
+## Browser Testing (Real Browser — Playwright)
+
+### Landing Page (aevoy.com)
+- **Status**: PASS — loads clean, "Your AI Employee" hero, nav works, demo section visible
+- **Branding**: Aurora, cycling hero text (Employee/Butler), Get Started CTA
+- **Issues**: 1 Cloudflare script error (non-blocking)
+
+### Dashboard (aevoy.com/dashboard)
+- **Status**: PASS — task input field, recent activity list, contact info (email + phone)
+- **Task submission**: Typed "What's the weather in Vancouver right now?" → "Task submitted successfully" toast → response appeared
+- **Stats**: Test user shows "10 tasks completed · ~2.5 hours saved · Flawless so far"
+
+### Aurora Page (aevoy.com/aurora)
+- **Status**: PASS — mic button (purple), onboarding card, text input, real-time feed
+- **Feed**: Shows all completed tasks with timestamps, checkmarks, expandable responses
+- **Real-time**: Weather result from dashboard appeared instantly in Aurora feed (Supabase subscription working)
+- **Text input**: Sent "Send me a quick summary of my commitments" → 33.6s → returned 9 active commitments with full context (work, personal, calendar)
+- **Issues**: `user_memory` onboarding query returns 401 (non-blocking, feed works)
+
+### Activity Page (aevoy.com/dashboard/activity)
+- **Status**: PASS — shows Total Tasks (1975), Completed (753), Failed (74), Total Cost ($65.03)
+- **Task detail**: Shows channel, execution time, cost, status per task
+
+### Scheduled Tasks (aevoy.com/dashboard/scheduled)
+- **Status**: PASS — 1 active schedule, 84 paused/cancelled, "New Schedule" button works
+
+### Browser Automation (Agent-Side)
+- **Web search task**: PASS — "PS5 price in Canada" → 42s, $0.01, concrete prices + upcoming price hike warning
+- **Browser scraping task**: SLOW — "books.toscrape.com first 3 books" → 38+ actions, $0.11+, still processing after 3 minutes
+- **Root cause**: Groq 8B is inefficient at browser reasoning — takes 38 steps for a 2-step task
+- **Fix needed**: Route browser/multi_step tasks to Gemini Flash (smarter, still cheap at $0.15/$0.60 per M)
+
+---
+
 ## Demo Readiness
 
 ### Earls Booking Task
-- **Status**: PARTIAL — system works through the pipeline but asks confirmation before final action
-- **Success rate**: 3/3 attempts reached phone-call-ready state (found restaurant, got phone number, knew Omar's name)
+- **Status**: PARTIAL — system navigates to booking site, finds phone, uses Omar's name autonomously (autonomy fix working), but asks confirmation before calling
+- **Success rate**: 3/3 attempts reached phone-call-ready state
 - **Average completion time**: 96-146 seconds
 - **Blockers**:
-  1. AI uses `ask_user` instead of `make_call` — model reasoning issue on 8B
+  1. AI uses `ask_user` instead of `make_call` — Groq 8B too conservative for autonomous calling
   2. OpenTable has bot detection → system correctly falls back to phone call approach
-  3. Need to route booking tasks to smarter model (Gemini Flash or Haiku) for the final "just call" decision
+  3. Need to route booking tasks to Gemini Flash or Haiku for the final "just call" decision
 
 ### What DOES Work for Demo (60-second video)
 The following flows are demo-ready RIGHT NOW:
@@ -151,19 +185,25 @@ The following flows are demo-ready RIGHT NOW:
 | "Remind me to call mom tomorrow at 9am" | 1.0s | YES — schedules correctly now |
 | "What's 2+2?" | 1.2s | YES — "Four." (perfect personality) |
 | "You're stupid" | 1.1s | YES — empathetic, appropriate |
-| "Cancel my Netflix" | 7s | YES — asks for credentials (correct behavior) |
-| Aurora mic → intent detection → action | 1-2s | YES — full pipeline working |
-| SMS inbound → AI response → outbound SMS | <2s | YES — tested on production |
+| "Cancel my Netflix" | 7s | YES — asks for credentials (correct) |
+| "Send me a summary of my commitments" | 33s | YES — returns 9 commitments with context |
+| "PS5 price in Canada" | 42s | YES — concrete prices, actionable advice |
+| Dashboard task submission | <2s | YES — toast + real-time feed update |
+| Aurora page + mic button | Instant | YES — UI loads, feed renders |
+| Aurora text input → response | 1-33s | YES — end-to-end via web |
+| SMS inbound → AI response | <2s | YES — tested on production |
 
 ### Recommended Demo Flow
-1. Show the Aurora page — tap mic, speak a sentence with an actionable intent
-2. Show the intent detection card appear in real-time
-3. Show a quick task via SMS or web: "What's the weather?" → instant Vancouver weather
-4. Show reminder scheduling: "Remind me to call mom tomorrow at 9am" → correctly scheduled
-5. Show the system's personality: natural, not robotic, human-sounding
+1. Open aevoy.com — show the landing page (clean, professional)
+2. Log in → show dashboard with task input and recent activity
+3. Type a task: "What's the weather?" → instant Vancouver weather response
+4. Navigate to Aurora → tap mic (show the listening UI)
+5. Send text: "Remind me to call mom tomorrow at 9am" → correctly scheduled
+6. Show the commitments summary → rich contextual knowledge about the user
+7. Show the Activity page → 1975 tasks, $65 total cost, completion stats
 
 ### Next Steps to Complete Earls Booking Demo
-1. Route multi_step booking tasks to Gemini Flash or Haiku (smarter than 8B for autonomy decisions)
+1. Route multi_step browser tasks to Gemini Flash (smarter than 8B)
 2. Test make_call tool independently to verify it places actual calls
 3. Run 10 consecutive Earls booking attempts and measure completion rate
 4. Once 90%+ succeed, record the demo video
