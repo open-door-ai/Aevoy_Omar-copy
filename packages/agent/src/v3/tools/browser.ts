@@ -565,19 +565,36 @@ registerTool({
       }
 
       // Run the agent in CUA mode — vision-based, coordinate clicking
-      // Gemini computer use: cheapest CUA model, handles complex SPAs + date pickers
-      const agent = stagehand.agent({
-        mode: 'cua',
-        model: {
-          modelName: 'google/gemini-2.5-computer-use-preview-10-2025' as any,
-          apiKey: process.env.GOOGLE_API_KEY,
-        },
-      });
+      // Fallback chain: Gemini CU → Gemini 3 Flash → Anthropic Haiku (if key available)
+      const cuaModels = [
+        { modelName: 'google/gemini-2.5-computer-use-preview-10-2025', apiKey: process.env.GOOGLE_API_KEY },
+        { modelName: 'google/gemini-3-flash-preview', apiKey: process.env.GOOGLE_API_KEY },
+        ...(process.env.ANTHROPIC_API_KEY ? [{ modelName: 'anthropic/claude-haiku-4-5-20251001', apiKey: process.env.ANTHROPIC_API_KEY }] : []),
+      ];
 
-      const result = await agent.execute({
-        instruction,
-        maxSteps,
-      });
+      let result: any;
+      let lastCuaError = '';
+      for (const cuaModel of cuaModels) {
+        try {
+          const agent = stagehand.agent({
+            mode: 'cua',
+            model: { modelName: cuaModel.modelName as any, apiKey: cuaModel.apiKey },
+          });
+          result = await agent.execute({ instruction, maxSteps });
+          break; // success
+        } catch (cuaErr: any) {
+          lastCuaError = cuaErr.message || String(cuaErr);
+          const { logger: log } = await import('../../utils/logger.js');
+          log.warn(`[BROWSER_AGENT] CUA model ${cuaModel.modelName} failed: ${lastCuaError.substring(0, 100)}, trying next...`);
+          if (lastCuaError.includes('429') || lastCuaError.includes('quota') || lastCuaError.includes('RESOURCE_EXHAUSTED')) {
+            continue; // try next model
+          }
+          throw cuaErr; // non-quota error, don't retry
+        }
+      }
+      if (!result) {
+        throw new Error(`All CUA models exhausted. Last error: ${lastCuaError}`);
+      }
 
       // Extract the result
       const actions = (result as any).actions || [];
