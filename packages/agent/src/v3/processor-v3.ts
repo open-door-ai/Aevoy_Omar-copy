@@ -614,6 +614,12 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   // Filter to only names that actually exist in the registry
   const registeredNames = new Set(allToolDefs.map(t => t.name));
   loadedToolNames = loadedToolNames.filter(n => registeredNames.has(n));
+  // Remove manual browser tools when browser_agent is available — force CUA mode
+  // The AI must use browser_agent for complex browser tasks, not browser_go/click/fill
+  const manualBrowserTools = ['browser_go', 'browser_click', 'browser_fill', 'browser_snapshot', 'browser_screenshot'];
+  if (loadedToolNames.includes('browser_agent')) {
+    loadedToolNames = loadedToolNames.filter(n => !manualBrowserTools.includes(n));
+  }
   const initialToolCount = allToolDefs.length;
   console.log(`[V3] Dynamic tool loading: ${loadedToolNames.length}/${initialToolCount} tools for multi_step tier`);
 
@@ -759,13 +765,10 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
       // focused decisions, not writing essays. Saves tokens and money.
       const tokensForStep = iterations > 60 ? 1000 : iterations > 30 ? 1500 : 2000;
       // ── Dynamic tool filtering for LLM call ──
-      // Use the loaded tool names as the filter. If browser activity is detected,
-      // narrow further to just browser tools + web_search + ask_user for ~75% token savings.
-      // BUT: after 15 steps without progress, unlock ALL tools so the AI can escalate
-      // to make_call, send_email, etc. — don't trap it in browser-only mode.
-      const hasBrowserActivity = messages.some(m => typeof m.content === 'string' && /browser_go|browser_click|browser_fill|browser_snapshot|browser_screenshot/i.test(m.content));
-      const stuckInBrowser = hasBrowserActivity && (iterations - lastMeaningfulProgress) > 15;
-      const toolsForCall = (hasBrowserActivity && !stuckInBrowser) ? 'browser' as const : loadedToolNames;
+      // All loaded tools are available at all times — no browser-only filter.
+      // browser_agent handles complex browser tasks via CUA; manual browser tools are removed.
+      // make_call, send_email etc. always available for escalation.
+      const toolsForCall = loadedToolNames;
 
       // ── Smart step complexity detection ──
       // After a snapshot or read (simple data), the AI just needs to decide what to click/fill.

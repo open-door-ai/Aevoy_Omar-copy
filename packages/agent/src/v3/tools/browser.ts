@@ -522,21 +522,38 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Initialize Stagehand with local Chrome in headless mode
-      // executablePath: Chrome installed via Dockerfile on Railway
+      // Launch Chrome directly with remote debugging, then connect Stagehand via raw CDP
+      const { spawn } = await import('child_process');
       const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
+      // Use a unique port per task to avoid conflicts with concurrent sessions
+      const debugPort = 9222 + Math.floor(Math.random() * 1000);
+      const chromeProc = spawn(chromePath, [
+        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', '--disable-gpu',
+        `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=0.0.0.0',
+        'about:blank'
+      ], { stdio: 'pipe' });
+      // Wait for Chrome to start
+      await new Promise(r => setTimeout(r, 2000));
+      // Get raw CDP WebSocket URL
+      let cdpWsUrl: string;
+      try {
+        const resp = await fetch(`http://127.0.0.1:${debugPort}/json/version`);
+        const data = await resp.json() as any;
+        cdpWsUrl = data.webSocketDebuggerUrl;
+      } catch (e: any) {
+        chromeProc.kill();
+        throw new Error(`Chrome debugging port ${debugPort} not accessible: ${e.message}`);
+      }
+      // Connect Stagehand to Chrome via raw CDP
       const stagehand = new Stagehand({
         env: 'LOCAL' as const,
         localBrowserLaunchOptions: {
-          headless: true,
-          executablePath: chromePath,
-          chromiumSandbox: false,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--remote-debugging-port=0'],
+          cdpUrl: cdpWsUrl,
         },
         model: 'google/gemini-2.5-flash' as any,
         verbose: 1,
       });
-
       await stagehand.init();
       const page = stagehand.context.pages()[0];
 
@@ -578,6 +595,7 @@ registerTool({
       }).catch(() => '');
 
       await stagehand.close().catch(() => {});
+      chromeProc.kill();
 
       const actionSummary = actions.length > 0
         ? `\n\nActions taken (${actions.length} steps):\n${actions.map((a: any, i: number) => `${i + 1}. ${a.reasoning || a.type || 'action'}`).join('\n')}`
