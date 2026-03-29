@@ -522,15 +522,16 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Initialize Stagehand with local browser (Railway has Chrome + Xvfb installed)
+      // Initialize Stagehand with local browser
+      // headless: false + Xvfb display :99 on Railway for CUA screenshot support
       const stagehand = new Stagehand({
         env: 'LOCAL' as const,
         localBrowserLaunchOptions: {
-          headless: true,
+          headless: false,
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
         },
         model: 'google/gemini-2.5-flash' as any,
-        verbose: 0,
+        verbose: 1,
       });
 
       await stagehand.init();
@@ -544,13 +545,15 @@ registerTool({
       }
 
       // Run the agent in CUA mode — vision-based, coordinate clicking
-      // This is what makes it work on complex SPAs, custom widgets, date pickers
+      // Try Anthropic CUA first (proven to work), fall back to Gemini CUA
+      const anthropicKey = process.env.ANTHROPIC_API_KEY;
+      const googleKey = process.env.GOOGLE_API_KEY;
+
       const agent = stagehand.agent({
         mode: 'cua',
-        model: {
-          modelName: 'google/gemini-2.5-computer-use-preview-10-2025',
-          apiKey: process.env.GOOGLE_API_KEY,
-        },
+        model: anthropicKey
+          ? { modelName: 'anthropic/claude-sonnet-4-6' as any, apiKey: anthropicKey }
+          : { modelName: 'google/gemini-2.5-computer-use-preview-10-2025' as any, apiKey: googleKey },
       });
 
       const result = await agent.execute({
