@@ -1057,10 +1057,33 @@ app.get("/debug/stagehand-cua", async (req, res) => {
   try {
     steps.push("1. Importing Stagehand...");
     const { Stagehand } = await import("@browserbasehq/stagehand");
-    steps.push("2. Creating instance...");
+    steps.push("2. Checking Chrome...");
     const chromePath = process.env.CHROME_PATH || "/usr/bin/google-chrome-stable";
     steps.push(`   CHROME_PATH: ${chromePath}`);
     steps.push(`   DISPLAY: ${process.env.DISPLAY}`);
+    // Check if Chrome binary exists
+    const { execSync } = await import("child_process");
+    try {
+      const chromeVersion = execSync(`${chromePath} --version 2>&1`).toString().trim();
+      steps.push(`   Chrome version: ${chromeVersion}`);
+    } catch (e: any) {
+      steps.push(`   Chrome NOT FOUND: ${e.message?.substring(0, 100)}`);
+      // Try to find any chrome
+      try {
+        const found = execSync("which google-chrome-stable google-chrome chromium chromium-browser 2>/dev/null || find /usr -name 'chrome' -o -name 'chromium' 2>/dev/null | head -5").toString().trim();
+        steps.push(`   Found alternatives: ${found}`);
+      } catch { steps.push("   No Chrome found anywhere"); }
+    }
+    // Also try launching via Playwright directly to compare
+    try {
+      const { chromium } = await import("playwright");
+      const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
+      steps.push(`   Playwright chromium.launch(): OK`);
+      await browser.close();
+    } catch (e: any) {
+      steps.push(`   Playwright chromium.launch() FAILED: ${e.message?.substring(0, 100)}`);
+    }
+    steps.push("3. Creating Stagehand instance...");
     const stagehand = new Stagehand({
       env: "LOCAL" as any,
       localBrowserLaunchOptions: {
