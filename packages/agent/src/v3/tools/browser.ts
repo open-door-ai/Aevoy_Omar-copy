@@ -529,7 +529,8 @@ registerTool({
     activeBrowserSessions++;
 
     try {
-      const buApiKey = process.env.BROWSER_USE_API_KEY || 'bu_IPGEqyd4qWIgcNLDkz0PMFyTKkgmsEiG7wi56wP9GJ8';
+      const buApiKey = process.env.BROWSER_USE_API_KEY;
+      if (!buApiKey) throw new Error('BROWSER_USE_API_KEY not configured');
       const fullTask = startUrl ? `Go to ${startUrl} and then: ${instruction}` : instruction;
 
       // Create task via Browser Use Cloud v3 API
