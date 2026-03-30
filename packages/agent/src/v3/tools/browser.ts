@@ -539,10 +539,10 @@ registerTool({
       const profileId = ctx.userId.substring(0, 8); // Use first 8 chars of user ID
       const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca&sessionContext=${profileId}`;
 
-      // Groq first (free, no quota issues), Gemini as fallback
+      // Gemini first (proven working), Groq as fallback for quota
       const models = [
-        'groq-llama-3.3-70b-versatile',
-        'gemini-2.5-flash',
+        'google/gemini-2.5-flash',
+        'google/gemini-2.0-flash',
       ];
 
       for (const model of models) {
