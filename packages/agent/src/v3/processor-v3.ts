@@ -559,7 +559,8 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
 
 function buildParamExtractionPrompt(toolName: string, taskText: string, ctx: TaskContext): string {
   const paramHelpers: Record<string, string> = {
-    weather: `Extract the location. User timezone: ${ctx.profile.timezone}.
+    weather: `Extract the location from the user's message. If no location is mentioned, use the user's city based on their timezone (${ctx.profile.timezone}).
+For example, if timezone is America/Vancouver, use "Vancouver".
 Respond with JSON: {"location": "city name"}`,
 
     send_email: `Extract email recipient, subject, and body.
