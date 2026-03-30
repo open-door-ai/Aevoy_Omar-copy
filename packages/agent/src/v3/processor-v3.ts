@@ -964,10 +964,26 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
 
-      // browser_agent result = DONE. Return to user. No retry. No outer loop.
+      // browser_agent result = DONE. Track it properly, then return to user.
       if (tc.name === 'browser_agent') {
         const resultText = String(result.data || result.error || 'Browser agent completed with no output.');
-        logger.info(`[V3] browser_agent done (success=${result.success}) — returning to user`);
+        // Track as actions for quality gate
+        actionCount++;
+        if (result.success) actionSuccessCount++;
+        // Track cost
+        if (result.cost > 0) {
+          cumulativeCost += result.cost;
+          await budget.trackCost('v3', 'browser_agent', result.cost, 'v3:tool:browser_agent');
+        }
+        // Update task progress in DB before returning
+        try {
+          const { getSupabaseClient } = await import('../utils/supabase.js');
+          await getSupabaseClient().from('tasks').update({
+            action_count: actionCount,
+            action_success_count: actionSuccessCount,
+          }).eq('id', ctx.taskId);
+        } catch { /* non-critical */ }
+        logger.info(`[V3] browser_agent done (success=${result.success}, cost=$${(result.cost || 0).toFixed(3)}) — returning to user`);
         return resultText;
       }
 

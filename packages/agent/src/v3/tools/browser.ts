@@ -528,41 +528,56 @@ registerTool({
       const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca`;
       const chromeProc: any = null; // no local Chrome needed
 
-      // Init Stagehand via CDP
-      const stagehand = new Stagehand({
-        env: 'LOCAL' as const,
-        localBrowserLaunchOptions: { cdpUrl: cdpWsUrl! },
-        model: 'google/gemini-2.5-flash' as any,
-        verbose: 0,
-      });
-      await stagehand.init();
+      // Model fallback: Gemini Flash → Groq Llama 70B → Gemini Pro
+      const models = [
+        'google/gemini-2.5-flash',
+        'groq/groq-llama-3.3-70b-versatile',
+        'google/gemini-2.5-pro-preview-03-25',
+      ];
 
-      if (startUrl) {
-        const page = stagehand.context.pages()[0];
-        await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
-        // Browser Use Cloud handles CAPTCHAs natively — no manual solving needed
+      let result: any;
+      for (const model of models) {
+        try {
+          const stagehand = new Stagehand({
+            env: 'LOCAL' as const,
+            localBrowserLaunchOptions: { cdpUrl: cdpWsUrl! },
+            model: model as any,
+            verbose: 0,
+          });
+          await stagehand.init();
+
+          if (startUrl) {
+            const page = stagehand.context.pages()[0];
+            await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
+          }
+
+          const agent = stagehand.agent({ model: model as any });
+          result = await agent.execute({ instruction, maxSteps: 30 });
+
+          // Extract page info before closing
+          const page = stagehand.context.pages()[0];
+          const url = page?.url() || '';
+          const title = await page?.title() || '';
+          await stagehand.close().catch(() => {});
+
+          const actions = (result as any).actions || [];
+          const message = (result as any).message || (result as any).finalMessage || '';
+          return {
+            success: true,
+            data: `${message}\n\nPage: ${title} (${url})\n\nSteps: ${actions.length}`,
+            cost: actions.length * 0.005,
+          };
+        } catch (modelErr: any) {
+          const errMsg = modelErr.message || String(modelErr);
+          if (errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+            continue; // Try next model
+          }
+          // Non-quota error on last model — throw
+          if (model === models[models.length - 1]) throw modelErr;
+          continue;
+        }
       }
-
-      // DOM mode: act() and fillForm() handle JS overlays, React buttons, dropdowns
-      const agent = stagehand.agent({
-        model: 'google/gemini-2.5-flash' as any,
-      });
-
-      const result = await agent.execute({ instruction, maxSteps: 30 });
-
-      const actions = (result as any).actions || [];
-      const message = (result as any).message || (result as any).finalMessage || '';
-      const page = stagehand.context.pages()[0];
-      const url = page?.url() || '';
-      const title = await page?.title() || '';
-
-      await stagehand.close().catch(() => {});
-
-      return {
-        success: true,
-        data: `${message}\n\nPage: ${title} (${url})\n\nSteps: ${actions.length}`,
-        cost: actions.length * 0.005,
-      };
+      throw new Error('All browser models exhausted (Gemini, Groq, Gemini Pro)');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Browser agent: ${msg.substring(0, 200)}`, cost: 0 };
