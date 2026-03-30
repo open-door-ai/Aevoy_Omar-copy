@@ -502,83 +502,84 @@ registerTool({
   },
 });
 
-// ── browser_agent — Stagehand v3 autonomous agent ──
-// Browser Use Cloud for anti-detect + residential proxies.
-// Groq first (free), Gemini fallback. Per-user persistent profiles.
+// ── browser_agent — Browser Use Cloud Task API ──
+// No Stagehand, no local Chrome, no model keys needed.
+// Browser Use Cloud handles: model (bu-mini), browser, proxy, CAPTCHA.
+// Credits: $6.73 remaining on free tier.
 
-// Concurrent browser session limiter — max 3 at once
 let activeBrowserSessions = 0;
 const MAX_CONCURRENT_BROWSER = 3;
 
 registerTool({
   name: 'browser_agent',
-  description: 'Autonomous browser agent for any website task. IMPORTANT: Include the user\'s city/location in the instruction when relevant (e.g. "Earls Ambleside in West Vancouver" not just "Earls Ambleside"). The browser agent has no context about the user — you must pass all relevant details in the instruction.',
+  description: 'Autonomous browser agent for any website task. IMPORTANT: Include the user\'s city/location in the instruction. The browser agent has no user context — pass all details.',
   category: 'browser',
   parameters: {
-    instruction: { type: 'string', description: 'What to do (e.g. "Book a table for 2 at 7pm on Saturday at Earls Ambleside")' },
-    start_url: { type: 'string', description: 'URL to start at (optional — agent can navigate on its own)' },
+    instruction: { type: 'string', description: 'Detailed instruction including location context' },
+    start_url: { type: 'string', description: 'URL to start at (optional)' },
   },
   required: ['instruction'],
   async execute(params, ctx): Promise<ToolCallResult> {
     const instruction = String(params.instruction);
     const startUrl = params.start_url ? String(params.start_url) : undefined;
 
-    // Enforce concurrent session limit
     if (activeBrowserSessions >= MAX_CONCURRENT_BROWSER) {
-      return { success: false, error: `Browser busy (${activeBrowserSessions}/${MAX_CONCURRENT_BROWSER} sessions active). Try again in a moment.`, cost: 0 };
+      return { success: false, error: 'Browser busy. Try again shortly.', cost: 0 };
     }
     activeBrowserSessions++;
 
     try {
-      const { Stagehand } = await import('@browserbasehq/stagehand');
-
-      // Browser Use Cloud — anti-detect browser with residential proxies
       const buApiKey = process.env.BROWSER_USE_API_KEY || 'bu_IPGEqyd4qWIgcNLDkz0PMFyTKkgmsEiG7wi56wP9GJ8';
+      const fullTask = startUrl ? `Go to ${startUrl} and then: ${instruction}` : instruction;
 
-      // Persistent profile per user — cookies, history, fingerprint carry over
-      const profileId = ctx.userId.substring(0, 8); // Use first 8 chars of user ID
-      const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca&sessionContext=${profileId}`;
+      // Create task via Browser Use Cloud v3 API
+      const createRes = await fetch('https://api.browser-use.com/api/v3/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Browser-Use-API-Key': buApiKey },
+        body: JSON.stringify({
+          task: fullTask,
+          model: 'bu-mini',
+          proxyCountryCode: 'ca',
+          keepAlive: false,
+        }),
+      });
 
-      // DeepSeek as primary model — no quota issues, no spending cap
-      // Stagehand accepts OpenAI-compatible APIs via clientOptions
-      // Use openai/gpt-4o-mini format — Browser Use Cloud requires provider/model
-      // DeepSeek isn't in their model list. Use their cheapest supported model.
-      const modelConfig = 'openai/gpt-4o-mini' as any;
+      if (!createRes.ok) {
+        const errText = await createRes.text();
+        throw new Error(`BU API ${createRes.status}: ${errText.substring(0, 150)}`);
+      }
 
-      {
-        try {
-          const stagehand = new Stagehand({
-            env: 'LOCAL' as const,
-            localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
-            model: modelConfig as any,
-            verbose: 0,
-          });
-          await stagehand.init();
+      const session = await createRes.json() as any;
+      const sessionId = session.id || session.sessionId;
+      if (!sessionId) throw new Error('No session ID returned');
 
-          if (startUrl) {
-            const page = stagehand.context.pages()[0];
-            await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
-          }
-
-          const agent = stagehand.agent({ model: modelConfig as any });
-          const result = await agent.execute({ instruction, maxSteps: 30 });
-
-          const page = stagehand.context.pages()[0];
-          const url = page?.url() || '';
-          const title = await page?.title() || '';
-          await stagehand.close().catch(() => {});
-
-          const actions = (result as any).actions || [];
-          const message = (result as any).message || (result as any).finalMessage || '';
-          return {
-            success: true,
-            data: `${message}\n\nPage: ${title} (${url})\n\nSteps: ${actions.length}`,
-            cost: actions.length * 0.003,
-          };
-        } catch (err: any) {
-          throw err;
+      // Poll for completion (max 3 min)
+      const deadline = Date.now() + 180000;
+      let result: any = null;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 5000));
+        const statusRes = await fetch(`https://api.browser-use.com/api/v3/sessions/${sessionId}`, {
+          headers: { 'X-Browser-Use-API-Key': buApiKey },
+        });
+        if (!statusRes.ok) continue;
+        const status = await statusRes.json() as any;
+        if (['stopped', 'error', 'timed_out'].includes(status.status) || (status.status === 'idle' && status.output)) {
+          result = status;
+          break;
         }
       }
+
+      if (!result) return { success: false, error: 'Browser task timed out (3 min)', cost: 0.05 };
+
+      const output = result.output || 'Task completed with no output';
+      const steps = result.stepCount || 0;
+      const cost = result.totalCostUsd || steps * 0.003;
+
+      return {
+        success: result.isTaskSuccessful !== false,
+        data: typeof output === 'string' ? output : JSON.stringify(output),
+        cost: typeof cost === 'number' ? cost : 0.01,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Browser agent: ${msg.substring(0, 200)}`, cost: 0 };
