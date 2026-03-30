@@ -553,8 +553,8 @@ registerTool({
       const sessionId = session.id || session.sessionId;
       if (!sessionId) throw new Error('No session ID returned');
 
-      // Poll for completion (max 3 min)
-      const deadline = Date.now() + 180000;
+      // Poll for completion (max 5 min for complex tasks)
+      const deadline = Date.now() + 300000;
       let result: any = null;
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 5000));
