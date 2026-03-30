@@ -523,23 +523,10 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Chrome with ScraperAPI residential proxy (free tier, no KYC)
-      const { spawn } = await import('child_process');
-      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-      const port = 9222 + Math.floor(Math.random() * 1000);
-      const scraperApiKey = process.env.SCRAPERAPI_KEY;
-      const proxyUrl = process.env.PROXY_URL
-        || (scraperApiKey ? `http://scraperapi:${scraperApiKey}@proxy-server.scraperapi.com:8001` : '');
-      const chromeProc = spawn(chromePath, [
-        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', '--disable-gpu',
-        `--remote-debugging-port=${port}`, '--remote-debugging-address=0.0.0.0',
-        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`, '--ignore-certificate-errors'] : []),
-        'about:blank',
-      ], { stdio: 'pipe' });
-      await new Promise(r => setTimeout(r, 2000));
-      const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
-      const { webSocketDebuggerUrl: cdpWsUrl } = await versionResp.json() as any;
+      // Browser Use Cloud — anti-detect browser with residential proxies and CAPTCHA solving
+      const buApiKey = process.env.BROWSER_USE_API_KEY || 'bu_IPGEqyd4qWIgcNLDkz0PMFyTKkgmsEiG7wi56wP9GJ8';
+      const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca`;
+      const chromeProc: any = null; // no local Chrome needed
 
       // Init Stagehand via CDP
       const stagehand = new Stagehand({
@@ -553,18 +540,7 @@ registerTool({
       if (startUrl) {
         const page = stagehand.context.pages()[0];
         await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
-        // Auto-solve CAPTCHAs on initial page load
-        try {
-          const { detectAndSolve } = await import('../../services/captcha-solver.js');
-          const captchaResult = await Promise.race([
-            detectAndSolve(page as any),
-            new Promise<{hadCaptcha: boolean; solved: boolean}>((r) => setTimeout(() => r({ hadCaptcha: false, solved: false }), 30000)),
-          ]);
-          if (captchaResult.hadCaptcha && captchaResult.solved) {
-            // CAPTCHA solved — wait for page to reload after solve
-            await new Promise(r => setTimeout(r, 3000));
-          }
-        } catch { /* CAPTCHA detection failed — continue anyway */ }
+        // Browser Use Cloud handles CAPTCHAs natively — no manual solving needed
       }
 
       // DOM mode: act() and fillForm() handle JS overlays, React buttons, dropdowns
@@ -581,7 +557,6 @@ registerTool({
       const title = await page?.title() || '';
 
       await stagehand.close().catch(() => {});
-      chromeProc.kill();
 
       return {
         success: true,
