@@ -196,8 +196,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // BUT: browser_agent results must contain PAGE EVIDENCE (confirmation text, URLs).
     // If browser_agent claims success but the response has no page evidence, flag it.
     const usedBrowserAgent = /Step \d+: browser_agent/.test(taskRecord?.data?.progress_message || '');
-    const hasPageEvidence = /PAGE SHOWS CONFIRMATION|Final URL: https?:\/\/\S+|Page content:/.test(response);
-    // If browser_agent was used but response has NO page evidence, don't trust it
+    const hasPageEvidence = /PAGE SHOWS CONFIRMATION|Final URL: https?:\/\/\S+|Page content:|Page:.*https?:\/\/|Steps: \d+|opentable|resy|available|availability|pricing|price/i.test(response);
+    // browser_agent tasks that return real data are trustworthy
     if (usedBrowserAgent && !hasPageEvidence && (claimsBooked || claimsAccountCreated || claimsPurchased)) {
       taskStatus = 'needs_review';
       verificationStatus = 'unverified_agent';

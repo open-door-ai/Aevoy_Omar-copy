@@ -503,13 +503,16 @@ registerTool({
 });
 
 // ── browser_agent — Stagehand v3 autonomous agent ──
-// Uses Steel browser (self-hosted on Railway) for non-datacenter IP.
-// Falls back to local Chrome if Steel unavailable.
-// Hybrid mode: DOM tools + coordinate tools for React SPAs.
+// Browser Use Cloud for anti-detect + residential proxies.
+// Groq first (free), Gemini fallback. Per-user persistent profiles.
+
+// Concurrent browser session limiter — max 3 at once
+let activeBrowserSessions = 0;
+const MAX_CONCURRENT_BROWSER = 3;
 
 registerTool({
   name: 'browser_agent',
-  description: 'Autonomous browser agent. Give it a natural language instruction and it navigates, clicks, fills forms, and completes tasks on any website. Handles React SPAs, date pickers, dropdowns, and complex workflows.',
+  description: 'Autonomous browser agent for any website task. IMPORTANT: Include the user\'s city/location in the instruction when relevant (e.g. "Earls Ambleside in West Vancouver" not just "Earls Ambleside"). The browser agent has no context about the user — you must pass all relevant details in the instruction.',
   category: 'browser',
   parameters: {
     instruction: { type: 'string', description: 'What to do (e.g. "Book a table for 2 at 7pm on Saturday at Earls Ambleside")' },
@@ -520,27 +523,33 @@ registerTool({
     const instruction = String(params.instruction);
     const startUrl = params.start_url ? String(params.start_url) : undefined;
 
+    // Enforce concurrent session limit
+    if (activeBrowserSessions >= MAX_CONCURRENT_BROWSER) {
+      return { success: false, error: `Browser busy (${activeBrowserSessions}/${MAX_CONCURRENT_BROWSER} sessions active). Try again in a moment.`, cost: 0 };
+    }
+    activeBrowserSessions++;
+
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Browser Use Cloud — anti-detect browser with residential proxies and CAPTCHA solving
+      // Browser Use Cloud — anti-detect browser with residential proxies
       const buApiKey = process.env.BROWSER_USE_API_KEY || 'bu_IPGEqyd4qWIgcNLDkz0PMFyTKkgmsEiG7wi56wP9GJ8';
-      const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca`;
-      const chromeProc: any = null; // no local Chrome needed
 
-      // Model fallback: Gemini Flash → Groq Llama 70B → Gemini Pro
+      // Persistent profile per user — cookies, history, fingerprint carry over
+      const profileId = ctx.userId.substring(0, 8); // Use first 8 chars of user ID
+      const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca&sessionContext=${profileId}`;
+
+      // Groq first (free, no quota issues), Gemini as fallback
       const models = [
-        'google/gemini-2.5-flash',
         'groq/groq-llama-3.3-70b-versatile',
-        'google/gemini-2.5-pro-preview-03-25',
+        'google/gemini-2.5-flash',
       ];
 
-      let result: any;
       for (const model of models) {
         try {
           const stagehand = new Stagehand({
             env: 'LOCAL' as const,
-            localBrowserLaunchOptions: { cdpUrl: cdpWsUrl! },
+            localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
             model: model as any,
             verbose: 0,
           });
@@ -552,9 +561,8 @@ registerTool({
           }
 
           const agent = stagehand.agent({ model: model as any });
-          result = await agent.execute({ instruction, maxSteps: 30 });
+          const result = await agent.execute({ instruction, maxSteps: 30 });
 
-          // Extract page info before closing
           const page = stagehand.context.pages()[0];
           const url = page?.url() || '';
           const title = await page?.title() || '';
@@ -565,22 +573,21 @@ registerTool({
           return {
             success: true,
             data: `${message}\n\nPage: ${title} (${url})\n\nSteps: ${actions.length}`,
-            cost: actions.length * 0.005,
+            cost: actions.length * 0.003,
           };
-        } catch (modelErr: any) {
-          const errMsg = modelErr.message || String(modelErr);
-          if (errMsg.includes('quota') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-            continue; // Try next model
-          }
-          // Non-quota error on last model — throw
-          if (model === models[models.length - 1]) throw modelErr;
+        } catch (err: any) {
+          const msg = err.message || '';
+          if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) continue;
+          if (model === models[models.length - 1]) throw err;
           continue;
         }
       }
-      throw new Error('All browser models exhausted (Gemini, Groq, Gemini Pro)');
+      throw new Error('All browser models exhausted');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Browser agent: ${msg.substring(0, 200)}`, cost: 0 };
+    } finally {
+      activeBrowserSessions--;
     }
   },
 });
