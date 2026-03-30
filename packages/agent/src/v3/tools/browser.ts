@@ -541,13 +541,9 @@ registerTool({
 
       // DeepSeek as primary model — no quota issues, no spending cap
       // Stagehand accepts OpenAI-compatible APIs via clientOptions
-      const modelConfig = {
-        modelName: 'deepseek-chat' as any,
-        clientOptions: {
-          apiKey: process.env.DEEPSEEK_API_KEY,
-          baseURL: 'https://api.deepseek.com/v1',
-        },
-      };
+      // Use openai/gpt-4o-mini format — Browser Use Cloud requires provider/model
+      // DeepSeek isn't in their model list. Use their cheapest supported model.
+      const modelConfig = 'openai/gpt-4o-mini' as any;
 
       {
         try {
