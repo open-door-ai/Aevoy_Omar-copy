@@ -582,9 +582,9 @@ registerTool({
         await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
       }
 
-      // Hybrid mode: DOM tools (act, fillForm) + coordinate tools (click, type)
+      // DOM mode: uses act() and fillForm() — handles JS overlays, React buttons, dropdowns
+      // Falls back to hybrid/cua if DOM mode fails
       const agent = stagehand.agent({
-        mode: 'hybrid',
         model: 'google/gemini-2.5-flash' as any,
       });
 
