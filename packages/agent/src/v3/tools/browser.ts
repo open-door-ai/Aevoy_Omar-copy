@@ -541,8 +541,8 @@ registerTool({
 
       // Groq first (free, no quota issues), Gemini as fallback
       const models = [
-        'groq/groq-llama-3.3-70b-versatile',
-        'google/gemini-2.5-flash',
+        'groq-llama-3.3-70b-versatile',
+        'gemini-2.5-flash',
       ];
 
       for (const model of models) {
