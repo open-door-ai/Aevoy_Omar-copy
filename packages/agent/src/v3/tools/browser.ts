@@ -580,10 +580,21 @@ registerTool({
       if (startUrl) {
         const page = stagehand.context.pages()[0];
         await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
+        // Auto-solve CAPTCHAs on initial page load
+        try {
+          const { detectAndSolve } = await import('../../services/captcha-solver.js');
+          const captchaResult = await Promise.race([
+            detectAndSolve(page as any),
+            new Promise<{hadCaptcha: boolean; solved: boolean}>((r) => setTimeout(() => r({ hadCaptcha: false, solved: false }), 30000)),
+          ]);
+          if (captchaResult.hadCaptcha && captchaResult.solved) {
+            // CAPTCHA solved — wait for page to reload after solve
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        } catch { /* CAPTCHA detection failed — continue anyway */ }
       }
 
-      // DOM mode: uses act() and fillForm() — handles JS overlays, React buttons, dropdowns
-      // Falls back to hybrid/cua if DOM mode fails
+      // DOM mode: act() and fillForm() handle JS overlays, React buttons, dropdowns
       const agent = stagehand.agent({
         model: 'google/gemini-2.5-flash' as any,
       });
