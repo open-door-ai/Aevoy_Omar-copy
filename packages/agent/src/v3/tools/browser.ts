@@ -523,50 +523,23 @@ registerTool({
     try {
       const { Stagehand } = await import('@browserbasehq/stagehand');
 
-      // Try Steel browser first (self-hosted on Railway, different IP than agent)
-      // Fall back to local Chrome if Steel unavailable
-      const steelUrl = process.env.STEEL_API_URL || '';
-      const steelKey = process.env.STEEL_API_KEY || '';
-      const isSelfHosted = steelUrl.includes('.railway.internal') || steelUrl.includes('localhost');
-      let cdpWsUrl: string | null = null;
-      let steelSessionId: string | null = null;
-      let chromeProc: any = null;
-
-      if (steelUrl && (steelKey || isSelfHosted)) {
-        try {
-          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (!isSelfHosted && steelKey) headers['steel-api-key'] = steelKey;
-          const apiBase = isSelfHosted ? `${steelUrl}/v1` : steelUrl;
-          const res = await fetch(`${apiBase}/sessions`, {
-            method: 'POST', headers,
-            body: JSON.stringify({ sessionTimeout: 300000 }),
-          });
-          if (res.ok) {
-            const session = await res.json() as any;
-            steelSessionId = session.id;
-            cdpWsUrl = isSelfHosted
-              ? `ws://${new URL(steelUrl).host}?sessionId=${steelSessionId}`
-              : `wss://connect.steel.dev?apiKey=${steelKey}&sessionId=${steelSessionId}`;
-          }
-        } catch { /* Steel unavailable, fall through to local Chrome */ }
-      }
-
-      // Local Chrome fallback
-      if (!cdpWsUrl) {
-        const { spawn } = await import('child_process');
-        const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
-        const port = 9222 + Math.floor(Math.random() * 1000);
-        chromeProc = spawn(chromePath, [
-          '--headless', '--no-sandbox', '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', '--disable-gpu',
-          `--remote-debugging-port=${port}`, '--remote-debugging-address=0.0.0.0',
-          'about:blank',
-        ], { stdio: 'pipe' });
-        await new Promise(r => setTimeout(r, 2000));
-        const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
-        const data = await versionResp.json() as any;
-        cdpWsUrl = data.webSocketDebuggerUrl;
-      }
+      // Chrome with ScraperAPI residential proxy (free tier, no KYC)
+      const { spawn } = await import('child_process');
+      const chromePath = process.env.CHROME_PATH || '/usr/bin/google-chrome-stable';
+      const port = 9222 + Math.floor(Math.random() * 1000);
+      const scraperApiKey = process.env.SCRAPERAPI_KEY;
+      const proxyUrl = process.env.PROXY_URL
+        || (scraperApiKey ? `http://scraperapi:${scraperApiKey}@proxy-server.scraperapi.com:8001` : '');
+      const chromeProc = spawn(chromePath, [
+        '--headless', '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', '--disable-gpu',
+        `--remote-debugging-port=${port}`, '--remote-debugging-address=0.0.0.0',
+        ...(proxyUrl ? [`--proxy-server=${proxyUrl}`, '--ignore-certificate-errors'] : []),
+        'about:blank',
+      ], { stdio: 'pipe' });
+      await new Promise(r => setTimeout(r, 2000));
+      const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
+      const { webSocketDebuggerUrl: cdpWsUrl } = await versionResp.json() as any;
 
       // Init Stagehand via CDP
       const stagehand = new Stagehand({
@@ -608,14 +581,7 @@ registerTool({
       const title = await page?.title() || '';
 
       await stagehand.close().catch(() => {});
-      if (chromeProc) chromeProc.kill();
-      // Release Steel session
-      if (steelSessionId && steelUrl) {
-        const headers: Record<string, string> = {};
-        if (steelKey) headers['steel-api-key'] = steelKey;
-        const apiBase = isSelfHosted ? `${steelUrl}/v1` : steelUrl;
-        fetch(`${apiBase}/sessions/${steelSessionId}`, { method: 'DELETE', headers }).catch(() => {});
-      }
+      chromeProc.kill();
 
       return {
         success: true,
