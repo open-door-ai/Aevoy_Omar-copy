@@ -539,18 +539,22 @@ registerTool({
       const profileId = ctx.userId.substring(0, 8); // Use first 8 chars of user ID
       const cdpWsUrl = `wss://connect.browser-use.com?apiKey=${buApiKey}&proxyCountryCode=ca&sessionContext=${profileId}`;
 
-      // Gemini first (proven working), Groq as fallback for quota
-      const models = [
-        'google/gemini-2.5-flash',
-        'google/gemini-2.0-flash',
-      ];
+      // DeepSeek as primary model — no quota issues, no spending cap
+      // Stagehand accepts OpenAI-compatible APIs via clientOptions
+      const modelConfig = {
+        modelName: 'deepseek-chat' as any,
+        clientOptions: {
+          apiKey: process.env.DEEPSEEK_API_KEY,
+          baseURL: 'https://api.deepseek.com/v1',
+        },
+      };
 
-      for (const model of models) {
+      {
         try {
           const stagehand = new Stagehand({
             env: 'LOCAL' as const,
             localBrowserLaunchOptions: { cdpUrl: cdpWsUrl },
-            model: model as any,
+            model: modelConfig as any,
             verbose: 0,
           });
           await stagehand.init();
@@ -560,7 +564,7 @@ registerTool({
             await page.goto(startUrl, { waitUntil: 'networkidle' as any, timeoutMs: 20000 }).catch(() => {});
           }
 
-          const agent = stagehand.agent({ model: model as any });
+          const agent = stagehand.agent({ model: modelConfig as any });
           const result = await agent.execute({ instruction, maxSteps: 30 });
 
           const page = stagehand.context.pages()[0];
@@ -576,13 +580,9 @@ registerTool({
             cost: actions.length * 0.003,
           };
         } catch (err: any) {
-          const msg = err.message || '';
-          if (msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) continue;
-          if (model === models[models.length - 1]) throw err;
-          continue;
+          throw err;
         }
       }
-      throw new Error('All browser models exhausted');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Browser agent: ${msg.substring(0, 200)}`, cost: 0 };
