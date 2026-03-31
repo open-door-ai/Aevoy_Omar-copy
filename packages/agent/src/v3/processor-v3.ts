@@ -386,9 +386,10 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     return { tier: 'single_tool', tool: 'weather', reasoning: 'weather query' };
   }
 
-  // Live data queries — use web_search first, not browser or knowledge
-  if (/\b(exchange\s*rate|usd.*cad|cad.*usd|stock\s*price|current\s*price|cheapest|price\s*of|cost\s*of|how\s*much|score|standings|won\s*the\s*game)\b/i.test(lower) && lower.length < 120) {
-    return { tier: 'single_tool', tool: 'web_search', reasoning: 'live data — web_search first, not browser' };
+  // Simple live data queries — short, single-fact lookups use web_search
+  // Complex research with "price/compare" goes to multi_step for browser_agent
+  if (/\b(exchange\s*rate|usd.*cad|cad.*usd|stock\s*price|score|standings|won\s*the\s*game)\b/i.test(lower) && lower.length < 60) {
+    return { tier: 'single_tool', tool: 'web_search', reasoning: 'simple live data lookup' };
   }
 
   // Email send
