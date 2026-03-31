@@ -532,13 +532,23 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
     if (jsonMatch) {
       params = JSON.parse(jsonMatch[0]);
     } else {
-      // Fall through to multi-step if we can't extract params
-      logger.warn(`[V3] Could not extract params for ${toolName}, falling back to multi_step`);
-      return handleMultiStep(task, ctx);
+      // For weather, default to user's city from timezone
+      if (toolName === 'weather') {
+        const tzCity = ctx.profile.timezone?.split('/').pop()?.replace(/_/g, ' ') || 'Vancouver';
+        params = { location: tzCity };
+      } else {
+        logger.warn(`[V3] Could not extract params for ${toolName}, falling back to multi_step`);
+        return handleMultiStep(task, ctx);
+      }
     }
   } catch (err) {
-    logger.warn({ err, taskId: ctx.taskId }, '[V3] single_tool param extraction failed, falling back to multi_step');
-    return handleMultiStep(task, ctx);
+    if (toolName === 'weather') {
+      const tzCity = ctx.profile.timezone?.split('/').pop()?.replace(/_/g, ' ') || 'Vancouver';
+      params = { location: tzCity };
+    } else {
+      logger.warn({ err, taskId: ctx.taskId }, '[V3] single_tool param extraction failed, falling back to multi_step');
+      return handleMultiStep(task, ctx);
+    }
   }
 
   // Execute the tool
