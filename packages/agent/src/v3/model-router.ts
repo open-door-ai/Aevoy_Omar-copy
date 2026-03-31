@@ -278,7 +278,7 @@ async function callProvider(
   maxTokens?: number,
   temperature?: number
 ): Promise<ModelResponse> {
-  const timeoutMs = model.provider === 'groq' ? 15000 : model.provider === 'deepseek' ? 30000 : model.provider === 'gemini' ? 45000 : 30000;
+  const timeoutMs = model.provider === 'groq' ? 15000 : model.provider === 'deepseek' ? 60000 : model.provider === 'gemini' ? 45000 : 30000;
 
   if (model.provider === 'haiku') {
     return callAnthropic(model, messages, tools, maxTokens, temperature);
