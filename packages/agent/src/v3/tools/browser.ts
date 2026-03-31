@@ -529,7 +529,7 @@ registerTool({
         headers: { 'Content-Type': 'application/json', 'X-Browser-Use-API-Key': buApiKey },
         body: JSON.stringify({
           task: fullTask,
-          model: 'bu-mini',
+          model: 'bu-max',
           proxyCountryCode: 'ca',
           keepAlive: false,
         }),
@@ -544,8 +544,8 @@ registerTool({
       const sessionId = session.id || session.sessionId;
       if (!sessionId) throw new Error('No session ID returned');
 
-      // Poll for completion (max 5 min for complex tasks)
-      const deadline = Date.now() + 300000;
+      // Poll for completion (max 8 min for complex tasks)
+      const deadline = Date.now() + 480000;
       let result: any = null;
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 5000));

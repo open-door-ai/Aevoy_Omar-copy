@@ -407,7 +407,7 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
   }
 
   // Memory/recall queries — use recall tool, NOT browser
-  if (/\b(what did I|status.*update|what.*done.*this week|what.*asked.*yesterday|did.*go through|my (tasks|history|commitments))\b/i.test(lower)) {
+  if (/\b(what did I|status.*update|what.*done.*this week|what.*asked.*yesterday|did.*go through|my (tasks|history|commitments)|do that.*again|last time|that thing)\b/i.test(lower)) {
     return { tier: 'single_tool', tool: 'recall', reasoning: 'memory/status recall' };
   }
 
