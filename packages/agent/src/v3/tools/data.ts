@@ -202,7 +202,28 @@ registerTool({
         // Non-critical — commitments table may not exist yet
       }
 
-      const combined = [facts, contextSummary, commitmentsSummary].filter(Boolean).join('\n\n--- Aurora Context ---\n');
+      // Query recent task history when asking about status/history/what was done
+      let taskHistory = '';
+      const isStatusQuery = /status|what.*did|what.*done|yesterday|this week|last time|again|go through/i.test(query);
+      if (isStatusQuery) {
+        try {
+          const { data: tasks } = await getSupabaseClient()
+            .from('tasks')
+            .select('email_subject, status, response_text, created_at')
+            .eq('user_id', ctx.userId)
+            .order('created_at', { ascending: false })
+            .limit(10);
+          if (tasks && tasks.length > 0) {
+            taskHistory = '\n\nRecent tasks:\n' + tasks.map((t: any) => {
+              const date = new Date(t.created_at).toLocaleString('en-US', { timeZone: 'America/Vancouver', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+              const preview = t.response_text ? t.response_text.substring(0, 80) : 'no response';
+              return `- [${t.status}] "${t.email_subject}" (${date}) → ${preview}`;
+            }).join('\n');
+          }
+        } catch { /* non-critical */ }
+      }
+
+      const combined = [taskHistory, facts, contextSummary, commitmentsSummary].filter(Boolean).join('\n\n---\n');
       return { success: true, data: combined || 'No memories or context found.', cost: 0 };
     } catch (err) {
       return { success: false, error: 'Failed to recall memory', cost: 0 };

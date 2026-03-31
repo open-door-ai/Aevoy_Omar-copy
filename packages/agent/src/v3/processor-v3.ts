@@ -386,9 +386,9 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     return { tier: 'single_tool', tool: 'weather', reasoning: 'weather query' };
   }
 
-  // Live data queries — must use web_search, not knowledge (rates change daily)
-  if (/\b(exchange\s*rate|usd.*cad|cad.*usd|stock\s*price|current\s*price|score|standings|won\s*the\s*game)\b/i.test(lower) && lower.length < 100) {
-    return { tier: 'multi_step', reasoning: 'live data query — needs web_search for current info' };
+  // Live data queries — use web_search first, not browser or knowledge
+  if (/\b(exchange\s*rate|usd.*cad|cad.*usd|stock\s*price|current\s*price|cheapest|price\s*of|cost\s*of|how\s*much|score|standings|won\s*the\s*game)\b/i.test(lower) && lower.length < 120) {
+    return { tier: 'single_tool', tool: 'web_search', reasoning: 'live data — web_search first, not browser' };
   }
 
   // Email send
@@ -593,8 +593,8 @@ Respond with JSON: {"to": "+1234567890", "body": "Message text"}`,
 
     schedule_task: `Extract what to schedule and when.
 User timezone: ${ctx.profile.timezone}. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.
-IMPORTANT: Pass the "time" field EXACTLY as the user phrased it — do NOT convert or interpret times. If they said "tomorrow at 9am", pass "tomorrow at 9am". If they said "in 5 minutes", pass "in 5 minutes". The tool handles all time parsing.
-Respond with JSON: {"description": "what to do", "time": "user's exact time phrase", "action_type": "reminder|call|task"}`,
+IMPORTANT: Pass the "time" field EXACTLY as the user phrased it. If they said "friday afternoon", pass "friday at 2pm" (afternoon = 2pm). If they said "morning", use 9am. If they said "evening", use 6pm. NEVER ask for a specific time when they gave a time-of-day word.
+Respond with JSON: {"description": "what to do", "time": "user's time phrase with reasonable default", "action_type": "reminder|call|task"}`,
 
     generate_image: `Extract image description and optional style.
 Respond with JSON: {"prompt": "detailed description", "style": "style or empty"}`,
@@ -609,6 +609,9 @@ Respond with JSON: {"to": "+1234567890", "message": "what to say"}`,
     recall: `The user wants to recall information about their past tasks, commitments, or context.
 Extract what they want to know about.
 Respond with JSON: {"query": "what the user wants to recall"}`,
+
+    web_search: `Extract the search query from the user's message.
+Respond with JSON: {"query": "search terms"}`,
   };
 
   return `User request: "${taskText}"
@@ -989,27 +992,24 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
         ledger.recordObservation(tc.name, tc.arguments, result);
       }
 
-      // browser_agent result = DONE. Track it properly, then return to user.
+      // browser_agent result — add to messages and CONTINUE the loop
+      // (don't return — there may be more tool calls for compound tasks)
       if (tc.name === 'browser_agent') {
-        const resultText = String(result.data || result.error || 'Browser agent completed with no output.');
-        // Track as actions for quality gate
+        const resultText = String(result.data || result.error || 'Browser agent completed.');
         actionCount++;
         if (result.success) actionSuccessCount++;
-        // Track cost
         if (result.cost > 0) {
           cumulativeCost += result.cost;
           await budget.trackCost('v3', 'browser_agent', result.cost, 'v3:tool:browser_agent');
         }
-        // Update task progress in DB before returning
-        try {
-          const { getSupabaseClient } = await import('../utils/supabase.js');
-          await getSupabaseClient().from('tasks').update({
-            action_count: actionCount,
-            action_success_count: actionSuccessCount,
-          }).eq('id', ctx.taskId);
-        } catch { /* non-critical */ }
-        logger.info(`[V3] browser_agent done (success=${result.success}, cost=$${(result.cost || 0).toFixed(3)}) — returning to user`);
-        return resultText;
+        // Inject the result into the conversation so the AI knows the browser part is done
+        messages.push({ role: 'tool', content: resultText, tool_call_id: tc.name });
+        messages.push({
+          role: 'user',
+          content: 'Browser task completed. Now check: were there OTHER parts of the original request that still need to be done (reminders, messages, emails)? If yes, do them now with the appropriate tools. If all parts are done, respond to the user with everything that was accomplished.',
+        });
+        logger.info(`[V3] browser_agent done — continuing loop for remaining subtasks`);
+        continue;
       }
 
       // ── FIX 3: Track meaningful vs stale actions ──
