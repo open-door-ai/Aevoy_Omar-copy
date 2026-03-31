@@ -847,17 +847,18 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
           progress_message: `Model error #${consecutiveModelFailures} at step ${iterations}: ${errMsg.substring(0, 200)}`,
         }).eq('id', ctx.taskId);
       } catch (err) { logger.warn({ err, taskId: ctx.taskId }, '[V3] Progress update for model error failed (non-critical)'); }
-      // Retry up to 5 times with backoff matching model-router's backoff windows:
-      // Gemini: 15s backoff, Haiku: 30s backoff. Retries must OUTLAST these.
-      if (consecutiveModelFailures >= 5) {
+      // Retry up to 3 times with short waits — deliver partial results fast
+      if (consecutiveModelFailures >= 3) {
+        // Deliver whatever we have — don't say "AI services issue"
+        const lastAssistantMsg = messages.filter(m => m.role === 'assistant' && m.content && m.content.length > 20).pop()?.content || '';
+        const lastToolResult = messages.filter(m => m.role === 'tool' && m.content && m.content.length > 20).pop()?.content || '';
         const partial = ledger.getPartialResults();
-        return partial !== 'No results gathered yet.'
-          ? `I ran into an issue with AI services, but here's what I found:\n\n${partial}`
-          : 'I encountered an issue with AI services. Please try again shortly.';
+        const bestResult = lastAssistantMsg || lastToolResult || partial;
+        return bestResult !== 'No results gathered yet.' ? bestResult : 'I had trouble completing this task. Please try again.';
       }
-      const retryDelays = [5000, 10000, 16000, 20000, 25000];
+      const retryDelays = [3000, 8000, 15000];
       const delay = retryDelays[Math.min(consecutiveModelFailures - 1, retryDelays.length - 1)];
-      logger.info(`[V3] Retrying model call in ${delay/1000}s (attempt ${consecutiveModelFailures}/5)`);
+      logger.info(`[V3] Retrying model call in ${delay/1000}s (attempt ${consecutiveModelFailures}/3)`);
       await new Promise(r => setTimeout(r, delay));
       continue;
     }
