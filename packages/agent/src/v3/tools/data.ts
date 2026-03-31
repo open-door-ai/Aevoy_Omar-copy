@@ -79,8 +79,13 @@ registerTool({
         const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/gi;
         let match;
         let count = 0;
-        while ((match = resultRegex.exec(html)) !== null && count < 8) {
-          const url = match[1]?.replace(/.*uddg=([^&]*).*/, (_, u) => decodeURIComponent(u)) || match[1];
+        while ((match = resultRegex.exec(html)) !== null && count < 5) {
+          let url = match[1] || '';
+          // Strip DuckDuckGo tracking redirects to get clean URLs
+          const uddgMatch = url.match(/uddg=([^&]*)/);
+          if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+          // Skip ad links (duckduckgo.com/y.js ad redirects)
+          if (url.includes('duckduckgo.com/y.js') || url.includes('ad_domain')) continue;
           const title = match[2]?.replace(/<[^>]+>/g, '').trim();
           const snippet = match[3]?.replace(/<[^>]+>/g, '').trim();
           if (title && snippet) {

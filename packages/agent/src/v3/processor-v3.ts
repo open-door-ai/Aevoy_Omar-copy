@@ -1179,8 +1179,8 @@ PICK ONE NEW STRATEGY and execute it NOW. Do NOT retry what already failed.`
       screenshotCount = 0;
     }
 
-    // ── Context compression every 5 iterations ──
-    if (iterations % 5 === 0 && messages.length > 12) {
+    // ── Context compression every 3 iterations (was 5 — DeepSeek needs smaller context) ──
+    if (iterations % 3 === 0 && messages.length > 8) {
       const compressed = compressMessagesV2(messages, progressNotes);
       messages.length = 0;
       messages.push(...compressed);
