@@ -386,6 +386,11 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     return { tier: 'single_tool', tool: 'weather', reasoning: 'weather query' };
   }
 
+  // Live data queries — must use web_search, not knowledge (rates change daily)
+  if (/\b(exchange\s*rate|usd.*cad|cad.*usd|stock\s*price|current\s*price|score|standings|won\s*the\s*game)\b/i.test(lower) && lower.length < 100) {
+    return { tier: 'multi_step', reasoning: 'live data query — needs web_search for current info' };
+  }
+
   // Email send
   if (/\b(send|compose|draft|write)\b.*\b(email|mail|message)\b.*\b(to)\b/i.test(lower) && /\S+@\S+\.\S+/.test(lower)) {
     return { tier: 'single_tool', tool: 'send_email', reasoning: 'email send' };
@@ -399,6 +404,11 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
   // Schedule/remind
   if (/\b(remind|schedule|call\s*me\s*back|timer|alarm)\b/i.test(lower)) {
     return { tier: 'single_tool', tool: 'schedule_task', reasoning: 'schedule/remind' };
+  }
+
+  // Memory/recall queries — use recall tool, NOT browser
+  if (/\b(what did I|status.*update|what.*done.*this week|what.*asked.*yesterday|did.*go through|my (tasks|history|commitments))\b/i.test(lower)) {
+    return { tier: 'single_tool', tool: 'recall', reasoning: 'memory/status recall' };
   }
 
   // Image generation
@@ -595,6 +605,10 @@ Respond with JSON: {"type": "word|excel|powerpoint|pdf", "title": "doc title", "
     make_call: `Extract phone number to call and message to speak.
 User's phone: ${ctx.profile.phone || 'unknown'}.
 Respond with JSON: {"to": "+1234567890", "message": "what to say"}`,
+
+    recall: `The user wants to recall information about their past tasks, commitments, or context.
+Extract what they want to know about.
+Respond with JSON: {"query": "what the user wants to recall"}`,
   };
 
   return `User request: "${taskText}"

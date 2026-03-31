@@ -503,12 +503,7 @@ registerTool({
 });
 
 // ── browser_agent — Browser Use Cloud Task API ──
-// No Stagehand, no local Chrome, no model keys needed.
-// Browser Use Cloud handles: model (bu-mini), browser, proxy, CAPTCHA.
-// Credits: $6.73 remaining on free tier.
-
-let activeBrowserSessions = 0;
-const MAX_CONCURRENT_BROWSER = 3;
+// BU Cloud handles concurrency, model, browser, proxy, CAPTCHA internally.
 
 registerTool({
   name: 'browser_agent',
@@ -522,11 +517,6 @@ registerTool({
   async execute(params, ctx): Promise<ToolCallResult> {
     const instruction = String(params.instruction);
     const startUrl = params.start_url ? String(params.start_url) : undefined;
-
-    if (activeBrowserSessions >= MAX_CONCURRENT_BROWSER) {
-      return { success: false, error: 'Browser busy. Try again shortly.', cost: 0 };
-    }
-    activeBrowserSessions++;
 
     try {
       const buApiKey = process.env.BROWSER_USE_API_KEY;
@@ -584,8 +574,6 @@ registerTool({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Browser agent: ${msg.substring(0, 200)}`, cost: 0 };
-    } finally {
-      activeBrowserSessions--;
     }
   },
 });
