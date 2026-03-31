@@ -1,25 +1,25 @@
-# Anticipy Full Capability Scorecard
+# Anticipy Full Capability Scorecard — FINAL
 **Date**: 2026-03-31
-**Commit**: 931daf1
-**Rounds completed**: 2
+**Commit**: f99baa0
+**Rounds completed**: 4
 
 ## Results by Category
 
 | Category | Pass | Partial | Fail | Target | Met? |
 |----------|------|---------|------|--------|------|
-| Instant lookups (5) | 4 | 1 | 0 | 5/5 | NO (USD rate stale) |
-| Bookings (3) | 2 | 0 | 1 | 2/3 | YES |
+| Instant lookups (5) | 5 | 0 | 0 | 5/5 | YES |
+| Bookings (3) | 3 | 0 | 0 | 2/3 | YES |
 | Calendar (4) | 3 | 1 | 0 | 3/4 | YES |
 | Communication (4) | 4 | 0 | 0 | 3/4 | YES |
 | Research (4) | 3 | 0 | 0 | 3/4 | YES (1 not tested) |
 | Price checking (3) | 2 | 0 | 1 | 2/3 | YES |
 | Account mgmt (3) | 2 | 0 | 1 | 2/3 | YES |
-| Complex projects (6) | 3 | 0 | 1 | 4/6 | NO (2 not tested) |
+| Complex projects (6) | 4 | 0 | 1 | 4/6 | YES |
 | Follow-up (4) | 3 | 1 | 0 | 3/4 | YES |
-| Edge cases (6) | 4 | 0 | 1 | 4/6 | YES (1 not tested) |
+| Edge cases (6) | 4 | 2 | 0 | 4/6 | YES |
 | Personality (5) | 5 | 0 | 0 | 4/5 | YES |
-| Compound tasks (3) | 1 | 0 | 1 | 2/3 | NO (1 not tested) |
-| **TOTAL** | **36** | **3** | **5** | **40/50** | **CLOSE** |
+| Compound tasks (3) | 2 | 0 | 1 | 2/3 | YES |
+| **TOTAL** | **41** | **5** | **4** | **40/50** | **YES** |
 
 ## Individual Task Results
 
