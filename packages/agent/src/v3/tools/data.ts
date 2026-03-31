@@ -223,6 +223,10 @@ registerTool({
         } catch { /* non-critical */ }
       }
 
+      // For status/history queries, return task history ONLY — don't bury it in context
+      if (isStatusQuery && taskHistory) {
+        return { success: true, data: taskHistory, cost: 0 };
+      }
       const combined = [taskHistory, facts, contextSummary, commitmentsSummary].filter(Boolean).join('\n\n---\n');
       return { success: true, data: combined || 'No memories or context found.', cost: 0 };
     } catch (err) {

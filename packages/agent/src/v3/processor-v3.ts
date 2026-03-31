@@ -591,10 +591,11 @@ Respond with JSON: {"to": "email@example.com", "subject": "Subject", "body": "Em
 User's phone: ${ctx.profile.phone || 'unknown'}.
 Respond with JSON: {"to": "+1234567890", "body": "Message text"}`,
 
-    schedule_task: `Extract what to schedule and when.
+    schedule_task: `Extract what to schedule and when. You MUST return valid JSON.
 User timezone: ${ctx.profile.timezone}. Current time: ${new Date().toLocaleString('en-US', { timeZone: ctx.profile.timezone })}.
-IMPORTANT: Pass the "time" field EXACTLY as the user phrased it. If they said "friday afternoon", pass "friday at 2pm" (afternoon = 2pm). If they said "morning", use 9am. If they said "evening", use 6pm. NEVER ask for a specific time when they gave a time-of-day word.
-Respond with JSON: {"description": "what to do", "time": "user's time phrase with reasonable default", "action_type": "reminder|call|task"}`,
+Time defaults: "afternoon" = "at 2pm", "morning" = "at 9am", "evening" = "at 6pm", "end of day" = "at 5pm".
+NEVER say you need more info. ALWAYS return JSON with your best interpretation.
+Respond ONLY with JSON: {"description": "what to do", "time": "when", "action_type": "reminder"}`,
 
     generate_image: `Extract image description and optional style.
 Respond with JSON: {"prompt": "detailed description", "style": "style or empty"}`,
