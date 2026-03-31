@@ -507,7 +507,7 @@ registerTool({
 
 registerTool({
   name: 'browser_agent',
-  description: 'Autonomous browser agent for any website task. IMPORTANT: Include the user\'s city/location in the instruction. The browser agent has no user context — pass all details.',
+  description: 'Browser agent for ONE website task at a time. Only use for tasks that REQUIRE a browser (booking, price lookup, form fill). Do NOT send compound tasks — use separate tools for each action. Include city/location in the instruction.',
   category: 'browser',
   parameters: {
     instruction: { type: 'string', description: 'Detailed instruction including location context' },
@@ -560,7 +560,7 @@ registerTool({
         }
       }
 
-      if (!result) return { success: false, error: 'Browser task timed out (3 min)', cost: 0.05 };
+      if (!result) return { success: false, error: 'Browser task timed out after 8 minutes', cost: 0.05 };
 
       const output = result.output || 'Task completed with no output';
       const steps = result.stepCount || 0;
