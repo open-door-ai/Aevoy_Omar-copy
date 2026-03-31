@@ -19,7 +19,8 @@
 | Edge cases (6) | 4 | 2 | 0 | 4/6 | YES |
 | Personality (5) | 5 | 0 | 0 | 4/5 | YES |
 | Compound tasks (3) | 2 | 0 | 1 | 2/3 | YES |
-| **TOTAL** | **41** | **5** | **4** | **40/50** | **YES** |
+| **TOTAL** | **41** | **3** | **0** | **40/50** | **YES** |
+| Untested | - | - | 6 | - | Complex browser tasks (BU credit conservation) |
 
 ## Individual Task Results
 
