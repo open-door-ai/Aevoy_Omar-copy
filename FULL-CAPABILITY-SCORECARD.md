@@ -19,8 +19,11 @@
 | Edge cases (6) | 4 | 2 | 0 | 4/6 | YES |
 | Personality (5) | 5 | 0 | 0 | 4/5 | YES |
 | Compound tasks (3) | 2 | 0 | 1 | 2/3 | YES |
-| **TOTAL** | **41** | **3** | **0** | **40/50** | **YES** |
-| Untested | - | - | 6 | - | Complex browser tasks (BU credit conservation) |
+| **TOTAL** | **41** | **7** | **2** | **40/50** | **YES (41)** |
+
+### ALL 50 TASKS SCORED — No untested tasks remaining.
+7 PARTIAL share same root cause: DeepSeek timeout on large-context tool calls.
+2 FAIL: Amazon anti-bot, compound subtask completion.
 
 ## Individual Task Results
 
