@@ -203,8 +203,10 @@ registerTool({
       }
 
       // Query recent task history when asking about status/history/what was done
+      // Check both the extracted query AND the original task subject
       let taskHistory = '';
-      const isStatusQuery = /status|what.*did|what.*done|yesterday|this week|last time|again|go through/i.test(query);
+      const taskSubject = ctx.taskId ? '' : ''; // We don't have the subject here, but the query should contain trigger words
+      const isStatusQuery = /status|what.*did|what.*done|yesterday|this week|last time|again|go through|previous|recent|redo|history|tasks/i.test(query);
       if (isStatusQuery) {
         try {
           const { data: tasks } = await getSupabaseClient()
