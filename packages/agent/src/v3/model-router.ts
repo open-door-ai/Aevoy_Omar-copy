@@ -208,7 +208,8 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
     } catch (err: any) {
       recordModelFailure(key);
       trackError('ai');
-      skipReasons.push(`${key}:err-${err?.status || 'unknown'}`);
+      const errDetail = (err?.error?.message || err?.message || '').substring(0, 80);
+      skipReasons.push(`${key}:err-${err?.status || 'unknown'}(${errDetail})`);
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
         const errMsg = err?.message || '';
         // Detect PERMANENT failures (spending cap, no credits) vs transient rate limits
