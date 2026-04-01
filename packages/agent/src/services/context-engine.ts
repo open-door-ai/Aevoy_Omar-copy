@@ -187,16 +187,19 @@ async function extractCommunicationStyle(message: string, userId: string): Promi
 // false positives (e.g., "In the movie, the guy cancels his subscription").
 
 const ACTION_INTENT_PATTERNS: RegExp[] = [
-  // EXPLICIT: "I need to..." / "I have to..." / "I should..." / "I gotta..."
-  /\bi\s+(need|have|got|gotta|should|must|want)\s+to\s+(.{5,80})/i,
+  // EXPLICIT: "I need to..." / "I have to..." / "I got to..."
+  /\bi\s+(need|have|got|gotta)\s+to\s+(.{5,80})/i,
+  // "I [really/probably] should/must/want [to] ..." — optional adverbs, optional "to"
+  /\bi\s+(?:really|probably|definitely|seriously)?\s*(should|must|want)\s+(?:to\s+)?(.{5,80})/i,
   // "Remind me to..."
   /\bremind\s+me\s+to\s+(.{5,80})/i,
   // "Don't let me forget..."
   /\bdon'?t\s+let\s+me\s+forget\s+(.{5,80})/i,
   // "I promised X..."
   /\bi\s+promised\s+(\w+)\s+(.{5,50})/i,
-  // "Book me..." / "Schedule..."
-  /\b(book|schedule|reserve|set up|arrange)\s+(me\s+)?(.{5,80})/i,
+  // "Book me..." / "I'll book..." / "Schedule a meeting" (sentence-start = implicit first-person)
+  // Matches: "I'll book...", "book me...", "Schedule a meeting..." (at start of sentence)
+  /\b(?:I(?:'ll|'d)?\s+(?:book|schedule|reserve|set up|arrange)|(?:book|schedule|reserve|set up|arrange)\s+(?:me|a|an|the|my)\s)(.{5,80})/i,
   // NOTE: Removed "can you/could you" — direct requests go through normal task processing,
   // not the action detection queue. Action detection is for things said in PASSING.
   // IMPLIED: "I keep forgetting to..." / "I keep meaning to..."
@@ -225,9 +228,21 @@ const FALSE_POSITIVE_PATTERNS: RegExp[] = [
   // Too vague: "someday", "maybe eventually", "at some point"
   /\b(someday|maybe eventually|at some point|one of these days|when I get around to)\b/i,
   // Reporting on someone else's action (not the user's own intent)
-  /\b(this guy|this person|my friend|my neighbor|my coworker)\s+(cancels?|books?|files?|sends?|calls?)\b/i,
-  // Quoting or paraphrasing: "he said", "she was like", "they told me"
-  /\b(he said|she said|they said|was like|told me that)\b.*\b(need|have|should|must|want)\s+to\b/i,
+  /\b(this guy|this person|my friend|my neighbor|my coworker)\s+(cancels?|books?|files?|sends?|calls?|keeps?\s+forgetting)\b/i,
+  // Quoting or paraphrasing someone else's intent (catch-all for third-person + action)
+  /\b(he said|she said|they said|was like|told me that|told me I)\b/i,
+  // Third person subject + "needs/wants to [action verb]" — someone else's intent, not ours
+  /\b(he|she|they)\s+(needs?|wants?|has?|have)\s+to\s+(book|schedule|cancel|send|call|file|pay|reserve|arrange)/i,
+  // "The main character" / "the protagonist" — fiction narration
+  /\b(the main character|the character|the protagonist|the hero|the villain)\b/i,
+  // Past-tense fiction: "had to cancel/book" after a third-person subject
+  /\b(he|she|they|the \w+)\s+had\s+to\s+(cancel|book|schedule|send|call|file|pay|reserve)/i,
+  // Media references: podcast, article, blog, TikTok, YouTube video
+  /\b(in the podcast|in the article|in the blog|on the blog|in that video|on youtube|on tiktok)\b/i,
+  // Generic "you should" advice (not first-person intent)
+  /\byou\s+should\s+/i,
+  // "but I'm not going to" — explicitly rejected intent
+  /\bbut\s+I(?:'m|\s+am)\s+not\s+(?:going\s+to|gonna)\b/i,
 ];
 
 /** Result of action detection — exported so callers can act immediately */
