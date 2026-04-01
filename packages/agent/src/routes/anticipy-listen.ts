@@ -28,8 +28,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
 import { createClient } from '@supabase/supabase-js';
-import { extractContext } from '../services/context-engine.js';
-import type { DetectedAction } from '../services/context-engine.js';
+import { ConversationBuffer, detectIntentsFromBuffer, clearSessionDetections } from '../services/intent-detector.js';
+import type { DetectedIntent } from '../services/intent-detector.js';
 import { trackSpend } from '../services/cost-circuit-breaker.js';
 import { processTaskV3 } from '../v3/processor-v3.js';
 import { getSupabaseClient } from '../utils/supabase.js';
@@ -136,23 +136,29 @@ function handleGracefulShutdown() {
 // Register once — idempotent via a module-level flag
 let shutdownRegistered = false;
 
-// ---- Extract context and act on detected intents ----
+// ---- LLM-based intent detection from rolling conversation buffer ----
 
 /**
- * Runs context extraction on transcribed speech. If an actionable intent
- * is detected:
- * - In AUTONOMOUS mode: immediately creates a V3 task (Anticipy acts NOW)
- * - In CONFIRMATION mode (default): sends intent_detected to client for user approval
+ * Analyzes the full conversation buffer with the LLM to detect actionable intents.
+ * When intents are found:
+ * - In AUTONOMOUS mode: immediately creates V3 tasks
+ * - In CONFIRMATION mode (default): sends intent_detected to client for approval
  *
- * The confirmation card shows what Anticipy heard and lets the user approve/dismiss.
- * This prevents false positive actions from ambient conversation.
+ * This replaces ALL regex-based intent detection. The LLM sees the full
+ * conversation context, so it can understand nuance, connect dots across
+ * sentences, and distinguish real intent from fiction/hypotheticals.
  */
-function extractAndMaybeAct(text: string, uid: string, clientWs: WebSocket): void {
-  extractContext(text, uid, 'microphone')
-    .then(async (detectedAction: DetectedAction | null) => {
-      if (!detectedAction) return;
+function analyzeBufferForIntents(
+  conversationBuffer: ConversationBuffer,
+  sessionId: string,
+  uid: string,
+  clientWs: WebSocket
+): void {
+  detectIntentsFromBuffer(conversationBuffer, sessionId)
+    .then(async (intents: DetectedIntent[]) => {
+      if (intents.length === 0) return;
 
-      // Look up user profile + settings to decide: autonomous or confirm?
+      // Look up user profile + settings
       const supabase = getSupabaseClient();
       const { data: profile } = await supabase
         .from('profiles')
@@ -161,7 +167,7 @@ function extractAndMaybeAct(text: string, uid: string, clientWs: WebSocket): voi
         .single();
 
       if (!profile) {
-        logger.warn({ userId: uid }, '[ANTICIPY-LISTEN] No profile — cannot create task for detected intent');
+        logger.warn({ userId: uid }, '[ANTICIPY-LISTEN] No profile found');
         return;
       }
 
@@ -173,67 +179,60 @@ function extractAndMaybeAct(text: string, uid: string, clientWs: WebSocket): voi
 
       const isAutonomous = settings?.autonomous_mode === true;
 
-      // ALWAYS tell the client what we detected (shows in feed as confirmation card)
-      if (clientWs.readyState === WebSocket.OPEN) {
-        try {
-          clientWs.send(JSON.stringify({
-            type: 'intent_detected',
-            action: detectedAction.actionText,
-            queueId: detectedAction.queueId,
-            needsConfirmation: !isAutonomous,
-          }));
-        } catch { /* best effort */ }
-      }
+      // Process each detected intent
+      for (const intent of intents) {
+        logger.info(
+          { userId: uid.substring(0, 8), action: intent.action.substring(0, 80), confidence: intent.confidence },
+          '[ANTICIPY-LISTEN] Intent detected: "%s" (confidence: %s)',
+          intent.action.substring(0, 60),
+          intent.confidence.toFixed(2)
+        );
 
-      // In confirmation mode, just notify — don't execute until user approves.
-      // The feed card shows the detected intent and the user can tap to confirm.
-      if (!isAutonomous) {
-        logger.info({ userId: uid.substring(0, 8), action: detectedAction.actionText.substring(0, 60) },
-          '[ANTICIPY-LISTEN] Intent detected (awaiting confirmation)');
-        return;
-      }
-
-      // AUTONOMOUS MODE: execute immediately
-      logger.info({ userId: uid.substring(0, 8), action: detectedAction.actionText.substring(0, 60) },
-        '[ANTICIPY-LISTEN] Creating immediate task from detected intent (autonomous)');
-
-      try {
-        const result = await processTaskV3({
-          userId: uid,
-          username: profile.username || 'user',
-          from: profile.email || `${profile.username}@aevoy.com`,
-          subject: detectedAction.actionText,
-          body: detectedAction.fullMessage,
-          inputChannel: 'web',
-          suppressEmail: true,
-        });
-
-        if (clientWs.readyState === WebSocket.OPEN && result.response) {
+        // Send to client for display
+        if (clientWs.readyState === WebSocket.OPEN) {
           try {
             clientWs.send(JSON.stringify({
-              type: 'action_completed',
-              action: detectedAction.actionText,
-              taskId: result.taskId,
-              response: result.response.substring(0, 500),
+              type: 'intent_detected',
+              action: intent.action,
+              details: intent.details,
+              confidence: intent.confidence,
+              needsConfirmation: !isAutonomous,
             }));
           } catch { /* best effort */ }
         }
 
-        if (detectedAction.queueId) {
-          await supabase
-            .from('proactive_queue')
-            .update({
-              status: 'acted_on',
-              delivered_at: new Date().toISOString(),
-            })
-            .eq('id', detectedAction.queueId);
+        // In confirmation mode, stop here — user must approve
+        if (!isAutonomous) continue;
+
+        // AUTONOMOUS MODE: execute immediately
+        try {
+          const result = await processTaskV3({
+            userId: uid,
+            username: profile.username || 'user',
+            from: profile.email || `${profile.username}@aevoy.com`,
+            subject: intent.action,
+            body: `${intent.action}\n\nDetails: ${JSON.stringify(intent.details)}\nReasoning: ${intent.reasoning}`,
+            inputChannel: 'web',
+            suppressEmail: true,
+          });
+
+          if (clientWs.readyState === WebSocket.OPEN && result.response) {
+            try {
+              clientWs.send(JSON.stringify({
+                type: 'action_completed',
+                action: intent.action,
+                taskId: result.taskId,
+                response: result.response.substring(0, 500),
+              }));
+            } catch { /* best effort */ }
+          }
+        } catch (err) {
+          logger.error({ err, userId: uid }, '[ANTICIPY-LISTEN] Failed to execute detected intent');
         }
-      } catch (err) {
-        logger.error({ err, userId: uid }, '[ANTICIPY-LISTEN] Failed to process detected intent as task');
       }
     })
     .catch((err) => {
-      logger.error({ err, userId: uid }, 'Mic context extraction failed');
+      logger.error({ err, userId: uid }, '[ANTICIPY-LISTEN] Intent detection failed');
     });
 }
 
@@ -276,12 +275,16 @@ export function setupListenWebSocket(server: Server): void {
     let deepgramWs: WebSocket | null = null;
     let minuteTimer: ReturnType<typeof setInterval> | null = null;
     let sessionTimer: ReturnType<typeof setTimeout> | null = null;
-    let transcriptBuffer = '';
     let pendingBatch = ''; // For batching short transcripts (< 3 words)
     let reconnecting = false;
     let audioBuffer: Buffer[] = [];
     let sessionStartMs = 0;
     let totalMinutesTracked = 0;
+    const sessionId = `session-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+    // Rolling conversation buffer — accumulates the FULL session transcript
+    // so the LLM can see context across the entire conversation, not just fragments.
+    const conversationBuffer = new ConversationBuffer();
 
     // ---- Auth timeout: must authenticate within 10 seconds ----
     const authTimeout = setTimeout(() => {
@@ -358,7 +361,8 @@ export function setupListenWebSocket(server: Server): void {
                 : trimmed;
               pendingBatch = '';
 
-              transcriptBuffer += ' ' + fullTranscript;
+              // Append to the rolling conversation buffer (LLM sees FULL context)
+              conversationBuffer.append(fullTranscript);
 
               // Echo final transcript to browser
               sendJson(clientWs, {
@@ -367,30 +371,27 @@ export function setupListenWebSocket(server: Server): void {
                 is_final: true,
               });
 
-              // Process in near-real-time: extract after just 5+ words
-              // (down from 20 — critical for the "Anticipy acts while you speak" experience)
-              if (transcriptBuffer.split(/\s+/).filter(Boolean).length >= 5) {
-                const textToExtract = transcriptBuffer.trim();
-                transcriptBuffer = '';
-
-                // Extract context AND check for immediate actions
-                extractAndMaybeAct(textToExtract, userId!, clientWs);
+              // Run LLM intent detection on the full buffer.
+              // The detector has its own cooldown to avoid spamming the LLM.
+              if (userId) {
+                analyzeBufferForIntents(conversationBuffer, sessionId, userId, clientWs);
               }
             }
           }
 
-          // UtteranceEnd = user paused speaking. Flush buffer immediately.
-          // This is the key: don't wait for word count — user's natural pause triggers processing.
+          // UtteranceEnd = user paused speaking. Flush pending batch and analyze.
           if (result.type === 'UtteranceEnd') {
             sendJson(clientWs, { type: result.type });
 
-            // Flush any accumulated text
-            const remaining = ((pendingBatch ? pendingBatch + ' ' : '') + transcriptBuffer).trim();
-            pendingBatch = '';
-            transcriptBuffer = '';
+            // Flush any remaining short batch into the conversation buffer
+            if (pendingBatch.trim().length > 0) {
+              conversationBuffer.append(pendingBatch.trim());
+              pendingBatch = '';
+            }
 
-            if (remaining.length > 3 && userId) {
-              extractAndMaybeAct(remaining, userId, clientWs);
+            // Natural pause = good time to analyze
+            if (userId) {
+              analyzeBufferForIntents(conversationBuffer, sessionId, userId, clientWs);
             }
           }
 
@@ -598,13 +599,18 @@ export function setupListenWebSocket(server: Server): void {
         }
       }
 
-      // Flush remaining pending batch + transcript buffer
-      const remaining = ((pendingBatch ? pendingBatch + ' ' : '') + transcriptBuffer).trim();
-      if (remaining.length > 5 && userId) {
-        extractAndMaybeAct(remaining, userId, clientWs);
+      // Flush remaining pending batch and do one final analysis
+      if (pendingBatch.trim().length > 0) {
+        conversationBuffer.append(pendingBatch.trim());
+        pendingBatch = '';
       }
-      pendingBatch = '';
-      transcriptBuffer = '';
+      if (userId && conversationBuffer.getWordCount() > 0) {
+        analyzeBufferForIntents(conversationBuffer, sessionId, userId, clientWs);
+      }
+
+      // Clean up session detection tracking
+      clearSessionDetections(sessionId);
+      conversationBuffer.clear();
 
       if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
         deepgramWs.close();

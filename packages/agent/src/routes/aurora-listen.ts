@@ -29,9 +29,7 @@ import type { IncomingMessage } from 'http';
 import type { Server } from 'http';
 import { createClient } from '@supabase/supabase-js';
 import { extractContext } from '../services/context-engine.js';
-import type { DetectedAction } from '../services/context-engine.js';
 import { trackSpend } from '../services/cost-circuit-breaker.js';
-import { processTaskV3 } from '../v3/processor-v3.js';
 import { getSupabaseClient } from '../utils/supabase.js';
 import { logger } from '../utils/logger.js';
 
@@ -146,80 +144,11 @@ let shutdownRegistered = false;
  * Also sends `intent_detected` back to the client so the feed can show
  * what Aurora noticed in real-time.
  */
-function extractAndMaybeAct(text: string, uid: string, clientWs: WebSocket): void {
-  extractContext(text, uid, 'microphone')
-    .then(async (detectedAction: DetectedAction | null) => {
-      if (!detectedAction) return;
-
-      // Tell the client what Aurora detected — shows in the feed immediately
-      if (clientWs.readyState === WebSocket.OPEN) {
-        try {
-          clientWs.send(JSON.stringify({
-            type: 'intent_detected',
-            action: detectedAction.actionText,
-            queueId: detectedAction.queueId,
-          }));
-        } catch { /* best effort */ }
-      }
-
-      // Look up user profile for the task
-      const supabase = getSupabaseClient();
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('username, email')
-        .eq('id', uid)
-        .single();
-
-      if (!profile) {
-        logger.warn({ userId: uid }, '[AURORA-LISTEN] No profile — cannot create task for detected intent');
-        return;
-      }
-
-      // Create and process a real V3 task from the detected intent.
-      // This is what makes Aurora ACT instead of just LISTEN.
-      logger.info({ userId: uid.substring(0, 8), action: detectedAction.actionText.substring(0, 60) },
-        '[AURORA-LISTEN] Creating immediate task from detected intent');
-
-      try {
-        const result = await processTaskV3({
-          userId: uid,
-          username: profile.username || 'user',
-          from: profile.email || `${profile.username}@aevoy.com`,
-          subject: detectedAction.actionText,
-          body: detectedAction.fullMessage,
-          inputChannel: 'web', // Process as a real task, not microphone (which is silenced)
-          suppressEmail: true, // Don't email — show in feed via realtime subscription
-        });
-
-        // Notify client that Aurora acted
-        if (clientWs.readyState === WebSocket.OPEN && result.response) {
-          try {
-            clientWs.send(JSON.stringify({
-              type: 'action_completed',
-              action: detectedAction.actionText,
-              taskId: result.taskId,
-              response: result.response.substring(0, 500),
-            }));
-          } catch { /* best effort */ }
-        }
-
-        // Mark the proactive queue item as acted_on
-        if (detectedAction.queueId) {
-          await supabase
-            .from('proactive_queue')
-            .update({
-              status: 'acted_on',
-              delivered_at: new Date().toISOString(),
-            })
-            .eq('id', detectedAction.queueId);
-        }
-      } catch (err) {
-        logger.error({ err, userId: uid }, '[AURORA-LISTEN] Failed to process detected intent as task');
-      }
-    })
-    .catch((err) => {
-      logger.error({ err, userId: uid }, 'Mic context extraction failed');
-    });
+// Legacy: just run context extraction for user learning (no action detection)
+function extractAndMaybeAct(text: string, uid: string, _clientWs: WebSocket): void {
+  extractContext(text, uid, 'microphone').catch((err) => {
+    logger.error({ err, userId: uid }, 'Mic context extraction failed');
+  });
 }
 
 // ---- WebSocket setup ----

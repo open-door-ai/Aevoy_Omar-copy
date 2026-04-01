@@ -178,171 +178,10 @@ async function extractCommunicationStyle(message: string, userId: string): Promi
   }
 }
 
-// ---- Instant Action Detection ----
-// Zero-cost regex-based detection of actionable intents.
-// Runs IMMEDIATELY — no LLM call needed.
-//
-// IMPORTANT: This is AMBIENT SPEECH detection. The user is NOT talking to us.
-// We must filter out fictional, hypothetical, and past-tense mentions to avoid
-// false positives (e.g., "In the movie, the guy cancels his subscription").
-
-const ACTION_INTENT_PATTERNS: RegExp[] = [
-  // EXPLICIT: "I need to..." / "I have to..." / "I got to..."
-  /\bi\s+(need|have|got|gotta)\s+to\s+(.{5,80})/i,
-  // "I [really/probably] should/must/want [to] ..." — optional adverbs, optional "to"
-  /\bi\s+(?:really|probably|definitely|seriously)?\s*(should|must|want)\s+(?:to\s+)?(.{5,80})/i,
-  // "Remind me to..."
-  /\bremind\s+me\s+to\s+(.{5,80})/i,
-  // "Don't let me forget..."
-  /\bdon'?t\s+let\s+me\s+forget\s+(.{5,80})/i,
-  // "I promised X..."
-  /\bi\s+promised\s+(\w+)\s+(.{5,50})/i,
-  // "Book me..." / "I'll book..." / "Schedule a meeting" (sentence-start = implicit first-person)
-  // Matches: "I'll book...", "book me...", "Schedule a meeting..." (at start of sentence)
-  /\b(?:I(?:'ll|'d)?\s+(?:book|schedule|reserve|set up|arrange)|(?:book|schedule|reserve|set up|arrange)\s+(?:me|a|an|the|my)\s)(.{5,80})/i,
-  // NOTE: Removed "can you/could you" — direct requests go through normal task processing,
-  // not the action detection queue. Action detection is for things said in PASSING.
-  // IMPLIED: "I keep forgetting to..." / "I keep meaning to..."
-  /\bi\s+keep\s+(forgetting|meaning|wanting|trying)\s+to\s+(.{5,80})/i,
-  // "X is due..." / "X is coming up..."
-  /\b(\w+\s+(?:insurance|bill|rent|payment|subscription|renewal))\s+is\s+due\b/i,
-  // "X needs the Y by Z" — someone else's deadline that affects the user
-  /\b(\w+)\s+(?:needs|wants|expects|is waiting for)\s+(?:the\s+)?(.{5,60})\s+by\s+(\w+)/i,
-  // "that's gonna be tight" / "running out of time" — stress about a deadline
-  /\b(due|deadline|by\s+\w+day|by\s+end\s+of)\b.*\b(tight|stressed|worried|behind|running out)/i,
-  // "shop around for..." / "look into..." / "figure out..."
-  /\b(shop around|look into|figure out|sort out|deal with|take care of)\s+(.{5,80})/i,
-];
-
-// ---- False Positive Filters ----
-// These patterns indicate the speaker is NOT expressing real intent.
-// Must run BEFORE action detection to filter out false positives.
-
-const FALSE_POSITIVE_PATTERNS: RegExp[] = [
-  // Fictional context: movie, show, book, game, story
-  /\b(in the movie|in the show|in the book|in the game|in the story|in the episode|on tv|watching a)\b/i,
-  // Past tense narration: "he canceled", "she booked", "they scheduled"
-  /\b(he|she|they|the guy|the character|the person|someone)\s+(canceled|cancelled|booked|scheduled|reserved|promised|sent|called|filed|paid)/i,
-  // Hypothetical: "what if", "imagine", "let's say", "for example"
-  /\b(what if|imagine|hypothetically|let's say|for example|in theory|in a world where)\b/i,
-  // Too vague: "someday", "maybe eventually", "at some point"
-  /\b(someday|maybe eventually|at some point|one of these days|when I get around to)\b/i,
-  // Reporting on someone else's action (not the user's own intent)
-  /\b(this guy|this person|my friend|my neighbor|my coworker)\s+(cancels?|books?|files?|sends?|calls?|keeps?\s+forgetting)\b/i,
-  // Quoting or paraphrasing someone else's intent (catch-all for third-person + action)
-  /\b(he said|she said|they said|was like|told me that|told me I)\b/i,
-  // Third person subject + "needs/wants to [action verb]" — someone else's intent, not ours
-  /\b(he|she|they)\s+(needs?|wants?|has?|have)\s+to\s+(book|schedule|cancel|send|call|file|pay|reserve|arrange)/i,
-  // "The main character" / "the protagonist" — fiction narration
-  /\b(the main character|the character|the protagonist|the hero|the villain)\b/i,
-  // Past-tense fiction: "had to cancel/book" after a third-person subject
-  /\b(he|she|they|the \w+)\s+had\s+to\s+(cancel|book|schedule|send|call|file|pay|reserve)/i,
-  // Media references: podcast, article, blog, TikTok, YouTube video
-  /\b(in the podcast|in the article|in the blog|on the blog|in that video|on youtube|on tiktok)\b/i,
-  // Generic "you should" advice (not first-person intent)
-  /\byou\s+should\s+/i,
-  // "but I'm not going to" — explicitly rejected intent
-  /\bbut\s+I(?:'m|\s+am)\s+not\s+(?:going\s+to|gonna)\b/i,
-];
-
-/** Result of action detection — exported so callers can act immediately */
-export interface DetectedAction {
-  actionText: string;
-  fullMessage: string;
-  queueId?: string;
-}
-
-/**
- * Instant action detection — runs via regex, zero LLM cost.
- * If the user mentions something actionable ("I need to book a flight"),
- * queues a proactive suggestion immediately so Anticipy can offer help.
- *
- * Returns the detected action (if any) so callers can trigger immediate execution.
- */
-export async function detectAndQueueActions(
-  message: string,
-  userId: string,
-  channel: string
-): Promise<DetectedAction | null> {
-  const lower = message.toLowerCase();
-
-  // FALSE POSITIVE CHECK: reject fictional/hypothetical/past-tense mentions
-  for (const fpPattern of FALSE_POSITIVE_PATTERNS) {
-    if (fpPattern.test(lower)) {
-      logger.debug("[CONTEXT] False positive filtered: %s", lower.substring(0, 60));
-      return null;
-    }
-  }
-
-  for (const pattern of ACTION_INTENT_PATTERNS) {
-    const match = lower.match(pattern);
-    if (match) {
-      // Extract the actionable part (always the last capture group)
-      const actionText = match[match.length - 1]?.trim();
-      if (!actionText || actionText.length < 5) continue;
-
-      // Clean up trailing punctuation
-      const cleanAction = actionText.replace(/[.!?,;:]+$/, '').trim();
-      if (!cleanAction) continue;
-
-      const supabase = getSupabaseClient();
-
-      // Deduplicate: skip if a similar suggestion was queued in the last hour
-      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      try {
-        const { data: existing } = await supabase
-          .from("proactive_queue")
-          .select("id")
-          .eq("user_id", userId)
-          .eq("action_type", "suggest")
-          .gte("created_at", oneHourAgo)
-          .ilike("title", `%${cleanAction.substring(0, 30)}%`)
-          .limit(1);
-
-        if (existing && existing.length > 0) {
-          logger.debug("[CONTEXT] Skipping duplicate action suggestion for %s", cleanAction.substring(0, 40));
-          return null;
-        }
-      } catch {
-        // Non-critical — proceed with insert
-      }
-
-      try {
-        // Store what the user said — not system language, not templates.
-        // The proactive processor will use the AI to generate a natural response
-        // based on context, not pre-programmed templates.
-        const { data: inserted } = await supabase.from("proactive_queue").insert({
-          user_id: userId,
-          action_type: "do",
-          title: cleanAction.substring(0, 80),
-          description: cleanAction,
-          priority: 7,
-          confidence: 0.90,
-          trigger_at: new Date().toISOString(),
-          status: "pending",
-          preferred_channel: channel === "microphone" ? "in_app" : channel,
-        })
-        .select("id")
-        .single();
-
-        logger.info({ userId: userId.substring(0, 8), action: cleanAction.substring(0, 60) },
-          "[CONTEXT] Intent detected — queued for action");
-
-        return {
-          actionText: cleanAction,
-          fullMessage: message,
-          queueId: inserted?.id,
-        };
-      } catch (err) {
-        logger.debug({ err: err instanceof Error ? err.message : String(err) },
-          "[CONTEXT] Failed to process action intent");
-      }
-
-      break; // Only queue one action per message
-    }
-  }
-  return null;
-}
+// ---- Regex-based intent detection REMOVED ----
+// All intent detection is now handled by the LLM-based intent-detector.ts module.
+// The rolling conversation buffer + Groq 70B provides contextual understanding
+// that regex could never achieve. See: packages/agent/src/services/intent-detector.ts
 
 // ---- Per-user extraction rate limiter ----
 
@@ -769,135 +608,54 @@ async function trackChannelUsage(
 // ---- Main Entry Point ----
 
 /**
- * Extract context from a user message.
+ * Extract context from a user message (background learning only).
  *
- * This is the main entry point — called after every user message.
- * Runs asynchronously and never throws (all errors are caught internally).
+ * This is the context LEARNING engine — it extracts people, commitments,
+ * preferences, emotions, etc. to build understanding of the user over time.
  *
- * Returns any detected actionable intent so callers can trigger
- * immediate task execution (critical for real-time Anticipy experience).
- *
- * @param message - The user's message content
- * @param userId - The user's ID
- * @param channel - The channel the message came from (sms, email, web, etc.)
+ * NOTE: This function does NOT detect actionable intents. Intent detection
+ * is handled entirely by intent-detector.ts via the rolling conversation buffer.
  */
 export async function extractContext(
   message: string,
   userId: string,
   channel: string
-): Promise<DetectedAction | null> {
-  if (!message || message.trim().length < 3) {
-    return null;
-  }
+): Promise<void> {
+  if (!message || message.trim().length < 3) return;
 
-  // Run instant action detection FIRST (regex, zero cost).
-  // This runs even on short messages — "Book dentist" is only 12 chars but actionable.
-  // Returns the detected action so callers (e.g., aurora-listen) can act immediately.
-  let detectedAction: DetectedAction | null = null;
-  try {
-    detectedAction = await detectAndQueueActions(message, userId, channel);
-  } catch (err) {
-    // Never let action detection block extraction
-    logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Action detection error");
-  }
-
-  // Communication style extraction (regex only, zero LLM cost).
-  // Runs before the LLM call so it's always free.
+  // Communication style extraction (regex only, zero LLM cost)
   try {
     await extractCommunicationStyle(message, userId);
   } catch (err) {
     logger.debug({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Style extraction error");
   }
 
-  // Skip trivial messages for LLM extraction (action detection already ran above)
+  // Skip trivial messages for LLM extraction
   const normalized = message.trim().toLowerCase().replace(/[.!?,]+$/g, '');
-  if (SKIP_MESSAGES.has(normalized)) {
-    return detectedAction;
-  }
+  if (SKIP_MESSAGES.has(normalized)) return;
+  if (message.trim().length < MIN_MESSAGE_LENGTH) return;
 
-  // Skip very short messages — not worth the LLM extraction cost
-  if (message.trim().length < MIN_MESSAGE_LENGTH) {
-    return detectedAction;
-  }
-
-  // Per-user rate limit: max 5 extractions per user per minute
-  if (isExtractionRateLimited(userId)) {
-    logger.debug("[CONTEXT] Rate limited for user %s — skipping extraction", userId.substring(0, 8));
-    return detectedAction;
-  }
+  // Per-user rate limit
+  if (isExtractionRateLimited(userId)) return;
 
   try {
-    // Step 1: Call LLM for extraction (truncate to 2000 chars to limit token cost)
     const truncatedMessage = message.length > MAX_MESSAGE_LENGTH_FOR_LLM
       ? message.substring(0, MAX_MESSAGE_LENGTH_FOR_LLM)
       : message;
     const extraction = await callGroqForExtraction(truncatedMessage);
     if (!extraction) {
-      // LLM unavailable — still store raw context without extraction
       await storeConversationContext(userId, channel, message, {
-        people_mentioned: [],
-        commitments: [],
-        tasks_implied: [],
-        dates_referenced: [],
-        preferences_expressed: [],
-        emotions_detected: [],
-        locations_mentioned: [],
-        topics: [],
-        sentiment: "neutral",
+        people_mentioned: [], commitments: [], tasks_implied: [],
+        dates_referenced: [], preferences_expressed: [], emotions_detected: [],
+        locations_mentioned: [], topics: [], sentiment: "neutral",
       });
-      return detectedAction;
+      return;
     }
 
-    // Step 2: Store raw conversation context
     await storeConversationContext(userId, channel, message, extraction);
-
-    // Step 3: Merge extracted data into user_context (upsert)
     await mergeUserContext(userId, extraction);
-
-    // Step 4: Store any detected commitments
     await storeCommitments(userId, extraction.commitments, channel);
-
-    // Step 5: Track channel preferences
     await trackChannelUsage(userId, channel, extraction.topics);
-
-    // Step 6: If the LLM found implied tasks with high confidence,
-    // also detect and queue them (covers intents the regex missed).
-    if (!detectedAction && extraction.tasks_implied?.length > 0) {
-      const topTask = extraction.tasks_implied
-        .filter(t => t.confidence >= 0.7)
-        .sort((a, b) => b.confidence - a.confidence)[0];
-
-      if (topTask) {
-        try {
-          const supabase = getSupabaseClient();
-          const { data: inserted } = await supabase.from("proactive_queue").insert({
-            user_id: userId,
-            action_type: "do",
-            title: topTask.description.substring(0, 80),
-            description: topTask.description,
-            priority: topTask.urgency === 'high' ? 8 : topTask.urgency === 'medium' ? 6 : 4,
-            confidence: topTask.confidence,
-            trigger_at: new Date().toISOString(),
-            status: "pending",
-            preferred_channel: channel === "microphone" ? "in_app" : channel,
-          })
-          .select("id")
-          .single();
-
-          detectedAction = {
-            actionText: topTask.description,
-            fullMessage: message,
-            queueId: inserted?.id,
-          };
-
-          logger.info({ userId: userId.substring(0, 8), action: topTask.description.substring(0, 60) },
-            "[CONTEXT] LLM-detected intent — queued for action");
-        } catch (err) {
-          logger.debug({ err: err instanceof Error ? err.message : String(err) },
-            "[CONTEXT] Failed to queue LLM-detected intent");
-        }
-      }
-    }
 
     const totalExtracted =
       (extraction.people_mentioned?.length || 0) +
@@ -908,24 +666,11 @@ export async function extractContext(
       (extraction.topics?.length || 0);
 
     if (totalExtracted > 0) {
-      logger.debug(
-        "[CONTEXT] Extracted %d items for user %s via %s (sentiment: %s)",
-        totalExtracted,
-        userId.substring(0, 8),
-        channel,
-        extraction.sentiment
-      );
+      logger.debug("[CONTEXT] Extracted %d items for user %s via %s", totalExtracted, userId.substring(0, 8), channel);
     }
   } catch (err) {
-    // Never throw — this runs in background
-    logger.warn(
-      { err: err instanceof Error ? err.message : String(err) },
-      "[CONTEXT] Extraction failed for user %s",
-      userId.substring(0, 8)
-    );
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "[CONTEXT] Extraction failed for user %s", userId.substring(0, 8));
   }
-
-  return detectedAction;
 }
 
 /**

@@ -67,8 +67,8 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
     // Don't respond conversationally. Extract context silently.
     // Only act on clear actionable intents detected by the context engine.
     if (task.inputChannel === 'microphone') {
-      // Context extraction already runs via extractContext() in index.ts
-      // Action detection already runs via detectAndQueueActions() in context-engine.ts
+      // Context extraction runs via extractContext() in index.ts
+      // Intent detection runs via LLM-based intent-detector.ts in anticipy-listen.ts
       // Don't generate a response — the user isn't talking to Anticipy
       return {
         taskId: '',
