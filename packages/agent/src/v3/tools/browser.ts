@@ -503,9 +503,13 @@ registerTool({
 });
 
 // ── browser_agent — Browser Use Cloud Task API ──
-// BU Cloud handles concurrency, model, browser, proxy, CAPTCHA internally.
+// Only register if BROWSER_USE_API_KEY is configured.
+// When missing, the manual Steel-based browser tools (browser_go/click/fill) stay active.
+if (!process.env.BROWSER_USE_API_KEY) {
+  console.log('[BROWSER] browser_agent NOT registered — BROWSER_USE_API_KEY not set. Using manual Steel/Playwright tools.');
+}
 
-registerTool({
+process.env.BROWSER_USE_API_KEY && registerTool({
   name: 'browser_agent',
   description: 'Browser agent for ONE website task at a time. Only use for tasks that REQUIRE a browser (booking, price lookup, form fill). Do NOT send compound tasks — use separate tools for each action. Include city/location in the instruction.',
   category: 'browser',
