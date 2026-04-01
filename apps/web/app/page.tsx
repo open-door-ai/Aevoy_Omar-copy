@@ -1563,7 +1563,7 @@ const PhoneMockup = () => {
             <div className="absolute -bottom-0.5 -right-0.5 w-[9px] h-[9px] rounded-full bg-emerald-500 border-[1.5px] border-white" />
           </div>
           <div>
-            <div className="text-[13px] font-semibold text-stone-900 leading-tight">Aurora</div>
+            <div className="text-[13px] font-semibold text-stone-900 leading-tight">Anticipy</div>
             <div className="text-[10px] text-emerald-600 leading-tight font-medium">Online</div>
           </div>
         </div>
@@ -1680,7 +1680,7 @@ const FeatureCard = ({ feature, index }: { feature: { title: string; description
 // MAIN COMPONENT
 // ============================================
 
-export default function AuroraLanding() {
+export default function AnticipyLanding() {
   const [showIntro, setShowIntro] = useState(false);
 
   // Check localStorage after mount to avoid SSR/CSR hydration mismatch
@@ -1934,7 +1934,7 @@ export default function AuroraLanding() {
             <div className="w-8 h-8 rounded-lg bg-stone-900 flex items-center justify-center">
               <span className="text-white font-semibold text-sm">A</span>
             </div>
-            <span className="font-semibold text-lg tracking-tight">Aurora</span>
+            <span className="font-semibold text-lg tracking-tight">Anticipy</span>
           </Link>
           
           <div className="hidden md:flex items-center gap-10">
@@ -2088,7 +2088,7 @@ export default function AuroraLanding() {
         </div>
       </section>
       
-      {/* What is Aurora */}
+      {/* What is Anticipy */}
       <section className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
@@ -2100,10 +2100,10 @@ export default function AuroraLanding() {
             {/* Right: Text */}
             <div>
               <h2 className="text-4xl md:text-5xl font-bold mb-6">
-                What is Aurora?
+                What is Anticipy?
               </h2>
               <p className="text-xl text-stone-600 mb-6 leading-relaxed">
-                Aurora is your AI employee that actually <em>does</em> tasks—not just answers questions.
+                Anticipy is your AI employee that actually <em>does</em> tasks—not just answers questions.
               </p>
               <p className="text-lg text-stone-600 mb-6 leading-relaxed">
                 Send it a task via email, text, voice, or chat. It opens a browser, navigates sites,
@@ -2127,12 +2127,12 @@ export default function AuroraLanding() {
         </div>
       </section>
 
-      {/* What Aurora Can Do */}
+      {/* What Anticipy Can Do */}
       <section className="py-32 bg-white">
         <div className="max-w-6xl mx-auto px-6">
           <div className="text-center mb-16">
             <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4">
-              What Aurora can do
+              What Anticipy can do
             </h2>
             <p className="text-xl text-stone-500">
               If a human can do it in a browser or on a phone, so can your AI.
@@ -2942,7 +2942,7 @@ export default function AuroraLanding() {
                   <td className="py-4 text-stone-600">100–10K credits</td>
                 </tr>
                 <tr className="bg-stone-100 font-semibold border-t-2 border-stone-300">
-                  <td className="py-4 text-stone-900">Aurora</td>
+                  <td className="py-4 text-stone-900">Anticipy</td>
                   <td className="py-4 font-mono text-stone-900">$0.10–0.50/task</td>
                   <td className="py-4 text-stone-900">Pay only for what you use</td>
                 </tr>
@@ -2951,7 +2951,7 @@ export default function AuroraLanding() {
               </div>
               <div className="mt-6 space-y-2 text-sm text-stone-600">
                 <p>✓ No hidden fees. Ever. If we charge you, you'll see exactly why.</p>
-                <p>✓ No subscription lock-in. Pay only when you use Aurora.</p>
+                <p>✓ No subscription lock-in. Pay only when you use Anticipy.</p>
                 <p>✓ Set spending caps to control costs. Pause anytime.</p>
                 <p>✓ Full refund if a task fails due to our error (not site changes).</p>
               </div>
@@ -3037,7 +3037,7 @@ export default function AuroraLanding() {
                 <div className="w-8 h-8 rounded-lg bg-stone-800 flex items-center justify-center">
                   <span className="text-white font-semibold text-sm">A</span>
                 </div>
-                <span className="font-semibold text-lg text-white">Aurora</span>
+                <span className="font-semibold text-lg text-white">Anticipy</span>
               </Link>
               <p className="text-sm max-w-xs">
                 Your AI employee that actually does things.
@@ -3066,7 +3066,7 @@ export default function AuroraLanding() {
           </div>
           
           <div className="pt-8 border-t border-stone-800 flex flex-col md:flex-row justify-between items-center gap-4 text-sm">
-            <p>© 2026 Aurora. All rights reserved.</p>
+            <p>© 2026 Anticipy. All rights reserved.</p>
             <p>We won&apos;t read your emails. We have our own inbox nightmares.</p>
           </div>
         </div>

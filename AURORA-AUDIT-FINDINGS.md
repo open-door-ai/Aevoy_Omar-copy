@@ -1,4 +1,4 @@
-# Aurora Audit Findings
+# Anticipy Audit Findings
 
 > Living document. Updated as issues are found and fixed.
 > Last updated: 2026-03-25
@@ -7,13 +7,13 @@
 
 ## 1. SYSTEM MAP
 
-### What Aurora IS
-Aurora is a simulated wearable AI experience. User taps a mic button (simulating an always-on pendant), speaks naturally, and Aurora listens, extracts context/intent, and acts autonomously. The user never gives commands — Aurora figures out what to do from ambient speech.
+### What Anticipy IS
+Anticipy is a simulated wearable AI experience. User taps a mic button (simulating an always-on pendant), speaks naturally, and Anticipy listens, extracts context/intent, and acts autonomously. The user never gives commands — Anticipy figures out what to do from ambient speech.
 
 ### Architecture Flow (AFTER FIXES)
 ```
 Browser mic → getUserMedia (16kHz mono PCM)
-  → WebSocket to /aurora/listen/ws
+  → WebSocket to /anticipy/listen/ws
     → JWT auth via Supabase token
     → Proxy to Deepgram (nova-2, interim_results=true, utterance_end_ms=1500)
       → Interim transcripts → sent to browser for live display
@@ -41,18 +41,18 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 ### Key Files
 | File | Lines | Purpose |
 |------|-------|---------|
-| `apps/web/app/aurora/page.tsx` | 469 | Main feed page, realtime subscriptions, message sending |
-| `apps/web/components/aurora/MicButton.tsx` | 640 | Mic capture, WebSocket audio streaming, visualizer |
-| `apps/web/components/aurora/FeedCard.tsx` | 197 | Feed card UI component |
-| `apps/web/components/aurora/StatusBanner.tsx` | 79 | Agent health check |
-| `apps/web/app/aurora/layout.tsx` | 212 | App shell, auth guard, theme toggle |
-| `apps/web/app/aurora/settings/page.tsx` | 551 | 7 configurable settings |
-| `apps/web/app/aurora/onboarding/page.tsx` | 229 | First-run onboarding chat |
-| `apps/web/app/api/aurora/send/route.ts` | 62 | Message proxy to agent |
+| `apps/web/app/anticipy/page.tsx` | 469 | Main feed page, realtime subscriptions, message sending |
+| `apps/web/components/anticipy/MicButton.tsx` | 640 | Mic capture, WebSocket audio streaming, visualizer |
+| `apps/web/components/anticipy/FeedCard.tsx` | 197 | Feed card UI component |
+| `apps/web/components/anticipy/StatusBanner.tsx` | 79 | Agent health check |
+| `apps/web/app/anticipy/layout.tsx` | 212 | App shell, auth guard, theme toggle |
+| `apps/web/app/anticipy/settings/page.tsx` | 551 | 7 configurable settings |
+| `apps/web/app/anticipy/onboarding/page.tsx` | 229 | First-run onboarding chat |
+| `apps/web/app/api/anticipy/send/route.ts` | 62 | Message proxy to agent |
 | `apps/web/lib/feed-formatter.ts` | 209 | Response cleaning for display |
-| `packages/agent/src/routes/aurora-listen.ts` | 497 | WebSocket proxy to Deepgram |
+| `packages/agent/src/routes/anticipy-listen.ts` | 497 | WebSocket proxy to Deepgram |
 | `packages/agent/src/services/context-engine.ts` | 895 | LLM context extraction |
-| `packages/agent/src/services/aurora-messenger.ts` | 666 | Outbound communication hub |
+| `packages/agent/src/services/anticipy-messenger.ts` | 666 | Outbound communication hub |
 | `packages/agent/src/services/proactive-queue.ts` | 687 | Action generation from commitments/patterns |
 | `packages/agent/src/services/proactive.ts` | 767 | Hourly proactive trigger checks |
 | `packages/agent/src/services/proactive-engagement.ts` | 941 | Habit learning, daily digests |
@@ -62,12 +62,12 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 | `packages/agent/src/v3/processor-v3.ts` | 1308 | V3 tiered task processor |
 | `packages/agent/src/v3/context-builder.ts` | 311 | Prompt context builder |
 
-### Database Tables (Aurora-specific)
+### Database Tables (Anticipy-specific)
 - `user_context` — Extracted facts (routines, preferences, relationships)
 - `conversation_context` — Raw conversation logs + extracted entities
 - `detected_patterns` — Behavioral patterns (daily routines, triggers)
 - `commitments` — User promises tracked with due dates
-- `proactive_queue` — Pending actions Aurora wants to take
+- `proactive_queue` — Pending actions Anticipy wants to take
 - `channel_preferences` — Learned channel routing
 - `daily_spend_tracking` — Cost circuit breaker
 - `browser_sessions` — Steel.dev session tracking
@@ -76,12 +76,12 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 
 ## 2. CRITICAL FINDINGS
 
-### BUG #1: Aurora processes speech ONLY AFTER recording stops (CRITICAL)
+### BUG #1: Anticipy processes speech ONLY AFTER recording stops (CRITICAL)
 
 **Root cause: There are actually TWO separate problems creating this behavior.**
 
 **Problem A: Transcript batching delays processing**
-- `aurora-listen.ts:254` — Context extraction only fires after `transcriptBuffer` accumulates 20+ words
+- `anticipy-listen.ts:254` — Context extraction only fires after `transcriptBuffer` accumulates 20+ words
 - Short utterances (< 3 words) get batched and held until the next final transcript
 - If user says "I need to book that restaurant" (7 words), it sits in the buffer waiting for 13 more words
 - When the user STOPS recording, the `close` handler (line 470-476) flushes the remaining buffer
@@ -99,7 +99,7 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
   ```
 - This means microphone input NEVER gets processed as a task
 
-**Impact: Aurora is deaf.** It hears, it stores, but it doesn't act in real-time. Actions are delayed by minutes to hours.
+**Impact: Anticipy is deaf.** It hears, it stores, but it doesn't act in real-time. Actions are delayed by minutes to hours.
 
 **Fix needed:**
 1. Lower transcript buffer threshold to 5 words (or use utterance-end VAD events)
@@ -116,7 +116,7 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 - The `recall` tool CAN access `user_context`, but the AI must explicitly call it
 - For instant and single_tool tiers, the AI never sees user context at all
 
-**Impact:** Aurora knows nothing about the user during task processing unless the AI happens to call `recall`. The entire context engine is collecting data that's never used.
+**Impact:** Anticipy knows nothing about the user during task processing unless the AI happens to call `recall`. The entire context engine is collecting data that's never used.
 
 **Fix needed:** Inject top user_context entries (high confidence) into the system prompt for all task tiers.
 
@@ -124,20 +124,20 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 
 **Root cause:** The microphone pipeline stores context but never creates tasks or feed items.
 
-- When Aurora detects an intent from speech, it queues to `proactive_queue`
+- When Anticipy detects an intent from speech, it queues to `proactive_queue`
 - The feed UI subscribes to `tasks` table changes (not `proactive_queue`)
 - Items in `proactive_queue` never appear in the feed until they're processed and delivered
-- The transcript echo (line 247-251 in aurora-listen.ts) shows transcripts briefly (5s) then clears
+- The transcript echo (line 247-251 in anticipy-listen.ts) shows transcripts briefly (5s) then clears
 
-**Impact:** User sees transcripts flash by briefly, but no indication that Aurora understood or is acting. Feels broken.
+**Impact:** User sees transcripts flash by briefly, but no indication that Anticipy understood or is acting. Feels broken.
 
-**Fix needed:** When an actionable intent is detected from mic input, immediately create a visible feed item showing what Aurora detected and what it plans to do.
+**Fix needed:** When an actionable intent is detected from mic input, immediately create a visible feed item showing what Anticipy detected and what it plans to do.
 
 ### BUG #4: Proactive queue items with action_type="do" are never executed (HIGH)
 
 **Root cause:** `detectAndQueueActions()` sets `action_type: "do"` but the proactive queue processor in `proactive-queue.ts` only handles `remind`, `suggest`, `check_in`, and `follow_up` types. Items with `action_type: "do"` sit in the queue forever.
 
-**Impact:** The most important Aurora capability — doing things the user mentioned — never actually happens.
+**Impact:** The most important Anticipy capability — doing things the user mentioned — never actually happens.
 
 **Fix needed:** Add "do" action processing that creates real V3 tasks from proactive queue items.
 
@@ -151,10 +151,10 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 |----------|------|--------------|
 | `context-engine.ts:185-208` | 9 ACTION_INTENT_PATTERNS regexes | MEDIUM — useful bootstrapping but should be AI-augmented |
 | `context-engine.ts:93-100` | 37 SKIP_MESSAGES | LOW — reasonable trivial-message filter |
-| `aurora-messenger.ts` | 23 FRUSTRATION_PATTERNS | MEDIUM — could miss nuanced frustration |
+| `anticipy-messenger.ts` | 23 FRUSTRATION_PATTERNS | MEDIUM — could miss nuanced frustration |
 | `proactive.ts` | 7 fixed proactive trigger types | HIGH — not learned, static |
-| `aurora-listen.ts:36` | 120-minute daily budget (in-memory) | LOW — resets on restart but acceptable MVP |
-| `aurora-messenger.ts` | 10PM-7AM quiet hours | LOW — configurable per user via settings |
+| `anticipy-listen.ts:36` | 120-minute daily budget (in-memory) | LOW — resets on restart but acceptable MVP |
+| `anticipy-messenger.ts` | 10PM-7AM quiet hours | LOW — configurable per user via settings |
 | `proactive-queue.ts:63` | 0.85 confidence threshold | LOW — reasonable default |
 
 ### NOT Hardcoded (Good)
@@ -165,7 +165,7 @@ Browser mic → getUserMedia → WebSocket → Deepgram (no interim, no utteranc
 - Model selection — dynamic fallback chain
 
 ### Verdict
-The hardcoding is mostly in the right places (bootstrapping/safety). The ACTION_INTENT_PATTERNS are the main concern — they determine what Aurora acts on from speech. Missing patterns = missed intents. But this is augmented by the LLM extraction which also extracts `tasks_implied`.
+The hardcoding is mostly in the right places (bootstrapping/safety). The ACTION_INTENT_PATTERNS are the main concern — they determine what Anticipy acts on from speech. Missing patterns = missed intents. But this is augmented by the LLM extraction which also extracts `tasks_implied`.
 
 ---
 
@@ -185,14 +185,14 @@ The hardcoding is mostly in the right places (bootstrapping/safety). The ACTION_
 1. **20-word buffer** before context extraction fires — too high, causes batch-processing feel
 2. **No immediate task creation** from detected intents — only queues for later
 3. **No real-time feed updates** from mic input — user sees nothing happening
-4. **interim_results=false** in Deepgram config (aurora-listen.ts:111) — no interim transcripts shown
+4. **interim_results=false** in Deepgram config (anticipy-listen.ts:111) — no interim transcripts shown
 5. **Microphone channel explicitly silenced** in V3 processor — returns empty immediately
 
 ### What's Missing
 1. No real-time intent display in the feed as user speaks
-2. No "Aurora is thinking about..." indicator for detected intents
-3. No mechanism to cancel/modify detected intents before Aurora acts
-4. No ambient vs. directed speech detection (Aurora should know when it's being spoken TO vs. overhearing)
+2. No "Anticipy is thinking about..." indicator for detected intents
+3. No mechanism to cancel/modify detected intents before Anticipy acts
+4. No ambient vs. directed speech detection (Anticipy should know when it's being spoken TO vs. overhearing)
 
 ---
 
@@ -225,7 +225,7 @@ The extracted context is NEVER automatically used in task processing:
 - No detection whatsoever
 - The V3 processor silences ALL microphone input (treats it all as ambient)
 - Text sent via the input box goes through normal task processing (treated as directed)
-- There's no "hey Aurora" wake word or equivalent
+- There's no "hey Anticipy" wake word or equivalent
 
 ---
 
@@ -237,7 +237,7 @@ The extracted context is NEVER automatically used in task processing:
 - Auth timeout (10 seconds)
 - Message size limit (64KB)
 - Cost circuit breaker (daily spend tracking)
-- RLS on all Aurora tables
+- RLS on all Anticipy tables
 - Credential stripping in responses
 
 ### Gaps
@@ -253,7 +253,7 @@ The extracted context is NEVER automatically used in task processing:
 ### What's Good
 - Clean, modern design with dark/light themes
 - Radial waveform visualizer during recording
-- Floating "Aurora is listening..." pill when mic scrolls out of view
+- Floating "Anticipy is listening..." pill when mic scrolls out of view
 - Haptic feedback on tap
 - Silence detection with state transition
 - Browser-specific permission help text
@@ -261,11 +261,11 @@ The extracted context is NEVER automatically used in task processing:
 - Real-time feed updates via Supabase realtime
 
 ### What's Broken/Missing
-- **No indication Aurora understood anything** — transcripts flash for 5s then vanish
-- **No "Aurora is working on..."** indicator for detected intents
+- **No indication Anticipy understood anything** — transcripts flash for 5s then vanish
+- **No "Anticipy is working on..."** indicator for detected intents
 - **Toast says "Processing what it heard..."** on stop but nothing visibly happens after
 - **Feed only shows task results** — no visibility into context extraction or intent detection
-- **Settings page has 7 options** but no "what Aurora knows about me" view
+- **Settings page has 7 options** but no "what Anticipy knows about me" view
 
 ---
 
@@ -287,13 +287,13 @@ The extracted context is NEVER automatically used in task processing:
 - Connect to existing task processing pipeline
 
 ### Fix 4: Real-time feed for mic intents
-- When intent detected, insert into conversation_context with Aurora's action plan
+- When intent detected, insert into conversation_context with Anticipy's action plan
 - Subscribe to conversation_context changes in the feed (not just tasks)
 
 ### Fix 5: Security — Encrypt conversation_context
 - Apply same AES-256-GCM encryption used for user_memory
 
-### Fix 6: UX — Show "Aurora knows" context view
+### Fix 6: UX — Show "Anticipy knows" context view
 - Add section to settings showing extracted context with confidence levels
 
 ---
@@ -322,7 +322,7 @@ The extracted context is NEVER automatically used in task processing:
 | "Oh wonderful, another all-hands meeting" (sarcasm) | NO | NO (empty) | NO | NO | Emotion tracked | WORKING |
 
 **Key verification points:**
-1. Microphone silencing bypass confirmed: `inputChannel: 'web'` in aurora-listen.ts:190 skips the check in processor-v3.ts:69
+1. Microphone silencing bypass confirmed: `inputChannel: 'web'` in anticipy-listen.ts:190 skips the check in processor-v3.ts:69
 2. User context loading confirmed: `loadUserContextSummary()` called in both handleInstant and handleMultiStep
 3. UtteranceEnd VAD event flushes buffer immediately — no waiting for word count
 4. Interim transcripts forwarded to browser for live display
@@ -331,7 +331,7 @@ The extracted context is NEVER automatically used in task processing:
 ### Live Test Battery (10 Scenarios — Jordan Chen Profile)
 
 Tests run against local agent with fixed code, live Supabase, live Groq API.
-Each test sent via `POST /task/v2` with `inputChannel: web` — the same pipeline Aurora uses.
+Each test sent via `POST /task/v2` with `inputChannel: web` — the same pipeline Anticipy uses.
 
 | # | Input | Verbatim Response (truncated) | U | A | C | Total |
 |---|-------|-------------------------------|:-:|:-:|:-:|:-----:|
@@ -380,7 +380,7 @@ Each test sent via `POST /task/v2` with `inputChannel: web` — the same pipelin
 ### Fix 1+2 Details (commit 0a8742d)
 **Files changed:** 6 files, +385/-49 lines
 
-**aurora-listen.ts:**
+**anticipy-listen.ts:**
 - Lowered transcript buffer from 20 words to 5 words
 - Added UtteranceEnd VAD handler that flushes buffer immediately on natural pauses
 - Enabled `interim_results=true` + `utterance_end_ms=1500` in Deepgram config
@@ -410,7 +410,7 @@ Each test sent via `POST /task/v2` with `inputChannel: web` — the same pipelin
 - Handles `intent_detected` and `action_completed` WebSocket messages
 - Forwards interim transcripts for live display
 
-**aurora/page.tsx:**
+**anticipy/page.tsx:**
 - Live interim transcript display above mic button while listening
 - `handleIntentDetected()` adds "Heard you mention: X — on it." card to feed
 - `handleTranscript()` manages live transcript state
@@ -422,7 +422,7 @@ Each test sent via `POST /task/v2` with `inputChannel: web` — the same pipelin
 - Tasks created with `suppressEmail: true` so results show in feed
 
 ### Fix 4 Details (seed script)
-**packages/agent/scripts/seed-aurora-test-user.sql:**
+**packages/agent/scripts/seed-anticipy-test-user.sql:**
 - Seeds 18 user_context entries for Jordan Chen (test user)
 - Seeds 3 commitments (insurance follow-up, Japan trip, Mom's birthday)
 - Seeds 2 detected patterns (MWF gym, Monday standup)

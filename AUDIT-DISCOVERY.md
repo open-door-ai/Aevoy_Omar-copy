@@ -17,12 +17,12 @@
 - `services/` — 50+ service files (AI, Twilio, email, memory, personality, etc.)
 - `execution/` — Document creation (Excel, PDF, Word, PowerPoint)
 - `middleware/` — Rate limiting, budget checks
-- `routes/` — Aurora listen WebSocket, skills
+- `routes/` — Anticipy listen WebSocket, skills
 - `security/` — Encryption, intent lock, validator
 - `utils/` — Cost calculator, PIN auth, error tracker, logger
 
 ### Web App (`apps/web/app/`)
-- 30+ pages (dashboard, aurora, billing, settings, admin, store, developer)
+- 30+ pages (dashboard, anticipy, billing, settings, admin, store, developer)
 - 90+ API routes
 - Admin panel at `/x7k9f` (obscured path)
 
@@ -34,7 +34,7 @@
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Minimal health check for load balancers |
-| GET | `/aurora/status` | Service status with AI backoff info |
+| GET | `/anticipy/status` | Service status with AI backoff info |
 | GET | `/health/detailed` | Detailed health (requires webhook secret) |
 | GET | `/admin/health` | Comprehensive admin health (requires Bearer auth) |
 | GET | `/health/memory` | Memory subsystem health |
@@ -89,14 +89,14 @@
 | POST | `/email/test` | Test IMAP connection |
 | POST | `/email/send` | Send email via Resend |
 
-### Aurora (5)
+### Anticipy (5)
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/aurora/settings` | Update user communication settings |
-| GET | `/aurora/feed/:userId` | Get user activity feed |
-| POST | `/aurora/onboard` | Trigger onboarding call |
-| POST | `/aurora/onboard/amd` | AMD voicemail detection for onboarding |
-| POST | `/aurora/error` | Frontend error reporting |
+| POST | `/anticipy/settings` | Update user communication settings |
+| GET | `/anticipy/feed/:userId` | Get user activity feed |
+| POST | `/anticipy/onboard` | Trigger onboarding call |
+| POST | `/anticipy/onboard/amd` | AMD voicemail detection for onboarding |
+| POST | `/anticipy/error` | Frontend error reporting |
 
 ### Debug (5)
 | Method | Path | Purpose |
@@ -123,8 +123,8 @@
 | Path | Purpose |
 |------|---------|
 | `/ws/voice` | ConversationRelay voice calls |
-| `/ws/browser/:taskId` | Browser takeover (disabled for Aurora) |
-| `/aurora/listen/ws` | Aurora listening (Deepgram proxy) |
+| `/ws/browser/:taskId` | Browser takeover (disabled for Anticipy) |
+| `/anticipy/listen/ws` | Anticipy listening (Deepgram proxy) |
 
 ---
 
@@ -144,7 +144,7 @@
 | scheduled_tasks | 158 | Yes | Cron jobs |
 | action_history | 15,009 | Yes | Action audit log |
 
-### Aurora-Specific Tables
+### Anticipy-Specific Tables
 | Table | Rows | Purpose |
 |-------|------|---------|
 | user_context | 424 | Extracted entities with confidence |
@@ -193,7 +193,7 @@ The CLAUDE.md references this but the column doesn't exist. Migration may have b
 | Resend | Outbound email | Configured |
 | IMAP (Gmail) | Inbound email polling | Configured |
 | Telegram | Bot messaging | Configured |
-| Deepgram | Real-time transcription (Aurora) | Configured |
+| Deepgram | Real-time transcription (Anticipy) | Configured |
 | ElevenLabs | TTS for voice calls | Configured (native to Twilio) |
 
 ### Browser Automation
@@ -280,14 +280,14 @@ The CLAUDE.md references this but the column doesn't exist. Migration may have b
 - Web: 1,698 (14.3%)
 - SMS: 53 (0.4%)
 - Voice: 35 (0.3%)
-- Microphone (Aurora): 5
+- Microphone (Anticipy): 5
 
 ### Recent (last 9 days): 291 tasks
 - 0 failures (100% success rate recently)
 - SMS flow works (977ms response time on last test)
 - Email flow works ($0.11 cost, 210s execution for complex task)
 - Voice works (10 completed)
-- Aurora microphone: 5 completed
+- Anticipy microphone: 5 completed
 
 ### Verification Quality
 - Verified: 6,596 (83.2%)
@@ -345,7 +345,7 @@ Cross-references AI claims against actual tool execution. Catches: hallucination
 
 ---
 
-## 10. Aurora System (Ambient Detection)
+## 10. Anticipy System (Ambient Detection)
 
 ### Pipeline
 ```
@@ -381,7 +381,7 @@ Mic → 16kHz PCM → WebSocket → Deepgram Nova-2 → Transcription
 The existing CLAUDE.md is **current and comprehensive**. It accurately reflects:
 - Project structure and file paths
 - V3 processor architecture
-- Aurora speech pipeline
+- Anticipy speech pipeline
 - Deployment configuration
 - Environment variables
 - Security rules

@@ -548,7 +548,7 @@ export default function HivePage() {
             </div>
             <div>
               <span className="text-lg font-bold text-[#F5F0E8] group-hover:text-[#E8612D] transition-colors">Hive Mind</span>
-              <span className="hidden sm:inline text-xs text-[#F5F0E8]/30 ml-2">by Aurora</span>
+              <span className="hidden sm:inline text-xs text-[#F5F0E8]/30 ml-2">by Anticipy</span>
             </div>
           </Link>
 
@@ -556,7 +556,7 @@ export default function HivePage() {
             href="/"
             className="text-sm text-[#F5F0E8]/40 hover:text-[#E8612D] transition-colors"
           >
-            &larr; Back to Aurora
+            &larr; Back to Anticipy
           </Link>
         </div>
       </header>
@@ -568,7 +568,7 @@ export default function HivePage() {
             The <span className="text-[#E8612D]">Hive Mind</span>
           </h1>
           <p className="text-[#F5F0E8]/50 text-base sm:text-lg max-w-2xl mx-auto">
-            Every task Aurora completes makes every agent smarter. Collective knowledge from thousands of real-world interactions.
+            Every task Anticipy completes makes every agent smarter. Collective knowledge from thousands of real-world interactions.
           </p>
         </div>
 
@@ -629,7 +629,7 @@ export default function HivePage() {
               <div className="text-center py-20 text-[#F5F0E8]/30">
                 <div className="text-4xl mb-3">{'\u{1F9E0}'}</div>
                 <p className="text-lg">No learnings yet</p>
-                <p className="text-sm mt-1">Aurora agents are still learning. Check back soon.</p>
+                <p className="text-sm mt-1">Anticipy agents are still learning. Check back soon.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -645,7 +645,7 @@ export default function HivePage() {
               <div className="text-center py-20 text-[#F5F0E8]/30">
                 <div className="text-4xl mb-3">{'\u{1F624}'}</div>
                 <p className="text-lg">No vents yet</p>
-                <p className="text-sm mt-1">Aurora agents haven&apos;t encountered any frustrations yet. Lucky them.</p>
+                <p className="text-sm mt-1">Anticipy agents haven&apos;t encountered any frustrations yet. Lucky them.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -684,7 +684,7 @@ export default function HivePage() {
       {/* Footer */}
       <footer className="border-t border-white/[0.06] py-8 text-center">
         <p className="text-xs text-[#F5F0E8]/20">
-          All data is auto-generated and anonymized. Zero personal information. Powered by Aurora agents.
+          All data is auto-generated and anonymized. Zero personal information. Powered by Anticipy agents.
         </p>
       </footer>
 

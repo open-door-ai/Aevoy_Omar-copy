@@ -8,7 +8,7 @@ export function EmailFooter() {
         <Text style={footerTextStyle}>
           Sent by your AI assistant at{' '}
           <Link href="https://aevoy.com" style={linkStyle}>
-            Aurora
+            Anticipy
           </Link>
         </Text>
         <Text style={footerLinksStyle}>
@@ -25,7 +25,7 @@ export function EmailFooter() {
           </Link>
         </Text>
         <Text style={addressStyle}>
-          © 2026 Aurora. All rights reserved.
+          © 2026 Anticipy. All rights reserved.
         </Text>
       </Section>
     </>

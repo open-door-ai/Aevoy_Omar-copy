@@ -45,7 +45,7 @@ function checkAndAlert(): void {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: adminChatId,
-          text: `Aurora Error Spike: ${errorCounts.total} errors in the last minute. AI: ${errorCounts.ai}, SMS: ${errorCounts.sms}, Voice: ${errorCounts.voice}, Email: ${errorCounts.email}`,
+          text: `Anticipy Error Spike: ${errorCounts.total} errors in the last minute. AI: ${errorCounts.ai}, SMS: ${errorCounts.sms}, Voice: ${errorCounts.voice}, Email: ${errorCounts.email}`,
         }),
       }).catch(() => {});
     }

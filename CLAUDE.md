@@ -1,11 +1,11 @@
-# Aurora — Claude Code Context
+# Anticipy — Claude Code Context
 
 > Comprehensive codebase reference. Read this before diving into any task.
 > **Transitioning from Aevoy** — see `AEVOY-CLAUDE.md` for legacy reference.
 
-## What is Aurora?
+## What is Anticipy?
 
-Aurora is a proactive AI assistant that learns from user interactions and acts autonomously. Unlike traditional chatbots that wait for commands, Aurora observes patterns in user behavior, anticipates needs, and takes initiative — sending reminders before you ask, routing information to the right channel at the right time, and building a rich understanding of each user over time. Aurora communicates via SMS, phone calls, email, Telegram, and WhatsApp.
+Anticipy is a proactive AI assistant that learns from user interactions and acts autonomously. Unlike traditional chatbots that wait for commands, Anticipy observes patterns in user behavior, anticipates needs, and takes initiative — sending reminders before you ask, routing information to the right channel at the right time, and building a rich understanding of each user over time. Anticipy communicates via SMS, phone calls, email, Telegram, and WhatsApp.
 
 ## Stack
 - **Monorepo**: pnpm workspaces
@@ -31,24 +31,27 @@ pnpm --filter agent dev       # Agent dev (port 3001)
 
 ## Key File Paths
 
-### Aurora (Always-Listening Experience)
-- `apps/web/app/aurora/page.tsx` — Main Aurora feed (mic + feed + messages)
-- `apps/web/components/aurora/MicButton.tsx` — Mic capture, WebSocket audio streaming, visualizer
-- `packages/agent/src/routes/aurora-listen.ts` — WebSocket proxy to Deepgram, real-time intent detection
+### Anticipy (Always-Listening Experience)
+- `apps/web/app/anticipy/page.tsx` — Main Anticipy feed (mic + feed + messages)
+- `apps/web/components/anticipy/MicButton.tsx` — Mic capture, WebSocket audio streaming, visualizer
+- `packages/agent/src/routes/anticipy-listen.ts` — WebSocket proxy to Deepgram, real-time intent detection
 - `packages/agent/src/services/context-engine.ts` — LLM context extraction from every message
-- `packages/agent/src/services/aurora-messenger.ts` — Central outbound delivery hub
+- `packages/agent/src/services/anticipy-messenger.ts` — Central outbound delivery hub
 - `packages/agent/src/services/proactive-queue.ts` — Action generation + "do" task execution
 - `packages/agent/src/v3/context-builder.ts` — Builds AI prompts with user context injection
 - `packages/agent/scripts/seed-aurora-test-user.sql` — Test user (Jordan Chen) seed data
 - See `AURORA-AUDIT-FINDINGS.md` for detailed architecture and `AURORA-DEMO-GUIDE.md` for demo instructions
 
-### Aurora Speech Pipeline (how mic → action works)
+### Anticipy Speech Pipeline (how mic → action works)
 ```
 Mic → 16kHz PCM → WebSocket → Deepgram (nova-2, interim+final+VAD)
   → 5-word buffer OR UtteranceEnd pause → extractContext()
+    → FALSE POSITIVE FILTER: fiction, hypothetical, past-tense, quoting (instant, free)
     → Regex: 10 ACTION_INTENT_PATTERNS (instant, free)
-    → LLM: Groq (people, commitments, tasks, emotions)
-    → IF action detected → intent_detected to browser + processTaskV3() immediately
+    → LLM: Groq — AMBIENT-AWARE prompt (distinguishes real intent from fiction)
+    → IF action detected + autonomous_mode=true → processTaskV3() immediately
+    → IF action detected + autonomous_mode=false → intent_detected to browser with needsConfirmation=true
+    → User approves via "Do it" button → /api/anticipy/send → V3 task created
     → User context (from user_context table) injected into all AI prompts
 ```
 
@@ -89,7 +92,7 @@ Mic → 16kHz PCM → WebSocket → Deepgram (nova-2, interim+final+VAD)
 - `apps/web/components/onboarding/unified-flow.tsx` — 6-step onboarding
 - `apps/web/supabase/migrations/` — 45+ migrations
 
-### Browser Automation (TO BE REMOVED for Aurora)
+### Browser Automation (TO BE REMOVED for Anticipy)
 - `packages/agent/src/execution/vision-agent.ts` — Browser automation loop
 - `packages/agent/src/execution/stealth.ts` — Anti-detection fingerprinting
 - `packages/agent/src/execution/captcha.ts` — CAPTCHA solving pipeline
@@ -259,7 +262,7 @@ pnpm --filter agent dev   # Agent: http://localhost:3001
 - SMS markup: 2.0x on top of base markup (2.592x total)
 - Credit wallet: auto-reload at $2 threshold, $10 reload amount
 
-## Transition Status (Aevoy → Aurora)
+## Transition Status (Aevoy → Anticipy)
 
 ### Working (Keep)
 - Personality engine (SOUL.md + IDENTITY.md + system prompt)
@@ -280,14 +283,14 @@ pnpm --filter agent dev   # Agent: http://localhost:3001
 - Marketplace tables
 - Hive Mind / vents system
 
-### To Build (Aurora-specific)
+### To Build (Anticipy-specific)
 - Proactive intelligence engine (pattern detection + anticipation)
 - User context accumulation (extract intents/entities from every conversation)
 - Pattern learning system (detect routines, preferences, habits)
-- Proactive action queue (things Aurora wants to tell/do)
+- Proactive action queue (things Anticipy wants to tell/do)
 - Channel preference learning (which channel for which info type)
 - Calendar deep integration (context source)
-- Aurora dashboard (proactive feed, not task list)
+- Anticipy dashboard (proactive feed, not task list)
 
 ## Common Pitfalls
 - **AGENT_URL on Vercel**: Must be Railway URL, not old dead VPS IP

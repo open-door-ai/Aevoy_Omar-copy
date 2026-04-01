@@ -11,14 +11,14 @@ interface ConfirmEmailProps {
 
 export function ConfirmEmail({ confirmationUrl, userEmail }: ConfirmEmailProps) {
   return (
-    <EmailLayout previewText="Confirm your Aurora account">
+    <EmailLayout previewText="Confirm your Anticipy account">
       <EmailHeader />
 
       <Section style={contentStyle}>
-        <Text style={headingStyle}>Welcome to Aurora!</Text>
+        <Text style={headingStyle}>Welcome to Anticipy!</Text>
 
         <Text style={bodyStyle}>
-          Thanks for signing up for Aurora, your AI employee that never fails. We're excited to have you on board.
+          Thanks for signing up for Anticipy, your AI employee that never fails. We're excited to have you on board.
         </Text>
 
         <Text style={bodyStyle}>
@@ -36,7 +36,7 @@ export function ConfirmEmail({ confirmationUrl, userEmail }: ConfirmEmailProps) 
         </Text>
 
         <Text style={smallTextStyle}>
-          If you didn't create an account with Aurora, you can safely ignore this email.
+          If you didn't create an account with Anticipy, you can safely ignore this email.
         </Text>
 
         <Text style={smallTextStyle}>

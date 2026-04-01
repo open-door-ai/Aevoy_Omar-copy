@@ -63,7 +63,7 @@ const TEST_EMAILS: Record<string, TestEmail> = {
 ---
 Task ID: 12345678-1234-1234-1234-123456789012
 
-From: Aurora AI
+From: Anticipy AI
 Subject: Confirm: Book restaurant for Friday
 Do you want me to proceed?`,
   },
@@ -87,7 +87,7 @@ Task ID: 87654321-4321-4321-4321-210987654321`,
 ---
 Task ID: abcdef12-3456-7890-abcd-ef1234567890
 
-From: Aurora AI
+From: Anticipy AI
 Subject: Verification code needed
 Please reply with the 2FA code.`,
   },

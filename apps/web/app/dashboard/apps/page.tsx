@@ -605,7 +605,7 @@ function ConnectedAppsContent() {
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
-                        <span className="text-muted-foreground">Type <strong className="text-foreground">Aurora</strong> in the app name box → click <strong className="text-foreground">Create</strong></span>
+                        <span className="text-muted-foreground">Type <strong className="text-foreground">Anticipy</strong> in the app name box → click <strong className="text-foreground">Create</strong></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">5</span>
@@ -641,7 +641,7 @@ function ConnectedAppsContent() {
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
-                        <span className="text-muted-foreground">Click <strong className="text-foreground">Generate app password</strong> → select <strong className="text-foreground">Other app</strong> → type Aurora</span>
+                        <span className="text-muted-foreground">Click <strong className="text-foreground">Generate app password</strong> → select <strong className="text-foreground">Other app</strong> → type Anticipy</span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>
@@ -659,7 +659,7 @@ function ConnectedAppsContent() {
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
-                        <span className="text-muted-foreground">Click <strong className="text-foreground">+</strong> → enter <strong className="text-foreground">Aurora</strong> as the label → click <strong className="text-foreground">Create</strong></span>
+                        <span className="text-muted-foreground">Click <strong className="text-foreground">+</strong> → enter <strong className="text-foreground">Anticipy</strong> as the label → click <strong className="text-foreground">Create</strong></span>
                       </li>
                       <li className="flex gap-3 text-xs">
                         <span className="w-5 h-5 rounded-full bg-primary/15 text-primary font-bold flex items-center justify-center shrink-0 text-[10px]">4</span>

@@ -71,7 +71,7 @@ const API_HANDLERS: Record<string, ApiHandler> = {
         // Try repo search
         const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}&per_page=5`;
         const res = await fetch(url, {
-          headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Aurora-Agent" },
+          headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Anticipy-Agent" },
           signal: AbortSignal.timeout(10000),
         });
         if (!res.ok) return null;

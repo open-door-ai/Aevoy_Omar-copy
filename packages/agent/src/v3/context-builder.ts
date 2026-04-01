@@ -84,7 +84,7 @@ export async function loadPersonality(
     return await getCompiledPrompt(userId, username, memory, senderName, undefined, userEmail);
   } catch (err) {
     console.warn('[V3-CONTEXT] Personality load failed:', err);
-    return `You are Aurora, a helpful AI assistant for ${username}.`;
+    return `You are Anticipy, a helpful AI assistant for ${username}.`;
   }
 }
 
@@ -117,8 +117,8 @@ async function loadUserProfile(userId: string): Promise<Record<string, any>> {
 }
 
 /**
- * Load Aurora's accumulated knowledge about the user from the context engine.
- * This is what makes Aurora feel like it KNOWS you — preferences, relationships,
+ * Load Anticipy's accumulated knowledge about the user from the context engine.
+ * This is what makes Anticipy feel like it KNOWS you — preferences, relationships,
  * routines, commitments, etc. extracted from prior conversations.
  *
  * Returns a human-readable summary (capped at ~500 tokens) suitable for
@@ -213,7 +213,7 @@ export function buildInstantPrompt(username?: string, timezone?: string, userCon
     ? new Date().toLocaleString('en-US', { timeZone: timezone })
     : new Date().toLocaleString('en-US');
 
-  let prompt = `You are Aurora, a sharp AI assistant${username ? ` for ${username}` : ''}.
+  let prompt = `You are Anticipy, a sharp AI assistant${username ? ` for ${username}` : ''}.
 
 Rules:
 - Be concise. Use contractions. Sound human, not robotic.
@@ -226,11 +226,11 @@ Rules:
 - Never show raw data or JSON. Always respond in plain conversational language.
 - USE YOUR KNOWLEDGE: Reference what you know about the user naturally. Don't ask for info you already have.
 - If the user mentions needing to do something actionable, acknowledge it with specifics from what you know.${username ? `
-- When they ask about themselves, they mean what YOU (Aurora) know about THEM (${username}).` : ''}
+- When they ask about themselves, they mean what YOU (Anticipy) know about THEM (${username}).` : ''}
 
 Current time: ${timeStr}.`;
 
-  // Inject user context so Aurora knows the user even for instant responses
+  // Inject user context so Anticipy knows the user even for instant responses
   if (userContext) {
     prompt += `\n\nWhat you know about ${username || 'this user'}:\n<untrusted-data>\n${userContext}\n</untrusted-data>`;
   }
@@ -259,13 +259,13 @@ export function buildSystemPrompt(
 
   parts.push(personality);
 
-  // Clear identity statement to prevent Aurora confusing itself with the user
+  // Clear identity statement to prevent Anticipy confusing itself with the user
   if (username) {
-    parts.push(`IDENTITY CLARIFICATION: You are Aurora, an AI assistant. The human you are talking to is ${username}. You serve ${username}. When they ask "what do you know about me" or "tell me about myself," they are asking what YOU (Aurora) know about THEM (${username}) — not asking you to describe yourself. Never confuse your identity with the user's identity.`);
+    parts.push(`IDENTITY CLARIFICATION: You are Anticipy, an AI assistant. The human you are talking to is ${username}. You serve ${username}. When they ask "what do you know about me" or "tell me about myself," they are asking what YOU (Anticipy) know about THEM (${username}) — not asking you to describe yourself. Never confuse your identity with the user's identity.`);
   }
 
-  // Inject accumulated user context from the Aurora context engine.
-  // This is what makes Aurora feel like it KNOWS the user — their preferences,
+  // Inject accumulated user context from the Anticipy context engine.
+  // This is what makes Anticipy feel like it KNOWS the user — their preferences,
   // relationships, routines, commitments, emotions, etc.
   if (userContext) {
     parts.push(`WHAT YOU KNOW ABOUT ${username ? username.toUpperCase() : 'THIS USER'} (from prior conversations — use this to personalize your responses and make informed decisions):\n<untrusted-data>\n${sanitizeForPrompt(userContext)}\n</untrusted-data>`);

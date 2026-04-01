@@ -7,7 +7,7 @@ test.describe('Vercel Production Deployment Verification', () => {
     // Test 1: Landing page
     console.log('[TEST 1] Landing page...');
     await page.goto('https://www.aevoy.com', { waitUntil: 'networkidle', timeout: 30000 });
-    await expect(page).toHaveTitle(/Aurora/);
+    await expect(page).toHaveTitle(/Anticipy/);
     console.log('✅ Landing page loaded successfully');
 
     // Test 2: Skills Marketplace page (should redirect to login)

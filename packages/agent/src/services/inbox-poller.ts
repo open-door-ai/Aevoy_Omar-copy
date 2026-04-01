@@ -678,7 +678,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
   // getting picked up by the IMAP poller. Processing them creates infinite loops and
   // triggers false PIN challenges.
   if (senderEmail.endsWith('@aevoy.com')) {
-    logger.info(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Aurora system email)`);
+    logger.info(`[INBOX-POLLER] Skipping self-email from ${maskEmail(senderEmail)} (Anticipy system email)`);
     return;
   }
 
@@ -740,7 +740,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     if (!hasPinSet) {
       // No PIN set — tell sender to contact the user
       await sendPinReply(email.from, username, email.subject,
-        `This email address only accepts emails from ${username}'s registered email. To allow emails from other addresses, ask ${username} to set up a Security PIN in their Aurora settings.`);
+        `This email address only accepts emails from ${username}'s registered email. To allow emails from other addresses, ask ${username} to set up a Security PIN in their Anticipy settings.`);
       logger.info(`[INBOX-POLLER] Unknown sender ${maskEmail(senderEmail)} for ${username}, no PIN set — sent setup instructions`);
       return;
     }
@@ -751,7 +751,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
     if (!pinMatch) {
       // No PIN found — reply asking for PIN
       await sendPinReply(email.from, username, email.subject,
-        `Hi! This is ${username}'s AI assistant at Aurora.\n\nI received your email, but I don't recognize your email address. To verify your identity, please reply with your 4-6 digit security PIN in the subject line or body of your email.\n\nIf you don't have a PIN, please ask ${username} to share it with you.`);
+        `Hi! This is ${username}'s AI assistant at Anticipy.\n\nI received your email, but I don't recognize your email address. To verify your identity, please reply with your 4-6 digit security PIN in the subject line or body of your email.\n\nIf you don't have a PIN, please ask ${username} to share it with you.`);
       logger.info(`[INBOX-POLLER] Sent PIN request to ${maskEmail(senderEmail)} for ${username}`);
       return;
     }
@@ -876,7 +876,7 @@ async function routeEmail(email: ParsedInboxEmail): Promise<void> {
             await sendSms({
               userId: user.id,
               to: userProfile.phone_number,
-              body: `[Aurora] ${urgentLabel} email from ${email.from}: "${email.subject.substring(0, 80)}" — replied on your behalf. Check your inbox.`,
+              body: `[Anticipy] ${urgentLabel} email from ${email.from}: "${email.subject.substring(0, 80)}" — replied on your behalf. Check your inbox.`,
             });
             logger.info(`[FULL-SEND] SMS alert sent for ${priority} email`);
           }

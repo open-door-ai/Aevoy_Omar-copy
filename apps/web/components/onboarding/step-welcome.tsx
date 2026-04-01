@@ -13,7 +13,7 @@ export default function StepWelcome({ name, onNext }: StepWelcomeProps) {
   const [typedText, setTypedText] = useState("");
   const [demoStep, setDemoStep] = useState(0);
 
-  const fullText = `Welcome to Aurora, ${name}`;
+  const fullText = `Welcome to Anticipy, ${name}`;
 
   // Typing effect
   useEffect(() => {

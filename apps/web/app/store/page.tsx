@@ -70,7 +70,7 @@ export default function StorePage() {
               <Sparkles className="h-5 w-5 text-primary" />
               <span className="text-xs font-semibold uppercase tracking-wider text-primary">New</span>
             </div>
-            <h1 className="text-4xl md:text-5xl font-bold mb-4">Aurora App Store</h1>
+            <h1 className="text-4xl md:text-5xl font-bold mb-4">Anticipy App Store</h1>
             <p className="text-lg text-muted-foreground max-w-xl mb-8">Extend your AI assistant with powerful widgets and integrations built by the community.</p>
             <div className="relative max-w-md">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -180,8 +180,8 @@ export default function StorePage() {
 
         {/* Developer CTA */}
         <section className="border border-border rounded-2xl p-8 bg-gradient-to-r from-primary/5 to-purple-500/5 text-center">
-          <h2 className="text-xl font-bold mb-2">Build for Aurora</h2>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto mb-4">Create widgets and integrations that extend what Aurora can do. Earn 70% of revenue from paid apps.</p>
+          <h2 className="text-xl font-bold mb-2">Build for Anticipy</h2>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto mb-4">Create widgets and integrations that extend what Anticipy can do. Earn 70% of revenue from paid apps.</p>
           <Link href="/developer" className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors">
             Start Building <ArrowRight className="h-4 w-4" />
           </Link>

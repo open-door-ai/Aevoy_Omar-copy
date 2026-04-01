@@ -221,7 +221,7 @@ describe('Phone System Scalability — International Concurrent Load', () => {
         phone: user.phone,
         username: user.id,
         timezone: user.timezone,
-        twilio_number: '+17789008951', // Shared Aurora number
+        twilio_number: '+17789008951', // Shared Anticipy number
         subscription_tier: 'beta',
         messages_limit: 100,
       }, { onConflict: 'id' });

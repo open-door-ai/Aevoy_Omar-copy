@@ -192,7 +192,7 @@ async function runLoadTests() {
 // Main test runner
 async function main() {
   console.log('\n========================================');
-  console.log('  Aurora Integration Tests');
+  console.log('  Anticipy Integration Tests');
   console.log('========================================\n');
 
   enableTestMode();

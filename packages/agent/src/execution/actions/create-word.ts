@@ -45,7 +45,7 @@ export interface WordResult {
 
 // ── Design Tokens ───────────────────────────────────────────────
 const WORD_THEME = {
-  // Colors (matching the overall Aurora palette)
+  // Colors (matching the overall Anticipy palette)
   headingColor: '1A1A2E',   // Deep navy
   accentColor: '00D4AA',    // Teal accent
   bodyColor: '2D3748',      // Dark gray body text
@@ -429,7 +429,7 @@ export async function createWordDocument(
         children,
       }],
       title: params.title,
-      creator: params.author || 'Aurora AI Agent',
+      creator: params.author || 'Anticipy AI Agent',
       description: 'AI-Generated Document',
       styles: {
         default: {

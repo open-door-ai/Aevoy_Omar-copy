@@ -180,7 +180,7 @@ export async function POST(request: Request) {
       SmsMethod: "POST",
       VoiceUrl: `${agentUrl}/webhook/voice/${user.id}`,
       VoiceMethod: "POST",
-      FriendlyName: `Aurora - ${user.id.slice(0, 8)}`,
+      FriendlyName: `Anticipy - ${user.id.slice(0, 8)}`,
     });
 
     const purchaseRes = await fetch(

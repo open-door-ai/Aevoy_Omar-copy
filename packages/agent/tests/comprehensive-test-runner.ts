@@ -80,7 +80,7 @@ async function runTest(suite: typeof TEST_SUITES[0], iteration: number): Promise
 
   try {
     const output = execSync(suite.command, {
-      cwd: '/workspaces/Aurora_Omar-copy/packages/agent',
+      cwd: '/workspaces/Anticipy_Omar-copy/packages/agent',
       encoding: 'utf-8',
       timeout: 120000, // 2 min timeout per test
     });

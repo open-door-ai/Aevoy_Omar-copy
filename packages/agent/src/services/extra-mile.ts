@@ -93,7 +93,7 @@ async function callCheapAI(systemPrompt: string, userPrompt: string): Promise<st
         baseURL: "https://openrouter.ai/api/v1",
         defaultHeaders: {
           "HTTP-Referer": "https://www.aevoy.com",
-          "X-Title": "Aurora AI Assistant",
+          "X-Title": "Anticipy AI Assistant",
         },
       });
       const resp = await or.chat.completions.create({

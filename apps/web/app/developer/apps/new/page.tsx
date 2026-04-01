@@ -151,7 +151,7 @@ export default function NewAppPage() {
                   </div>
                   {form.priceType !== "free" && (
                     <div><label className="text-sm font-medium mb-1 block">Price (USD)</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span><input type="number" min={0} step={0.01} value={(form.priceCents / 100).toFixed(2)} onChange={e => updateForm({ priceCents: Math.round(parseFloat(e.target.value || "0") * 100) })} className="w-full pl-7 p-3 rounded-lg border border-border bg-background text-sm outline-none focus:ring-2 focus:ring-primary/20" /></div>
-                      <p className="text-xs text-muted-foreground mt-1">You earn 70% — Aurora takes 30% platform fee</p>
+                      <p className="text-xs text-muted-foreground mt-1">You earn 70% — Anticipy takes 30% platform fee</p>
                     </div>
                   )}
                 </>)}

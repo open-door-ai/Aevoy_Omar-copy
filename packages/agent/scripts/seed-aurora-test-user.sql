@@ -1,5 +1,5 @@
--- Aurora Test User: Jordan Chen
--- Seeds user_context entries for the test user so the Aurora gauntlet can be run.
+-- Anticipy Test User: Jordan Chen
+-- Seeds user_context entries for the test user so the Anticipy gauntlet can be run.
 -- Test user ID: 11684ec6-80cd-4bb6-9aed-8f0947afd06a (test-e2e@aevoy.com)
 --
 -- Run this against Supabase to populate the test profile.

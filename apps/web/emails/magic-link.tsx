@@ -11,14 +11,14 @@ interface MagicLinkProps {
 
 export function MagicLink({ magicLinkUrl, userEmail }: MagicLinkProps) {
   return (
-    <EmailLayout previewText="Your Aurora sign-in link">
+    <EmailLayout previewText="Your Anticipy sign-in link">
       <EmailHeader />
 
       <Section style={contentStyle}>
-        <Text style={headingStyle}>Sign In to Aurora</Text>
+        <Text style={headingStyle}>Sign In to Anticipy</Text>
 
         <Text style={bodyStyle}>
-          Click the button below to securely sign in to your Aurora account:
+          Click the button below to securely sign in to your Anticipy account:
         </Text>
 
         <Section style={buttonContainerStyle}>

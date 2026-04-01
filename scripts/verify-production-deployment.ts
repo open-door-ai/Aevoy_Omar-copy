@@ -145,8 +145,8 @@ async function checkVercelHealth(): Promise<CheckResult> {
       };
     }
 
-    // Check if it's actually the Aurora landing page
-    if (!response.body.includes('Aurora') && !response.body.includes('AI Employee')) {
+    // Check if it's actually the Anticipy landing page
+    if (!response.body.includes('Anticipy') && !response.body.includes('AI Employee')) {
       return {
         name: 'Vercel Web App',
         status: 'WARN',

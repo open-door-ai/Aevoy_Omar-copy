@@ -835,7 +835,7 @@ export async function handleIncomingVoice(
       .single();
 
     if (!profile) {
-      return await generateResponseTwiml("Sorry, this number is not associated with an Aurora account.");
+      return await generateResponseTwiml("Sorry, this number is not associated with an Anticipy account.");
     }
 
     // Check if the caller IS the user (direct call to their AI)
@@ -848,7 +848,7 @@ export async function handleIncomingVoice(
       return await generateIncomingCallTwiml(profile.id, profile.username);
     }
 
-    // Someone else is calling the user's Aurora number (forwarded call)
+    // Someone else is calling the user's Anticipy number (forwarded call)
     // Act as a receptionist / assistant
     logger.info({ username: profile.username, from: data.from }, '[TWILIO] Forwarded call');
     return await generateReceptionistTwiml(profile.id, profile.username, data.from);
@@ -1168,7 +1168,7 @@ export async function initiateEmailConversation(
 
   // Generate natural opening message
   const senderName = email.from.split("<")[0].trim();
-  const openingMessage = `Hi ${profile.username}! This is your Aurora assistant. I received an email from ${senderName} about "${email.subject}". This needs your input. Let me read it to you.`;
+  const openingMessage = `Hi ${profile.username}! This is your Anticipy assistant. I received an email from ${senderName} about "${email.subject}". This needs your input. Let me read it to you.`;
 
   // Build TwiML with conversation flow
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>

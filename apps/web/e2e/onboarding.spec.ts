@@ -26,7 +26,7 @@ test.describe('Complete Onboarding Flow', () => {
 
     // Navigate to signup page
     await page.goto('/signup');
-    await expect(page).toHaveTitle(/Aurora|Sign Up|Create Account/i);
+    await expect(page).toHaveTitle(/Anticipy|Sign Up|Create Account/i);
 
     // Verify signup form is visible
     await expect(page.locator('input[type="email"]')).toBeVisible();
@@ -58,7 +58,7 @@ test.describe('Complete Onboarding Flow', () => {
 
     // If redirected to dashboard, check if onboarding needs to be completed
     if (page.url().includes('/dashboard')) {
-      const needsOnboarding = await page.locator('text=Welcome to Aurora').isVisible().catch(() => false);
+      const needsOnboarding = await page.locator('text=Welcome to Anticipy').isVisible().catch(() => false);
       if (!needsOnboarding) {
         console.log('[E2E] ℹ️ Onboarding already completed');
         return;
@@ -66,7 +66,7 @@ test.describe('Complete Onboarding Flow', () => {
     }
 
     // Verify Welcome step is visible
-    await expect(page.locator('text=Welcome to Aurora')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Welcome to Anticipy')).toBeVisible({ timeout: 10000 });
 
     // Verify progress indicator shows step 1 of 6
     await expect(page.locator('text=/1\\s*\/\\s*6/')).toBeVisible();

@@ -360,7 +360,7 @@ describe('CORS Security', () => {
 describe('Encryption Security', () => {
   it('should use AES-256-GCM format (iv:authTag:data)', () => {
     // Check that encryption module exists and uses correct format
-    const encryptionPath = '/workspaces/Aurora_Omar-copy/packages/agent/src/security/encryption.ts';
+    const encryptionPath = '/workspaces/Anticipy_Omar-copy/packages/agent/src/security/encryption.ts';
     const fs = require('fs');
     const content = fs.readFileSync(encryptionPath, 'utf8');
 
@@ -376,7 +376,7 @@ describe('Encryption Security', () => {
   });
 
   it('should validate encryption key strength on startup', () => {
-    const indexPath = '/workspaces/Aurora_Omar-copy/packages/agent/src/index.ts';
+    const indexPath = '/workspaces/Anticipy_Omar-copy/packages/agent/src/index.ts';
     const fs = require('fs');
     const content = fs.readFileSync(indexPath, 'utf8');
 
@@ -403,7 +403,7 @@ describe('Encryption Security', () => {
 
 describe('Row-Level Security (RLS)', () => {
   it('should have RLS enabled on all user tables', () => {
-    const migrationPath = '/workspaces/Aurora_Omar-copy/apps/web/supabase/RUN_ALL_MIGRATIONS.sql';
+    const migrationPath = '/workspaces/Anticipy_Omar-copy/apps/web/supabase/RUN_ALL_MIGRATIONS.sql';
     const fs = require('fs');
     const content = fs.readFileSync(migrationPath, 'utf8');
 
@@ -423,7 +423,7 @@ describe('Row-Level Security (RLS)', () => {
   });
 
   it('should have policies preventing cross-user access', () => {
-    const migrationPath = '/workspaces/Aurora_Omar-copy/apps/web/supabase/RUN_ALL_MIGRATIONS.sql';
+    const migrationPath = '/workspaces/Anticipy_Omar-copy/apps/web/supabase/RUN_ALL_MIGRATIONS.sql';
     const fs = require('fs');
     const content = fs.readFileSync(migrationPath, 'utf8');
 
@@ -478,7 +478,7 @@ describe('API Key Protection', () => {
   });
 
   it('should mask sensitive data in logs', () => {
-    const loggingPath = '/workspaces/Aurora_Omar-copy/packages/agent/src/utils/logging.ts';
+    const loggingPath = '/workspaces/Anticipy_Omar-copy/packages/agent/src/utils/logging.ts';
     const fs = require('fs');
 
     if (fs.existsSync(loggingPath)) {
@@ -499,7 +499,7 @@ describe('API Key Protection', () => {
 describe('PIN Security', () => {
   it('should enforce PIN lockout after failed attempts', async () => {
     // Email PIN should lock after 3 failed attempts
-    const migrationPath = '/workspaces/Aurora_Omar-copy/apps/web/supabase/migration_v15.sql';
+    const migrationPath = '/workspaces/Anticipy_Omar-copy/apps/web/supabase/migration_v15.sql';
     const fs = require('fs');
     const content = fs.readFileSync(migrationPath, 'utf8');
 
@@ -509,7 +509,7 @@ describe('PIN Security', () => {
   });
 
   it('should store PINs encrypted', () => {
-    const encryptionPath = '/workspaces/Aurora_Omar-copy/packages/agent/src/security/encryption.ts';
+    const encryptionPath = '/workspaces/Anticipy_Omar-copy/packages/agent/src/security/encryption.ts';
     const fs = require('fs');
     const content = fs.readFileSync(encryptionPath, 'utf8');
 
@@ -520,7 +520,7 @@ describe('PIN Security', () => {
   });
 
   it('should have PIN expiration (10 minutes for email PIN)', async () => {
-    const migrationPath = '/workspaces/Aurora_Omar-copy/apps/web/supabase/migration_v15.sql';
+    const migrationPath = '/workspaces/Anticipy_Omar-copy/apps/web/supabase/migration_v15.sql';
     const fs = require('fs');
     const content = fs.readFileSync(migrationPath, 'utf8');
 
@@ -536,7 +536,7 @@ describe('PIN Security', () => {
 
 describe('Session Security', () => {
   it('should have session expiration (7 days)', async () => {
-    const migrationPath = '/workspaces/Aurora_Omar-copy/apps/web/supabase/migration_v4.sql';
+    const migrationPath = '/workspaces/Anticipy_Omar-copy/apps/web/supabase/migration_v4.sql';
     const fs = require('fs');
 
     if (fs.existsSync(migrationPath)) {
@@ -549,7 +549,7 @@ describe('Session Security', () => {
   });
 
   it('should clean up expired sessions', async () => {
-    const schedulerPath = '/workspaces/Aurora_Omar-copy/packages/agent/src/services/scheduler.ts';
+    const schedulerPath = '/workspaces/Anticipy_Omar-copy/packages/agent/src/services/scheduler.ts';
     const fs = require('fs');
     const content = fs.readFileSync(schedulerPath, 'utf8');
 

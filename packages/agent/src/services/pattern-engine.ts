@@ -1,5 +1,5 @@
 /**
- * Pattern Engine — Behavioral Pattern Detection for Aurora
+ * Pattern Engine — Behavioral Pattern Detection for Anticipy
  *
  * Detects recurring patterns from accumulated user context:
  * - daily_routine: same actions at similar times (EMA smoothing)

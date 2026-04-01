@@ -16,7 +16,7 @@
  */
 
 import { getSupabaseClient } from "../utils/supabase.js";
-import { sendAuroraMessage } from "./aurora-messenger.js";
+import { sendAnticipyMessage } from "./aurora-messenger.js";
 import type { ProactiveFinding, ProactivePriority } from "../types/index.js";
 import { logger } from "../utils/logger.js";
 
@@ -493,7 +493,7 @@ export class ProactiveEngine {
 
   /**
    * Check for commitments that are due soon or overdue.
-   * Scans the commitments table (Aurora intelligence engine).
+   * Scans the commitments table (Anticipy intelligence engine).
    */
   private async checkCommitmentsDue(userId: string): Promise<ProactiveFinding[]> {
     const findings: ProactiveFinding[] = [];
@@ -592,7 +592,7 @@ export class ProactiveEngine {
 
   /**
    * Check detected patterns for trigger conditions matching the current time/context.
-   * Scans the detected_patterns table (Aurora intelligence engine).
+   * Scans the detected_patterns table (Anticipy intelligence engine).
    */
   private async checkPatternTriggers(userId: string): Promise<ProactiveFinding[]> {
     const findings: ProactiveFinding[] = [];
@@ -708,11 +708,11 @@ export class ProactiveEngine {
         return;
       }
 
-      // Route through Aurora Messenger (central delivery with cost controls + quiet hours)
+      // Route through Anticipy Messenger (central delivery with cost controls + quiet hours)
       const auroraPriority = priority === 'high' ? 'high' : priority === 'medium' ? 'medium' : 'low';
-      const emailSubject = "[Aurora] " + finding.trigger.replace(/_/g, " ");
+      const emailSubject = "[Anticipy] " + finding.trigger.replace(/_/g, " ");
 
-      await sendAuroraMessage({
+      await sendAnticipyMessage({
         userId: user.userId,
         content: action,
         priority: auroraPriority,

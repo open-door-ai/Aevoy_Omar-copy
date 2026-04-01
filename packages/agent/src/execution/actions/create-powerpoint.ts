@@ -189,8 +189,8 @@ export async function createPowerPoint(
     const pres = new pptxgen();
 
     // Set presentation properties
-    pres.author = params.author || 'Aurora AI Agent';
-    pres.company = 'Aurora';
+    pres.author = params.author || 'Anticipy AI Agent';
+    pres.company = 'Anticipy';
     pres.title = params.title || params.filename;
     pres.subject = params.subject || 'AI-Generated Presentation';
 

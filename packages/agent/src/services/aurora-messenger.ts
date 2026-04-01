@@ -664,3 +664,6 @@ export async function handleProactiveFeedback(
     reply: "My mistake. I'll learn from this. What did I get wrong?",
   };
 }
+
+// Anticipy alias — same function, new name
+export const sendAnticipyMessage = sendAuroraMessage;

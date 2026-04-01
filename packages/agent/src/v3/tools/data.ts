@@ -186,7 +186,7 @@ registerTool({
       const memory = await loadMemory(ctx.userId, query, 'default');
       const facts = memory.facts || '';
 
-      // Also query Aurora's context engine for richer user knowledge
+      // Also query Anticipy's context engine for richer user knowledge
       let contextSummary = '';
       try {
         const contextEntries = await getUserContext(ctx.userId);
@@ -199,7 +199,7 @@ registerTool({
         console.warn('[V3-TOOL-DATA] Context engine lookup failed (non-critical):', err);
       }
 
-      // Query active commitments Aurora is tracking for the user
+      // Query active commitments Anticipy is tracking for the user
       let commitmentsSummary = '';
       try {
         const { data: commitments } = await getSupabaseClient()

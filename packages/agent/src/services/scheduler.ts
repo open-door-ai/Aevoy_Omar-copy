@@ -232,10 +232,10 @@ async function runProactiveChecks(): Promise<void> {
     const { analyzeAllUserPatterns } = await import("./pattern-engine.js");
     const patternCount = await analyzeAllUserPatterns();
     if (patternCount > 0) {
-      logger.info(`[SCHEDULER] Aurora pattern engine: ${patternCount} patterns detected`);
+      logger.info(`[SCHEDULER] Anticipy pattern engine: ${patternCount} patterns detected`);
     }
   } catch (error) {
-    logger.error('[SCHEDULER] Aurora pattern engine error:', error);
+    logger.error('[SCHEDULER] Anticipy pattern engine error:', error);
   }
 
   // AURORA INTELLIGENCE: Run proactive queue generation + processing
@@ -243,10 +243,10 @@ async function runProactiveChecks(): Promise<void> {
     const { runProactiveQueue } = await import("./proactive-queue.js");
     const { generated, processed } = await runProactiveQueue();
     if (generated > 0 || processed > 0) {
-      logger.info(`[SCHEDULER] Aurora proactive queue: ${generated} generated, ${processed} processed`);
+      logger.info(`[SCHEDULER] Anticipy proactive queue: ${generated} generated, ${processed} processed`);
     }
   } catch (error) {
-    logger.error('[SCHEDULER] Aurora proactive queue error:', error);
+    logger.error('[SCHEDULER] Anticipy proactive queue error:', error);
   }
 
   // CONTEXT CLEANUP: Delete old conversation_context and stale user_context (daily, checked hourly)
@@ -303,7 +303,7 @@ async function runProactiveChecks(): Promise<void> {
                 await sendResponse({
                   to: profile.email,
                   from: `${profile.username}@aevoy.com`,
-                  subject: "[Aurora] Skill Recommendations",
+                  subject: "[Anticipy] Skill Recommendations",
                   body: `I analyzed your recent task patterns and found ${recommendations.length} skills that could help:\n\n${formattedRecommendations}\n\nInstall skills at: https://www.aevoy.com/dashboard/skills`,
                 });
                 logger.info(`[SCHEDULER] Sent ${recommendations.length} skill recommendations to user ${userId.slice(0, 8)}`);
@@ -426,7 +426,7 @@ async function runProactiveChecks(): Promise<void> {
                   await sendResponse({
                     to: profile.email,
                     from: `${profile.username}@aevoy.com`,
-                    subject: "[Aurora] Action Required",
+                    subject: "[Anticipy] Action Required",
                     body: formatProblemsForNotification(criticalProblems),
                   });
 
@@ -1167,11 +1167,11 @@ async function runCompletionReports(opts: { includeDaily: boolean; includeWeekly
 }
 
 /**
- * Morning check-in briefings via Aurora Messenger.
+ * Morning check-in briefings via Anticipy Messenger.
  *
  * Runs every 60 seconds. Queries user_settings.morning_checkin_time,
  * compares against the user's local time (via profiles.timezone),
- * and sends a morning briefing via sendAuroraMessage (auto-selects best channel).
+ * and sends a morning briefing via sendAnticipyMessage (auto-selects best channel).
  *
  * Deduplication: uses distributed_locks to ensure only one check-in per user per day.
  * Uses a separate distributed lock so only one instance runs at a time.
@@ -1244,17 +1244,17 @@ async function checkMorningCheckins(): Promise<void> {
             expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           }, { onConflict: 'lock_name' });
 
-        // Send morning briefing via Aurora Messenger (picks best channel)
+        // Send morning briefing via Anticipy Messenger (picks best channel)
         logger.info({ userId: user.user_id, username: profile?.username }, 'Morning check-in triggered');
 
         try {
-          const { sendAuroraMessage } = await import('./aurora-messenger.js');
-          await sendAuroraMessage({
+          const { sendAnticipyMessage } = await import('./aurora-messenger.js');
+          await sendAnticipyMessage({
             userId: user.user_id,
-            content: `Good morning${profile?.username ? `, ${profile.username}` : ''}! Here\'s your daily check-in from Aurora. Ready when you are -- just tell me what you need today.`,
+            content: `Good morning${profile?.username ? `, ${profile.username}` : ''}! Here\'s your daily check-in from Anticipy. Ready when you are -- just tell me what you need today.`,
             priority: 'medium',
             source: 'proactive',
-            emailSubject: '[Aurora] Morning Check-in',
+            emailSubject: '[Anticipy] Morning Check-in',
           });
         } catch (err) {
           logger.error({ err, userId: user.user_id }, 'Morning check-in delivery failed');

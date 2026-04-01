@@ -17,7 +17,7 @@ const IMAP_GUIDES: Record<ImapProvider, { videoId?: string; videoDuration?: stri
       { text: "Go to", url: "https://myaccount.google.com/security", urlLabel: "Google Account Security" },
       { text: "Ensure 2-Step Verification is On" },
       { text: "Open", url: "https://myaccount.google.com/apppasswords", urlLabel: "App Passwords" },
-      { text: 'Type "Aurora" → click Create → copy the 16-char password' },
+      { text: 'Type "Anticipy" → click Create → copy the 16-char password' },
     ],
   },
   outlook: {
@@ -36,7 +36,7 @@ const IMAP_GUIDES: Record<ImapProvider, { videoId?: string; videoDuration?: stri
     steps: [
       { text: "Go to", url: "https://login.yahoo.com/account/security", urlLabel: "Yahoo Account Security" },
       { text: "Enable Two-step verification" },
-      { text: 'Click Generate app password → Other app → type "Aurora"' },
+      { text: 'Click Generate app password → Other app → type "Anticipy"' },
       { text: "Copy the generated password" },
     ],
   },
@@ -46,7 +46,7 @@ const IMAP_GUIDES: Record<ImapProvider, { videoId?: string; videoDuration?: stri
     steps: [
       { text: "Sign in at", url: "https://appleid.apple.com", urlLabel: "appleid.apple.com" },
       { text: "Under Sign-In and Security → App-Specific Passwords" },
-      { text: 'Click + → label it "Aurora" → Create' },
+      { text: 'Click + → label it "Anticipy" → Create' },
       { text: "Copy the xxxx-xxxx-xxxx-xxxx password" },
     ],
   },
@@ -99,7 +99,7 @@ export default function StepEmailCalendar({ onNext, onBack }: StepEmailCalendarP
         <div className="text-4xl mb-4">📬</div>
         <h1 className="font-bold text-gray-900 mb-2 text-2xl">Connect Your Email</h1>
         <p className="text-gray-500">
-          Aurora reads, prioritizes, and responds to your emails — quietly working in the background.
+          Anticipy reads, prioritizes, and responds to your emails — quietly working in the background.
         </p>
         <span className="inline-block mt-3 text-xs font-medium text-gray-400 bg-gray-100 px-3 py-1 rounded-full">
           Optional — you can do this later in Settings
@@ -112,7 +112,7 @@ export default function StepEmailCalendar({ onNext, onBack }: StepEmailCalendarP
           <div className="text-3xl mb-2">✓</div>
           <p className="font-semibold text-green-800">{imapEmail} connected!</p>
           <p className="text-sm text-green-600 mt-1">
-            Aurora will check your inbox every 30 minutes and handle emails for you.
+            Anticipy will check your inbox every 30 minutes and handle emails for you.
           </p>
         </div>
       ) : (

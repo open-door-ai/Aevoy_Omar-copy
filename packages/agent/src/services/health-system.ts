@@ -1,7 +1,7 @@
 /**
  * HEALTH SYSTEM - The Final Boss That Never Fails
  *
- * This is the ultimate guarantee that Aurora ALWAYS works.
+ * This is the ultimate guarantee that Anticipy ALWAYS works.
  * Not "tries to work" - ALWAYS works.
  *
  * Features:

@@ -7,13 +7,13 @@ export default function TermsPage() {
 
         <h2>1. Acceptance of Terms</h2>
         <p>
-          By accessing or using Aurora ("the Service"), you agree to be bound by these Terms of Service.
+          By accessing or using Anticipy ("the Service"), you agree to be bound by these Terms of Service.
           If you disagree with any part of the terms, you may not access the Service.
         </p>
 
         <h2>2. Description of Service</h2>
         <p>
-          Aurora is an AI-powered task automation service that uses artificial intelligence to complete
+          Anticipy is an AI-powered task automation service that uses artificial intelligence to complete
           tasks on your behalf, including but not limited to web browsing, form filling, email management,
           booking services, and research.
         </p>
@@ -31,7 +31,7 @@ export default function TermsPage() {
 
         <h2>4. AI Accuracy and Limitations</h2>
         <p>
-          <strong>Aurora is 99.9999% accurate but not perfect.</strong> The AI may:
+          <strong>Anticipy is 99.9999% accurate but not perfect.</strong> The AI may:
         </p>
         <ul>
           <li>Misunderstand task requirements</li>
@@ -45,7 +45,7 @@ export default function TermsPage() {
 
         <h2>5. Liability Limitations</h2>
         <p>
-          Aurora is not liable for:
+          Anticipy is not liable for:
         </p>
         <ul>
           <li>Incorrect bookings, purchases, or communications made by the AI</li>
@@ -75,7 +75,7 @@ export default function TermsPage() {
           <li>Early access to new features</li>
         </ul>
         <p>
-          Beta status may be revoked at Aurora's discretion with 30 days notice.
+          Beta status may be revoked at Anticipy's discretion with 30 days notice.
         </p>
 
         <h2>8. Privacy and Data</h2>
@@ -93,7 +93,7 @@ export default function TermsPage() {
         </ul>
 
         <h2>9. Prohibited Uses</h2>
-        <p>You may not use Aurora to:</p>
+        <p>You may not use Anticipy to:</p>
         <ul>
           <li>Violate any laws or regulations</li>
           <li>Harass, abuse, or harm others</li>
@@ -134,7 +134,7 @@ export default function TermsPage() {
         <hr className="my-8" />
 
         <p className="text-sm text-muted-foreground">
-          By using Aurora, you acknowledge that you have read, understood, and agree to be bound by
+          By using Anticipy, you acknowledge that you have read, understood, and agree to be bound by
           these Terms of Service.
         </p>
       </div>

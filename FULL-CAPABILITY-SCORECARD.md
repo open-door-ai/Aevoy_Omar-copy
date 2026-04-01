@@ -53,7 +53,7 @@
 | 22 | YVR-SFO flight | PASS | 170s | CA$433 cheapest on Google Flights |
 | 23 | samsung galaxy compare | NOT TESTED | - | - |
 | 24 | cancel free trial | PASS | 53s | Gave platform-specific instructions |
-| 25 | subscriptions | PASS | 43s | Found Aurora + restaurant services from context |
+| 25 | subscriptions | PASS | 43s | Found Anticipy + restaurant services from context |
 | 26 | change netflix plan | NOT TESTED | - | - |
 | 27 | meetup organizer outreach | NOT TESTED | - | - |
 | 28 | wireless charging comparison | NOT TESTED | - | - |

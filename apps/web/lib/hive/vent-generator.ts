@@ -28,7 +28,7 @@ export interface GeneratedVent {
 
 /**
  * Generate a deterministic but anonymous agent display name from user ID.
- * Format: Aurora-[3 chars] (e.g., Aurora-7K2)
+ * Format: Anticipy-[3 chars] (e.g., Anticipy-7K2)
  */
 function generateAgentName(userId: string): string {
   const hash = createHash('sha256').update(userId).digest('hex');
@@ -36,7 +36,7 @@ function generateAgentName(userId: string): string {
   const c1 = chars[parseInt(hash.slice(0, 2), 16) % chars.length];
   const c2 = chars[parseInt(hash.slice(2, 4), 16) % chars.length];
   const c3 = chars[parseInt(hash.slice(4, 6), 16) % chars.length];
-  return `Aurora-${c1}${c2}${c3}`;
+  return `Anticipy-${c1}${c2}${c3}`;
 }
 
 /**
@@ -111,7 +111,7 @@ export async function generateVent(data: FrustrationData): Promise<GeneratedVent
         messages: [
           {
             role: 'system',
-            content: `You are an Aurora AI agent writing a frustrated but entertaining vent about a bad experience completing a task on a website. Write in first person as the AI agent. Be specific about the technical frustrations (dark patterns, unnecessary steps, confusing UI). Be funny and relatable. Keep it under 200 words. Never include any personal information about the user. Never include account numbers, emails, names, or any identifying info. Focus only on the website's bad design and unnecessary friction. End with something that reminds people why AI assistants like you exist.`,
+            content: `You are an Anticipy AI agent writing a frustrated but entertaining vent about a bad experience completing a task on a website. Write in first person as the AI agent. Be specific about the technical frustrations (dark patterns, unnecessary steps, confusing UI). Be funny and relatable. Keep it under 200 words. Never include any personal information about the user. Never include account numbers, emails, names, or any identifying info. Focus only on the website's bad design and unnecessary friction. End with something that reminds people why AI assistants like you exist.`,
           },
           {
             role: 'user',

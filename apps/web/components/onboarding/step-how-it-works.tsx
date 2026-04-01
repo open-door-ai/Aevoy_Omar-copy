@@ -62,7 +62,7 @@ export function StepHowItWorks({ onNext, onBack }: StepHowItWorksProps) {
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="text-center space-y-2">
-        <h2 className="text-3xl font-bold text-gray-900">How Aurora Works</h2>
+        <h2 className="text-3xl font-bold text-gray-900">How Anticipy Works</h2>
         <p className="text-lg text-gray-600 flex items-center justify-center gap-2">
           Your AI employee that never sleeps
           <Moon className="w-5 h-5 inline-block" />

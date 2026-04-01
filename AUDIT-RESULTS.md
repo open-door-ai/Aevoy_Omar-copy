@@ -11,10 +11,10 @@
 ### What Exists
 - **Full-stack production system** running on Railway (agent) + Vercel (web) + Cloudflare (email worker)
 - **78 database tables** in Supabase with RLS on all but 2
-- **68 Express routes** on the agent (task processing, Twilio webhooks, Aurora, admin)
+- **68 Express routes** on the agent (task processing, Twilio webhooks, Anticipy, admin)
 - **90+ Next.js API routes** on the web app
 - **V3 tiered processor** (ACTIVE) with 17 registered tools, 4-tier model routing
-- **Aurora ambient listening** via WebSocket → Deepgram Nova-2 → intent detection → processTaskV3
+- **Anticipy ambient listening** via WebSocket → Deepgram Nova-2 → intent detection → processTaskV3
 - **Personality engine** (SOUL.md + IDENTITY.md) — excellent, sounds human
 - **11,880 tasks processed** historically, 29,924 AI cost log entries
 - **13 users**, 4 Twilio numbers provisioned
@@ -24,7 +24,7 @@
 - Instant tier responses: 1-1.3 seconds, $0.00 cost (Groq free tier)
 - Personality is natural, not robotic: "Four." for 2+2, no fluff
 - Multi-channel delivery works (SMS, email, voice, web)
-- Aurora mic → Deepgram → intent detection → task creation pipeline is complete
+- Anticipy mic → Deepgram → intent detection → task creation pipeline is complete
 - Proactive queue generates and executes autonomous actions
 - Context engine extracts 146 entities for Omar (locations, relationships, preferences)
 - Credit wallet + cost tracking is solid
@@ -49,7 +49,7 @@
 | Gemini Flash | **PASS** | gemini-2.5-flash working (2.0-flash deprecated) |
 | Anthropic | **PASS** | claude-haiku-4.5 configured, operational |
 | Resend (email) | **PASS** | Email sent successfully |
-| Deepgram | **PASS** | API key configured for Aurora listening |
+| Deepgram | **PASS** | API key configured for Anticipy listening |
 | Patchright | **PASS** | Installed v1.58.2, Chrome + Xvfb on Railway |
 | Playwright | **PASS** | Installed v1.58.1 as fallback |
 | Stagehand | **INSTALLED** | In package.json, available but V3 uses own browser tools |
@@ -71,8 +71,8 @@
 | Voice calls | **PASS** | Working | 10 completed voice tasks in last 9 days |
 | Email processing | **PASS** | 210s for complex task | Email → task → browser → response |
 | Task execution pipeline | **PASS** | Varies by tier | instant < 2s, single_tool < 8s, multi_step < 15min |
-| Aurora ambient detection | **PASS** | ~1-2s from speech to intent card | Mic→Deepgram→regex→proactive_queue→processTaskV3 |
-| Shared action engine | **PASS** | All channels → same processTaskV3() | Verified in code: SMS, web, Aurora all use same tools, models, budget |
+| Anticipy ambient detection | **PASS** | ~1-2s from speech to intent card | Mic→Deepgram→regex→proactive_queue→processTaskV3 |
+| Shared action engine | **PASS** | All channels → same processTaskV3() | Verified in code: SMS, web, Anticipy all use same tools, models, budget |
 | Earls booking task | **PARTIAL** | 96s | Navigates site, finds phone number, but asks confirmation before calling |
 
 ---
@@ -105,7 +105,7 @@
 
 ## Fixes Applied
 
-### Commit 4fd99cb: `fix(aurora): scheduler timezone bug + autonomous action prompt`
+### Commit 4fd99cb: `fix(anticipy): scheduler timezone bug + autonomous action prompt`
 **Files**: `packages/agent/src/v3/tools/system.ts`, `packages/agent/src/v3/context-builder.ts`
 
 1. **schedule_task timezone fix**:
@@ -119,7 +119,7 @@
    - "Asking for clarification when you could have just acted is a failure"
    - No hardcoded scenarios — purely behavioral
 
-### Commit 208a235: `fix(aurora): tell AI to pass time expressions verbatim to scheduler`
+### Commit 208a235: `fix(anticipy): tell AI to pass time expressions verbatim to scheduler`
 **Files**: `packages/agent/src/v3/processor-v3.ts`
 
 1. **Parameter extraction prompt fix**:
@@ -136,7 +136,7 @@
 
 ### Landing Page (aevoy.com)
 - **Status**: PASS — loads clean, "Your AI Employee" hero, nav works, demo section visible
-- **Branding**: Aurora, cycling hero text (Employee/Butler), Get Started CTA
+- **Branding**: Anticipy, cycling hero text (Employee/Butler), Get Started CTA
 - **Issues**: 1 Cloudflare script error (non-blocking)
 
 ### Dashboard (aevoy.com/dashboard)
@@ -144,10 +144,10 @@
 - **Task submission**: Typed "What's the weather in Vancouver right now?" → "Task submitted successfully" toast → response appeared
 - **Stats**: Test user shows "10 tasks completed · ~2.5 hours saved · Flawless so far"
 
-### Aurora Page (aevoy.com/aurora)
+### Anticipy Page (aevoy.com/anticipy)
 - **Status**: PASS — mic button (purple), onboarding card, text input, real-time feed
 - **Feed**: Shows all completed tasks with timestamps, checkmarks, expandable responses
-- **Real-time**: Weather result from dashboard appeared instantly in Aurora feed (Supabase subscription working)
+- **Real-time**: Weather result from dashboard appeared instantly in Anticipy feed (Supabase subscription working)
 - **Text input**: Sent "Send me a quick summary of my commitments" → 33.6s → returned 9 active commitments with full context (work, personal, calendar)
 - **Issues**: `user_memory` onboarding query returns 401 (non-blocking, feed works)
 
@@ -190,15 +190,15 @@ The following flows are demo-ready RIGHT NOW:
 | "Send me a summary of my commitments" | 33s | YES — returns 9 commitments with context |
 | "PS5 price in Canada" | 42s | YES — concrete prices, actionable advice |
 | Dashboard task submission | <2s | YES — toast + real-time feed update |
-| Aurora page + mic button | Instant | YES — UI loads, feed renders |
-| Aurora text input → response | 1-33s | YES — end-to-end via web |
+| Anticipy page + mic button | Instant | YES — UI loads, feed renders |
+| Anticipy text input → response | 1-33s | YES — end-to-end via web |
 | SMS inbound → AI response | <2s | YES — tested on production |
 
 ### Recommended Demo Flow
 1. Open aevoy.com — show the landing page (clean, professional)
 2. Log in → show dashboard with task input and recent activity
 3. Type a task: "What's the weather?" → instant Vancouver weather response
-4. Navigate to Aurora → tap mic (show the listening UI)
+4. Navigate to Anticipy → tap mic (show the listening UI)
 5. Send text: "Remind me to call mom tomorrow at 9am" → correctly scheduled
 6. Show the commitments summary → rich contextual knowledge about the user
 7. Show the Activity page → 1975 tasks, $65 total cost, completion stats
@@ -235,7 +235,7 @@ The system correctly classifies "Book Earls" as multi_step, routes to Gemini Fla
 
 ### What Works for Demo
 1. Instant conversational AI (personality, scheduling, weather) — flawless
-2. Aurora page with mic button and real-time feed — working
+2. Anticipy page with mic button and real-time feed — working
 3. Multi-step research (PS5 pricing, restaurant search) — excellent
 4. Context recall (commitments, user knowledge) — impressive
 5. SMS channel — all tests pass

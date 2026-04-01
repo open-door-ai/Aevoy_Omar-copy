@@ -211,7 +211,7 @@ export default function SkillsMarketplacePage() {
 
   const getSourceBadge = (source: string) => {
     const badges = {
-      curated: { label: 'Aurora', color: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' },
+      curated: { label: 'Anticipy', color: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400' },
       mcp: { label: 'MCP', color: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400' },
       n8n: { label: 'n8n', color: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' },
     };

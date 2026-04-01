@@ -230,7 +230,7 @@ export default function StepSecurityLegal({
             id="cb-hive-mind"
             checked={allowVenting}
             onChange={setAllowVenting}
-            label="Allow my AI to contribute anonymous learnings to improve Aurora"
+            label="Allow my AI to contribute anonymous learnings to improve Anticipy"
             sublabel="No personal data is shared — just aggregated usage patterns"
           />
         </div>

@@ -63,13 +63,13 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
   let taskId = task.taskId || '';
 
   try {
-    // ── Microphone channel: Aurora is LISTENING, not being spoken to ──
+    // ── Microphone channel: Anticipy is LISTENING, not being spoken to ──
     // Don't respond conversationally. Extract context silently.
     // Only act on clear actionable intents detected by the context engine.
     if (task.inputChannel === 'microphone') {
       // Context extraction already runs via extractContext() in index.ts
       // Action detection already runs via detectAndQueueActions() in context-engine.ts
-      // Don't generate a response — the user isn't talking to Aurora
+      // Don't generate a response — the user isn't talking to Anticipy
       return {
         taskId: '',
         success: true,
@@ -504,7 +504,7 @@ Category:`;
 async function handleInstant(task: TaskRequest, ctx: TaskContext): Promise<string> {
   const taskText = task.subject === task.body ? task.subject : `${task.subject} ${task.body}`;
 
-  // Load user context so Aurora knows the user even for instant responses
+  // Load user context so Anticipy knows the user even for instant responses
   const userContext = await loadUserContextSummary(ctx.userId);
   const systemPromptText = buildInstantPrompt(ctx.username, ctx.profile.timezone, userContext);
 
@@ -582,7 +582,7 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
       try {
         const synthResult = await callModel({
           messages: [
-            { role: 'system', content: `You are Aurora, a helpful assistant. Answer the user's question using the data below. Be concise and conversational. Extract the key fact/number/answer. Never show raw URLs or search result formatting.` },
+            { role: 'system', content: `You are Anticipy, a helpful assistant. Answer the user's question using the data below. Be concise and conversational. Extract the key fact/number/answer. Never show raw URLs or search result formatting.` },
             { role: 'user', content: `Question: "${taskText}"\n\nData:\n${rawData.substring(0, 2000)}` },
           ],
           tier: 'instant',
@@ -680,7 +680,7 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
   const initialToolCount = allToolDefs.length;
   console.log(`[V3] Dynamic tool loading: ${loadedToolNames.length}/${initialToolCount} tools for multi_step tier`);
 
-  // ── Load Aurora's accumulated knowledge about the user ──
+  // ── Load Anticipy's accumulated knowledge about the user ──
   const userContext = await loadUserContextSummary(ctx.userId);
 
   // ── Build system prompt with filtered tools + user context ──
@@ -1358,7 +1358,7 @@ function stripCredentialLeaks(text: string): string {
   // Strip agent inbox email if it leaks into response
   const agentInbox = process.env.AGENT_INBOX_EMAIL;
   if (agentInbox) {
-    clean = clean.replace(new RegExp(agentInbox.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[aurora-email]');
+    clean = clean.replace(new RegExp(agentInbox.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[anticipy-email]');
   }
 
   // Note: Don't strip password patterns from responses — user may have asked for credentials
@@ -1372,8 +1372,8 @@ function stripCredentialLeaks(text: string): string {
  * this detects the pattern and produces a clean summary.
  */
 function cleanRawToolOutput(text: string): string {
-  // Detect recall tool dump pattern: contains "--- Aurora Context ---" or raw JSON objects
-  const hasContextDump = text.includes('--- Aurora Context ---');
+  // Detect recall tool dump pattern: contains "--- Anticipy Context ---" or raw JSON objects
+  const hasContextDump = text.includes('--- Anticipy Context ---');
   const hasRawJson = (text.match(/\{[^}]*"[^"]*"[^}]*:[^}]*\}/g) || []).length > 3;
   const hasConfidenceScores = (text.match(/\(confidence:\s*[\d.]+\)/g) || []).length > 2;
 

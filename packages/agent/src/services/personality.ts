@@ -102,7 +102,7 @@ export function compileSystemPrompt(
   userContext: { username: string; senderName?: string; timezone?: string; preferences?: string; recentActivity?: string; userEmail?: string },
   agiBasePrompt?: string
 ): string {
-  // username = agent's Aurora username (e.g. "sage"), senderName = human's name (e.g. "Omar")
+  // username = agent's Anticipy username (e.g. "sage"), senderName = human's name (e.g. "Omar")
   const agentName = userContext.username.charAt(0).toUpperCase() + userContext.username.slice(1);
   const humanName = userContext.senderName || "the user";
 

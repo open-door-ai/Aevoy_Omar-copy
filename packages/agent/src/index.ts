@@ -119,6 +119,7 @@ import { WebSocketServer } from "ws";
 import { handleVoiceWebSocket, getActiveSessionCount } from "./services/voice-conversation.js";
 import { logger } from "./utils/logger.js";
 import { setupListenWebSocket } from "./routes/aurora-listen.js";
+import { setupListenWebSocket as setupAnticipyListenWebSocket } from "./routes/anticipy-listen.js";
 
 // ---- Global Error Handlers are at the END of the file ----
 // (single registration point to avoid duplicate handlers)
@@ -616,6 +617,11 @@ app.get("/aurora/status", async (_req, res) => {
   res.json(status);
 });
 
+// Anticipy alias for the status endpoint (same handler)
+app.get("/anticipy/status", async (_req, res) => {
+  res.redirect(307, "/aurora/status");
+});
+
 // Debug: trigger proactive checks on demand (requires webhook secret)
 app.post("/debug/proactive", async (req, res) => {
   const secret = req.headers["x-webhook-secret"];
@@ -799,7 +805,7 @@ app.get("/admin/health", async (req, res) => {
     status: overallStatus,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
-    version: "aurora-v0",
+    version: "anticipy-v0",
     services,
     supabase_latency_ms: supabaseLatencyMs,
     scheduler: schedulerStatus,
@@ -829,7 +835,7 @@ app.post("/takeover/validate-token", async (req, res) => {
     if (!data || data.used || new Date(data.expires_at) < new Date()) {
       return res.status(401).json({ valid: false, error: 'Invalid or expired token' });
     }
-    // Browser engine registry removed (Aurora doesn't use browser automation)
+    // Browser engine registry removed (Anticipy doesn't use browser automation)
     return res.json({ valid: true, taskId: data.task_id, userId: data.user_id, hasEngine: false });
   } catch (err) {
     logger.error('[TAKEOVER] Token validation error:', err);
@@ -843,7 +849,7 @@ app.get("/engines", async (req, res) => {
   if (!verifyWebhookSecret(secret as string)) {
     return res.status(401).json({ error: "unauthorized" });
   }
-  // Browser engine registry removed (Aurora doesn't use browser automation)
+  // Browser engine registry removed (Anticipy doesn't use browser automation)
   return res.json({ activeEngines: 0 });
 });
 
@@ -1174,7 +1180,7 @@ app.post("/task/v2", taskLimiter, async (req, res) => {
     message: "Task received — processing now. You'll get the response via your channel.",
   });
 
-  // Aurora Intelligence: ALWAYS extract context (even for microphone — especially for microphone)
+  // Anticipy Intelligence: ALWAYS extract context (even for microphone — especially for microphone)
   const messageContent = (taskReq.body || taskReq.subject || '').trim();
   if (messageContent) {
     extractContext(messageContent, userId, inputChannel || 'web').catch(err =>
@@ -1347,7 +1353,7 @@ app.post("/task", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
-  // Aurora Intelligence: extract context in background (non-blocking)
+  // Anticipy Intelligence: extract context in background (non-blocking)
   const taskMessageContent = ((task.body || '') + ' ' + (task.subject || '')).trim();
   if (taskMessageContent) {
     extractContext(taskMessageContent, task.userId, (task.inputChannel as string) || 'email').catch(err =>
@@ -1431,7 +1437,7 @@ app.post("/task/incoming", taskLimiter, async (req, res) => {
 
   res.json({ status: "queued", message: "Task received and processing" });
 
-  // Aurora Intelligence: extract context in background (non-blocking)
+  // Anticipy Intelligence: extract context in background (non-blocking)
   const incomingMsgContent = ((sanitizedIncoming.body || '') + ' ' + (sanitizedIncoming.subject || '')).trim();
   if (incomingMsgContent) {
     extractContext(incomingMsgContent, task.userId, (task.inputChannel as string) || 'email').catch(err =>
@@ -1659,11 +1665,11 @@ app.post("/email/send", taskLimiter, async (req, res) => {
 // ---- Twilio Voice Webhooks ----
 
 // ---- Demo Number Config ----
-// The website "Call Me Now" demo number — allows ANY caller to talk to Aurora AI
+// The website "Call Me Now" demo number — allows ANY caller to talk to Anticipy AI
 const DEMO_PHONE_NUMBER = process.env.DEMO_PHONE_NUMBER || "+18882981661"; // Toll-free demo number (purchased 2026-03-15)
 const DEMO_USER_ID = process.env.DEMO_USER_ID || ""; // Ties demo sessions to an account (set on Railway)
 const DEMO_VOICE = "EXAVITQu4vr4xnSDxMaL"; // Sarah — warm, professional ElevenLabs voice
-const DEMO_GREETING = "Hey! I'm your Aurora AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
+const DEMO_GREETING = "Hey! I'm your Anticipy AI — think of me as an employee who actually does things. I browse websites, fill forms, send emails, make calls, do research, book reservations — whatever you need. Go ahead, test me. Ask me anything.";
 
 // ---- Demo Daily Minute Cap (cost protection) ----
 // INCIDENT 2026-03-16: Someone spammed "Call Me Now" 27 times in 10 min, burned $33.
@@ -1718,8 +1724,8 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
             effectiveCallType = "onboarding_setup";
             effectiveUserId = profile.id;
             effectiveGreeting = name
-              ? `Hey ${name}! Welcome to Aurora — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
-              : `Hey there! Welcome to Aurora — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
+              ? `Hey ${name}! Welcome to Anticipy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`
+              : `Hey there! Welcome to Anticipy — I'm your new AI employee. I'm stoked to start working for you. Let me ask you a few quick questions so I can be exactly the assistant you need. Ready?`;
             logger.info(`[VOICE-DEMO] Outbound matched logged-in user ${profile.id.slice(0, 8)} (${name}), starting onboarding setup`);
           } else {
             effectiveCallType = "demo";
@@ -1774,7 +1780,7 @@ app.post("/webhook/voice/demo-outbound", twilioLimiter, validateTwilioSignature,
     // Fallback: simple greeting so the call doesn't fail silently
     const fallback = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="Polly.Joanna-Neural">Hey there! I'm Aurora, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
+  <Say voice="Polly.Joanna-Neural">Hey there! I'm Anticipy, your AI assistant. Something went wrong connecting to my brain, but I'm real! Visit aevoy.com to try again.</Say>
   <Hangup/>
 </Response>`;
     res.type("text/xml").send(fallback);
@@ -2427,7 +2433,7 @@ app.post("/webhook/voice/message/:userId", twilioLimiter, validateTwilioSignatur
           await sendSms({
             userId,
             to: profile.phone_number,
-            body: `[Aurora] Missed call from ${callerNumber}: "${speechResult.substring(0, 140)}"`,
+            body: `[Anticipy] Missed call from ${callerNumber}: "${speechResult.substring(0, 140)}"`,
           });
         }
 
@@ -2602,7 +2608,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
     const resolved = await resolveUser(senderNumber);
 
     if (!resolved) {
-      // Unknown sender — look up who owns the Aurora number being texted
+      // Unknown sender — look up who owns the Anticipy number being texted
       const recipientUser = await resolveUser(twilioNumber);
 
       if (!recipientUser) {
@@ -2749,7 +2755,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Message>Got it. Aurora will stop reaching out. Text START anytime to resume.</Message>
+  <Message>Got it. Anticipy will stop reaching out. Text START anytime to resume.</Message>
 </Response>`);
     }
 
@@ -2766,7 +2772,7 @@ app.post("/webhook/sms/incoming", twilioLimiter, validateTwilioSignature, async 
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Message>Welcome back! Aurora will now proactively reach out when there's something useful to share.</Message>
+  <Message>Welcome back! Anticipy will now proactively reach out when there's something useful to share.</Message>
 </Response>`);
     }
 
@@ -2963,7 +2969,7 @@ app.post("/webhook/voice/pin-verify", twilioLimiter, validateTwilioSignature, as
     let resolved = await resolveUser(callerNumber);
 
     if (!resolved) {
-      // Unknown caller — resolve by the Aurora number being called (To)
+      // Unknown caller — resolve by the Anticipy number being called (To)
       const calledNumber = req.body.To || req.body.Called || "";
       if (calledNumber) {
         resolved = await resolveUser(calledNumber);
@@ -3352,7 +3358,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Message>Got it. Aurora will stop reaching out. Text START anytime to resume.</Message>
+  <Message>Got it. Anticipy will stop reaching out. Text START anytime to resume.</Message>
 </Response>`);
     }
 
@@ -3369,7 +3375,7 @@ app.post("/webhook/sms/premium/:userId", twilioLimiter, validateTwilioSignature,
       res.type("text/xml");
       return res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Message>Welcome back! Aurora will now proactively reach out when there's something useful to share.</Message>
+  <Message>Welcome back! Anticipy will now proactively reach out when there's something useful to share.</Message>
 </Response>`);
     }
 
@@ -3452,7 +3458,7 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
 
     const supabase = getSupabaseClient();
 
-    // Handle /start {code} — link Telegram account to Aurora user
+    // Handle /start {code} — link Telegram account to Anticipy user
     if (text.startsWith("/start ") || text.startsWith("/start@")) {
       const parts = text.split(" ");
       const code = parts[1]?.trim();
@@ -3468,15 +3474,15 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
           body: JSON.stringify({ code, chatId }),
         });
         if (linkRes.ok) {
-          await sendTelegramMessage(chatId, "✅ Connected! Your Aurora AI is now available on Telegram. Send me any message to get started.");
+          await sendTelegramMessage(chatId, "✅ Connected! Your Anticipy AI is now available on Telegram. Send me any message to get started.");
         } else {
-          await sendTelegramMessage(chatId, "❌ That link code is invalid or expired. Please get a new code from your Aurora dashboard.");
+          await sendTelegramMessage(chatId, "❌ That link code is invalid or expired. Please get a new code from your Anticipy dashboard.");
         }
         return;
       }
     }
 
-    // Resolve Aurora user by telegram_chat_id
+    // Resolve Anticipy user by telegram_chat_id
     const { data: profile } = await supabase
       .from("profiles")
       .select("id, username, email, phone")
@@ -3484,7 +3490,7 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
       .single();
 
     if (!profile) {
-      await sendTelegramMessage(chatId, "👋 I don't recognize this account. Please connect your Telegram from your Aurora dashboard at aevoy.com");
+      await sendTelegramMessage(chatId, "👋 I don't recognize this account. Please connect your Telegram from your Anticipy dashboard at aevoy.com");
       return;
     }
 
@@ -3506,10 +3512,10 @@ app.post("/webhook/telegram", twilioLimiter, async (req, res) => {
     if (CALL_ME.test(body.trim())) {
       if (profile.phone) {
         const { callUser } = await import("./services/twilio.js");
-        await callUser({ userId: profile.id, to: profile.phone, message: "Calling you now from your Aurora AI assistant." });
+        await callUser({ userId: profile.id, to: profile.phone, message: "Calling you now from your Anticipy AI assistant." });
         await sendTelegramMessage(chatId, "📞 Calling you now on " + profile.phone.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") + "...");
       } else {
-        await sendTelegramMessage(chatId, "⚠️ No phone number registered. Add one in your Aurora settings to enable calling.");
+        await sendTelegramMessage(chatId, "⚠️ No phone number registered. Add one in your Anticipy settings to enable calling.");
       }
       return;
     }
@@ -3570,7 +3576,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
 
         if (linkRes.ok) {
           await sendWhatsAppMessage(fromPhone,
-            "✅ Your WhatsApp is now linked to your Aurora account!\n\nSend me any message to get started. Try: \"What can you do?\" or \"call me\"");
+            "✅ Your WhatsApp is now linked to your Anticipy account!\n\nSend me any message to get started. Try: \"What can you do?\" or \"call me\"");
         } else {
           const err = await linkRes.json().catch(() => ({})) as { error?: string };
           const reason = err?.error === "Code expired"
@@ -3593,7 +3599,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
 
     if (!profile) {
       await sendWhatsAppMessage(fromPhone,
-        "👋 Hi! To use Aurora AI on WhatsApp:\n\n1. Sign up at aevoy.com\n2. Go to Connected Apps\n3. Scan the WhatsApp QR code\n\nTakes 30 seconds!");
+        "👋 Hi! To use Anticipy AI on WhatsApp:\n\n1. Sign up at aevoy.com\n2. Go to Connected Apps\n3. Scan the WhatsApp QR code\n\nTakes 30 seconds!");
       return;
     }
 
@@ -3606,7 +3612,7 @@ app.post("/webhook/whatsapp", twilioLimiter, validateTwilioSignature, async (req
       const callTo = profile.phone || fromPhone;
       if (callTo) {
         const { callUser } = await import("./services/twilio.js");
-        await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Aurora AI." });
+        await callUser({ userId: profile.id, to: callTo, message: "Calling you now from your Anticipy AI." });
         await sendWhatsAppMessage(fromPhone, "📞 Calling you now...");
       } else {
         await sendWhatsAppMessage(fromPhone, "⚠️ No phone number on file. Add one in Settings to enable calling.");
@@ -3898,7 +3904,7 @@ app.post("/webhook/voice/onboarding-gather/:userId", twilioLimiter, validateTwil
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${voice}">
-    Hi! This is Aurora verifying your phone number. 
+    Hi! This is Anticipy verifying your phone number. 
     Press 1 to confirm this is your number, or press 2 if this is not your number.
   </Say>
   <Gather numDigits="1" action="${process.env.AGENT_URL || "http://localhost:3001"}/webhook/voice/onboarding-confirm/${userId}" method="POST">
@@ -4142,7 +4148,7 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-// ---- Aurora Communication Endpoints ----
+// ---- Anticipy Communication Endpoints ----
 
 // POST /aurora/settings — update user communication settings
 app.post('/aurora/settings', taskLimiter, async (req, res) => {
@@ -4361,7 +4367,7 @@ app.post('/aurora/onboard', taskLimiter, async (req, res) => {
       await sendSms({
         userId,
         to: profile.phone_number,
-        body: "Hey, I tried calling twice but couldn't reach you. No worries — text me what's on your plate this week and I'll get to work. I'm Aurora, your new AI assistant.",
+        body: "Hey, I tried calling twice but couldn't reach you. No worries — text me what's on your plate this week and I'll get to work. I'm Anticipy, your new AI assistant.",
       });
 
       // Update status to sms_fallback
@@ -4383,7 +4389,7 @@ app.post('/aurora/onboard', taskLimiter, async (req, res) => {
     const callResult = await callUser({
       userId,
       to: profile.phone_number,
-      message: `Hey ${displayName}, this is Aurora. I'm about to become the most useful thing in your life, but right now I know absolutely nothing about you. What's stressing you out this week?`,
+      message: `Hey ${displayName}, this is Anticipy. I'm about to become the most useful thing in your life, but right now I know absolutely nothing about you. What's stressing you out this week?`,
     });
 
     // Increment attempt counter
@@ -4482,7 +4488,7 @@ app.post('/aurora/onboard/amd', taskLimiter, async (req, res) => {
         await sendSms({
           userId,
           to: profile.phone_number,
-          body: "Hey, I tried calling twice but got your voicemail. Text me what's on your plate this week and I'll get to work. I'm Aurora.",
+          body: "Hey, I tried calling twice but got your voicemail. Text me what's on your plate this week and I'll get to work. I'm Anticipy.",
         });
       }
 
@@ -4549,14 +4555,14 @@ server.on("upgrade", (request, socket, head) => {
     }
     takeoverWss.handleUpgrade(request, socket, head, async (ws) => {
       try {
-        // Browser takeover removed (Aurora doesn't use browser automation)
+        // Browser takeover removed (Anticipy doesn't use browser automation)
         ws.close(4404, "Browser takeover not available");
       } catch (err) {
         logger.error("[TAKEOVER-WS] Handler error:", err);
         ws.close(4500, "Internal error");
       }
     });
-  } else if (url.pathname === '/aurora/listen/ws') {
+  } else if (url.pathname === '/aurora/listen/ws' || url.pathname === '/anticipy/listen/ws') {
     // Handled by setupListenWebSocket — don't destroy
     return;
   } else {
@@ -4569,7 +4575,9 @@ wss.on("connection", (ws, request) => {
 });
 
 // Deepgram listening proxy — browser mic → transcription → context extraction
+// Supports both /aurora/listen/ws (legacy) and /anticipy/listen/ws (new)
 setupListenWebSocket(server);
+setupAnticipyListenWebSocket(server);
 
 server.listen(PORT, async () => {
   logger.info(`Agent server v2.0 running on port ${PORT}`);
@@ -4640,7 +4648,7 @@ server.listen(PORT, async () => {
                   .single();
                 if (profile?.email) {
                   const { sendResponse } = await import('./services/email.js');
-                  const agentFrom = `${profile.username || 'Aurora'}@aevoy.com`;
+                  const agentFrom = `${profile.username || 'Anticipy'}@aevoy.com`;
                   await sendResponse({
                     to: profile.email,
                     from: agentFrom,

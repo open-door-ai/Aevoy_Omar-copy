@@ -80,8 +80,8 @@ export async function POST(req: NextRequest) {
         price_data: {
           currency: "usd",
           product_data: {
-            name: `Aurora Credit Top-Up — $${(amountCents / 100).toFixed(2)}`,
-            description: `Add $${(amountCents / 100).toFixed(2)} credits to your Aurora account`,
+            name: `Anticipy Credit Top-Up — $${(amountCents / 100).toFixed(2)}`,
+            description: `Add $${(amountCents / 100).toFixed(2)} credits to your Anticipy account`,
           },
           unit_amount: amountCents,
         },

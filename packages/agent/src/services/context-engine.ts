@@ -1,5 +1,5 @@
 /**
- * Context Engine — Aurora's Intelligence Core
+ * Context Engine — Anticipy's Intelligence Core
  *
  * Runs LLM extraction on every user message to build a deep
  * understanding of the user over time. Extracts people, commitments,
@@ -100,7 +100,7 @@ const SKIP_MESSAGES = new Set([
 ]);
 
 // ---- Communication Style Extraction (FREE — regex only, no LLM) ----
-// Detects HOW the user communicates so Aurora can mirror their style over time.
+// Detects HOW the user communicates so Anticipy can mirror their style over time.
 
 async function extractCommunicationStyle(message: string, userId: string): Promise<void> {
   // Only analyze messages long enough to show style (>20 chars)
@@ -178,9 +178,13 @@ async function extractCommunicationStyle(message: string, userId: string): Promi
   }
 }
 
-// ---- Instant Action Detection (FIX 1) ----
+// ---- Instant Action Detection ----
 // Zero-cost regex-based detection of actionable intents.
 // Runs IMMEDIATELY — no LLM call needed.
+//
+// IMPORTANT: This is AMBIENT SPEECH detection. The user is NOT talking to us.
+// We must filter out fictional, hypothetical, and past-tense mentions to avoid
+// false positives (e.g., "In the movie, the guy cancels his subscription").
 
 const ACTION_INTENT_PATTERNS: RegExp[] = [
   // EXPLICIT: "I need to..." / "I have to..." / "I should..." / "I gotta..."
@@ -207,6 +211,25 @@ const ACTION_INTENT_PATTERNS: RegExp[] = [
   /\b(shop around|look into|figure out|sort out|deal with|take care of)\s+(.{5,80})/i,
 ];
 
+// ---- False Positive Filters ----
+// These patterns indicate the speaker is NOT expressing real intent.
+// Must run BEFORE action detection to filter out false positives.
+
+const FALSE_POSITIVE_PATTERNS: RegExp[] = [
+  // Fictional context: movie, show, book, game, story
+  /\b(in the movie|in the show|in the book|in the game|in the story|in the episode|on tv|watching a)\b/i,
+  // Past tense narration: "he canceled", "she booked", "they scheduled"
+  /\b(he|she|they|the guy|the character|the person|someone)\s+(canceled|cancelled|booked|scheduled|reserved|promised|sent|called|filed|paid)/i,
+  // Hypothetical: "what if", "imagine", "let's say", "for example"
+  /\b(what if|imagine|hypothetically|let's say|for example|in theory|in a world where)\b/i,
+  // Too vague: "someday", "maybe eventually", "at some point"
+  /\b(someday|maybe eventually|at some point|one of these days|when I get around to)\b/i,
+  // Reporting on someone else's action (not the user's own intent)
+  /\b(this guy|this person|my friend|my neighbor|my coworker)\s+(cancels?|books?|files?|sends?|calls?)\b/i,
+  // Quoting or paraphrasing: "he said", "she was like", "they told me"
+  /\b(he said|she said|they said|was like|told me that)\b.*\b(need|have|should|must|want)\s+to\b/i,
+];
+
 /** Result of action detection — exported so callers can act immediately */
 export interface DetectedAction {
   actionText: string;
@@ -217,7 +240,7 @@ export interface DetectedAction {
 /**
  * Instant action detection — runs via regex, zero LLM cost.
  * If the user mentions something actionable ("I need to book a flight"),
- * queues a proactive suggestion immediately so Aurora can offer help.
+ * queues a proactive suggestion immediately so Anticipy can offer help.
  *
  * Returns the detected action (if any) so callers can trigger immediate execution.
  */
@@ -227,6 +250,14 @@ export async function detectAndQueueActions(
   channel: string
 ): Promise<DetectedAction | null> {
   const lower = message.toLowerCase();
+
+  // FALSE POSITIVE CHECK: reject fictional/hypothetical/past-tense mentions
+  for (const fpPattern of FALSE_POSITIVE_PATTERNS) {
+    if (fpPattern.test(lower)) {
+      logger.debug("[CONTEXT] False positive filtered: %s", lower.substring(0, 60));
+      return null;
+    }
+  }
 
   for (const pattern of ACTION_INTENT_PATTERNS) {
     const match = lower.match(pattern);
@@ -324,9 +355,19 @@ function isExtractionRateLimited(userId: string): boolean {
   return false;
 }
 
-const EXTRACTION_PROMPT = `You are analyzing a message from a user to their AI assistant Aurora.
-Extract structured data. Be thorough — capture implied, not just stated.
-Include subtext, humor, stress signals, indirect commitments.
+const EXTRACTION_PROMPT = `You are analyzing AMBIENT SPEECH — the user is talking to ANOTHER PERSON, not to you. You are listening passively to extract useful context.
+
+CRITICAL RULES FOR AMBIENT DETECTION:
+1. The speaker is NOT giving you commands. They are talking to someone else.
+2. Distinguish REAL intent from fictional, hypothetical, or past-tense narration.
+3. "I should cancel my gym membership" = REAL intent (actionable, confidence >= 0.7)
+4. "In the movie, the guy cancels his subscription" = FICTION (not actionable, confidence = 0)
+5. "I was thinking about maybe switching phone plans someday" = TOO VAGUE (confidence < 0.3)
+6. "My boss moved the deadline to Friday" = REAL event that needs calendar action (actionable)
+7. "They denied my insurance claim, number 47291" = REAL event, extract details (claim number)
+8. Only flag tasks_implied with confidence >= 0.7 if the speaker expressed genuine personal intent or reported a real event that requires action.
+
+Extract structured data. Be thorough but PRECISE — only flag genuine intents.
 
 Return ONLY valid JSON (no markdown, no code fences):
 {
@@ -719,7 +760,7 @@ async function trackChannelUsage(
  * Runs asynchronously and never throws (all errors are caught internally).
  *
  * Returns any detected actionable intent so callers can trigger
- * immediate task execution (critical for real-time Aurora experience).
+ * immediate task execution (critical for real-time Anticipy experience).
  *
  * @param message - The user's message content
  * @param userId - The user's ID

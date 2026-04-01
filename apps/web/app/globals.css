@@ -85,7 +85,7 @@
   --brand-light: oklch(0.72 0.12 270);
   --brand-subtle: oklch(0.92 0.04 270);
 
-  /* Aurora colors */
+  /* Anticipy colors */
   --aurora-1: oklch(0.7 0.15 270);
   --aurora-2: oklch(0.65 0.18 300);
   --aurora-3: oklch(0.6 0.12 240);
@@ -134,7 +134,7 @@
   --brand-light: oklch(0.8 0.1 270);
   --brand-subtle: oklch(0.3 0.06 270);
 
-  /* Aurora colors (dark) */
+  /* Anticipy colors (dark) */
   --aurora-1: oklch(0.4 0.15 270);
   --aurora-2: oklch(0.35 0.18 300);
   --aurora-3: oklch(0.3 0.12 240);
@@ -154,7 +154,7 @@
   }
 }
 
-/* Aurora animation */
+/* Anticipy animation */
 @keyframes aurora-shift {
   0%, 100% { transform: translate(0, 0) scale(1); }
   25% { transform: translate(30px, -50px) scale(1.1); }
@@ -252,7 +252,7 @@
   --border: oklch(0.922 0 0);
 }
 
-/* ─── Aurora Theme Variables ─── */
+/* ─── Anticipy Theme Variables ─── */
 :root, [data-theme="light"] {
   --aurora-bg: #FAFAFA;
   --aurora-card: #FFFFFF;
@@ -269,7 +269,24 @@
   --aurora-text-secondary: #8E8E93;
 }
 
-/* ─── Aurora Mic Button Animations ─── */
+/* ─── Anticipy Theme Variables (aliases for shared styling) ─── */
+:root, [data-theme="light"] {
+  --anticipy-bg: #FAFAFA;
+  --anticipy-card: #FFFFFF;
+  --anticipy-card-border: #E5E5EA;
+  --anticipy-text: #1C1C1E;
+  --anticipy-text-secondary: #8E8E93;
+}
+
+[data-theme="dark"] {
+  --anticipy-bg: #0A0A0B;
+  --anticipy-card: #141416;
+  --anticipy-card-border: #2A2A2E;
+  --anticipy-text: #EDEDEF;
+  --anticipy-text-secondary: #8E8E93;
+}
+
+/* ─── Anticipy Mic Button Animations ─── */
 @keyframes breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.03); }

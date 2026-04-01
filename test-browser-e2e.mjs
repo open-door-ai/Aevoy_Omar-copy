@@ -172,15 +172,15 @@ await runTest(
 await wait(3000);
 
 // === REAL WEBSITE INTERACTION ===
-console.log('\n=== REAL WEBSITE TESTS (Aurora & Common Sites) ===');
+console.log('\n=== REAL WEBSITE TESTS (Anticipy & Common Sites) ===');
 
 await runTest(
-  'Visit Aurora homepage',
+  'Visit Anticipy homepage',
   'visit https://www.aevoy.com and tell me what the main headline says',
   'research',
   (result) => {
     if (result.response && result.response.toLowerCase().includes('aevoy')) {
-      console.log('    ✓ Successfully extracted Aurora content');
+      console.log('    ✓ Successfully extracted Anticipy content');
     }
   }
 );
@@ -188,7 +188,7 @@ await runTest(
 await wait(3000);
 
 await runTest(
-  'Check Aurora features',
+  'Check Anticipy features',
   'go to aevoy.com and list the main features mentioned on the homepage',
   'research'
 );

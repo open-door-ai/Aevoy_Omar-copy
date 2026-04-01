@@ -1343,7 +1343,7 @@ export default function SettingsPage() {
                 />
                 <div>
                   <p className="font-medium">Enable agent venting</p>
-                  <p className="text-sm text-muted-foreground">Your agent gets an anonymous identity (e.g. Aurora-7K2) and can vent about dark patterns it encounters</p>
+                  <p className="text-sm text-muted-foreground">Your agent gets an anonymous identity (e.g. Anticipy-7K2) and can vent about dark patterns it encounters</p>
                 </div>
               </label>
             </div>
@@ -1434,7 +1434,7 @@ export default function SettingsPage() {
               <p className="text-sm text-muted-foreground">
                 Allow your AI agent to share anonymous learnings (successful action patterns) with the global Hive Mind.
                 All personal information is automatically scrubbed before upload — emails, names, passwords are never shared.
-                This helps ALL Aurora agents get smarter over time.
+                This helps ALL Anticipy agents get smarter over time.
               </p>
               <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors">
                 <input
@@ -2742,7 +2742,7 @@ export default function SettingsPage() {
                 <p className="text-sm text-muted-foreground">
                   OpenRouter provides access to 200+ AI models through a single API key.
                   This includes free models (rate-limited), frontier models, and specialized models.
-                  Connect your own key to route Aurora&apos;s AI calls through your preferred models.
+                  Connect your own key to route Anticipy&apos;s AI calls through your preferred models.
                 </p>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
@@ -2862,7 +2862,7 @@ export default function SettingsPage() {
                       <p className="text-xs text-amber-700 dark:text-amber-400">
                         <strong>Free Only</strong> preset uses rate-limited free models. Tasks may fail or be slower during peak hours.
                         <strong> Quality</strong> preset will charge your OpenRouter account.
-                        Aurora is not responsible for OpenRouter charges.
+                        Anticipy is not responsible for OpenRouter charges.
                       </p>
                     </div>
                   </div>
@@ -2902,7 +2902,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Code2 className="h-5 w-5" /> Developer</CardTitle>
-          <CardDescription>Build and publish widgets on the Aurora App Store</CardDescription>
+          <CardDescription>Build and publish widgets on the Anticipy App Store</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex justify-between items-center">

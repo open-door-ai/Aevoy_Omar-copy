@@ -7,9 +7,9 @@ export default function AuthLayout({
 }) {
   return (
     <div className="min-h-screen flex">
-      {/* Left panel — Aurora (hidden on mobile) */}
+      {/* Left panel — Anticipy (hidden on mobile) */}
       <div className="hidden lg:flex lg:w-[55%] relative bg-stone-950 overflow-hidden items-center justify-center">
-        {/* Aurora blobs */}
+        {/* Anticipy blobs */}
         <div
           className="absolute w-[500px] h-[500px] rounded-full opacity-30 blur-[120px] animate-aurora"
           style={{ background: "oklch(0.7 0.15 270)", top: "10%", left: "10%" }}
@@ -37,7 +37,7 @@ export default function AuthLayout({
         <div className="relative z-10 text-center px-12">
           <Link href="/" className="inline-block">
             <h1 className="text-5xl font-bold text-white tracking-tight">
-              Aurora
+              Anticipy
             </h1>
           </Link>
           <p className="mt-4 text-lg text-stone-400 max-w-sm mx-auto">
@@ -69,7 +69,7 @@ export default function AuthLayout({
         <header className="lg:hidden border-b border-border bg-background/80 backdrop-blur-sm relative z-10">
           <div className="px-6 py-4">
             <Link href="/" className="text-2xl font-bold text-foreground">
-              Aurora
+              Anticipy
             </Link>
           </div>
         </header>

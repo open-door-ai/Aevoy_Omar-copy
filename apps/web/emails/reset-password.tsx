@@ -11,14 +11,14 @@ interface ResetPasswordProps {
 
 export function ResetPassword({ resetUrl, userEmail }: ResetPasswordProps) {
   return (
-    <EmailLayout previewText="Reset your Aurora password">
+    <EmailLayout previewText="Reset your Anticipy password">
       <EmailHeader />
 
       <Section style={contentStyle}>
         <Text style={headingStyle}>Reset Your Password</Text>
 
         <Text style={bodyStyle}>
-          We received a request to reset the password for your Aurora account ({userEmail}).
+          We received a request to reset the password for your Anticipy account ({userEmail}).
         </Text>
 
         <Text style={bodyStyle}>

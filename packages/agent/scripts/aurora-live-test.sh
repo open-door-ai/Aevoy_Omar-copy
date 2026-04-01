@@ -1,7 +1,7 @@
 #!/bin/bash
-# Aurora Live Test Harness
+# Anticipy Live Test Harness
 # Sends test inputs through the REAL production pipeline via /task/v2
-# Usage: bash aurora-live-test.sh <test_number>
+# Usage: bash anticipy-live-test.sh <test_number>
 
 set -euo pipefail
 

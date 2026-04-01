@@ -160,7 +160,7 @@ describe('Proactive Engagement System', () => {
         // Access private method through any type (for testing only)
         const formatted = (engine as any).formatDailyDigestEmail(digest);
 
-        expect(formatted).toContain('Daily Aurora Digest');
+        expect(formatted).toContain('Daily Anticipy Digest');
         expect(formatted).toContain('Tasks completed');
         expect(formatted).toContain('Total cost');
         expect(formatted).toContain(digest.date);
@@ -215,7 +215,7 @@ describe('Proactive Engagement System', () => {
         // Access private method through any type (for testing only)
         const formatted = (engine as any).formatWeeklyReportEmail(report);
 
-        expect(formatted).toContain('Weekly Aurora Report');
+        expect(formatted).toContain('Weekly Anticipy Report');
         expect(formatted).toContain('Productivity Score');
         expect(formatted).toContain(report.productivity_score.toString());
         expect(formatted).toContain('Your Habits');

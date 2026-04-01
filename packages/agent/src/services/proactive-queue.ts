@@ -1,5 +1,5 @@
 /**
- * Proactive Queue — Aurora's Action Generation & Processing
+ * Proactive Queue — Anticipy's Action Generation & Processing
  *
  * Generates candidate proactive actions from:
  * - Commitments that are upcoming or overdue
@@ -511,7 +511,7 @@ export async function processQueue(): Promise<number> {
           }
 
           // Build context-rich task body so the AI can make informed decisions
-          const taskBody = `Aurora picked up something from a conversation: "${actionDesc}"
+          const taskBody = `Anticipy picked up something from a conversation: "${actionDesc}"
 
 Based on what you know about the user, handle this appropriately:
 - If you have enough context to take action (you know who the person is, what needs to happen), do it.
@@ -533,8 +533,8 @@ Based on what you know about the user, handle this appropriately:
         } else {
           // NON-ACTION: send a message via aurora-messenger
           try {
-            const { sendAuroraMessage } = await import('./aurora-messenger.js');
-            await sendAuroraMessage({
+            const { sendAnticipyMessage } = await import('./aurora-messenger.js');
+            await sendAnticipyMessage({
               userId,
               content: actionDesc,
               priority: (action.priority as number) >= 7 ? 'high' : 'medium',

@@ -173,13 +173,13 @@ export default function PrivacyPage() {
 
         <h2>10. Children's Privacy</h2>
         <p>
-          Aurora is not intended for users under 18. We do not knowingly collect data from children.
+          Anticipy is not intended for users under 18. We do not knowingly collect data from children.
           If we discover we have collected data from a child, we will delete it immediately.
         </p>
 
         <h2>11. International Data Transfers</h2>
         <p>
-          Your data is stored in the United States (Supabase, Vercel). By using Aurora, you consent
+          Your data is stored in the United States (Supabase, Vercel). By using Anticipy, you consent
           to this transfer. We ensure adequate safeguards through standard contractual clauses.
         </p>
 

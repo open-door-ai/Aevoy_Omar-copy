@@ -77,7 +77,7 @@ export default function DashboardLayout({
     <>
       <div className="p-4 border-b border-border">
         <Link href="/" className="text-2xl font-bold text-foreground">
-          Aurora
+          Anticipy
         </Link>
       </div>
       <nav className="p-3 space-y-1 flex-1 overflow-y-auto">
@@ -158,7 +158,7 @@ export default function DashboardLayout({
       <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-card/80 backdrop-blur-sm border-b border-border">
         <div className="flex items-center justify-between px-4 py-3">
           <Link href="/" className="text-xl font-bold text-foreground">
-            Aurora
+            Anticipy
           </Link>
           <button
             onClick={() => setMobileOpen(!mobileOpen)}

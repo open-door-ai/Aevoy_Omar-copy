@@ -3,6 +3,20 @@ import type { NextConfig } from "next";
 const isDev = process.env.NODE_ENV === "development";
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    return [
+      {
+        source: "/aurora",
+        destination: "/anticipy",
+        permanent: true,
+      },
+      {
+        source: "/aurora/:path*",
+        destination: "/anticipy/:path*",
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {

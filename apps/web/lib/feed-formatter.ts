@@ -1,6 +1,6 @@
 export interface FeedItem {
   id: string;
-  summary: string; // Clean, human-readable text in Aurora's voice
+  summary: string; // Clean, human-readable text in Anticipy's voice
   channel:
     | "sms"
     | "email"
@@ -12,7 +12,7 @@ export interface FeedItem {
     | "proactive";
   status: "completed" | "processing" | "failed" | "pending";
   timestamp: string;
-  isUser?: boolean; // true = user message, false/undefined = Aurora response
+  isUser?: boolean; // true = user message, false/undefined = Anticipy response
 }
 
 // Patterns that indicate raw/debug data that must NEVER be shown
@@ -83,12 +83,12 @@ export function formatTaskForFeed(task: {
     });
   }
 
-  // Aurora response — clean it up
+  // AI response — clean it up
   if (task.response_text) {
     const cleaned = cleanResponse(task.response_text);
     if (cleaned) {
       items.push({
-        id: `${task.id}-aurora`,
+        id: `${task.id}-anticipy`,
         summary: cleaned,
         channel: (task.input_channel as FeedItem["channel"]) || "web",
         status: task.status as FeedItem["status"],
@@ -98,7 +98,7 @@ export function formatTaskForFeed(task: {
     }
   } else if (task.status === "processing") {
     items.push({
-      id: `${task.id}-aurora`,
+      id: `${task.id}-anticipy`,
       summary: "",
       channel: "web",
       status: "processing",
@@ -133,7 +133,7 @@ function cleanResponse(text: string): string {
       }
       return result;
     }
-    return "Aurora completed a task."; // Fallback
+    return "Anticipy completed a task."; // Fallback
   }
 
   // Strip any inline raw data patterns
@@ -168,7 +168,7 @@ function cleanResponse(text: string): string {
 
   // If remaining text is under 10 chars, use fallback
   if (cleaned.length < 10) {
-    return "Aurora completed a task.";
+    return "Anticipy completed a task.";
   }
 
   // Detect and transform failure/error responses
@@ -199,7 +199,7 @@ export function formatProactiveForFeed(item: {
 }): FeedItem {
   return {
     id: `proactive-${item.id}`,
-    summary: item.description || item.title || "Aurora noticed something.",
+    summary: item.description || item.title || "Anticipy noticed something.",
     channel: (item.preferred_channel as FeedItem["channel"]) || "proactive",
     status: item.status as FeedItem["status"],
     timestamp: item.created_at,
