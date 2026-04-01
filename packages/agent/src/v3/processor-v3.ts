@@ -855,6 +855,26 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
       const isAfterComplexAction = ['browser_go', 'browser_fill', 'browser_click'].includes(lastToolName) && /new page|redirected|form submitted|navigate/i.test(lastToolResult);
       const stepComplexity: 'simple' | 'complex' = (isAfterSimpleRead && !isAfterComplexAction && iterations > 3) ? 'simple' : 'complex';
 
+      // ── Validate message format before sending to model ──
+      // Fix orphaned tool_calls: if an assistant message has tool_calls but the
+      // next message is NOT a tool result, strip the tool_calls to prevent 400 errors.
+      for (let mi = 0; mi < messages.length - 1; mi++) {
+        const msg = messages[mi];
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+          const nextMsg = messages[mi + 1];
+          if (nextMsg?.role !== 'tool') {
+            // Orphaned tool_calls — strip them to prevent "must be followed by tool messages" error
+            logger.warn(`[V3] Stripping orphaned tool_calls at message ${mi} (next is ${nextMsg?.role})`);
+            delete msg.tool_calls;
+          }
+        }
+      }
+      // Ensure messages are not empty (at minimum: system + user)
+      if (messages.filter(m => m.role !== 'system').length === 0) {
+        logger.error(`[V3] Empty non-system messages at step ${iterations} — re-injecting task prompt`);
+        messages.push({ role: 'user', content: buildTaskPrompt(task.subject, task.body) });
+      }
+
       modelResponse = await callModel({
         messages,
         tier: 'multi_step',
