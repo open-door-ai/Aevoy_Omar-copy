@@ -1042,7 +1042,7 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
           await budget.trackCost('v3', 'browser_agent', result.cost, 'v3:tool:browser_agent');
         }
         // Inject the result into the conversation so the AI knows the browser part is done
-        messages.push({ role: 'tool', content: resultText, tool_call_id: tc.name });
+        messages.push({ role: 'tool', content: resultText, tool_call_id: assistantToolCalls[i].id });
         messages.push({
           role: 'user',
           content: 'Browser task completed. Now check: were there OTHER parts of the original request that still need to be done (reminders, messages, emails)? If yes, do them now with the appropriate tools. If all parts are done, respond to the user with everything that was accomplished.',
