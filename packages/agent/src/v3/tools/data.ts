@@ -63,6 +63,23 @@ registerTool({
   async execute(params): Promise<ToolCallResult> {
     const query = String(params.query);
     try {
+      // Strategy 0: Currency exchange rate detection — use free API for accurate live rates
+      const currencyMatch = query.match(/\b(USD|CAD|EUR|GBP|JPY|AUD|CHF|CNY|INR|MXN|BRL|KRW|SEK|NOK|NZD|SGD|HKD|TRY|ZAR|RUB|PLN|THB|IDR|PHP|CZK|ILS|CLP|AED|SAR|MYR|TWD|DKK|HUF|RON|BGN|HRK|ISK)\b.*\b(USD|CAD|EUR|GBP|JPY|AUD|CHF|CNY|INR|MXN|BRL|KRW|SEK|NOK|NZD|SGD|HKD|TRY|ZAR|RUB|PLN|THB|IDR|PHP|CZK|ILS|CLP|AED|SAR|MYR|TWD|DKK|HUF|RON|BGN|HRK|ISK)\b/i);
+      if (currencyMatch && currencyMatch[1].toUpperCase() !== currencyMatch[2].toUpperCase()) {
+        try {
+          const from = currencyMatch[1].toUpperCase();
+          const to = currencyMatch[2].toUpperCase();
+          const rateRes = await fetch(`https://open.er-api.com/v6/latest/${from}`, { signal: AbortSignal.timeout(5000) });
+          if (rateRes.ok) {
+            const rateData = await rateRes.json() as any;
+            const rate = rateData?.rates?.[to];
+            if (rate) {
+              return { success: true, data: `1 ${from} = ${rate} ${to} (as of ${rateData.time_last_update_utc || 'today'})`, cost: 0 };
+            }
+          }
+        } catch { /* fall through to search */ }
+      }
+
       // Strategy 1: DuckDuckGo instant answer API (fast, has direct answers for conversions/facts)
       try {
         const instantRes = await fetch(
