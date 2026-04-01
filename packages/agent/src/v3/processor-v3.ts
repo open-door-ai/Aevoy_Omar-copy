@@ -957,8 +957,17 @@ Pick ONE new approach and execute it NOW. Don't explain — just DO it.`
       const allowedMissing = missingNames.filter(n => !blockedTools.includes(n));
       if (allowedMissing.length === 0) {
         console.log(`[V3] Blocked expansion of manual browser tools [${missingNames.join(', ')}] — use browser_agent`);
-        // Tell the AI to use browser_agent instead
-        messages.push({ role: 'tool', content: 'These browser tools are not available. Use browser_agent instead for all browser interaction.', tool_call_id: missingNames[0] });
+        // Push the assistant message with tool_calls first (required by OpenAI format)
+        const blockedToolCalls = modelResponse.toolCalls.map((tc, i) => ({
+          id: `call_${Date.now()}_${i}`,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        }));
+        messages.push({ role: 'assistant', content: modelResponse.content || '', tool_calls: blockedToolCalls });
+        // Then push tool results for each blocked call
+        for (const btc of blockedToolCalls) {
+          messages.push({ role: 'tool', content: `Tool "${btc.function.name}" is not available. Use browser_agent instead for all browser interaction.`, tool_call_id: btc.id });
+        }
         continue;
       }
       console.log(`[V3] Tool expansion triggered: LLM requested unloaded tools [${allowedMissing.join(', ')}]`);
