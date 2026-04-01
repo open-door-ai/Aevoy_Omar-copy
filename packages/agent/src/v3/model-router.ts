@@ -77,15 +77,15 @@ function recordModelFailure(modelKey: string): void {
   sessionModelPerf.set(modelKey, perf);
 }
 
-/** Check if a model has been unreliable recently (>60% failure rate, min 3 attempts) */
+/** Check if a model has been unreliable recently (>80% failure rate, min 5 attempts, last 2 min) */
 function isModelUnreliable(modelKey: string): boolean {
   const perf = sessionModelPerf.get(modelKey);
   if (!perf) return false;
   const total = perf.successes + perf.failures;
-  if (total < 3) return false; // Need enough data
+  if (total < 5) return false; // Need more data before marking unreliable
   const failRate = perf.failures / total;
-  // If it failed >60% of the time and last failure was in the last 5 minutes
-  return failRate > 0.6 && (Date.now() - perf.lastFailure) < 5 * 60 * 1000;
+  // Only mark unreliable at very high failure rates, and decay quickly (2 min window)
+  return failRate > 0.8 && (Date.now() - perf.lastFailure) < 2 * 60 * 1000;
 }
 
 /** Get exported session performance data (for logging/diagnostics) */
@@ -187,19 +187,19 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
   const models = TIER_MODELS[effectiveTier] || TIER_MODELS.instant;
   const tools = opts.useTools ? buildFunctionSchemas(opts.toolCategory) : undefined;
 
+  const skipReasons: string[] = [];
   for (const model of models) {
     const key = `${model.provider}:${model.model}`;
-    if (isBackedOff(key)) continue;
-    if (!hasApiKey(model.provider)) continue;
+    if (isBackedOff(key)) { skipReasons.push(`${key}:backed-off`); continue; }
+    if (!hasApiKey(model.provider)) { skipReasons.push(`${key}:no-key`); continue; }
 
-    // Skip models that have been unreliable this session (>60% failure rate)
     if (isModelUnreliable(key)) {
-      logger.info({ model: key }, '[V3-MODEL] Skipping unreliable model (session failure rate too high)');
+      skipReasons.push(`${key}:unreliable`);
+      logger.info({ model: key }, '[V3-MODEL] Skipping unreliable model');
       continue;
     }
 
-    // For tool calling, skip models that don't support it (unless no tools needed)
-    if (opts.useTools && !model.supportsToolCalling) continue;
+    if (opts.useTools && !model.supportsToolCalling) { skipReasons.push(`${key}:no-tools`); continue; }
 
     try {
       const result = await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
@@ -208,30 +208,27 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
     } catch (err: any) {
       recordModelFailure(key);
       trackError('ai');
+      skipReasons.push(`${key}:err-${err?.status || 'unknown'}`);
       if (err?.status === 429 || err?.status === 402 || err?.message?.includes('429') || err?.message?.includes('rate')) {
-        if (model.provider === 'gemini') {
-          // Gemini TPM (tokens per minute) rate limit — tool-calling requests are large.
-          // Wait 10s first, then 30s, then 60s. The per-minute limit resets over ~60s.
-          // Haiku account is EMPTY — Gemini is the ONLY working model. Must wait and retry.
-          // With reduced tool schemas (6 instead of 38), requests are 75% smaller.
-          // Shorter waits should work now. Try 5s, 15s, 30s.
-          for (const waitMs of [5000, 15000, 30000]) {
-            logger.info({ waitSec: waitMs / 1000 }, `[V3-MODEL] Gemini 429 — waiting ${waitMs/1000}s then retrying`);
-            await new Promise(r => setTimeout(r, waitMs));
-            try {
-              return await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
-            } catch (retryErr: any) {
-              if (retryErr?.status !== 429) {
-                // Non-rate-limit error — set backoff and try next model
-                setBackoff(key, 5000);
-                break;
-              }
-              // Still 429 — try next wait duration
-            }
-          }
-          // All retries exhausted — set backoff and try next model
-          setBackoff(key, 10000);
+        const errMsg = err?.message || '';
+        // Detect PERMANENT failures (spending cap, no credits) vs transient rate limits
+        const isPermanent = errMsg.includes('spending cap') || errMsg.includes('credit balance') || err?.status === 402;
+        if (isPermanent) {
+          // Don't waste time retrying — back off for 5 minutes
+          logger.warn({ model: key }, `[V3-MODEL] Permanent failure (spending cap/no credits) — backing off 5min`);
+          setBackoff(key, 300000);
           continue;
+        }
+        if (model.provider === 'gemini') {
+          // Transient Gemini rate limit — one quick retry
+          logger.info(`[V3-MODEL] Gemini 429 rate limit — retrying in 5s`);
+          await new Promise(r => setTimeout(r, 5000));
+          try {
+            return await callProvider(model, opts.messages, tools, opts.maxTokens, opts.temperature);
+          } catch {
+            setBackoff(key, 15000);
+            continue;
+          }
         }
         const backoffMs = model.provider === 'groq' ? 60000 : 30000;
         setBackoff(key, backoffMs);
@@ -253,7 +250,8 @@ export async function callModel(opts: CallOptions): Promise<ModelResponse> {
     }
   }
 
-  throw new Error('All AI models are currently unavailable. Please try again shortly.');
+  const diagnostic = skipReasons.length > 0 ? ` [${skipReasons.join(', ')}]` : '';
+  throw new Error(`All AI models are currently unavailable.${diagnostic}`);
 }
 
 /**
