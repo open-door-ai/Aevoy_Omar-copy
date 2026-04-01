@@ -63,7 +63,28 @@ registerTool({
   async execute(params): Promise<ToolCallResult> {
     const query = String(params.query);
     try {
-      // Strategy 1: DuckDuckGo HTML search (scrape actual results, not just instant answers)
+      // Strategy 1: DuckDuckGo instant answer API (fast, has direct answers for conversions/facts)
+      try {
+        const instantRes = await fetch(
+          `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (instantRes.ok) {
+          const data = await instantRes.json() as any;
+          // Check for direct answer (conversions, calculations, definitions)
+          if (data.Answer) {
+            return { success: true, data: `Answer: ${data.Answer}`, cost: 0 };
+          }
+          if (data.AbstractText && data.AbstractText.length > 20) {
+            const source = data.AbstractURL ? ` (${data.AbstractURL})` : '';
+            return { success: true, data: `${data.AbstractText}${source}`, cost: 0 };
+          }
+        }
+      } catch {
+        // Instant answer failed — continue to HTML search
+      }
+
+      // Strategy 2: DuckDuckGo HTML search (scrape actual results)
       const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       const res = await fetch(ddgUrl, {
         headers: {
@@ -74,17 +95,14 @@ registerTool({
 
       if (res.ok) {
         const html = await res.text();
-        // Extract search results from DuckDuckGo HTML
         const results: string[] = [];
         const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>(.*?)<\/a>/gi;
         let match;
         let count = 0;
         while ((match = resultRegex.exec(html)) !== null && count < 5) {
           let url = match[1] || '';
-          // Strip DuckDuckGo tracking redirects to get clean URLs
           const uddgMatch = url.match(/uddg=([^&]*)/);
           if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
-          // Skip ad links (duckduckgo.com/y.js ad redirects)
           if (url.includes('duckduckgo.com/y.js') || url.includes('ad_domain')) continue;
           const title = match[2]?.replace(/<[^>]+>/g, '').trim();
           const snippet = match[3]?.replace(/<[^>]+>/g, '').trim();
@@ -99,27 +117,7 @@ registerTool({
         }
       }
 
-      // Strategy 2: DuckDuckGo instant answer API (for factual queries)
-      const instantRes = await fetch(
-        `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1`,
-        { signal: AbortSignal.timeout(5000) }
-      );
-      if (instantRes.ok) {
-        const data = await instantRes.json();
-        const lines: string[] = [];
-        if (data.AbstractText) {
-          lines.push(`Summary: ${data.AbstractText}`);
-          if (data.AbstractURL) lines.push(`Source: ${data.AbstractURL}`);
-        }
-        if (data.RelatedTopics?.length) {
-          for (const topic of data.RelatedTopics.slice(0, 5)) {
-            if (topic.Text) lines.push(`- ${topic.Text.substring(0, 200)}${topic.FirstURL ? ` (${topic.FirstURL})` : ''}`);
-          }
-        }
-        if (lines.length > 0) return { success: true, data: lines.join('\n'), cost: 0 };
-      }
-
-      // No results from either method — suggest browser Google search
+      // No results from either method
       return {
         success: true,
         data: `No web search results for "${query}". Use browser_go("https://www.google.com/search?q=${encodeURIComponent(query)}") to search Google directly in the browser.`,

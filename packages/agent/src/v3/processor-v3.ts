@@ -449,7 +449,8 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
     const classifyPrompt = `Classify this task into exactly one category. Respond with ONLY the category name, nothing else.
 
 Categories:
-- instant: Simple greeting, small talk, conversational response, OR factual/knowledge questions the AI can answer from memory (e.g. "what is the capital of X", "explain Y", "how does Z work", math, translations, definitions, general knowledge)
+- instant: Simple greeting, small talk, conversational response, OR timeless knowledge questions (definitions, math, history facts, science, "what is X", "explain Y")
+- web_search: Questions about CURRENT/RECENT events, live data, today's news, sports results, stock prices, exchange rates, "who won", "what happened", anything that changes over time
 - weather: Weather check for a location
 - send_email: Send an email to someone
 - send_sms: Send a text/SMS message
@@ -461,9 +462,11 @@ Categories:
 - multi_step: Complex task needing multiple different actions in sequence
 
 RULES:
-- "instant" is ONLY for greetings, small talk, or pure knowledge questions (definitions, math, history facts)
-- If the task mentions ANY website, URL, domain, service name, or brand — it's "browser"
-- If the task asks to sign up, book, buy, cancel, apply, check prices, or interact with any online service — it's "browser"
+- "instant" is ONLY for greetings, small talk, or TIMELESS knowledge (facts that don't change)
+- If the answer could be different today vs last week, it's "web_search" NOT "instant"
+- "who won", "latest", "current", "recent", "today", scores, prices, rates → "web_search"
+- If the task mentions ANY website, URL, domain, service name, or brand → "browser"
+- If the task asks to sign up, book, buy, cancel, apply, check prices, or interact with any online service → "browser"
 - When in doubt between "instant" and "browser", ALWAYS choose "browser"
 
 Task: "${taskText.substring(0, 300)}"
@@ -475,6 +478,7 @@ Category:`;
 
     const categoryToTier: Record<string, TierClassification> = {
       instant: { tier: 'instant', reasoning: 'AI: greeting/chat' },
+      web_search: { tier: 'single_tool', tool: 'web_search', reasoning: 'AI: live data lookup' },
       weather: { tier: 'single_tool', tool: 'weather', reasoning: 'AI: weather' },
       send_email: { tier: 'single_tool', tool: 'send_email', reasoning: 'AI: email' },
       send_sms: { tier: 'single_tool', tool: 'send_sms', reasoning: 'AI: SMS' },
