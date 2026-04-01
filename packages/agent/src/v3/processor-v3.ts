@@ -570,7 +570,30 @@ async function handleSingleTool(task: TaskRequest, ctx: TaskContext, toolName: s
     if (toolResult.cost > 0) {
       await trackServiceCost(ctx.userId, 'v3', toolName, toolResult.cost, `v3:${toolName}`, ctx.taskId);
     }
-    return String(toolResult.data || `Done — ${toolName} completed successfully.`);
+
+    const rawData = String(toolResult.data || `Done — ${toolName} completed successfully.`);
+
+    // For web_search and recall: synthesize raw results into a natural response
+    if ((toolName === 'web_search' || toolName === 'recall') && rawData.length > 100) {
+      try {
+        const synthResult = await callModel({
+          messages: [
+            { role: 'system', content: `You are Aurora, a helpful assistant. Answer the user's question using the data below. Be concise and conversational. Extract the key fact/number/answer. Never show raw URLs or search result formatting.` },
+            { role: 'user', content: `Question: "${taskText}"\n\nData:\n${rawData.substring(0, 2000)}` },
+          ],
+          tier: 'instant',
+          maxTokens: 300,
+          temperature: 0.3,
+        });
+        if (synthResult.content && synthResult.content.length > 10) {
+          return synthResult.content;
+        }
+      } catch {
+        // Synthesis failed — return raw data as fallback
+      }
+    }
+
+    return rawData;
   }
 
   // Tool failed — fall back to multi-step for a more thorough attempt
