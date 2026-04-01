@@ -134,7 +134,7 @@ export async function processTaskV3(task: TaskRequest): Promise<TaskResult> {
         break;
       case 'multi_step':
       case 'autonomous':
-        response = await handleMultiStep(task, ctx);
+        response = await handleMultiStep(task, ctx, classification.browserRequired);
         break;
       default:
         response = await handleMultiStep(task, ctx);
@@ -426,17 +426,17 @@ async function classifyTaskTier(subject: string, body: string): Promise<TierClas
 
   // Explicit URL in task (contains .com/.org/.net/.io/.ca/.co/.ai etc.)
   if (/\b\w+\.(com|org|net|io|ca|co|ai|app|dev|me|us|uk|edu|gov|info|biz)\b/i.test(lower)) {
-    return { tier: 'multi_step', reasoning: 'task contains URL — browser required' };
+    return { tier: 'multi_step', reasoning: 'task contains URL — browser required', browserRequired: true };
   }
 
   // Navigation intent (go to / browse / visit / open / navigate to / check out)
   if (/\b(go\s+to|browse|navigate\s+to|visit|open|check\s+out|look\s+at|head\s+to|pull\s+up)\b.*\b(website|site|page|portal|platform|app)\b/i.test(lower)) {
-    return { tier: 'multi_step', reasoning: 'navigation intent — browser required' };
+    return { tier: 'multi_step', reasoning: 'navigation intent — browser required', browserRequired: true };
   }
 
   // Action-on-website intent (sign up, register, create account, book, reserve, purchase, buy, order, cancel, apply, log in)
   if (/\b(sign\s*up|signup|register|create\s*(an?\s*)?account|book\s*(a|an|the|me)?|reserv|purchase|buy|order|cancel\s*(my|a|the)?\s*(subscription|account|membership|plan|service)|apply\s*(for|to|on)|log\s*in|login|subscribe|enroll|checkout|add\s*to\s*cart)\b/i.test(lower)) {
-    return { tier: 'multi_step', reasoning: 'website action intent — browser required' };
+    return { tier: 'multi_step', reasoning: 'website action intent — browser required', browserRequired: true };
   }
 
   // Research/scrape intent requiring live web data
@@ -486,7 +486,7 @@ Category:`;
       generate_image: { tier: 'single_tool', tool: 'generate_image', reasoning: 'AI: image' },
       create_document: { tier: 'single_tool', tool: 'create_document', reasoning: 'AI: document' },
       make_call: { tier: 'single_tool', tool: 'make_call', reasoning: 'AI: call' },
-      browser: { tier: 'multi_step', reasoning: 'AI: browser task' },
+      browser: { tier: 'multi_step', reasoning: 'AI: browser task', browserRequired: true },
       multi_step: { tier: 'multi_step', reasoning: 'AI: multi-step' },
     };
 
@@ -654,7 +654,7 @@ Respond with ONLY the JSON object, no other text.`;
 // TIER 3: MULTI-STEP (full tool-calling loop)
 // ══════════════════════════════════════════════════════════════════
 
-async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<string> {
+async function handleMultiStep(task: TaskRequest, ctx: TaskContext, browserRequired?: boolean): Promise<string> {
   const taskText = task.subject === task.body ? task.subject : `${task.subject} ${task.body}`;
 
   // ── Load memory and personality for multi-step tasks ──
@@ -708,6 +708,16 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext): Promise<str
     { role: 'system', content: systemPrompt },
     { role: 'user', content: buildTaskPrompt(task.subject, task.body, task.responsePrefix) },
   ];
+
+  // When the classifier determined this task requires browser interaction,
+  // tell the AI to use browser_go to navigate to actual websites.
+  // This prevents the AI from taking the shortcut of using web_search for everything.
+  if (browserRequired) {
+    messages.push({
+      role: 'system',
+      content: `BROWSER TASK: This task requires you to interact with a real website using browser tools. Use browser_go to navigate to the actual website, then use browser_click and browser_fill to interact with it. Do NOT use web_search as a shortcut — the user wants you to DO something on a website, not just look up information. Open the real site, navigate it, and complete the action.`,
+    });
+  }
 
   // ── Task ledger ──
   const ledger = new TaskLedger(ctx.taskId, { maxIterations: MAX_ITERATIONS, timeoutMs: TASK_TIMEOUT_MS });

@@ -14,6 +14,7 @@ export interface TierClassification {
   tier: TaskTier;
   tool?: string;          // For single_tool tier: which tool to invoke
   reasoning?: string;     // Brief explanation of classification
+  browserRequired?: boolean; // For multi_step: classifier detected this MUST use browser tools
 }
 
 // ── Tool System ──
