@@ -713,9 +713,19 @@ async function handleMultiStep(task: TaskRequest, ctx: TaskContext, browserRequi
   // tell the AI to use browser_go to navigate to actual websites.
   // This prevents the AI from taking the shortcut of using web_search for everything.
   if (browserRequired) {
+    // Build user details string for form filling
+    const userDetails: string[] = [];
+    if (ctx.profile?.displayName) userDetails.push(`Name: ${ctx.profile.displayName}`);
+    if (ctx.email) userDetails.push(`Email: ${ctx.email}`);
+    if (ctx.profile?.phone) userDetails.push(`Phone: ${ctx.profile.phone}`);
+    if (ctx.profile?.twilioNumber) userDetails.push(`Phone: ${ctx.profile.twilioNumber}`);
+    const detailsBlock = userDetails.length > 0
+      ? `\n\nUSER DETAILS FOR FORM FILLING (use these when forms ask for name/email/phone — do NOT ask the user):\n${userDetails.join('\n')}`
+      : '';
+
     messages.push({
       role: 'system',
-      content: `BROWSER TASK: This task requires you to interact with a real website using browser tools. Use browser_go to navigate to the actual website, then use browser_click and browser_fill to interact with it. Do NOT use web_search as a shortcut — the user wants you to DO something on a website, not just look up information. Open the real site, navigate it, and complete the action.`,
+      content: `BROWSER TASK: This task requires you to interact with a real website using browser tools. Use browser_go to navigate to the actual website, then use browser_click and browser_fill to interact with it. Do NOT use web_search as a shortcut — the user wants you to DO something on a website, not just look up information. Open the real site, navigate it, and complete the action.${detailsBlock}`,
     });
   }
 
