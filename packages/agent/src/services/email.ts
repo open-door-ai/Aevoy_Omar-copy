@@ -1,6 +1,39 @@
 import { Resend } from "resend";
 import { fakeEmailServer, isTestMode } from "../test-utils/fake-email-server.js";
 import { trackError } from "../utils/error-tracker.js";
+import { getSupabaseClient } from "../utils/supabase.js";
+
+// ---------------------------------------------------------------------------
+// Blocked-email gate — checked before ANY outbound email
+// ---------------------------------------------------------------------------
+
+const blockedEmailCache = new Map<string, boolean>();
+const BLOCKED_CACHE_TTL_MS = 60_000; // 1 minute
+let blockedCacheLoadedAt = 0;
+
+async function loadBlockedEmails(): Promise<void> {
+  try {
+    const { data } = await getSupabaseClient()
+      .from("blocked_emails")
+      .select("email");
+    blockedEmailCache.clear();
+    if (data) {
+      for (const row of data) {
+        blockedEmailCache.set(row.email.toLowerCase(), true);
+      }
+    }
+    blockedCacheLoadedAt = Date.now();
+  } catch (err) {
+    console.error("[EMAIL-BLOCK] Failed to load blocked emails:", err);
+  }
+}
+
+export async function isEmailBlocked(email: string): Promise<boolean> {
+  if (Date.now() - blockedCacheLoadedAt > BLOCKED_CACHE_TTL_MS) {
+    await loadBlockedEmails();
+  }
+  return blockedEmailCache.has(email.toLowerCase());
+}
 
 /**
  * SECURITY: Sanitize email header values to prevent header injection.
@@ -40,6 +73,12 @@ export async function sendResponse(options: EmailOptions): Promise<boolean> {
   const from = sanitizeEmailHeader(options.from);
   const subject = sanitizeEmailHeader(options.subject);
   const { body, attachments } = options;
+
+  // BLOCK: Check if recipient is on the blocked list
+  if (await isEmailBlocked(to)) {
+    console.log(`[EMAIL-BLOCK] Blocked outbound email to ${to} — user opted out`);
+    return false;
+  }
 
   console.log(`[EMAIL-SEND] sendResponse called: to=${to}, from=${from}, subject="${subject?.substring(0, 50)}", bodyLen=${body?.length || 0}`);
 
@@ -292,6 +331,12 @@ export async function sendConfirmationEmail(
   const safeFrom = sanitizeEmailHeader(from);
   const safeGoal = sanitizeEmailHeader(goal);
 
+  // BLOCK: Check if recipient is on the blocked list
+  if (await isEmailBlocked(safeTo)) {
+    console.log(`[EMAIL-BLOCK] Blocked confirmation email to ${safeTo} — user opted out`);
+    return false;
+  }
+
   const body = `${confirmationMessage}
 
 ---
@@ -330,6 +375,12 @@ export async function sendVerificationCodeRequest(
   // SECURITY: Sanitize header fields
   const safeTo = sanitizeEmailHeader(to);
   const safeFrom = sanitizeEmailHeader(from);
+
+  // BLOCK: Check if recipient is on the blocked list
+  if (await isEmailBlocked(safeTo)) {
+    console.log(`[EMAIL-BLOCK] Blocked verification email to ${safeTo} — user opted out`);
+    return false;
+  }
 
   const liveViewSection = liveViewUrl
     ? `\n\n**Or enter it yourself:** ${liveViewUrl}\nOpen this link on any device to see and control the browser directly.\n`
@@ -380,6 +431,12 @@ export async function sendTaskAccepted(
   // SECURITY: Sanitize header fields
   const safeTo = sanitizeEmailHeader(to);
   const safeFrom = sanitizeEmailHeader(from);
+
+  // BLOCK: Check if recipient is on the blocked list
+  if (await isEmailBlocked(safeTo)) {
+    console.log(`[EMAIL-BLOCK] Blocked task-accepted email to ${safeTo} — user opted out`);
+    return false;
+  }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://www.aevoy.com';
   const taskLink = taskId ? `\n\n📊 **Track progress:** ${appUrl}/dashboard/tasks/${taskId}` : '';

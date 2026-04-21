@@ -18,7 +18,7 @@ import { getSupabaseClient } from "../utils/supabase.js";
 import { checkBudget, trackSpend, CHANNEL_COSTS } from "./cost-circuit-breaker.js";
 import { getPreferredChannel } from "./channel-learner.js";
 import { sendSms, callUser } from "./twilio.js";
-import { sendResponse } from "./email.js";
+import { sendResponse, isEmailBlocked } from "./email.js";
 import type { DeliveryChannel } from "./cost-circuit-breaker.js";
 import { logger } from "../utils/logger.js";
 
@@ -67,6 +67,13 @@ const FALLBACK_CHANNEL_ORDER: DeliveryChannel[] = ['in_app', 'telegram', 'email'
  */
 export async function sendAnticipyMessage(message: AnticipyMessage): Promise<DeliveryResult> {
   const { userId, content, priority, source, proactiveQueueId } = message;
+
+  // BLOCK: Check if user is on the blocked list (blocks ALL channels, not just email)
+  const profile = await getUserProfile(userId);
+  if (profile && await isEmailBlocked(profile.email)) {
+    logger.info({ userId: userId.slice(0, 8), email: profile.email }, '[AURORA-MSG] Blocked — user opted out of all communications');
+    return { delivered: false, channel: 'in_app', queued: false, reason: 'User opted out' };
+  }
 
   // Step 1: Always insert into conversation_context (in-app feed — free)
   await insertConversationContext(userId, content, source, proactiveQueueId);

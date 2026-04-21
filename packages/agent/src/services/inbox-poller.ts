@@ -25,6 +25,7 @@ import {
 } from "./task-router.js";
 import { maskEmail } from "../utils/logging.js";
 import { logger } from '../utils/logger.js';
+import { isEmailBlocked } from "./email.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -172,6 +173,13 @@ async function pollInbox(): Promise<void> {
           const toAddr: string =
             env.to?.[0]?.address?.toLowerCase() || "";
           const subject: string = env.subject || "(no subject)";
+
+          // BLOCK: Skip emails from blocked/opted-out users
+          if (await isEmailBlocked(fromAddr)) {
+            logger.info(`[INBOX-POLLER] Blocked email from ${maskEmail(fromAddr)} — user opted out, marking as read`);
+            await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+            continue;
+          }
 
           // Idempotency check — skip if already processed
           const alreadyProcessed = await isEmailProcessed(messageId);
