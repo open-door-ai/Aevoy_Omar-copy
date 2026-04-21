@@ -63,9 +63,9 @@ export function TransitionBanner() {
         }}
       >
         <span>
-          We are now part of <strong>Anticipation Labs</strong>. See our pendant at{' '}
-          <span style={{ textDecoration: 'underline', textUnderlineOffset: '2px' }}>
-            anticipy.ai
+          Aevoy is no longer in service. See{' '}
+          <span style={{ textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 600 }}>
+            Anticipy.ai
           </span>
         </span>
       </a>
